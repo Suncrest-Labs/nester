@@ -12,8 +12,7 @@ const baseItems = [
 ]
 
 // Repeat 4× so the track is long enough for a seamless loop on any screen
-const carouselIte
- = [...baseItems, ...baseItems, ...baseItems, ...baseItems]
+const carouselItems = [...baseItems, ...baseItems, ...baseItems, ...baseItems]
 
 // Duplicate for seamless infinite loop (translateX -50% lands back at start)
 const track = [...carouselItems, ...carouselItems]
