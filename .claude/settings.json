@@ -10,7 +10,9 @@
       "Bash(pnpm --version)",
       "Bash(gh api repos/Suncrest-Labs/nester-dapp/contents --jq '.[].name')",
       "Bash(gh api repos/Suncrest-Labs/nester_intelligence/contents --jq '.[].name')",
-      "Bash(taskkill //F //IM node.exe)"
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(gh pr view 1 --repo Suncrest-Labs/nester --json title,body,state,statusCheckRollup,headRefName,baseRefName)",
+      "Bash(gh run view 22799659181 --repo Suncrest-Labs/nester --log-failed)"
     ]
   }
 }
