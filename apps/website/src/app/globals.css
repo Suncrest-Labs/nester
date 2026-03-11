@@ -1,0 +1,196 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    /* #ffffff */
+    --foreground: 240 10% 10%;
+    /* Dark text */
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 10%;
+
+    --primary: 255 60% 60%;
+    /* Aave-like Purple/Pink Gradient base */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 255 60% 60%;
+
+    --radius: 0.75rem;
+
+    /* Custom Aave Gradients */
+    --gradient-brand: linear-gradient(135deg, #B6509E 0%, #2EBAC6 100%);
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 255 60% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@keyframes scroll-left {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-scroll-left {
+  animation: scroll-left 80s linear infinite;
+}
+
+.animate-scroll-left:hover {
+  animation-play-state: paused;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Animated gradient border — thin border with bright traveling raindrop */
+@property --border-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes border-rotate {
+  0%   { --border-angle: 0deg; }
+  100% { --border-angle: 360deg; }
+}
+
+.gradient-border-active {
+  position: relative;
+  border-color: transparent !important;
+  overflow: visible;
+}
+
+/* Thin gradient border */
+.gradient-border-active::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--border-angle),
+    #6025f5, #ff5555, #facc15, #6025f5
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: border-rotate 3s linear infinite;
+  z-index: 0;
+}
+
+/* Bright raindrop glow that circles — sits centered on the border line */
+.gradient-border-active::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 4px;
+  background: conic-gradient(
+    from var(--border-angle),
+    #6025f5 0deg,
+    #ff5555 20deg,
+    #facc15 40deg,
+    transparent 60deg,
+    transparent 320deg,
+    #6025f5 360deg
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  filter: blur(4px);
+  opacity: 1;
+  animation: border-rotate 6s linear infinite;
+  z-index: 0;
+}
+
+.gradient-border-active > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* AI layer — smaller glow for compact cards */
+.gradient-border-sm::after {
+  inset: -2px !important;
+  padding: 5px !important;
+  filter: blur(4px) !important;
+}
+
+/* FAQ — larger glow for wide accordion items */
+.gradient-border-lg::after {
+  inset: -6px !important;
+  padding: 12px !important;
+  filter: blur(10px) !important;
+}
+
+/* Ecosystem staircase padding — only on md+ where staircase is visible */
+.ecosystem-text-panel {
+  padding-top: 3rem;
+}
+@media (min-width: 768px) {
+  .ecosystem-text-panel {
+    padding-top: calc(272px + 3rem);
+  }
+}
