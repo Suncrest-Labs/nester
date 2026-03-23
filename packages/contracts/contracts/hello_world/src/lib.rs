@@ -10,13 +10,9 @@ impl NesterContract {
         vec![&env, symbol_short!("Hello"), to]
     }
 
-    pub fn initiate_swap(env: Env, swap_info: SwapInfo) -> Vec<Symbol> {
+    pub fn initiate_swap(env: Env, _swap_info: u128) -> Vec<Symbol> {
         vec![&env]
     }
-}
-
-pub struct SwapInfo {
-    pub amount: u128,
 }
 
 /*
