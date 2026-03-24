@@ -53,6 +53,35 @@ jobs:
       - name: Lint
         run: npm run lint
 
+  internal-stellar:
+    name: Internal (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race ./internal/...
+
+      - name: Run fmt check
+        run: |
+          if [ "$(gofmt -s -l ./internal | wc -l)" -gt 0 ]; then
+            echo "Code formatting issues found. Run: go fmt ./internal/..."
+            gofmt -s -d ./internal
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./internal/...
+
   dapp-frontend:
     name: Dapp Frontend (Next.js)
     runs-on: ubuntu-latest
