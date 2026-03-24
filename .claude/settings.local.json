@@ -13,7 +13,11 @@
       "Bash(gh api:*)",
       "Bash(gh pr:*)",
       "Bash(npm run:*)",
-      "Bash(npm ci:*)"
+      "Bash(npm ci:*)",
+      "Bash(gh issue:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(go test:*)",
+      "Bash(/usr/local/go/bin/go test:*)"
     ]
   }
 }
