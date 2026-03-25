@@ -3,15 +3,6 @@
 version = 4
 
 [[package]]
-name = "access-control-contract"
-version = "0.1.0"
-dependencies = [
- "nester-common",
- "nester-test-utils",
- "soroban-sdk",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -30,9 +21,11 @@ checksum = "512761e0bb2578dd7380c6baaa0f4ce03e84f95e960231d1dec8bf4d7d6e2627"
 name = "allocation-strategy-contract"
 version = "0.1.0"
 dependencies = [
+ "nester-access-control",
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",
+ "yield-registry-contract",
 ]
 
 [[package]]
@@ -654,6 +647,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e3e04debbb59698c15bacbb6d93584a8c0ca9cc3213cb423d31f760d8843ce5"
 dependencies = [
  "adler2",
+]
+
+[[package]]
+name = "nester-access-control"
+version = "0.1.0"
+dependencies = [
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
 ]
 
 [[package]]
@@ -1531,6 +1533,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 name = "yield-registry-contract"
 version = "0.1.0"
 dependencies = [
+ "nester-access-control",
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",

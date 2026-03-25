@@ -1,11 +1,12 @@
 [package]
-name = "access-control-contract"
+name = "nester-access-control"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+name = "nester_access_control"
+crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]

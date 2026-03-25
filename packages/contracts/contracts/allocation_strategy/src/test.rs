@@ -9,8 +9,19 @@ use soroban_sdk::{
     vec, Address, Env,
 };
 use yield_registry::{
-    SourceStatus as RegistrySourceStatus, YieldRegistryContract, YieldRegistryContractClient,
+    ProtocolType as RegistryProtocolType, SourceStatus as RegistrySourceStatus,
+    YieldRegistryContract, YieldRegistryContractClient,
 };
+
+// Helper: register a source with the registry using the new API.
+fn reg(
+    registry: &YieldRegistryContractClient,
+    env: &Env,
+    admin: &Address,
+    id: soroban_sdk::Symbol,
+) {
+    registry.register_source(admin, &id, &Address::generate(env), &RegistryProtocolType::Lending);
+}
 
 #[test]
 fn set_weights_and_calculate_allocation() {
@@ -23,21 +34,9 @@ fn set_weights_and_calculate_allocation() {
 
     let registry = YieldRegistryContractClient::new(&env, &registry_id);
     registry.initialize(&admin);
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("aave"),
-        &RegistrySourceStatus::Active,
-    );
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("blend"),
-        &RegistrySourceStatus::Active,
-    );
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("compound"),
-        &RegistrySourceStatus::Active,
-    );
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    reg(&registry, &env, &admin, symbol_short!("blend"));
+    reg(&registry, &env, &admin, symbol_short!("compound"));
 
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     client.initialize(&admin, &registry_id);
@@ -88,16 +87,8 @@ fn rejects_invalid_weight_sum() {
 
     let registry = YieldRegistryContractClient::new(&env, &registry_id);
     registry.initialize(&admin);
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("aave"),
-        &RegistrySourceStatus::Active,
-    );
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("blend"),
-        &RegistrySourceStatus::Active,
-    );
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    reg(&registry, &env, &admin, symbol_short!("blend"));
 
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     client.initialize(&admin, &registry_id);
@@ -163,21 +154,9 @@ fn sends_remainder_to_highest_weight() {
 
     let registry = YieldRegistryContractClient::new(&env, &registry_id);
     registry.initialize(&admin);
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("aave"),
-        &RegistrySourceStatus::Active,
-    );
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("blend"),
-        &RegistrySourceStatus::Active,
-    );
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("compound"),
-        &RegistrySourceStatus::Active,
-    );
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    reg(&registry, &env, &admin, symbol_short!("blend"));
+    reg(&registry, &env, &admin, symbol_short!("compound"));
 
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     client.initialize(&admin, &registry_id);
@@ -224,11 +203,7 @@ fn only_admin_can_update_weights() {
 
     let registry = YieldRegistryContractClient::new(&env, &registry_id);
     registry.initialize(&admin);
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("aave"),
-        &RegistrySourceStatus::Active,
-    );
+    reg(&registry, &env, &admin, symbol_short!("aave"));
 
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     client.initialize(&admin, &registry_id);
@@ -260,11 +235,9 @@ fn rejects_inactive_sources() {
 
     let registry = YieldRegistryContractClient::new(&env, &registry_id);
     registry.initialize(&admin);
-    registry.upsert_source(
-        &admin,
-        &symbol_short!("aave"),
-        &RegistrySourceStatus::Paused,
-    );
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    // Pause the source
+    registry.update_status(&admin, &symbol_short!("aave"), &RegistrySourceStatus::Paused);
 
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     client.initialize(&admin, &registry_id);
