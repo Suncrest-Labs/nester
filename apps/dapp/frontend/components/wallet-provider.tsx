@@ -122,9 +122,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                         try {
                             StellarWalletsKit.setWallet(savedWalletId);
                             // Use the module directly to request the address
-                            const module = StellarWalletsKit.selectedModule;
+                            const walletModule = StellarWalletsKit.selectedModule;
                             const { address: addr } =
-                                await module.getAddress();
+                                await walletModule.getAddress();
                             if (addr) {
                                 // Update the kit's internal state
                                 const { activeAddress } = await import(
@@ -175,8 +175,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                 StellarWalletsKit.setWallet(walletId);
 
                 // Call the module directly to request the address from the wallet extension
-                const module = StellarWalletsKit.selectedModule;
-                const { address: addr } = await module.getAddress();
+                const walletModule = StellarWalletsKit.selectedModule;
+                const { address: addr } = await walletModule.getAddress();
 
                 if (addr) {
                     // Update the kit's internal state signal
