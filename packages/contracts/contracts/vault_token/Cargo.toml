@@ -5,12 +5,15 @@ edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+# rlib so the Vault contract can import the generated client for cross-contract calls.
+name = "vault_token"
+crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
 nester-common = { path = "../../libs/common" }
+nester-access-control = { path = "../access_control" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

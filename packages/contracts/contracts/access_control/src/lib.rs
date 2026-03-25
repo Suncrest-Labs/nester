@@ -247,6 +247,69 @@ impl AccessControl {
             proposal.from.clone(),
         );
     }
+
+    /// Step 1 of two-step admin transfer.
+    pub fn transfer_admin(env: &Env, current_admin: &Address, new_admin: &Address) {
+        current_admin.require_auth();
+        Self::require_role(env, current_admin, Role::Admin);
+        env.storage().instance().set(
+            &DataKey::PendingTransfer,
+            &AdminTransfer {
+                from: current_admin.clone(),
+                to: new_admin.clone(),
+            },
+        );
+        env.events().publish(
+            (
+                symbol_short!("xfr_prop"),
+                current_admin.clone(),
+                new_admin.clone(),
+            ),
+            (),
+        );
+    }
+
+    /// Step 2 of two-step admin transfer. Grants new Admin, revokes old.
+    pub fn accept_admin(env: &Env, new_admin: &Address) {
+        new_admin.require_auth();
+        let proposal: AdminTransfer = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingTransfer)
+            .unwrap_or_else(|| panic_with_error!(env, ContractError::InvalidOperation));
+        if proposal.to != *new_admin {
+            panic_with_error!(env, ContractError::Unauthorized);
+        }
+        let already_admin = Self::has_role(env, new_admin, Role::Admin);
+        internal_set_role(env, new_admin, Role::Admin, true);
+        if !already_admin {
+            internal_inc_admin_count(env);
+        }
+        internal_dec_admin_count(env);
+        internal_set_role(env, &proposal.from, Role::Admin, false);
+        env.storage().instance().remove(&DataKey::PendingTransfer);
+        env.events().publish(
+            (symbol_short!("xfr_acc"), new_admin.clone()),
+            proposal.from.clone(),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+fn internal_set_role(env: &Env, account: &Address, role: Role, active: bool) {
+    env.storage()
+        .instance()
+        .set(&DataKey::HasRole(account.clone(), role), &active);
+}
+
+fn internal_admin_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::AdminCount)
+        .unwrap_or(0u32)
 }
 
 // ---------------------------------------------------------------------------

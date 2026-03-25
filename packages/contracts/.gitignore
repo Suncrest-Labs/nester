@@ -3,3 +3,7 @@ target
 
 # Local Soroban settings
 .soroban
+
+
+# tests snapshots
+tests_snapshots
