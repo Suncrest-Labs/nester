@@ -1,22 +1,12 @@
-FROM node:22.11.0-slim
+FROM python:3.12-slim
 
-# Create app directory
-WORKDIR /usr/src/app
+WORKDIR /app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install app dependencies
-RUN npm ci
-
-# Bundle app source
 COPY . .
 
-# Build the TypeScript files
-RUN npm run build
+EXPOSE 8000
 
-# Expose port 8080
-EXPOSE 8080
-
-# Start the app
-CMD npm run start
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
