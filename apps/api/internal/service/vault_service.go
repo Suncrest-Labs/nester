@@ -102,6 +102,7 @@ func (s *VaultService) UpdateAllocations(ctx context.Context, input UpdateAlloca
 
 	normalized := make([]vault.Allocation, 0, len(input.Allocations))
 	now := time.Now().UTC()
+	totalAmount := decimal.Zero
 
 	for _, allocation := range input.Allocations {
 		if strings.TrimSpace(allocation.Protocol) == "" || allocation.Amount.Cmp(decimal.Zero) < 0 || allocation.APY.Cmp(decimal.Zero) < 0 {
@@ -121,6 +122,12 @@ func (s *VaultService) UpdateAllocations(ctx context.Context, input UpdateAlloca
 		allocation.Protocol = strings.ToLower(strings.TrimSpace(allocation.Protocol))
 		allocation.VaultID = input.VaultID
 		normalized = append(normalized, allocation)
+		totalAmount = totalAmount.Add(allocation.Amount)
+	}
+
+	// Validate that allocation weights sum to exactly 100%
+	if !totalAmount.Equal(decimal.RequireFromString("100")) {
+		return vault.Vault{}, vault.ErrInvalidAllocation
 	}
 
 	if err := s.repository.ReplaceAllocations(ctx, input.VaultID, normalized); err != nil {
