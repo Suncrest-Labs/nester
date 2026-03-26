@@ -38,8 +38,6 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         message: "Deposited 500 USDC into Balanced Vault",
         timestamp: isoMinutesAgo(8),
         read: false,
-        actionUrl: "https://stellar.expert/explorer/testnet/tx/mock-deposit-500",
-        actionLabel: "View Transaction",
     },
     {
         id: "seed-2",
@@ -48,8 +46,6 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         message: "Withdrew 200 USDC from Growth Vault",
         timestamp: isoMinutesAgo(24),
         read: false,
-        actionUrl: "https://stellar.expert/explorer/testnet/tx/mock-withdrawal-200",
-        actionLabel: "View Transaction",
     },
     {
         id: "seed-3",

@@ -1,7 +1,6 @@
 "use client";
 
 import { useWallet } from "@/components/wallet-provider";
-import { useNotifications } from "@/components/notifications-provider";
 import { Navbar } from "@/components/navbar";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -61,7 +60,6 @@ const vaultTypes = [
 
 export default function VaultsPage() {
     const { isConnected } = useWallet();
-    const { addNotification } = useNotifications();
     const router = useRouter();
 
     useEffect(() => {
@@ -69,19 +67,6 @@ export default function VaultsPage() {
             router.push("/");
         }
     }, [isConnected, router]);
-
-    const handleMockDeposit = (vaultName: string) => {
-        addNotification(
-            {
-                type: "deposit_confirmed",
-                title: "Deposit Confirmed",
-                message: `Deposited 500 USDC into ${vaultName} Vault`,
-                actionUrl: `https://stellar.expert/explorer/testnet/tx/mock-deposit-${vaultName.toLowerCase()}`,
-                actionLabel: "View Transaction",
-            },
-            { showToast: true }
-        );
-    };
 
     if (!isConnected) return null;
 
@@ -158,9 +143,9 @@ export default function VaultsPage() {
                                         <span className="text-xs text-muted-foreground font-medium">{vault.risk} Risk</span>
                                     </div>
                                     <button
-                                        onClick={() =>
-                                            handleMockDeposit(vault.name)
-                                        }
+                                        onClick={() => {
+                                            // Placeholder until real deposit flow is wired.
+                                        }}
                                         className="flex items-center gap-1.5 text-sm font-medium text-foreground hover:gap-2 transition-all"
                                     >
                                         Deposit <ArrowUpRight className="h-4 w-4" />
