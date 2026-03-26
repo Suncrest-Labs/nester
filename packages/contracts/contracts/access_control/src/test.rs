@@ -223,6 +223,21 @@ fn admin_can_revoke_operator_role() {
 }
 
 #[test]
+fn revoking_absent_role_is_idempotent() {
+    let (env, admin, other, cid) = setup();
+
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &admin, &other, Role::Operator)
+    });
+
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &other,
+        Role::Operator
+    )));
+}
+
+#[test]
 #[should_panic]
 fn non_admin_cannot_revoke_role() {
     let (env, admin, operator, cid) = setup();

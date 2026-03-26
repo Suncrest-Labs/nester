@@ -225,6 +225,121 @@ fn only_admin_can_update_weights() {
 }
 
 #[test]
+fn operator_can_update_weights() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let operator = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    reg(&registry, &env, &admin, symbol_short!("blend"));
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize(&admin, &registry_id);
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    let weights = vec![
+        &env,
+        AllocationWeight {
+            source_id: symbol_short!("aave"),
+            weight_bps: 6_000,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("blend"),
+            weight_bps: 4_000,
+        },
+    ];
+
+    client.set_weights(&operator, &weights);
+    assert_eq!(client.get_weights(), weights);
+}
+
+#[test]
+fn operator_cannot_manage_roles_or_transfer_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let operator = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize(&admin, &registry_id);
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    let grant_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.grant_role(&operator, &outsider, &Role::Operator);
+    }));
+    assert!(grant_result.is_err());
+
+    let revoke_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.revoke_role(&operator, &admin, &Role::Admin);
+    }));
+    assert!(revoke_result.is_err());
+
+    let transfer_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.transfer_admin(&operator, &outsider);
+    }));
+    assert!(transfer_result.is_err());
+}
+
+#[test]
+fn calculate_allocation_preserves_total_for_rounding_cases() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    reg(&registry, &env, &admin, symbol_short!("blend"));
+    reg(&registry, &env, &admin, symbol_short!("comp"));
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize(&admin, &registry_id);
+    client.set_weights(
+        &admin,
+        &vec![
+            &env,
+            AllocationWeight {
+                source_id: symbol_short!("aave"),
+                weight_bps: 3_334,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("blend"),
+                weight_bps: 3_333,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("comp"),
+                weight_bps: 3_333,
+            },
+        ],
+    );
+
+    for total in [1_i128, 7_i128, 101_i128, 10_001_i128] {
+        let allocations = client.calculate_allocation(&total);
+        let mut allocated_total = 0_i128;
+        for (_, amount) in allocations.iter() {
+            allocated_total += amount;
+        }
+        assert_eq!(allocated_total, total);
+    }
+}
+
+#[test]
 fn rejects_inactive_sources() {
     let env = Env::default();
     env.mock_all_auths();

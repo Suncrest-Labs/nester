@@ -126,9 +126,26 @@ impl VaultContract {
 mod tests {
     extern crate std;
 
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
 
     use super::{VaultContract, VaultContractClient};
+
+    #[contract]
+    struct VaultObserverContract;
+
+    #[contractimpl]
+    impl VaultObserverContract {
+        pub fn pause_target(env: Env, target: Address, caller: Address) {
+            caller.require_auth();
+            let client = VaultContractClient::new(&env, &target);
+            client.pause(&caller);
+        }
+
+        pub fn is_target_paused(env: Env, target: Address) -> bool {
+            let client = VaultContractClient::new(&env, &target);
+            client.is_paused()
+        }
+    }
 
     fn setup() -> (Env, soroban_sdk::Address) {
         let env = Env::default();
@@ -166,6 +183,24 @@ mod tests {
     }
 
     #[test]
+    fn pause_and_unpause_are_idempotent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = soroban_sdk::Address::generate(&env);
+        let contract_id = env.register_contract(None, VaultContract);
+        let client = VaultContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+
+        client.pause(&admin);
+        client.pause(&admin);
+        assert!(client.is_paused());
+
+        client.unpause(&admin);
+        client.unpause(&admin);
+        assert!(!client.is_paused());
+    }
+
+    #[test]
     #[should_panic]
     fn non_admin_cannot_pause() {
         let env = Env::default();
@@ -189,5 +224,61 @@ mod tests {
         client.initialize(&admin);
         client.pause(&admin);
         client.deposit(); // must panic
+    }
+
+    #[test]
+    #[should_panic]
+    fn withdraw_fails_when_paused() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = soroban_sdk::Address::generate(&env);
+        let contract_id = env.register_contract(None, VaultContract);
+        let client = VaultContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+        client.pause(&admin);
+        client.withdraw();
+    }
+
+    #[test]
+    fn cross_contract_pause_state_is_visible() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = soroban_sdk::Address::generate(&env);
+        let vault_id = env.register_contract(None, VaultContract);
+        let observer_id = env.register_contract(None, VaultObserverContract);
+
+        let vault = VaultContractClient::new(&env, &vault_id);
+        let observer = VaultObserverContractClient::new(&env, &observer_id);
+
+        vault.initialize(&admin);
+        assert!(!observer.is_target_paused(&vault_id));
+
+        vault.pause(&admin);
+        assert!(observer.is_target_paused(&vault_id));
+    }
+
+    #[test]
+    fn cross_contract_pause_requires_admin_in_target_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = soroban_sdk::Address::generate(&env);
+        let outsider = soroban_sdk::Address::generate(&env);
+        let vault_id = env.register_contract(None, VaultContract);
+        let observer_id = env.register_contract(None, VaultObserverContract);
+
+        let vault = VaultContractClient::new(&env, &vault_id);
+        let observer = VaultObserverContractClient::new(&env, &observer_id);
+
+        vault.initialize(&admin);
+        observer.pause_target(&vault_id, &admin);
+        assert!(vault.is_paused());
+
+        vault.unpause(&admin);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            observer.pause_target(&vault_id, &outsider);
+        }));
+
+        assert!(result.is_err());
+        assert!(!vault.is_paused());
     }
 }
