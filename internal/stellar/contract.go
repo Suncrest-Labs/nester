@@ -44,8 +44,7 @@ func (ci *ContractInvoker) SimulateContract(
 	// Call Soroban RPC to simulate (this is a placeholder for the actual implementation)
 	// In production, this would call the actual Soroban RPC simulateTransaction endpoint
 	if tx == nil {
-		result.Error = "failed to build transaction"
-		return result, nil
+		return nil, fmt.Errorf("failed to build transaction")
 	}
 
 	result.IsSuccess = true
