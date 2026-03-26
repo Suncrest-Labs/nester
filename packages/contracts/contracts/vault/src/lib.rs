@@ -238,9 +238,9 @@ impl VaultContract {
     }
 
     /// Withdraw funds from the vault.
+    /// Note: withdrawals are allowed even when the vault is paused so users can always exit.
     pub fn withdraw(env: Env, user: Address, amount: i128) -> i128 {
         require_initialized(&env);
-        require_active(&env);
 
         if amount <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
