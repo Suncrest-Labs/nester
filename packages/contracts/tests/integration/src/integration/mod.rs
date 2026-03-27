@@ -250,22 +250,25 @@ fn non_operator_cannot_set_weights() {
 #[should_panic]
 fn deposit_is_rejected_when_vault_is_paused() {
     let h = NesterHarness::setup();
+    let user = h.create_user();
     h.vault().pause(&h.admin);
     assert!(h.vault().is_paused());
-    h.vault().deposit(); // must panic
+    h.vault().deposit(&user, &100); // must panic
 }
 
 #[test]
 #[should_panic]
 fn withdraw_is_rejected_when_vault_is_paused() {
     let h = NesterHarness::setup();
+    let user = h.create_user();
     h.vault().pause(&h.admin);
-    h.vault().withdraw(); // must panic
+    h.vault().withdraw(&user, &100); // must panic
 }
 
 #[test]
 fn vault_accepts_deposit_after_unpause() {
     let h = NesterHarness::setup();
+    let user = h.create_user();
 
     h.vault().pause(&h.admin);
     assert!(h.vault().is_paused());
@@ -274,7 +277,7 @@ fn vault_accepts_deposit_after_unpause() {
     assert!(!h.vault().is_paused());
 
     // deposit() stub no-ops when not paused — it must not panic here.
-    h.vault().deposit();
+    h.vault().deposit(&user, &100);
 }
 
 #[test]
