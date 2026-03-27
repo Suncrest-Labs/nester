@@ -16,7 +16,7 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env, String};
 
 use allocation_strategy_contract::{AllocationStrategyContract, AllocationStrategyContractClient};
 use vault_contract::{VaultContract, VaultContractClient};
@@ -137,5 +137,10 @@ impl NesterHarness {
     /// without going through the (stub) Vault deposit flow.
     pub fn seed_token_balance(&self, user: &Address, amount: i128) {
         self.token().mint_for_deposit(user, &amount);
+    }
+
+    /// Mint `amount` of the underlying deposit token (e.g. USDC) to `user`.
+    pub fn mint_deposit_tokens(&self, user: &Address, amount: i128) {
+        StellarAssetClient::new(&self.env, &self.deposit_token_id).mint(user, &amount);
     }
 }

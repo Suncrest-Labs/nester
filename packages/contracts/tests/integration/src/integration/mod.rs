@@ -276,7 +276,8 @@ fn vault_accepts_deposit_after_unpause() {
     h.vault().unpause(&h.admin);
     assert!(!h.vault().is_paused());
 
-    // deposit() stub no-ops when not paused — it must not panic here.
+    // Mint deposit tokens so the real transfer inside deposit() succeeds.
+    h.mint_deposit_tokens(&user, 1_000);
     h.vault().deposit(&user, &100);
 }
 
