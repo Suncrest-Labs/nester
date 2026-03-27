@@ -65,6 +65,8 @@ pub enum Role {
     Admin,
     /// Operational role: can perform day-to-day tasks (e.g. weight updates).
     Operator,
+    /// Manager role: can collect fees and manage specific vault operations.
+    Manager,
 }
 
 // ---------------------------------------------------------------------------

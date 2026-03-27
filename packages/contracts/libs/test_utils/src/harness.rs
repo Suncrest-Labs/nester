@@ -19,6 +19,7 @@ extern crate std;
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env, String};
 
 use allocation_strategy_contract::{AllocationStrategyContract, AllocationStrategyContractClient};
+use treasury_contract::{TreasuryContract, TreasuryContractClient};
 use vault_contract::{VaultContract, VaultContractClient};
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 use yield_registry::{YieldRegistryContract, YieldRegistryContractClient};
@@ -36,6 +37,8 @@ pub struct NesterHarness {
 
     /// On-chain ID of the deployed Vault contract.
     pub vault_id: Address,
+    /// On-chain ID of the deployed Treasury contract.
+    pub treasury_id: Address,
     /// On-chain ID of the deployed VaultToken contract.
     pub token_id: Address,
     /// On-chain ID of the deployed YieldRegistry contract.
@@ -50,10 +53,11 @@ impl NesterHarness {
     /// Deploy and initialise all Nester contracts in a fresh test environment.
     ///
     /// Initialisation order:
-    /// 1. `VaultContract` — AccessControl bootstrapped with `admin`.
-    /// 2. `VaultTokenContract` — vault address stored as sole minter/burner.
-    /// 3. `YieldRegistryContract` — AccessControl bootstrapped with `admin`.
-    /// 4. `AllocationStrategyContract` — registry address stored for source
+    /// 1. `TreasuryContract` — registered and initialised.
+    /// 2. `VaultContract` — AccessControl bootstrapped with `admin`.
+    /// 3. `VaultTokenContract` — vault address stored as sole minter/burner.
+    /// 4. `YieldRegistryContract` — AccessControl bootstrapped with `admin`.
+    /// 5. `AllocationStrategyContract` — registry address stored for source
     ///    validation; AccessControl bootstrapped with `admin`.
     pub fn setup() -> Self {
         let env = Env::default();
@@ -64,6 +68,7 @@ impl NesterHarness {
 
         // Register contracts (allocates an on-chain address for each).
         let vault_id    = env.register_contract(None, VaultContract);
+        let treasury_id = env.register_contract(None, TreasuryContract);
         let token_id    = env.register_contract(None, VaultTokenContract);
         let registry_id = env.register_contract(None, YieldRegistryContract);
         let strategy_id = env.register_contract(None, AllocationStrategyContract);
@@ -72,7 +77,9 @@ impl NesterHarness {
         let deposit_token_id = env.register_stellar_asset_contract_v2(token_admin).address();
 
         // Initialise in dependency order.
-        VaultContractClient::new(&env, &vault_id).initialize(&admin, &deposit_token_id);
+        TreasuryContractClient::new(&env, &treasury_id).initialize(&admin, &vault_id);
+
+        VaultContractClient::new(&env, &vault_id).initialize(&admin, &deposit_token_id, &treasury_id);
 
         VaultTokenContractClient::new(&env, &token_id).initialize(
             &vault_id,
@@ -92,6 +99,7 @@ impl NesterHarness {
             env,
             admin,
             vault_id,
+            treasury_id,
             token_id,
             registry_id,
             strategy_id,

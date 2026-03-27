@@ -225,6 +225,7 @@ func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 		"001_create_users_table.up.sql",
 		"004_create_vaults_table.up.sql",
 		"005_create_allocations_table.up.sql",
+		"006_create_settlements_table.up.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)
@@ -240,7 +241,7 @@ func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 func resetIntegrationTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	if _, err := db.Exec(`TRUNCATE TABLE allocations, vaults, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE settlements, allocations, vaults, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE failed: %v", err)
 	}
 }

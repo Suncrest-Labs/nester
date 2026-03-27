@@ -147,6 +147,28 @@ func TestInitiateSettlement_ZeroAmountReturnsError(t *testing.T) {
 	}
 }
 
+func TestInitiateSettlement_EmptyCurrencyReturnsError(t *testing.T) {
+	svc := service.NewSettlementService(newStubRepo())
+	in := validInput()
+	in.Currency = "   "
+
+	_, err := svc.InitiateSettlement(context.Background(), in)
+	if !errors.Is(err, offramp.ErrInvalidSettlement) {
+		t.Errorf("expected ErrInvalidSettlement, got %v", err)
+	}
+}
+
+func TestInitiateSettlement_EmptyAccountNumberReturnsError(t *testing.T) {
+	svc := service.NewSettlementService(newStubRepo())
+	in := validInput()
+	in.Destination.AccountNumber = ""
+
+	_, err := svc.InitiateSettlement(context.Background(), in)
+	if !errors.Is(err, offramp.ErrInvalidSettlement) {
+		t.Errorf("expected ErrInvalidSettlement, got %v", err)
+	}
+}
+
 func TestInitiateSettlement_BankTransferRequiresBankCode(t *testing.T) {
 	svc := service.NewSettlementService(newStubRepo())
 	in := validInput()
@@ -288,6 +310,25 @@ func TestUpdateStatus_FullLifecycleToFailed(t *testing.T) {
 	}
 	if updated.CompletedAt == nil {
 		t.Error("failed settlement should have completed_at set")
+	}
+}
+
+func TestUpdateStatus_FailedAfterLiquidityMatched(t *testing.T) {
+	svc := service.NewSettlementService(newStubRepo())
+	ctx := context.Background()
+
+	s, _ := svc.InitiateSettlement(ctx, validInput())
+	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, NewStatus: offramp.StatusLiquidityMatched})
+
+	updated, err := svc.UpdateStatus(ctx, service.UpdateStatusInput{
+		SettlementID: s.ID,
+		NewStatus:    offramp.StatusFailed,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.Status != offramp.StatusFailed {
+		t.Errorf("want failed, got %s", updated.Status)
 	}
 }
 
