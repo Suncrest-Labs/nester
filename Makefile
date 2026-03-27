@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check clippy build test integration-test clean
+.PHONY: fmt fmt-check clippy build test integration-test clean deploy-testnet deploy-all
 
 CARGO := cargo
 CONTRACTS_DIR := packages/contracts
@@ -24,3 +24,8 @@ integration-test:
 
 clean:
 	cd $(CONTRACTS_DIR) && $(CARGO) clean
+
+deploy-testnet:
+	cd $(CONTRACTS_DIR) && bash scripts/deploy.sh
+
+deploy-all: build deploy-testnet
