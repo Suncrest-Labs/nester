@@ -9,6 +9,7 @@ use nester_common::ContractError;
 
 const ESCROW: Symbol = symbol_short!("ESCROW");
 const CONTRIB: Symbol = symbol_short!("CONTRIB");
+const REFUND: Symbol = symbol_short!("REFUND");
 
 // ---------------------------------------------------------------------------
 // Storage
@@ -142,6 +143,40 @@ impl RentEscrowContract {
         set_total(&env, new_total);
 
         env.events().publish((ESCROW, CONTRIB, from), amount);
+    }
+
+    /// Refund a specific user's contribution back to them.
+    pub fn refund(env: Env, user: Address) {
+        require_initialized(&env);
+        user.require_auth();
+
+        if is_released(&env) {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
+
+        let contribution = get_contribution(&env, &user);
+        if contribution <= 0 {
+            panic_with_error!(&env, ContractError::InsufficientBalance);
+        }
+
+        let token_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
+        let contract_address = env.current_contract_address();
+
+        token::Client::new(&env, &token_address).transfer(
+            &contract_address,
+            &user,
+            &contribution,
+        );
+
+        set_contribution(&env, &user, 0);
+        let new_total = get_total(&env) - contribution;
+        set_total(&env, new_total);
+
+        env.events().publish((ESCROW, REFUND, user), contribution);
     }
 
     // -----------------------------------------------------------------------

@@ -93,3 +93,47 @@ fn test_contribute_negative_fails() {
     }));
     assert!(result.is_err());
 }
+
+#[test]
+fn test_refund() {
+    let (env, _landlord, token_address, contract_id, client) = setup(3_000);
+    let user = Address::generate(&env);
+
+    mint_tokens(&env, &token_address, &user, 5_000);
+    client.contribute(&user, &2_000);
+
+    client.refund(&user);
+
+    assert_eq!(client.get_contribution(&user), 0);
+    assert_eq!(client.get_total_contributions(), 0);
+
+    let token = TokenClient::new(&env, &token_address);
+    assert_eq!(token.balance(&user), 5_000);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_refund_no_contribution_fails() {
+    let (env, _landlord, _token_address, _contract_id, client) = setup(3_000);
+    let user = Address::generate(&env);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.refund(&user);
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_double_refund_fails() {
+    let (env, _landlord, token_address, _contract_id, client) = setup(3_000);
+    let user = Address::generate(&env);
+
+    mint_tokens(&env, &token_address, &user, 5_000);
+    client.contribute(&user, &2_000);
+    client.refund(&user);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.refund(&user);
+    }));
+    assert!(result.is_err());
+}
