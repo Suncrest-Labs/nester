@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 	"net/http"
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
+	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
@@ -40,6 +42,13 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/users/{userId}/vaults", h.listUserVaults)
 }
 
+func (h *VaultHandler) RegisterProtected(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
+	mux.Handle("POST /api/v1/vaults", authMiddleware(http.HandlerFunc(h.createVault)))
+	mux.Handle("GET /api/v1/vaults/{id}", authMiddleware(http.HandlerFunc(h.getVault)))
+	mux.Handle("GET /api/v1/vaults/{id}/allocations", authMiddleware(http.HandlerFunc(h.getAllocations)))
+	mux.Handle("GET /api/v1/users/{userId}/vaults", authMiddleware(http.HandlerFunc(h.listUserVaults)))
+}
+
 func (h *VaultHandler) createVault(w http.ResponseWriter, r *http.Request) {
 	var request createVaultRequest
 	if err := decodeJSON(r, &request); err != nil {
@@ -47,9 +56,14 @@ func (h *VaultHandler) createVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := uuid.Parse(request.UserID)
+	userID, err := middleware.AuthenticatedUserID(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "user_id must be a valid UUID")
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	if strings.TrimSpace(request.UserID) != "" && request.UserID != userID.String() {
+		writeError(w, http.StatusForbidden, "cannot create vault for another user")
 		return
 	}
 
@@ -85,6 +99,11 @@ func (h *VaultHandler) getVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.isOwner(r, model.UserID) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, model)
 }
 
@@ -92,6 +111,11 @@ func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
 	userID, err := uuid.Parse(r.PathValue("userId"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "user id must be a valid UUID")
+		return
+	}
+
+	if !h.isOwner(r, userID) {
+		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
@@ -117,7 +141,20 @@ func (h *VaultHandler) getAllocations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.isOwner(r, vault.UserID) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, vault.Allocations)
+}
+
+func (h *VaultHandler) isOwner(r *http.Request, resourceUserID uuid.UUID) bool {
+	authenticatedUserID, err := middleware.AuthenticatedUserID(r.Context())
+	if err != nil {
+		return false
+	}
+	return authenticatedUserID == resourceUserID
 }
 
 func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
@@ -157,7 +194,6 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorResponse{Error: message})
 }
-
 
 // validateCurrencyCode verifies the currency code is valid (ISO 4217 or crypto token format)
 func validateCurrencyCode(code string) error {

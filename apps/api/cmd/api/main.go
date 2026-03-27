@@ -16,6 +16,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+	"github.com/suncrestlabs/nester/apps/api/internal/router"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
@@ -52,13 +53,24 @@ func run() error {
 
 	settlementRepository := postgres.NewSettlementRepository(db)
 	settlementService := service.NewSettlementService(settlementRepository)
-	settlementHandler := handler.NewSettlementHandler(settlementService)
+	settlementHandler := handler.NewSettlementHandler(settlementService, vaultService)
+
+	authRepository := postgres.NewAuthRepository(db)
+	authService := service.NewAuthService(authRepository, service.AuthConfigInput{
+		Issuer:          cfg.Auth().JWTIssuer(),
+		AccessSecret:    cfg.Auth().JWTAccessSecret(),
+		RefreshSecret:   cfg.Auth().JWTRefreshSecret(),
+		AccessTokenTTL:  cfg.Auth().AccessTokenTTL(),
+		RefreshTokenTTL: cfg.Auth().RefreshTokenTTL(),
+		NonceTTL:        cfg.Auth().NonceTTL(),
+	})
+	authHandler := handler.NewAuthHandler(authService)
+	authMiddleware := middleware.AuthMiddleware(authService)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(db, cfg.Database().ConnectionTimeout()))
 	mux.HandleFunc("GET /healthz", healthHandler(db, cfg.Database().ConnectionTimeout()))
-	vaultHandler.Register(mux)
-	settlementHandler.Register(mux)
+	router.Register(mux, authHandler, vaultHandler, settlementHandler, authMiddleware)
 
 	server := &http.Server{
 		Addr:         cfg.Server().Address(),

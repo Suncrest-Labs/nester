@@ -18,6 +18,7 @@ type Config struct {
 	server      ServerConfig
 	database    DatabaseConfig
 	stellar     StellarConfig
+	auth        AuthConfig
 	log         LogConfig
 }
 
@@ -39,6 +40,15 @@ type StellarConfig struct {
 	networkPassphrase string
 	rpcURL            string
 	horizonURL        string
+}
+
+type AuthConfig struct {
+	jwtIssuer        string
+	jwtAccessSecret  string
+	jwtRefreshSecret string
+	accessTokenTTL   time.Duration
+	refreshTokenTTL  time.Duration
+	nonceTTL         time.Duration
 }
 
 type LogConfig struct {
@@ -81,6 +91,14 @@ func Load() (*Config, error) {
 			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
 			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
 		},
+		auth: AuthConfig{
+			jwtIssuer:        loader.stringDefault("AUTH_JWT_ISSUER", "nester-api"),
+			jwtAccessSecret:  loader.requiredString("AUTH_JWT_ACCESS_SECRET"),
+			jwtRefreshSecret: loader.requiredString("AUTH_JWT_REFRESH_SECRET"),
+			accessTokenTTL:   loader.durationDefault("AUTH_ACCESS_TOKEN_TTL", 15*time.Minute),
+			refreshTokenTTL:  loader.durationDefault("AUTH_REFRESH_TOKEN_TTL", 7*24*time.Hour),
+			nonceTTL:         loader.durationDefault("AUTH_NONCE_TTL", 5*time.Minute),
+		},
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
 			format: strings.ToLower(loader.stringDefault("LOG_FORMAT", defaultLogFormat(environment))),
@@ -110,6 +128,10 @@ func (c Config) Database() DatabaseConfig {
 
 func (c Config) Stellar() StellarConfig {
 	return c.stellar
+}
+
+func (c Config) Auth() AuthConfig {
+	return c.auth
 }
 
 func (c Config) Log() LogConfig {
@@ -143,6 +165,30 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.database.connectionTimeout <= 0 {
 		loader.addError("DATABASE_CONNECTION_TIMEOUT must be greater than 0")
+	}
+
+	if strings.TrimSpace(c.auth.jwtIssuer) == "" {
+		loader.addError("AUTH_JWT_ISSUER is required")
+	}
+
+	if strings.TrimSpace(c.auth.jwtAccessSecret) == "" {
+		loader.addError("AUTH_JWT_ACCESS_SECRET is required")
+	}
+
+	if strings.TrimSpace(c.auth.jwtRefreshSecret) == "" {
+		loader.addError("AUTH_JWT_REFRESH_SECRET is required")
+	}
+
+	if c.auth.accessTokenTTL <= 0 {
+		loader.addError("AUTH_ACCESS_TOKEN_TTL must be greater than 0")
+	}
+
+	if c.auth.refreshTokenTTL <= 0 {
+		loader.addError("AUTH_REFRESH_TOKEN_TTL must be greater than 0")
+	}
+
+	if c.auth.nonceTTL <= 0 {
+		loader.addError("AUTH_NONCE_TTL must be greater than 0")
 	}
 
 	if !isOneOf(c.log.level, "debug", "info", "warn", "error") {
@@ -200,6 +246,30 @@ func (s StellarConfig) RPCURL() string {
 
 func (s StellarConfig) HorizonURL() string {
 	return s.horizonURL
+}
+
+func (a AuthConfig) JWTIssuer() string {
+	return a.jwtIssuer
+}
+
+func (a AuthConfig) JWTAccessSecret() string {
+	return a.jwtAccessSecret
+}
+
+func (a AuthConfig) JWTRefreshSecret() string {
+	return a.jwtRefreshSecret
+}
+
+func (a AuthConfig) AccessTokenTTL() time.Duration {
+	return a.accessTokenTTL
+}
+
+func (a AuthConfig) RefreshTokenTTL() time.Duration {
+	return a.refreshTokenTTL
+}
+
+func (a AuthConfig) NonceTTL() time.Duration {
+	return a.nonceTTL
 }
 
 func (l LogConfig) Level() string {

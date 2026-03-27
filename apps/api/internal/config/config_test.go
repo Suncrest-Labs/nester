@@ -3,8 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"sync"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,6 +19,8 @@ func baseEnv(t *testing.T) {
 		"SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_SHUTDOWN_TIMEOUT",
 		"DATABASE_DSN", "DATABASE_POOL_SIZE", "DATABASE_CONNECTION_TIMEOUT",
 		"STELLAR_NETWORK_PASSPHRASE", "STELLAR_RPC_URL", "STELLAR_HORIZON_URL",
+		"AUTH_JWT_ISSUER", "AUTH_JWT_ACCESS_SECRET", "AUTH_JWT_REFRESH_SECRET",
+		"AUTH_ACCESS_TOKEN_TTL", "AUTH_REFRESH_TOKEN_TTL", "AUTH_NONCE_TTL",
 		"LOG_LEVEL", "LOG_FORMAT",
 	} {
 		t.Setenv(key, "")
@@ -32,6 +34,8 @@ func requiredEnv(t *testing.T) {
 	t.Setenv("STELLAR_NETWORK_PASSPHRASE", "Test Network")
 	t.Setenv("STELLAR_RPC_URL", "https://rpc.example.com")
 	t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
+	t.Setenv("AUTH_JWT_ACCESS_SECRET", "access-secret-for-tests")
+	t.Setenv("AUTH_JWT_REFRESH_SECRET", "refresh-secret-for-tests")
 }
 
 func TestLoadFromDotEnv(t *testing.T) {
@@ -50,6 +54,8 @@ func TestLoadFromDotEnv(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Test Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_ACCESS_SECRET=dotenv-access-secret",
+		"AUTH_JWT_REFRESH_SECRET=dotenv-refresh-secret",
 	}, "\n"))
 
 	chdir(t, dir)
@@ -96,6 +102,8 @@ func TestLoadMissingRequiredFields(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE is required",
 		"STELLAR_RPC_URL is required",
 		"STELLAR_HORIZON_URL is required",
+		"AUTH_JWT_ACCESS_SECRET is required",
+		"AUTH_JWT_REFRESH_SECRET is required",
 	} {
 		if !strings.Contains(message, expected) {
 			t.Fatalf("expected error to contain %q, got %q", expected, message)
@@ -166,6 +174,8 @@ func TestLoadEnvVarsTakePrecedenceOverDotEnv(t *testing.T) {
 	t.Setenv("STELLAR_NETWORK_PASSPHRASE", "From EnvVar")
 	t.Setenv("STELLAR_RPC_URL", "https://envvar-rpc.example.com")
 	t.Setenv("STELLAR_HORIZON_URL", "https://envvar-horizon.example.com")
+	t.Setenv("AUTH_JWT_ACCESS_SECRET", "env-access-secret")
+	t.Setenv("AUTH_JWT_REFRESH_SECRET", "env-refresh-secret")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -175,6 +185,8 @@ func TestLoadEnvVarsTakePrecedenceOverDotEnv(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=From DotEnv",
 		"STELLAR_RPC_URL=https://dotenv-rpc.example.com",
 		"STELLAR_HORIZON_URL=https://dotenv-horizon.example.com",
+		"AUTH_JWT_ACCESS_SECRET=dotenv-access-secret",
+		"AUTH_JWT_REFRESH_SECRET=dotenv-refresh-secret",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -207,6 +219,8 @@ func TestLoadConcurrentCalls(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Concurrent Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_ACCESS_SECRET=dotenv-access-secret",
+		"AUTH_JWT_REFRESH_SECRET=dotenv-refresh-secret",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -256,6 +270,8 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("SERVER_PORT", "9091")
 	t.Setenv("DATABASE_DSN", "postgres://env:secret@localhost:5432/nester?sslmode=disable")
+	t.Setenv("AUTH_JWT_ACCESS_SECRET", "env-access-secret")
+	t.Setenv("AUTH_JWT_REFRESH_SECRET", "env-refresh-secret")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -265,6 +281,8 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=From DotEnv",
 		"STELLAR_RPC_URL=https://dotenv-rpc.example.com",
 		"STELLAR_HORIZON_URL=https://dotenv-horizon.example.com",
+		"AUTH_JWT_ACCESS_SECRET=dotenv-access-secret",
+		"AUTH_JWT_REFRESH_SECRET=dotenv-refresh-secret",
 		"LOG_LEVEL=warn",
 	}, "\n"))
 	chdir(t, dir)
@@ -295,10 +313,10 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 // only a subset of required fields are missing.
 func TestLoadMissingRequiredFieldsPartial(t *testing.T) {
 	cases := []struct {
-		name          string
-		set           func(t *testing.T)
-		wantMissing   []string
-		wantNotInErr  []string
+		name         string
+		set          func(t *testing.T)
+		wantMissing  []string
+		wantNotInErr []string
 	}{
 		{
 			name: "missing database dsn only",
@@ -363,6 +381,8 @@ func TestLoadAllDefaults(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Test Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_ACCESS_SECRET=dotenv-access-secret",
+		"AUTH_JWT_REFRESH_SECRET=dotenv-refresh-secret",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -448,6 +468,8 @@ func TestLoadUnknownKeysIgnored(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Test Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_ACCESS_SECRET=dotenv-access-secret",
+		"AUTH_JWT_REFRESH_SECRET=dotenv-refresh-secret",
 		"UNKNOWN_KEY_ONE=some-value",
 		"ANOTHER_UNKNOWN=ignored",
 		"TOTALLY_MADE_UP=whatever",
@@ -477,6 +499,8 @@ func TestLoadEmptyEnvVarsTreatedAsUnset(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Test Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_ACCESS_SECRET=dotenv-access-secret",
+		"AUTH_JWT_REFRESH_SECRET=dotenv-refresh-secret",
 	}, "\n"))
 	chdir(t, dir)
 

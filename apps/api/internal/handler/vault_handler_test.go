@@ -137,9 +137,58 @@ func TestVaultHandlerNotFoundAndInvalidUser(t *testing.T) {
 	}
 }
 
+func TestVaultHandlerProtectedRoutesRequireOwnership(t *testing.T) {
+	userID := uuid.New()
+	otherUserID := uuid.New()
+	repository := newHandlerRepository(userID, otherUserID)
+	vaultService := service.NewVaultService(repository)
+	handler := NewVaultHandler(vaultService)
+	mux := http.NewServeMux()
+	handler.RegisterProtected(mux, middleware.AuthMiddleware(stubAccessAuthenticator{
+		principal: service.AuthPrincipal{UserID: userID, WalletAddress: "GTEST"},
+	}))
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/v1/users/" + otherUserID.String() + "/vaults")
+	if err != nil {
+		t.Fatalf("GET protected vault list error = %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth header, got %d", response.StatusCode)
+	}
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/users/"+otherUserID.String()+"/vaults", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer valid-token")
+
+	authenticatedResponse, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("authenticated GET error = %v", err)
+	}
+	defer authenticatedResponse.Body.Close()
+
+	if authenticatedResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for another user's vaults, got %d", authenticatedResponse.StatusCode)
+	}
+}
+
 type handlerRepository struct {
 	users  map[uuid.UUID]struct{}
 	vaults map[uuid.UUID]vault.Vault
+}
+
+type stubAccessAuthenticator struct {
+	principal service.AuthPrincipal
+}
+
+func (s stubAccessAuthenticator) AuthenticateAccessToken(_ string) (service.AuthPrincipal, error) {
+	return s.principal, nil
 }
 
 func newHandlerRepository(userIDs ...uuid.UUID) *handlerRepository {
