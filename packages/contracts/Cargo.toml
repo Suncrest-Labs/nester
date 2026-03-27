@@ -4,6 +4,7 @@ members = [
   "contracts/*",
   "libs/common",
   "libs/test_utils",
+  "tests/integration",
 ]
 
 [workspace.dependencies]

@@ -1,0 +1,21 @@
+[package]
+name = "nester-integration-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# This crate contains only tests — no deployable artifact is produced.
+[lib]
+name = "nester_integration_tests"
+crate-type = ["rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk                  = { workspace = true, features = ["testutils"] }
+nester-test-utils            = { path = "../../libs/test_utils" }
+nester-common                = { path = "../../libs/common" }
+nester-access-control        = { path = "../../contracts/access_control" }
+vault-contract               = { path = "../../contracts/vault" }
+vault-token-contract         = { path = "../../contracts/vault_token" }
+yield-registry-contract      = { path = "../../contracts/yield_registry" }
+allocation-strategy-contract = { path = "../../contracts/allocation_strategy" }

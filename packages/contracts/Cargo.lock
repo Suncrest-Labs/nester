@@ -666,11 +666,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "nester-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "allocation-strategy-contract",
+ "nester-access-control",
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+ "vault-contract",
+ "vault-token-contract",
+ "yield-registry-contract",
+]
+
+[[package]]
 name = "nester-test-utils"
 version = "0.1.0"
 dependencies = [
+ "allocation-strategy-contract",
  "nester-common",
  "soroban-sdk",
+ "vault-contract",
+ "vault-token-contract",
+ "yield-registry-contract",
 ]
 
 [[package]]

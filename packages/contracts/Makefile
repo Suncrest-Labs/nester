@@ -1,14 +1,15 @@
-.PHONY: build test fmt clippy clean help deploy-testnet
+.PHONY: build test integration-test fmt clippy clean help deploy-testnet
 
 help:
 	@echo "Nester Soroban Workspace Commands"
 	@echo "=================================="
-	@echo "make build           - Build all contracts to WASM"
-	@echo "make test            - Run all tests"
-	@echo "make fmt             - Format code with cargo fmt"
-	@echo "make clippy          - Run clippy linter (must pass clean)"
-	@echo "make clean           - Remove build artifacts"
-	@echo "make deploy-testnet  - Deploy contracts to Stellar testnet"
+	@echo "make build            - Build all contracts to WASM"
+	@echo "make test             - Run all unit tests"
+	@echo "make integration-test - Run multi-contract integration tests only"
+	@echo "make fmt              - Format code with cargo fmt"
+	@echo "make clippy           - Run clippy linter (must pass clean)"
+	@echo "make clean            - Remove build artifacts"
+	@echo "make deploy-testnet   - Deploy contracts to Stellar testnet"
 
 build:
 	@echo "Building all Soroban contracts to WASM..."
@@ -25,6 +26,11 @@ test:
 	@echo "Running all tests..."
 	@cargo test --lib
 	@echo "✓ All tests passed"
+
+integration-test:
+	@echo "Running multi-contract integration tests..."
+	@cargo test -p nester-integration-tests --lib
+	@echo "✓ Integration tests passed"
 
 fmt:
 	@echo "Formatting code..."
