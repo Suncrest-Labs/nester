@@ -19,6 +19,7 @@ type Config struct {
 	database    DatabaseConfig
 	stellar     StellarConfig
 	log         LogConfig
+	intelligence IntelligenceConfig
 }
 
 type ServerConfig struct {
@@ -42,9 +43,8 @@ type StellarConfig struct {
 	sourceKey         string
 }
 
-type LogConfig struct {
-	level  string
-	format string
+type IntelligenceConfig struct {
+	url string
 }
 
 func Load() (*Config, error) {
@@ -87,6 +87,9 @@ func Load() (*Config, error) {
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
 			format: strings.ToLower(loader.stringDefault("LOG_FORMAT", defaultLogFormat(environment))),
 		},
+		intelligence: IntelligenceConfig{
+			url: loader.requiredURL("INTELLIGENCE_URL"),
+		},
 	}
 
 	cfg.validate(&loader)
@@ -116,6 +119,10 @@ func (c Config) Stellar() StellarConfig {
 
 func (c Config) Log() LogConfig {
 	return c.log
+}
+
+func (c Config) Intelligence() IntelligenceConfig {
+	return c.intelligence
 }
 
 func (c *Config) validate(loader *envLoader) {
@@ -214,6 +221,10 @@ func (l LogConfig) Level() string {
 
 func (l LogConfig) Format() string {
 	return l.format
+}
+
+func (i IntelligenceConfig) URL() string {
+	return i.url
 }
 
 type envLoader struct {

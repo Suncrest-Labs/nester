@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,10 +14,14 @@ import (
 
 type SettlementService struct {
 	repository offramp.Repository
+	riskClient *RiskClient
 }
 
-func NewSettlementService(repository offramp.Repository) *SettlementService {
-	return &SettlementService{repository: repository}
+func NewSettlementService(repository offramp.Repository, riskURL string) *SettlementService {
+	return &SettlementService{
+		repository: repository,
+		riskClient: NewRiskClient(riskURL),
+	}
 }
 
 // InitiateSettlementInput carries caller-supplied data for a new settlement.
@@ -78,10 +83,81 @@ func (s *SettlementService) InitiateSettlement(ctx context.Context, input Initia
 		FiatAmount:   input.FiatAmount,
 		ExchangeRate: input.ExchangeRate,
 		Destination:  input.Destination,
-		Status:       offramp.StatusInitiated,
 	}
 
+	// Perform risk evaluation
+	riskStatus, err := s.evaluateRisk(ctx, model)
+	if err != nil {
+		// Default to block for critical failures
+		return offramp.Settlement{}, fmt.Errorf("risk evaluation failed: %w", err)
+	}
+
+	if riskStatus == offramp.StatusBlocked {
+		return offramp.Settlement{}, fmt.Errorf("transaction blocked by fraud detection")
+	}
+
+	model.Status = riskStatus
+
 	return s.repository.Create(ctx, model)
+}
+
+func (s *SettlementService) evaluateRisk(ctx context.Context, model offramp.Settlement) (offramp.SettlementStatus, error) {
+	history, err := s.repository.GetByUserID(ctx, model.UserID, "")
+	if err != nil {
+		return "", err
+	}
+
+	avg := decimal.Zero
+	count := 0
+	velocity24h := 0
+	isNovelAccount := true
+	now := time.Now().UTC()
+	yesterday := now.Add(-24 * time.Hour)
+
+	for _, prev := range history {
+		if prev.Status == offramp.StatusConfirmed {
+			avg = avg.Add(prev.Amount)
+			count++
+		}
+		if prev.CreatedAt.After(yesterday) {
+			velocity24h++
+		}
+		if prev.Destination.AccountNumber == model.Destination.AccountNumber {
+			isNovelAccount = false
+		}
+	}
+
+	historyAvg := float64(0)
+	if count > 0 {
+		historyAvg, _ = avg.Div(decimal.NewFromInt(int64(count))).Float64()
+	}
+
+	amount, _ := model.Amount.Float64()
+
+	riskResp, err := s.riskClient.Evaluate(ctx, RiskEvaluationRequest{
+		UserID:             model.UserID.String(),
+		Amount:             amount,
+		HistoryAvg:         historyAvg,
+		Velocity24h:        velocity24h,
+		IsNovelAccount:     isNovelAccount,
+		DestinationAccount: model.Destination.AccountNumber,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	switch riskResp.RecommendedAction {
+	case "block":
+		return offramp.StatusBlocked, nil
+	case "hold":
+		return offramp.StatusHeld, nil
+	case "flag":
+		// Flagged transactions still proceed but are marked for review
+		// Here we keep it as initiated or we could add a "flagged" flag
+		return offramp.StatusInitiated, nil
+	default:
+		return offramp.StatusInitiated, nil
+	}
 }
 
 // GetSettlement retrieves a single settlement by ID.
