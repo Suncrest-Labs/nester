@@ -4,9 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,9 +18,11 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
+	"github.com/suncrestlabs/nester/apps/api/internal/indexer"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/server"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	"github.com/suncrestlabs/nester/internal/stellar"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
@@ -24,6 +30,9 @@ var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
 	}
@@ -45,6 +54,37 @@ func run() error {
 		return err
 	}
 	defer db.Close()
+
+	// Initialize Stellar Client
+	stellarClient, err := stellar.NewClient(context.Background(), stellar.Config{
+		NetworkID:    cfg.Stellar().NetworkPassphrase(),
+		RPCURL:       cfg.Stellar().RPCURL(),
+		SourceKey:    cfg.Stellar().SourceKey(),
+		Network:      stellar.Testnet, // Default or from config
+	})
+	if err != nil {
+		return fmt.Errorf("stellar client: %w", err)
+	}
+
+	// Initialize Indexer
+	idx := indexer.New(db, stellarClient, baseLogger)
+
+	// Handle CLI commands
+	if len(os.Args) > 1 && os.Args[1] == "index" {
+		if len(os.Args) > 2 && os.Args[2] == "backfill" {
+			backfillCmd := flag.NewFlagSet("backfill", flag.ExitOnError)
+			fromLedger := backfillCmd.Uint64("from-ledger", 0, "Ledger to start backfill from")
+			if err := backfillCmd.Parse(os.Args[3:]); err != nil {
+				return err
+			}
+			if *fromLedger == 0 {
+				return errors.New("--from-ledger is required and must be > 0")
+			}
+			baseLogger.Info("starting manual backfill", "ledger", *fromLedger)
+			return idx.BackfillManual(context.Background(), *fromLedger)
+		}
+		return errors.New("unknown index command: " + os.Args[2])
+	}
 
 	vaultRepository := postgres.NewVaultRepository(db)
 	vaultService := service.NewVaultService(vaultRepository)
@@ -68,10 +108,17 @@ func run() error {
 		WriteTimeout: cfg.Server().WriteTimeout(),
 	}
 
-	baseLogger.Info("starting server", "addr", cfg.Server().Address(), "environment", cfg.Environment())
-
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Start Indexer in background
+	go func() {
+		if err := idx.Start(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("indexer stopped unexpectedly", "error", err)
+		}
+	}()
+
+	baseLogger.Info("starting server", "addr", cfg.Server().Address(), "environment", cfg.Environment())
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -92,10 +139,10 @@ func run() error {
 
 	stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server().GracefulShutdown())
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), cfg.Server().GracefulShutdown())
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(timeoutCtx); err != nil {
 		return err
 	}
 

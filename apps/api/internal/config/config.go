@@ -39,6 +39,7 @@ type StellarConfig struct {
 	networkPassphrase string
 	rpcURL            string
 	horizonURL        string
+	sourceKey         string
 }
 
 type LogConfig struct {
@@ -80,6 +81,7 @@ func Load() (*Config, error) {
 			networkPassphrase: loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
 			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
 			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
+			sourceKey:         loader.stringDefault("STELLAR_SOURCE_KEY", "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), // Default for read-only
 		},
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
@@ -200,6 +202,10 @@ func (s StellarConfig) RPCURL() string {
 
 func (s StellarConfig) HorizonURL() string {
 	return s.horizonURL
+}
+
+func (s StellarConfig) SourceKey() string {
+	return s.sourceKey
 }
 
 func (l LogConfig) Level() string {
