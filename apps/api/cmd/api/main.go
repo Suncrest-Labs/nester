@@ -14,8 +14,8 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
-	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+	"github.com/suncrestlabs/nester/apps/api/internal/server"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
@@ -54,15 +54,16 @@ func run() error {
 	settlementService := service.NewSettlementService(settlementRepository)
 	settlementHandler := handler.NewSettlementHandler(settlementService)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(db, cfg.Database().ConnectionTimeout()))
-	mux.HandleFunc("GET /healthz", healthHandler(db, cfg.Database().ConnectionTimeout()))
-	vaultHandler.Register(mux)
-	settlementHandler.Register(mux)
+	h := server.New(
+		baseLogger,
+		vaultService,
+		settlementService,
+		healthHandler(db, cfg.Database().ConnectionTimeout()),
+	)
 
-	server := &http.Server{
+	srv := &http.Server{
 		Addr:         cfg.Server().Address(),
-		Handler:      middleware.LimitRequestBody(1 * 1024 * 1024)(middleware.Logging(baseLogger)(mux)),
+		Handler:      h,
 		ReadTimeout:  cfg.Server().ReadTimeout(),
 		WriteTimeout: cfg.Server().WriteTimeout(),
 	}
@@ -74,7 +75,7 @@ func run() error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		err := server.ListenAndServe()
+		err := srv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 			return
@@ -94,7 +95,7 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server().GracefulShutdown())
 	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(ctx); err != nil {
 		return err
 	}
 
