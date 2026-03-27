@@ -281,3 +281,44 @@ fn test_withdraw_emits_event() {
 
     assert!(!env.events().all().is_empty());
 }
+
+#[test]
+fn test_large_deposit_and_withdraw() {
+    let (env, _admin, token_address, contract_id, client) = setup();
+    let user = Address::generate(&env);
+
+    let large_amount: i128 = i128::MAX / 2;
+    mint_tokens(&env, &token_address, &user, large_amount);
+
+    let balance = client.deposit(&user, &large_amount);
+    assert_eq!(balance, large_amount);
+    assert_eq!(client.get_balance(&user), large_amount);
+    assert_eq!(client.get_total_deposits(), large_amount);
+
+    let token = TokenClient::new(&env, &token_address);
+    assert_eq!(token.balance(&contract_id), large_amount);
+
+    let balance = client.withdraw(&user, &large_amount);
+    assert_eq!(balance, 0);
+    assert_eq!(client.get_balance(&user), 0);
+    assert_eq!(client.get_total_deposits(), 0);
+}
+
+#[test]
+fn test_multiple_large_deposits_overflow_protection() {
+    let (env, _admin, token_address, _contract_id, client) = setup();
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+
+    let large_amount: i128 = i128::MAX / 2;
+    mint_tokens(&env, &token_address, &user_a, large_amount);
+    mint_tokens(&env, &token_address, &user_b, large_amount);
+
+    client.deposit(&user_a, &large_amount);
+
+    // Second large deposit should panic due to overflow in total tracking
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.deposit(&user_b, &large_amount);
+    }));
+    assert!(result.is_err());
+}
