@@ -6,7 +6,7 @@ use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Address, Env,
+    Address, Env, String,
 };
 use nester_access_control::Role;
 
@@ -469,4 +469,10 @@ fn test_emergency_withdraw() {
     assert_eq!(returned, 1000);
     assert_eq!(client.get_shares(&user), 0);
     assert_eq!(client.get_total_deposits(), 0);
+}
+
+#[test]
+fn test_version() {
+    let (env, _admin, _token_address, _contract_id, client) = setup();
+    assert_eq!(client.version(), String::from_str(&env, "1.0.0"));
 }

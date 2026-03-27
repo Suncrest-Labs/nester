@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
-    IntoVal, Symbol,
+    IntoVal, String, Symbol,
 };
 
 use nester_access_control::{AccessControl, Role};
@@ -677,6 +677,11 @@ impl VaultContract {
 
     pub fn get_circuit_breaker_config(env: Env) -> CircuitBreakerConfig {
         env.storage().instance().get(&DataKey::CircuitBreakerConfig).expect("CB config missing")
+    }
+
+    /// Return the contract version string.
+    pub fn version(env: Env) -> String {
+        String::from_str(&env, "1.0.0")
     }
 }
 
