@@ -20,6 +20,8 @@ export interface VaultDefinition {
     strategies: string[];
     lockDays: number;
     earlyWithdrawalPenaltyPct: number;
+    performanceFeePct: number;
+    managementFeePct: number;
     asset: "USDC";
 }
 
@@ -36,7 +38,9 @@ export const vaultDefinitions: VaultDefinition[] = [
         color: "emerald",
         strategies: ["Blend Lending", "Aave stable pools"],
         lockDays: 30,
-        earlyWithdrawalPenaltyPct: 1.5,
+        earlyWithdrawalPenaltyPct: 0.1,
+        performanceFeePct: 10,
+        managementFeePct: 0.5,
         asset: "USDC",
     },
     {
@@ -51,7 +55,9 @@ export const vaultDefinitions: VaultDefinition[] = [
         color: "blue",
         strategies: ["Lending + LP", "Kamino integration"],
         lockDays: 45,
-        earlyWithdrawalPenaltyPct: 2,
+        earlyWithdrawalPenaltyPct: 0.1,
+        performanceFeePct: 10,
+        managementFeePct: 0.5,
         asset: "USDC",
     },
     {
@@ -66,7 +72,9 @@ export const vaultDefinitions: VaultDefinition[] = [
         color: "orange",
         strategies: ["Leveraged yield", "Volatile LP"],
         lockDays: 60,
-        earlyWithdrawalPenaltyPct: 3.5,
+        earlyWithdrawalPenaltyPct: 0.1,
+        performanceFeePct: 10,
+        managementFeePct: 0.5,
         asset: "USDC",
     },
     {
@@ -81,7 +89,9 @@ export const vaultDefinitions: VaultDefinition[] = [
         color: "purple",
         strategies: ["Index position", "Multi-protocol"],
         lockDays: 90,
-        earlyWithdrawalPenaltyPct: 4,
+        earlyWithdrawalPenaltyPct: 0.1,
+        performanceFeePct: 10,
+        managementFeePct: 0.5,
         asset: "USDC",
     },
 ];

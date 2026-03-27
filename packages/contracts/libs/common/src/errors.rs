@@ -12,4 +12,6 @@ pub enum ContractError {
     AllocationError = 7,
     RoleNotFound = 8,
     InvalidOperation = 9,
+    ExceedsLimit = 10,
+    CircuitBreakerTriggered = 11,
 }

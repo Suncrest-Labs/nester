@@ -6,125 +6,111 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/suncrestlabs/nester/apps/api/internal/api"
 )
 
-type rateLimiter struct {
-	sync.Mutex
-	// map of key (IP or wallet) -> window start time -> request count
-	ips     map[string]map[int64]int
-	wallets map[string]map[int64]int
+// bucket is a token-bucket entry for a single rate-limit key.
+type bucket struct {
+	mu         sync.Mutex
+	tokens     float64
+	lastRefill time.Time
 }
 
-func newRateLimiter() *rateLimiter {
-	rl := &rateLimiter{
-		ips:     make(map[string]map[int64]int),
-		wallets: make(map[string]map[int64]int),
+// limiter holds per-key token buckets.
+type limiter struct {
+	mu      sync.Mutex
+	buckets map[string]*bucket
+	limit   int
+	window  time.Duration
+}
+
+func newLimiter(limit int, window time.Duration) *limiter {
+	return &limiter{
+		buckets: make(map[string]*bucket),
+		limit:   limit,
+		window:  window,
 	}
-	// Background cleanup of old windows
-	go rl.cleanup()
-	return rl
 }
 
-func (rl *rateLimiter) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
-	for range ticker.C {
-		rl.Lock()
-		now := time.Now().Unix()
-		for key, windows := range rl.ips {
-			for start := range windows {
-				if start < now-60 { // Minute windows
-					delete(windows, start)
-				}
-			}
-			if len(windows) == 0 {
-				delete(rl.ips, key)
-			}
+// allow consumes one token for key. It returns true when the request is
+// allowed; otherwise it returns false along with an estimated wait duration
+// until the next token becomes available.
+func (l *limiter) allow(key string) (bool, time.Duration) {
+	l.mu.Lock()
+	b, ok := l.buckets[key]
+	if !ok {
+		// First request for this key — charge immediately, start with limit-1.
+		b = &bucket{tokens: float64(l.limit - 1), lastRefill: time.Now()}
+		l.buckets[key] = b
+		l.mu.Unlock()
+		return true, 0
+	}
+	l.mu.Unlock()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(b.lastRefill)
+	refill := elapsed.Seconds() / l.window.Seconds() * float64(l.limit)
+	b.tokens = min(float64(l.limit), b.tokens+refill)
+	b.lastRefill = now
+
+	if b.tokens >= 1 {
+		b.tokens--
+		return true, 0
+	}
+
+	// Estimate how long until one token is available.
+	wait := time.Duration((1-b.tokens)/float64(l.limit)*float64(l.window)) + time.Second
+	return false, wait
+}
+
+// IPRateLimiter returns middleware that enforces a per-remote-IP rate limit of
+// limit requests per window.
+func IPRateLimiter(limit int, window time.Duration) func(http.Handler) http.Handler {
+	l := newLimiter(limit, window)
+	return rateLimitMiddleware(l, func(r *http.Request) string {
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			return r.RemoteAddr
 		}
-		for key, windows := range rl.wallets {
-			for start := range windows {
-				if start < now-3600 { // Hour windows
-					delete(windows, start)
-				}
-			}
-			if len(windows) == 0 {
-				delete(rl.wallets, key)
-			}
-		}
-		rl.Unlock()
-	}
-}
-
-func (rl *rateLimiter) limitIP(ip string) (bool, time.Duration) {
-	rl.Lock()
-	defer rl.Unlock()
-
-	now := time.Now().Unix()
-	windowStart := now / 60 * 60
-
-	if _, ok := rl.ips[ip]; !ok {
-		rl.ips[ip] = make(map[int64]int)
-	}
-
-	count := rl.ips[ip][windowStart]
-	if count >= 100 {
-		return false, time.Duration(60-(now%60)) * time.Second
-	}
-
-	rl.ips[ip][windowStart]++
-	return true, 0
-}
-
-func (rl *rateLimiter) limitWallet(wallet string) (bool, time.Duration) {
-	rl.Lock()
-	defer rl.Unlock()
-
-	now := time.Now().Unix()
-	windowStart := now / 3600 * 3600
-
-	if _, ok := rl.wallets[wallet]; !ok {
-		rl.wallets[wallet] = make(map[int64]int)
-	}
-
-	count := rl.wallets[wallet][windowStart]
-	if count >= 20 {
-		return false, time.Duration(3600-(now%3600)) * time.Second
-	}
-
-	rl.wallets[wallet][windowStart]++
-	return true, 0
-}
-
-// RateLimit implements sliding window rate limiting.
-func RateLimit(next http.Handler) http.Handler {
-	rl := newRateLimiter()
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-		
-		// 1. IP Rate Limiting (100 req/min)
-		if ok, retryAfter := rl.limitIP(ip); !ok {
-			w.Header().Set("Retry-After", fmt.Sprintf("%.0f", retryAfter.Seconds()))
-			api.Error(w, http.StatusTooManyRequests, "global rate limit exceeded: try again later")
-			return
-		}
-
-		// 2. Wallet Rate Limiting (20 deposits/hour)
-		// Extract wallet from X-Wallet-Address header or similar if present.
-		// For this implementation, we assume the wallet address is passed in a header.
-		wallet := r.Header.Get("X-Wallet-Address")
-		if wallet != "" && r.Method == http.MethodPost { 
-			// Check if it's a deposit path (basic heuristic)
-			if r.URL.Path == "/api/v1/vaults/deposit" || r.URL.Path == "/api/v1/deposits" {
-				if ok, retryAfter := rl.limitWallet(wallet); !ok {
-					w.Header().Set("Retry-After", fmt.Sprintf("%.0f", retryAfter.Seconds()))
-					api.Error(w, http.StatusTooManyRequests, "wallet deposit limit exceeded: try again later")
-					return
-				}
-			}
-		}
-
-		next.ServeHTTP(w, r)
+		return ip
 	})
+}
+
+// WalletRateLimiter returns middleware that enforces a per-wallet rate limit.
+// extractWallet derives the wallet key from the request; an empty string means
+// no key is present and the request passes through unchecked.
+func WalletRateLimiter(limit int, window time.Duration, extractWallet func(*http.Request) string) func(http.Handler) http.Handler {
+	l := newLimiter(limit, window)
+	return rateLimitMiddleware(l, extractWallet)
+}
+
+func rateLimitMiddleware(l *limiter, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key := keyFn(r)
+			if key == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			allowed, wait := l.allow(key)
+			if !allowed {
+				retryAfter := int(wait.Seconds())
+				if retryAfter < 1 {
+					retryAfter = 1
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				// If you prefer the 'api' package error handling, replace the line below with:
+				// api.Error(w, http.StatusTooManyRequests, "rate limit exceeded")
+				fmt.Fprintf(w, `{"success":false,"error":{"code":429,"message":"rate limit exceeded"}}`)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
