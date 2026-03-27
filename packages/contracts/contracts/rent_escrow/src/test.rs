@@ -4,7 +4,7 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Events},
     token::{StellarAssetClient, TokenClient},
     Address, Env,
 };
@@ -134,6 +134,72 @@ fn test_double_refund_fails() {
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         client.refund(&user);
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_release() {
+    let (env, landlord, token_address, contract_id, client) = setup(3_000);
+    let user = Address::generate(&env);
+
+    mint_tokens(&env, &token_address, &user, 5_000);
+    client.contribute(&user, &3_000);
+
+    client.release(&landlord);
+
+    assert!(client.is_released());
+
+    let token = TokenClient::new(&env, &token_address);
+    assert_eq!(token.balance(&landlord), 3_000);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_release_before_target_fails() {
+    let (env, landlord, token_address, _contract_id, client) = setup(3_000);
+    let user = Address::generate(&env);
+
+    mint_tokens(&env, &token_address, &user, 5_000);
+    client.contribute(&user, &1_000);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.release(&landlord);
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_release_emits_event() {
+    let (env, landlord, token_address, _contract_id, client) = setup(3_000);
+    let user = Address::generate(&env);
+
+    mint_tokens(&env, &token_address, &user, 5_000);
+    client.contribute(&user, &3_000);
+    client.release(&landlord);
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that the AgreementReleased event was emitted
+    // The event topics should contain the "released" symbol
+    let last = events.last().unwrap();
+    // Topics are stored as a Vec<Val>; the first topic should be the "released" symbol
+    let topics_len = last.1.len();
+    assert!(topics_len > 0, "event should have at least one topic");
+}
+
+#[test]
+fn test_double_release_fails() {
+    let (env, landlord, token_address, _contract_id, client) = setup(3_000);
+    let user = Address::generate(&env);
+
+    mint_tokens(&env, &token_address, &user, 5_000);
+    client.contribute(&user, &3_000);
+    client.release(&landlord);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.release(&landlord);
     }));
     assert!(result.is_err());
 }

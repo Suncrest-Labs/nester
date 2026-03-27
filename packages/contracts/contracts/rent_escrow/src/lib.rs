@@ -10,6 +10,7 @@ use nester_common::ContractError;
 const ESCROW: Symbol = symbol_short!("ESCROW");
 const CONTRIB: Symbol = symbol_short!("CONTRIB");
 const REFUND: Symbol = symbol_short!("REFUND");
+const RELEASED: Symbol = symbol_short!("released");
 
 // ---------------------------------------------------------------------------
 // Storage
@@ -177,6 +178,52 @@ impl RentEscrowContract {
         set_total(&env, new_total);
 
         env.events().publish((ESCROW, REFUND, user), contribution);
+    }
+
+    /// Release funds to the landlord once the rent target is fully funded.
+    pub fn release(env: Env, landlord: Address) {
+        require_initialized(&env);
+        landlord.require_auth();
+
+        if is_released(&env) {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
+
+        let stored_landlord: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Landlord)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
+
+        if landlord != stored_landlord {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
+
+        let total = get_total(&env);
+        let target = get_rent_target(&env);
+
+        if total < target {
+            panic_with_error!(&env, ContractError::InsufficientBalance);
+        }
+
+        let token_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
+        let contract_address = env.current_contract_address();
+
+        token::Client::new(&env, &token_address).transfer(
+            &contract_address,
+            &landlord,
+            &total,
+        );
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Released, &true);
+
+        env.events().publish((RELEASED,), total);
     }
 
     // -----------------------------------------------------------------------
