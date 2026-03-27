@@ -20,6 +20,8 @@ type VaultHandler struct {
 	service *service.VaultService
 }
 
+var errAuthenticatedUserMismatch = errors.New("authenticated user mismatch")
+
 type createVaultRequest struct {
 	UserID          string `json:"user_id"`
 	ContractAddress string `json:"contract_address"`
@@ -56,14 +58,13 @@ func (h *VaultHandler) createVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := middleware.AuthenticatedUserID(r.Context())
+	userID, err := h.resolveCreateUserID(r, request.UserID)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	if strings.TrimSpace(request.UserID) != "" && request.UserID != userID.String() {
-		writeError(w, http.StatusForbidden, "cannot create vault for another user")
+		if errors.Is(err, errAuthenticatedUserMismatch) {
+			writeError(w, http.StatusForbidden, "cannot create vault for another user")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "user_id must be a valid UUID")
 		return
 	}
 
@@ -99,7 +100,7 @@ func (h *VaultHandler) getVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.isOwner(r, model.UserID) {
+	if h.authenticatedUserPresent(r) && !h.isOwner(r, model.UserID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -114,7 +115,7 @@ func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.isOwner(r, userID) {
+	if h.authenticatedUserPresent(r) && !h.isOwner(r, userID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -141,7 +142,7 @@ func (h *VaultHandler) getAllocations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.isOwner(r, vault.UserID) {
+	if h.authenticatedUserPresent(r) && !h.isOwner(r, vault.UserID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -155,6 +156,22 @@ func (h *VaultHandler) isOwner(r *http.Request, resourceUserID uuid.UUID) bool {
 		return false
 	}
 	return authenticatedUserID == resourceUserID
+}
+
+func (h *VaultHandler) authenticatedUserPresent(r *http.Request) bool {
+	_, err := middleware.AuthenticatedUserID(r.Context())
+	return err == nil
+}
+
+func (h *VaultHandler) resolveCreateUserID(r *http.Request, requestedUserID string) (uuid.UUID, error) {
+	if authenticatedUserID, err := middleware.AuthenticatedUserID(r.Context()); err == nil {
+		if strings.TrimSpace(requestedUserID) != "" && requestedUserID != authenticatedUserID.String() {
+			return uuid.Nil, errAuthenticatedUserMismatch
+		}
+		return authenticatedUserID, nil
+	}
+
+	return uuid.Parse(requestedUserID)
 }
 
 func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, err error) {

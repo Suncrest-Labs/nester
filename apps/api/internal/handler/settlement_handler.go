@@ -76,14 +76,13 @@ func (h *SettlementHandler) initiateSettlement(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	userID, err := middleware.AuthenticatedUserID(r.Context())
+	userID, err := h.resolveInitiatingUserID(r, req.UserID)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	if strings.TrimSpace(req.UserID) != "" && req.UserID != userID.String() {
-		writeError(w, http.StatusForbidden, "cannot create settlement for another user")
+		if errors.Is(err, errAuthenticatedUserMismatch) {
+			writeError(w, http.StatusForbidden, "cannot create settlement for another user")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "user_id must be a valid UUID")
 		return
 	}
 
@@ -93,7 +92,7 @@ func (h *SettlementHandler) initiateSettlement(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if h.vaultService != nil {
+	if h.vaultService != nil && h.authenticatedUserPresent(r) {
 		vaultModel, err := h.vaultService.GetVault(r.Context(), vaultID)
 		if err != nil {
 			if errors.Is(err, vault.ErrVaultNotFound) {
@@ -164,7 +163,7 @@ func (h *SettlementHandler) getSettlement(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if !h.isOwner(r, model.UserID) {
+	if h.authenticatedUserPresent(r) && !h.isOwner(r, model.UserID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -179,7 +178,7 @@ func (h *SettlementHandler) listUserSettlements(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if !h.isOwner(r, userID) {
+	if h.authenticatedUserPresent(r) && !h.isOwner(r, userID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -214,7 +213,7 @@ func (h *SettlementHandler) updateStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !h.isOwner(r, current.UserID) {
+	if h.authenticatedUserPresent(r) && !h.isOwner(r, current.UserID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -259,4 +258,20 @@ func (h *SettlementHandler) isOwner(r *http.Request, resourceUserID uuid.UUID) b
 		return false
 	}
 	return authenticatedUserID == resourceUserID
+}
+
+func (h *SettlementHandler) authenticatedUserPresent(r *http.Request) bool {
+	_, err := middleware.AuthenticatedUserID(r.Context())
+	return err == nil
+}
+
+func (h *SettlementHandler) resolveInitiatingUserID(r *http.Request, requestedUserID string) (uuid.UUID, error) {
+	if authenticatedUserID, err := middleware.AuthenticatedUserID(r.Context()); err == nil {
+		if strings.TrimSpace(requestedUserID) != "" && requestedUserID != authenticatedUserID.String() {
+			return uuid.Nil, errAuthenticatedUserMismatch
+		}
+		return authenticatedUserID, nil
+	}
+
+	return uuid.Parse(requestedUserID)
 }
