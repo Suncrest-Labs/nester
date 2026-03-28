@@ -165,6 +165,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+
+      - name: Add wasm32-unknown-unknown target
+        run: rustup target add wasm32-unknown-unknown
+
       - name: Build yield_registry WASM
         run: cargo build --release --target wasm32-unknown-unknown -p yield-registry-contract
 
