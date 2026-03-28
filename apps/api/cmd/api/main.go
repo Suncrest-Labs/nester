@@ -111,8 +111,8 @@ func run() error {
 }
 
 func healthHandler(db *repository.PostgresDB, timeout time.Duration) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
 		if err := db.Ping(ctx); err != nil {
