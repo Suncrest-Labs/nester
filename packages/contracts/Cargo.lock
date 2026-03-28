@@ -689,6 +689,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nester-snapshots"
+version = "0.1.0"
+
+[[package]]
 name = "nester-test-utils"
 version = "0.1.0"
 dependencies = [

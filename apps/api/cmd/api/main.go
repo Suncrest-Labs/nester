@@ -81,11 +81,24 @@ func run() error {
 		{PathPrefix: "/api/v1/", Public: false},
 	}
 	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
-	limiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
+	// Global rate limit applies to all requests per IP.
+	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
+	// Write rate limit is stricter and applies only to mutating methods (POST/PUT/PATCH/DELETE).
+	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 
 	server := &http.Server{
-		Addr:         cfg.Server().Address(),
-		Handler:      limiter(authenticator(middleware.LimitRequestBody(1 * 1024 * 1024)(middleware.Logging(baseLogger)(mux)))),
+		Addr: cfg.Server().Address(),
+		Handler: middleware.RecoverPanic(baseLogger)(
+			globalLimiter(
+				writeLimiter(
+					authenticator(
+						middleware.LimitRequestBody(1*1024*1024)(
+							middleware.Logging(baseLogger)(mux),
+						),
+					),
+				),
+			),
+		),
 		ReadTimeout:  cfg.Server().ReadTimeout(),
 		WriteTimeout: cfg.Server().WriteTimeout(),
 	}

@@ -1,12 +1,11 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
-	"github.com/suncrestlabs/nester/apps/api/internal/api"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
 type AuthHandler struct {
@@ -32,27 +31,27 @@ type ChallengeResponse struct {
 
 func (h *AuthHandler) handleChallenge(w http.ResponseWriter, r *http.Request) {
 	var req ChallengeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "invalid request body")
+	if err := decodeJSON(r, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid request body"))
 		return
 	}
 
 	if req.WalletAddress == "" {
-		api.Error(w, http.StatusBadRequest, "wallet_address is required")
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("wallet_address is required"))
 		return
 	}
 
 	challenge, err := h.authService.GenerateChallenge(r.Context(), req.WalletAddress)
 	if err != nil {
 		if errors.Is(err, service.ErrWalletInvalid) {
-			api.Error(w, http.StatusBadRequest, err.Error())
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 			return
 		}
-		api.Error(w, http.StatusInternalServerError, "failed to generate challenge")
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "failed to generate challenge"))
 		return
 	}
 
-	api.JSON(w, http.StatusOK, ChallengeResponse{Challenge: challenge})
+	response.WriteJSON(w, http.StatusOK, response.OK(ChallengeResponse{Challenge: challenge}))
 }
 
 type VerifyRequest struct {
@@ -67,25 +66,25 @@ type VerifyResponse struct {
 
 func (h *AuthHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 	var req VerifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "invalid request body")
+	if err := decodeJSON(r, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid request body"))
 		return
 	}
 
 	if req.WalletAddress == "" || req.Signature == "" || req.Challenge == "" {
-		api.Error(w, http.StatusBadRequest, "wallet_address, signature, and challenge are required")
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("wallet_address, signature, and challenge are required"))
 		return
 	}
 
 	token, err := h.authService.VerifyAndIssue(r.Context(), req.WalletAddress, req.Signature, req.Challenge)
 	if err != nil {
 		if errors.Is(err, service.ErrChallengeExpired) || errors.Is(err, service.ErrSignatureInvalid) || errors.Is(err, service.ErrWalletInvalid) {
-			api.Error(w, http.StatusUnauthorized, err.Error())
+			response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", err.Error()))
 			return
 		}
-		api.Error(w, http.StatusInternalServerError, "authentication failed")
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "authentication failed"))
 		return
 	}
 
-	api.JSON(w, http.StatusOK, VerifyResponse{Token: token})
+	response.WriteJSON(w, http.StatusOK, response.OK(VerifyResponse{Token: token}))
 }

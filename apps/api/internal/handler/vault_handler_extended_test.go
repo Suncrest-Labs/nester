@@ -115,12 +115,21 @@ func TestVaultHandlerGetVaultReturns404WhenNotFound(t *testing.T) {
 		t.Fatalf("expected status 404, got %d", response.StatusCode)
 	}
 
-	var errorResp errorResponse
-	if err := json.NewDecoder(response.Body).Decode(&errorResp); err != nil {
+	var errResp struct {
+		Success bool `json:"success"`
+		Error   struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&errResp); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
 
-	if errorResp.Error == "" {
+	if errResp.Success {
+		t.Fatal("expected success=false for error response")
+	}
+	if errResp.Error.Message == "" {
 		t.Fatal("error response should have error message")
 	}
 }
@@ -591,12 +600,21 @@ func TestVaultHandler_GetAllocations_NotFound(t *testing.T) {
 		t.Fatalf("expected status 404, got %d", response.StatusCode)
 	}
 
-	var errorResp errorResponse
-	if err := json.NewDecoder(response.Body).Decode(&errorResp); err != nil {
+	var errResp struct {
+		Success bool `json:"success"`
+		Error   struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&errResp); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
 
-	if errorResp.Error == "" {
+	if errResp.Success {
+		t.Fatal("expected success=false for error response")
+	}
+	if errResp.Error.Message == "" {
 		t.Fatal("error response should have error message")
 	}
 }
