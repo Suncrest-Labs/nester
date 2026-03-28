@@ -1,6 +1,6 @@
 .PHONY: migrate-up migrate-down migrate-create
 
-DATABASE_DSN ?= postgres://postgres:password@localhost:5432/nester_dev?sslmode=disable
+DATABASE_DSN ?= postgres://postgres:postgres@localhost:5432/nester?sslmode=disable
 
 migrate-up:
 	DATABASE_DSN="$(DATABASE_DSN)" go run ./internal/db/migrate.go up
