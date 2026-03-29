@@ -2,21 +2,26 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
+	"github.com/suncrestlabs/nester/apps/api/internal/indexer"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/server"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	"github.com/suncrestlabs/nester/internal/stellar"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
@@ -24,6 +29,9 @@ var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
 	}
@@ -40,11 +48,45 @@ func run() error {
 		return err
 	}
 
-	db, err := openDatabase(cfg)
+	pgPool, err := repository.NewPostgresDB(cfg.Database())
 	if err != nil {
 		return err
 	}
+	defer pgPool.Pool.Close()
+
+	db := stdlib.OpenDBFromPool(pgPool.Pool)
 	defer db.Close()
+
+	// Initialize Stellar Client
+	stellarClient, err := stellar.NewClient(context.Background(), stellar.Config{
+		NetworkID:    cfg.Stellar().NetworkPassphrase(),
+		RPCURL:       cfg.Stellar().RPCURL(),
+		SourceKey:    cfg.Stellar().SourceKey(),
+		Network:      stellar.Testnet, // Default or from config
+	})
+	if err != nil {
+		return fmt.Errorf("stellar client: %w", err)
+	}
+
+	// Initialize Indexer
+	idx := indexer.New(db, stellarClient, baseLogger)
+
+	// Handle CLI commands
+	if len(os.Args) > 1 && os.Args[1] == "index" {
+		if len(os.Args) > 2 && os.Args[2] == "backfill" {
+			backfillCmd := flag.NewFlagSet("backfill", flag.ExitOnError)
+			fromLedger := backfillCmd.Uint64("from-ledger", 0, "Ledger to start backfill from")
+			if err := backfillCmd.Parse(os.Args[3:]); err != nil {
+				return err
+			}
+			if *fromLedger == 0 {
+				return errors.New("--from-ledger is required and must be > 0")
+			}
+			baseLogger.Info("starting manual backfill", "ledger", *fromLedger)
+			return idx.BackfillManual(context.Background(), *fromLedger)
+		}
+		return errors.New("unknown index command: " + os.Args[2])
+	}
 
 	vaultRepository := postgres.NewVaultRepository(db)
 	vaultService := service.NewVaultService(vaultRepository)
@@ -68,10 +110,17 @@ func run() error {
 		WriteTimeout: cfg.Server().WriteTimeout(),
 	}
 
-	baseLogger.Info("starting server", "addr", cfg.Server().Address(), "environment", cfg.Environment())
-
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Start Indexer in background
+	go func() {
+		if err := idx.Start(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("indexer stopped unexpectedly", "error", err)
+		}
+	}()
+
+	baseLogger.Info("starting server", "addr", cfg.Server().Address(), "environment", cfg.Environment())
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -92,10 +141,10 @@ func run() error {
 
 	stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server().GracefulShutdown())
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), cfg.Server().GracefulShutdown())
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(timeoutCtx); err != nil {
 		return err
 	}
 
@@ -107,39 +156,12 @@ func run() error {
 	return nil
 }
 
-func openDatabase(cfg *config.Config) (*sql.DB, error) {
-	db, err := sql.Open("pgx", cfg.Database().DSN())
-	if err != nil {
-		return nil, err
-	}
-
-	db.SetMaxOpenConns(cfg.Database().PoolSize())
-	db.SetMaxIdleConns(min(5, cfg.Database().PoolSize()))
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Database().ConnectionTimeout())
-	defer cancel()
-
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
-	return db, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func healthHandler(db *sql.DB, timeout time.Duration) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func healthHandler(db *repository.PostgresDB, timeout time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		if err := db.PingContext(ctx); err != nil {
+		if err := db.Ping(ctx); err != nil {
 			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 			return
 		}

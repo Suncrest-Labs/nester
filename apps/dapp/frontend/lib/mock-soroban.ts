@@ -1,6 +1,7 @@
 "use client";
 
 import { getExplorerUrl } from "@/components/portfolio-provider";
+import { config } from "@/lib/config";
 
 export async function buildMockTransactionXdr(
     address: string,
@@ -10,7 +11,7 @@ export async function buildMockTransactionXdr(
     const account = new StellarSdk.Account(address, "1");
     const tx = new StellarSdk.TransactionBuilder(account, {
         fee: StellarSdk.BASE_FEE,
-        networkPassphrase: StellarSdk.Networks.TESTNET,
+        networkPassphrase: config.stellarNetwork,
     })
         .addOperation(
             StellarSdk.Operation.manageData({
@@ -34,7 +35,7 @@ export async function signWithWalletOrMock(txXdr: string) {
 
         if (selectedModule?.signTransaction) {
             const result = await selectedModule.signTransaction(txXdr, {
-                networkPassphrase: StellarSdk.Networks.TESTNET,
+                networkPassphrase: config.stellarNetwork,
             });
             const signedTxXdr =
                 typeof result === "string"

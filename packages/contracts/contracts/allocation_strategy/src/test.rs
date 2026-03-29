@@ -8,10 +8,8 @@ use soroban_sdk::{
     testutils::{Address as _, Events},
     vec, Address, Env,
 };
-use yield_registry::{
-    ProtocolType as RegistryProtocolType, SourceStatus as RegistrySourceStatus,
-    YieldRegistryContract, YieldRegistryContractClient,
-};
+use nester_common::{ProtocolType as RegistryProtocolType, SourceStatus as RegistrySourceStatus};
+use yield_registry::{YieldRegistryContract, YieldRegistryContractClient};
 
 // Helper: register a source with the registry using the new API.
 fn reg(

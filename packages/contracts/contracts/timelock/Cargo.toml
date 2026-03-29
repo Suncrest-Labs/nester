@@ -1,0 +1,19 @@
+[package]
+name = "nester-timelock"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "nester_timelock"
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+nester-common = { path = "../../libs/common" }
+nester-access-control = { path = "../access_control" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+nester-test-utils = { path = "../../libs/test_utils" }

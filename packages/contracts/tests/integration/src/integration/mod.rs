@@ -1,3 +1,4 @@
+// CI trigger: update from 0xDeon fork
 // ---------------------------------------------------------------------------
 // Nester Protocol — Multi-Contract Integration Tests
 //
@@ -20,7 +21,7 @@ use soroban_sdk::{symbol_short, vec, Vec};
 use allocation_strategy_contract::AllocationWeight;
 use nester_access_control::Role;
 use nester_test_utils::NesterHarness;
-use yield_registry::ProtocolType;
+use nester_common::ProtocolType;
 
 // ---------------------------------------------------------------------------
 // Scenario 1 — Full protocol initialisation
@@ -109,7 +110,7 @@ fn strategy_rejects_weights_for_unregistered_source() {
 #[should_panic]
 fn strategy_rejects_weights_for_paused_source() {
     let h = NesterHarness::setup();
-    use yield_registry::SourceStatus;
+    use nester_common::SourceStatus;
 
     let aave = symbol_short!("aave");
     h.registry().register_source(
@@ -296,7 +297,8 @@ fn non_admin_cannot_pause_vault() {
         let token_admin2 = soroban_sdk::Address::generate(&env2);
         let deposit_token2 = env2.register_stellar_asset_contract_v2(token_admin2).address();
         let vault_id2 = env2.register_contract(None, vault_contract::VaultContract);
-        vault_contract::VaultContractClient::new(&env2, &vault_id2).initialize(&admin2, &deposit_token2);
+        let treasury2 = soroban_sdk::Address::generate(&env2);
+        vault_contract::VaultContractClient::new(&env2, &vault_id2).initialize(&admin2, &deposit_token2, &treasury2);
 
         // Strip all mocked auths so the role guard runs normally.
         env2.set_auths(&[]);

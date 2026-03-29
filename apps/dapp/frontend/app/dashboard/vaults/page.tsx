@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { Navbar } from "@/components/navbar";
-import { DepositModal } from "@/components/vault-action-modals";
+import { DepositModal } from "@/components/vault/depositModal";
 import { usePortfolio } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { vaultDefinitions, type VaultDefinition } from "@/lib/vault-data";

@@ -248,14 +248,16 @@ export function DepositModal({
                                     </span>
                                 </div>
                                 <div className="flex items-center justify-between text-sm">
-                                    <span className="text-muted-foreground">Early withdrawal penalty</span>
+                                    <span className="text-muted-foreground">Management fee (annual)</span>
                                     <span className="font-medium text-foreground">
-                                        {vault.earlyWithdrawalPenaltyPct.toFixed(1)}%
+                                        {vault.managementFeePct}%
                                     </span>
                                 </div>
                                 <div className="flex items-center justify-between text-sm">
-                                    <span className="text-muted-foreground">Protocol fee</span>
-                                    <span className="font-medium text-foreground">0.00 USDC</span>
+                                    <span className="text-muted-foreground">Performance fee (on yield)</span>
+                                    <span className="font-medium text-foreground">
+                                        {vault.performanceFeePct}%
+                                    </span>
                                 </div>
                             </div>
                         </div>
@@ -583,9 +585,9 @@ export function WithdrawModal({
                                         </span>
                                     </div>
                                     <div className="flex items-center justify-between text-sm">
-                                        <span className="text-muted-foreground">Penalty</span>
+                                        <span className="text-muted-foreground">Performance Fee (10% of yield)</span>
                                         <span className="font-medium text-foreground">
-                                            {formatCurrency(quote?.penaltyAmount ?? 0)} USDC
+                                            {formatCurrency(Math.max(0, (quote?.grossAmount ?? 0) - (quote?.sharesBurned ?? 0)) * 0.1)} USDC
                                         </span>
                                     </div>
                                     <div className="flex items-center justify-between text-sm">

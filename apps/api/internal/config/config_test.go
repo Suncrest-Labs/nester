@@ -19,7 +19,10 @@ func baseEnv(t *testing.T) {
 		"SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_SHUTDOWN_TIMEOUT",
 		"DATABASE_DSN", "DATABASE_POOL_SIZE", "DATABASE_CONNECTION_TIMEOUT",
 		"STELLAR_NETWORK_PASSPHRASE", "STELLAR_RPC_URL", "STELLAR_HORIZON_URL",
+		"AUTH_JWT_SECRET", "AUTH_TOKEN_EXPIRY", "AUTH_CHALLENGE_EXPIRY",
+		"RATELIMIT_GLOBAL_LIMIT", "RATELIMIT_GLOBAL_WINDOW", "RATELIMIT_WRITE_LIMIT", "RATELIMIT_WRITE_WINDOW",
 		"LOG_LEVEL", "LOG_FORMAT",
+		"INTELLIGENCE_URL",
 	} {
 		t.Setenv(key, "")
 	}
@@ -32,6 +35,8 @@ func requiredEnv(t *testing.T) {
 	t.Setenv("STELLAR_NETWORK_PASSPHRASE", "Test Network")
 	t.Setenv("STELLAR_RPC_URL", "https://rpc.example.com")
 	t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
+	t.Setenv("AUTH_JWT_SECRET", "this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes")
+	t.Setenv("INTELLIGENCE_URL", "https://intelligence.example.com")
 }
 
 func TestLoadFromDotEnv(t *testing.T) {
@@ -50,6 +55,8 @@ func TestLoadFromDotEnv(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Test Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 	}, "\n"))
 
 	chdir(t, dir)
@@ -96,6 +103,7 @@ func TestLoadMissingRequiredFields(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE is required",
 		"STELLAR_RPC_URL is required",
 		"STELLAR_HORIZON_URL is required",
+		"AUTH_JWT_SECRET is required",
 	} {
 		if !strings.Contains(message, expected) {
 			t.Fatalf("expected error to contain %q, got %q", expected, message)
@@ -166,6 +174,7 @@ func TestLoadEnvVarsTakePrecedenceOverDotEnv(t *testing.T) {
 	t.Setenv("STELLAR_NETWORK_PASSPHRASE", "From EnvVar")
 	t.Setenv("STELLAR_RPC_URL", "https://envvar-rpc.example.com")
 	t.Setenv("STELLAR_HORIZON_URL", "https://envvar-horizon.example.com")
+	t.Setenv("INTELLIGENCE_URL", "https://intelligence.example.com")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -175,6 +184,7 @@ func TestLoadEnvVarsTakePrecedenceOverDotEnv(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=From DotEnv",
 		"STELLAR_RPC_URL=https://dotenv-rpc.example.com",
 		"STELLAR_HORIZON_URL=https://dotenv-horizon.example.com",
+		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -207,6 +217,8 @@ func TestLoadConcurrentCalls(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Concurrent Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -265,6 +277,8 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=From DotEnv",
 		"STELLAR_RPC_URL=https://dotenv-rpc.example.com",
 		"STELLAR_HORIZON_URL=https://dotenv-horizon.example.com",
+		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 		"LOG_LEVEL=warn",
 	}, "\n"))
 	chdir(t, dir)
@@ -363,6 +377,8 @@ func TestLoadAllDefaults(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Test Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -448,6 +464,8 @@ func TestLoadUnknownKeysIgnored(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Test Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 		"UNKNOWN_KEY_ONE=some-value",
 		"ANOTHER_UNKNOWN=ignored",
 		"TOTALLY_MADE_UP=whatever",
@@ -477,6 +495,8 @@ func TestLoadEmptyEnvVarsTreatedAsUnset(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE=Test Network",
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
+		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 	}, "\n"))
 	chdir(t, dir)
 

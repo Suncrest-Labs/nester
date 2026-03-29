@@ -22,16 +22,7 @@ import {
     ArrowRight,
 } from "lucide-react";
 
-const BANKS = [
-    { name: "Kuda Bank", code: "kuda" },
-    { name: "Moniepoint", code: "moniepoint" },
-    { name: "Access Bank", code: "access" },
-    { name: "GTBank", code: "gtbank" },
-    { name: "First Bank", code: "firstbank" },
-    { name: "UBA", code: "uba" },
-    { name: "Zenith Bank", code: "zenith" },
-    { name: "Opay", code: "opay" },
-];
+import { BANKS, type LPNode, LP_NODES } from "@/lib/settlement-data";
 
 const SEND_ASSETS = [
     { symbol: "USDC", name: "USD Coin", image: "/usdc.png" },
@@ -45,26 +36,7 @@ const RECEIVE_CURRENCIES = [
     { symbol: "KES", name: "Kenyan Shilling", image: "/naira.webp", rate: 129.50 },
 ];
 
-interface LPNode {
-    id: string;
-    name: string;
-    bank: string;
-    baseRateOffset: number;
-    fee: number;
-    avgSettleTime: number;
-    reliability: number;
-}
 
-const LP_NODES: LPNode[] = [
-    { id: "n1", name: "LiquidityPrime", bank: "kuda", baseRateOffset: 2.15, fee: 0.4, avgSettleTime: 8, reliability: 99.2 },
-    { id: "n2", name: "FastSettle NG", bank: "zenith", baseRateOffset: 0.80, fee: 0.5, avgSettleTime: 12, reliability: 97.8 },
-    { id: "n3", name: "NairaNode", bank: "gtbank", baseRateOffset: 1.45, fee: 0.45, avgSettleTime: 15, reliability: 98.5 },
-    { id: "n4", name: "CedarPay", bank: "access", baseRateOffset: -0.30, fee: 0.35, avgSettleTime: 20, reliability: 96.1 },
-    { id: "n5", name: "StellarBridge", bank: "moniepoint", baseRateOffset: 1.90, fee: 0.5, avgSettleTime: 5, reliability: 99.5 },
-    { id: "n6", name: "KudaConnect", bank: "kuda", baseRateOffset: 0.55, fee: 0.3, avgSettleTime: 3, reliability: 98.9 },
-    { id: "n7", name: "PayRoute", bank: "firstbank", baseRateOffset: -0.90, fee: 0.6, avgSettleTime: 25, reliability: 94.2 },
-    { id: "n8", name: "SwiftNode", bank: "opay", baseRateOffset: 1.10, fee: 0.45, avgSettleTime: 10, reliability: 97.0 },
-];
 
 interface QuoteResult {
     node: LPNode;
@@ -220,8 +192,8 @@ export default function SettlementsPage() {
     const displayReceive = selectedQuote
         ? selectedQuote.receiveAmount
         : numericAmount > 0
-        ? numericAmount * receiveCurrency.rate * 0.995
-        : 0;
+            ? numericAmount * receiveCurrency.rate * 0.995
+            : 0;
 
     const handleWithdraw = () => {
         if (!allFieldsFilled || quotePhase !== "done" || !selectedQuote) {
@@ -522,12 +494,12 @@ export default function SettlementsPage() {
                             {!numericAmount
                                 ? "Enter an amount"
                                 : !selectedBank
-                                ? "Select a bank"
-                                : accountNumber.length !== 10
-                                ? "Enter account number"
-                                : quotePhase !== "done"
-                                ? "Finding best rate..."
-                                : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
+                                    ? "Select a bank"
+                                    : accountNumber.length !== 10
+                                        ? "Enter account number"
+                                        : quotePhase !== "done"
+                                            ? "Finding best rate..."
+                                            : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
                         </button>
                     </div>
                 </motion.div>
@@ -588,8 +560,8 @@ export default function SettlementsPage() {
                                                 quotePhase === "scanning"
                                                     ? `${(scannedCount / LP_NODES.length) * 60}%`
                                                     : quotePhase === "comparing"
-                                                    ? "80%"
-                                                    : "95%",
+                                                        ? "80%"
+                                                        : "95%",
                                         }}
                                         transition={{ duration: 0.2, ease: "easeOut" }}
                                     />
