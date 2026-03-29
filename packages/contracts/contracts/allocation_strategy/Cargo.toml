@@ -13,9 +13,7 @@ soroban-sdk = { workspace = true }
 nester-common = { path = "../../libs/common" }
 nester-access-control = { path = "../access_control" }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-yield-registry-contract = { path = "../yield_registry" }
-
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 nester-test-utils = { path = "../../libs/test_utils" }
+yield-registry-contract = { path = "../yield_registry" }

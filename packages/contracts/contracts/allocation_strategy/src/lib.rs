@@ -1,29 +1,78 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, vec, Address, Env, IntoVal,
+    Symbol, Val, Vec,
 };
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event, ContractError, SourceStatus, BASIS_POINT_SCALE};
-
-#[cfg(target_arch = "wasm32")]
-mod yield_registry_import {
-    use nester_common::{ProtocolType, SourceStatus};
-    soroban_sdk::contractimport!(
-        file = "../../../target/wasm32-unknown-unknown/release/yield_registry.wasm"
-    );
-}
-
-#[cfg(target_arch = "wasm32")]
-use yield_registry_import::{Client as RegistryClient, YieldSource as RegistrySource};
-
-#[cfg(not(target_arch = "wasm32"))]
-use yield_registry::{YieldRegistryContractClient as RegistryClient, YieldSource as RegistrySource};
+use nester_common::{emit_event, ContractError, ProtocolType, SourceStatus, BASIS_POINT_SCALE};
 
 const STRATEGY: Symbol = symbol_short!("STRATEGY");
 const WEIGHTS_UPDATED: Symbol = symbol_short!("WTS_SET");
 const MAX_RISK_RATING: u32 = 10;
+
+#[contracttype]
+#[derive(Clone, Debug)]
+struct RegistryApySnapshot {
+    pub apy_bps: u32,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+struct RegistrySource {
+    pub id: Symbol,
+    pub contract_address: Address,
+    pub protocol_type: ProtocolType,
+    pub status: SourceStatus,
+    pub added_at: u64,
+    pub current_apy_bps: u32,
+    pub apy_history: Vec<RegistryApySnapshot>,
+    pub tvl: i128,
+    pub risk_rating: u32,
+    pub min_deposit: i128,
+    pub max_deposit: i128,
+    pub last_updated: u64,
+    pub migration_required: bool,
+    pub migration_completed: bool,
+    pub migration_completed_at: u64,
+}
+
+struct RegistryClient<'a> {
+    env: &'a Env,
+    contract_id: &'a Address,
+}
+
+impl<'a> RegistryClient<'a> {
+    fn new(env: &'a Env, contract_id: &'a Address) -> Self {
+        Self { env, contract_id }
+    }
+
+    fn has_source(&self, source_id: &Symbol) -> bool {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::new(self.env, "has_source"),
+            vec![self.env, source_id.clone().into_val(self.env)],
+        )
+    }
+
+    fn get_source_status(&self, source_id: &Symbol) -> SourceStatus {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::new(self.env, "get_source_status"),
+            vec![self.env, source_id.clone().into_val(self.env)],
+        )
+    }
+
+    fn get_active_sources(&self) -> Vec<RegistrySource> {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::new(self.env, "get_active_sources"),
+            Vec::<Val>::new(self.env),
+        )
+    }
+}
 
 #[contracttype]
 #[derive(Clone, Debug)]
