@@ -91,7 +91,7 @@ func run() error {
 	vaultHandler := handler.NewVaultHandler(vaultService)
 
 	settlementRepository := postgres.NewSettlementRepository(db)
-	settlementService := service.NewSettlementService(settlementRepository, cfg.Intelligence().URL())
+	settlementService := service.NewSettlementService(settlementRepository)
 	settlementHandler := handler.NewSettlementHandler(settlementService)
 
 	h := server.New(

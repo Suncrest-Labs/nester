@@ -44,7 +44,7 @@ type StellarConfig struct {
 }
 
 type IntelligenceConfig struct {
-	url string
+    url string
 }
 
 func Load() (*Config, error) {
