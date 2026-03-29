@@ -19,17 +19,17 @@ export interface VaultPosition {
     id: string;
     vaultName: string;
     riskTier: RiskTier;
-    balance: string;
+    balance: number;
     apy: string;
-    yieldEarned: string;
+    yieldEarned: number;
     nVaultBalance: string;
     asset: string;
     trendData: number[];
 }
 
 export interface PortfolioStats {
-    totalBalance: string;
-    totalYieldEarned: string;
+    totalBalance: number;
+    totalYieldEarned: number;
     activeVaults: number;
     prometheusInsights: number;
 }
@@ -83,21 +83,21 @@ export const mockVaultPositions: VaultPosition[] = VAULTS.map((name, i) => {
         id: (i + 1).toString(),
         vaultName: name,
         riskTier: RISK_TIERS[i % RISK_TIERS.length],
-        balance: `$${baseBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        balance: baseBalance,
         apy: APYS[i % APYS.length],
-        yieldEarned: `$${baseYield.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        yieldEarned: baseYield,
         nVaultBalance: Math.floor(baseBalance * 0.98).toString(),
         asset: "USDC",
         trendData: Array.from({ length: 7 }, () => Math.floor(Math.random() * 40))
     };
 });
 
-const totalBal = mockVaultPositions.reduce((acc, pos) => acc + parseFloat(pos.balance.replace(/[$,]/g, '')), 0);
-const totalYield = mockVaultPositions.reduce((acc, pos) => acc + parseFloat(pos.yieldEarned.replace(/[$,]/g, '')), 0);
+const totalBal = mockVaultPositions.reduce((acc, pos) => acc + pos.balance, 0);
+const totalYield = mockVaultPositions.reduce((acc, pos) => acc + pos.yieldEarned, 0);
 
 export const mockPortfolioStats: PortfolioStats = {
-    totalBalance: `$${totalBal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-    totalYieldEarned: `$${totalYield.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    totalBalance: totalBal,
+    totalYieldEarned: totalYield,
     activeVaults: VAULTS.length,
     prometheusInsights: 3
 };

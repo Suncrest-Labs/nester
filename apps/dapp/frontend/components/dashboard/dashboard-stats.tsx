@@ -9,6 +9,7 @@ import {
     Sparkles 
 } from "lucide-react";
 import { PortfolioStats } from "@/lib/mock-data";
+import { useSettings } from "@/context/settings-context";
 
 interface DashboardStatsProps {
     stats: PortfolioStats;
@@ -16,16 +17,18 @@ interface DashboardStatsProps {
 }
 
 export function DashboardStats({ stats, loading }: DashboardStatsProps) {
+    const { formatValue } = useSettings();
+
     const items = [
         {
             label: "Total Balance",
-            value: stats.totalBalance,
+            value: formatValue(stats.totalBalance),
             change: null,
             icon: Vault,
         },
         {
             label: "Total Yield Earned",
-            value: stats.totalYieldEarned,
+            value: formatValue(stats.totalYieldEarned),
             change: "+12.5%", // Mock change
             icon: TrendingUp,
         },

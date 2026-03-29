@@ -20,6 +20,7 @@ import {
 } from "@/lib/mock-data";
 import { subDays, parseISO, isAfter } from "date-fns";
 import { cn } from "@/lib/utils";
+import { useSettings } from "@/context/settings-context";
 
 interface PortfolioChartsProps {
     positions: VaultPosition[];
@@ -34,30 +35,38 @@ const CHART_COLORS = [
 ];
 
 export function PortfolioCharts({ positions }: PortfolioChartsProps) {
+    const { formatValue, exchangeRate, currency } = useSettings();
     const [timeframe, setTimeframe] = useState<"7D" | "1M" | "3M" | "ALL">("1M");
 
     // Process Pie Data
     const pieData = useMemo(() => {
         return positions.map((p, i) => ({
             name: p.vaultName,
-            value: parseFloat(p.balance.replace(/[$,]/g, '')),
+            value: p.balance * exchangeRate,
             color: CHART_COLORS[i % CHART_COLORS.length]
         }));
-    }, [positions]);
+    }, [positions, exchangeRate]);
 
     // Filter Performance Data based on timeframe
     const filteredHistory = useMemo(() => {
-        if (timeframe === "ALL") return mockPerformanceHistory;
+        const history = mockPerformanceHistory.map(d => ({
+            ...d,
+            balance: d.balance * exchangeRate,
+            yield: d.yield * exchangeRate,
+            benchmark: d.benchmark * exchangeRate
+        }));
+
+        if (timeframe === "ALL") return history;
         
         const days = timeframe === "7D" ? 7 : timeframe === "1M" ? 30 : 90;
         const startDate = subDays(new Date(), days);
         
-        return mockPerformanceHistory.filter(d => isAfter(parseISO(d.date), startDate));
-    }, [timeframe]);
+        return history.filter(d => isAfter(parseISO(d.date), startDate));
+    }, [timeframe, exchangeRate]);
 
     const totalBalanceValue = useMemo(() => {
-        return positions.reduce((acc, p) => acc + parseFloat(p.balance.replace(/[$,]/g, '')), 0);
-    }, [positions]);
+        return positions.reduce((acc, p) => acc + p.balance, 0) * exchangeRate;
+    }, [positions, exchangeRate]);
 
     return (
         <div className="grid gap-6 lg:grid-cols-3">
@@ -86,14 +95,16 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
                             </Pie>
                             <Tooltip 
                                 contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', fontSize: '11px' }}
-                                formatter={(value: any) => `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                formatter={(value: any) => formatValue(Number(value) / exchangeRate)}
                             />
                         </PieChart>
                     </ResponsiveContainer>
                     {/* Center Text */}
                     <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                         <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Total</span>
-                        <span className="text-xl font-heading font-light">${(totalBalanceValue / 1000).toFixed(1)}k</span>
+                        <span className="text-xl font-heading font-light">
+                            {currency === "USD" ? `$${(totalBalanceValue / 1000).toFixed(1)}k` : formatValue(totalBalanceValue / exchangeRate)}
+                        </span>
                     </div>
                 </div>
 
@@ -156,13 +167,13 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
                                 axisLine={false} 
                                 tickLine={false} 
                                 tick={{ fontSize: 9, fill: '#94a3b8' }}
-                                tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
+                                tickFormatter={(val) => currency === "USD" ? `$${(val / 1000).toFixed(0)}k` : `${(val / 1000).toFixed(0)}k`}
                             />
                             <Tooltip 
                                 labelStyle={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '4px' }}
                                 itemStyle={{ fontSize: '11px' }}
                                 contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
-                                formatter={(value: any) => `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                formatter={(value: any) => formatValue(Number(value) / exchangeRate)}
                             />
                             <Legend 
                                 verticalAlign="top" 

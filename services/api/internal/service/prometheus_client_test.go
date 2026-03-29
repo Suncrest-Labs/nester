@@ -19,7 +19,7 @@ func TestPrometheusClient_Caching(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&callCount, 1)
 		recs := []intelligence.Recommendation{{Title: "Test"}}
-		json.NewEncoder(w).Encode(recs)
+		_ = json.NewEncoder(w).Encode(recs)
 	}))
 	defer server.Close()
 
@@ -29,13 +29,11 @@ func TestPrometheusClient_Caching(t *testing.T) {
 	}
 	client := NewPrometheusClient(cfg)
 
-	// First call - should hit server
 	recs, err := client.GetVaultRecommendations(context.Background(), "v1")
 	assert.NoError(t, err)
 	assert.Len(t, recs, 1)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&callCount))
 
-	// Second call - should hit cache
 	recs, err = client.GetVaultRecommendations(context.Background(), "v1")
 	assert.NoError(t, err)
 	assert.Len(t, recs, 1)
@@ -46,7 +44,7 @@ func TestPrometheusClient_PathEscaping(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/vaults/v%2F1/recommendations", r.URL.EscapedPath())
 		recs := []intelligence.Recommendation{{Title: "Escaped"}}
-		json.NewEncoder(w).Encode(recs)
+		_ = json.NewEncoder(w).Encode(recs)
 	}))
 	defer server.Close()
 
@@ -74,13 +72,11 @@ func TestPrometheusClient_CircuitBreaker(t *testing.T) {
 	}
 	client := NewPrometheusClient(cfg)
 
-	// Fail 5 times
 	for i := 0; i < 5; i++ {
 		_, err := client.GetVaultRecommendations(context.Background(), "v1")
-		assert.Error(t, err) // Should return error now
+		assert.Error(t, err)
 	}
 
-	// 6th call - should NOT hit server (circuit open)
 	prevCalls := atomic.LoadInt32(&callCount)
 	_, err := client.GetVaultRecommendations(context.Background(), "v1")
 	assert.Error(t, err)
@@ -97,7 +93,7 @@ func TestPrometheusClient_Retry(t *testing.T) {
 			return
 		}
 		recs := []intelligence.Recommendation{{Title: "Success After Retry"}}
-		json.NewEncoder(w).Encode(recs)
+		_ = json.NewEncoder(w).Encode(recs)
 	}))
 	defer server.Close()
 

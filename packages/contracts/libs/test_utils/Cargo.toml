@@ -8,5 +8,10 @@ publish = false
 crate-type = ["rlib"]
 
 [dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
-nester-common = { path = "../common" }
+soroban-sdk        = { workspace = true, features = ["testutils"] }
+nester-common      = { path = "../common" }
+vault-contract     = { path = "../../contracts/vault" }
+vault-token-contract = { path = "../../contracts/vault_token" }
+yield-registry-contract = { path = "../../contracts/yield_registry" }
+allocation-strategy-contract = { path = "../../contracts/allocation_strategy" }
+treasury-contract = { path = "../../contracts/treasury" }

@@ -1,6 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useWallet } from "@/components/wallet-provider";
+import {
+    usePortfolio,
+    type PortfolioTransactionType,
+} from "@/components/portfolio-provider";
 import { Navbar } from "@/components/navbar";
 import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useState, useMemo } from "react";
@@ -21,9 +26,8 @@ import {
     Filter,
     Vault as VaultIcon
 } from "lucide-react";
-import { mockTransactions, TransactionType } from "@/lib/mock-data";
 import { cn, truncateAddress } from "@/lib/utils";
-import Link from "next/link";
+import { getExplorerTxUrl } from "@/utils/explorer";
 
 const TYPE_ICONS = {
     "Deposit": ArrowDownLeft,
@@ -42,10 +46,11 @@ const PAGE_SIZE = 10;
 
 export default function HistoryPage() {
     const { isConnected } = useWallet();
+    const { transactions } = usePortfolio();
     const router = useRouter();
     
     const [searchQuery, setSearchQuery] = useState("");
-    const [filterType, setFilterType] = useState<TransactionType | "All">("All");
+    const [filterType, setFilterType] = useState<PortfolioTransactionType | "All">("All");
     const [filterVault, setFilterVault] = useState("All");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
@@ -58,7 +63,7 @@ export default function HistoryPage() {
     }, [isConnected, router]);
 
     const filteredTransactions = useMemo(() => {
-        return mockTransactions.filter(tx => {
+        return transactions.filter(tx => {
             const matchesType = filterType === "All" || tx.type === filterType;
             const matchesVault = filterVault === "All" || tx.vaultName === filterVault;
             const matchesSearch = tx.txHash.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -74,7 +79,7 @@ export default function HistoryPage() {
             
             return matchesType && matchesVault && matchesSearch && matchesDate;
         });
-    }, [filterType, filterVault, searchQuery, startDate, endDate]);
+    }, [filterType, filterVault, searchQuery, startDate, endDate, transactions]);
 
     const totalPages = Math.ceil(filteredTransactions.length / PAGE_SIZE);
     const paginatedTransactions = filteredTransactions.slice(
@@ -82,7 +87,7 @@ export default function HistoryPage() {
         currentPage * PAGE_SIZE
     );
 
-    const uniqueVaults = Array.from(new Set(mockTransactions.map(tx => tx.vaultName)));
+    const uniqueVaults = Array.from(new Set(transactions.map(tx => tx.vaultName)));
 
     const exportToCSV = () => {
         const headers = ["ID", "Type", "Amount", "Asset", "Vault", "Timestamp", "Status", "Hash"];
@@ -107,7 +112,7 @@ export default function HistoryPage() {
 
     if (!isConnected) return null;
 
-    const isInitiallyEmpty = mockTransactions.length === 0;
+    const isInitiallyEmpty = transactions.length === 0;
 
     return (
         <div className="min-h-screen bg-background">
@@ -189,7 +194,7 @@ export default function HistoryPage() {
                                     <select
                                         value={filterType}
                                         onChange={(e) => {
-                                            setFilterType(e.target.value as TransactionType | "All");
+                                            setFilterType(e.target.value as PortfolioTransactionType | "All");
                                             setCurrentPage(1);
                                         }}
                                         className="w-full rounded-2xl border border-border bg-white pl-11 pr-4 py-3 text-sm appearance-none cursor-pointer focus:border-black/20 focus:outline-none"
@@ -334,7 +339,7 @@ export default function HistoryPage() {
                                                             </td>
                                                             <td className="px-6 py-4 text-right">
                                                                 <a 
-                                                                    href={`https://stellar.expert/explorer/public/tx/${tx.txHash}`} 
+                                                                    href={getExplorerTxUrl(tx.txHash)} 
                                                                     target="_blank" 
                                                                     rel="noopener noreferrer"
                                                                     className="inline-flex items-center gap-1.5 text-xs text-primary hover:text-primary-foreground hover:bg-primary px-2 py-1 rounded-lg transition-all group/link"

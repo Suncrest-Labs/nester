@@ -37,30 +37,42 @@ func NewVaultService(repository vault.Repository) *VaultService {
 }
 
 func (s *VaultService) CreateVault(ctx context.Context, input CreateVaultInput) (vault.Vault, error) {
-	if input.UserID == uuid.Nil || strings.TrimSpace(input.ContractAddress) == "" || strings.TrimSpace(input.Currency) == "" {
-		return vault.Vault{}, vault.ErrInvalidVault
-	}
-
-	status := vault.StatusActive
-	if strings.TrimSpace(input.Status) != "" {
-		parsedStatus, err := vault.ParseStatus(input.Status)
-		if err != nil {
-			return vault.Vault{}, err
-		}
-		status = parsedStatus
-	}
-
-	model := vault.Vault{
-		ID:              uuid.New(),
-		UserID:          input.UserID,
-		ContractAddress: strings.TrimSpace(input.ContractAddress),
-		TotalDeposited:  decimal.Zero,
-		CurrentBalance:  decimal.Zero,
-		Currency:        strings.ToUpper(strings.TrimSpace(input.Currency)),
-		Status:          status,
-	}
-
-	return s.repository.CreateVault(ctx, model)
+	       if input.UserID == uuid.Nil {
+		       return vault.Vault{}, vault.ErrInvalidVault
+	       }
+	       contractAddress := strings.TrimSpace(input.ContractAddress)
+	       if contractAddress == "" {
+		       return vault.Vault{}, vault.ErrInvalidVault
+	       }
+	       currency := strings.ToUpper(strings.TrimSpace(input.Currency))
+	       if currency == "" {
+		       return vault.Vault{}, vault.ErrInvalidVault
+	       }
+	       status := vault.StatusActive
+	       if s := strings.TrimSpace(input.Status); s != "" {
+		       parsedStatus, err := vault.ParseStatus(s)
+		       if err != nil {
+			       return vault.Vault{}, err
+		       }
+		       status = parsedStatus
+	       }
+	       now := time.Now()
+	       model := vault.Vault{
+		       ID:              uuid.New(),
+		       UserID:          input.UserID,
+		       ContractAddress: contractAddress,
+		       TotalDeposited:  decimal.Zero,
+		       CurrentBalance:  decimal.Zero,
+		       Currency:        currency,
+		       Status:          status,
+		       CreatedAt:       now,
+		       UpdatedAt:       now,
+	       }
+	       // Defensive: ensure all fields are set and normalized
+	       if model.ID == uuid.Nil || model.UserID == uuid.Nil || model.ContractAddress == "" || model.Currency == "" || model.Status == "" {
+		       return vault.Vault{}, vault.ErrInvalidVault
+	       }
+	       return s.repository.CreateVault(ctx, model)
 }
 
 func (s *VaultService) GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error) {

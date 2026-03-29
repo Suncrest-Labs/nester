@@ -3,7 +3,8 @@ export type NotificationType =
     | "withdrawal_processed"
     | "ai_alert"
     | "rebalance_event"
-    | "offramp_status";
+    | "offramp_status"
+    | "info";
 
 export interface AppNotification {
     id: string;

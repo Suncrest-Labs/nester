@@ -2,11 +2,17 @@
 
 import { useWallet, type WalletInfo } from "@/components/wallet-provider";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, Loader2, AlertCircle, ChevronDown } from "lucide-react";
+import { ArrowRight, Loader2, AlertCircle, ChevronDown, CheckCircle2, Wallet } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
+import { config } from "@/lib/config";
+import { truncateAddress } from "@/lib/utils";
+import { usePortfolio } from "@/components/portfolio-provider";
+import { useOnboarding } from "@/hooks/useOnboarding";
+import { useNotifications } from "@/components/notifications-provider";
+import { useNetwork } from "@/hooks/useNetwork";
 
-const FEATURED_IDS = ["freighter", "lobstr", "xbull"];
+const FEATURED_IDS = config.featuredWallets;
 
 function WalletGridCard({
     wallet,
@@ -94,11 +100,19 @@ function WalletListItem({
 }
 
 export function ConnectWallet() {
-    const { connect, isConnecting, wallets, walletsLoaded } = useWallet();
+    const { currentNetwork } = useNetwork();
+    const { connect, isConnecting, wallets, walletsLoaded, isConnected, address, disconnect } = useWallet();
+    const { balances, applyBalanceUpdate } = usePortfolio();
+    const { completeStep } = useOnboarding();
+    const { addNotification } = useNotifications();
 
     const [error, setError] = useState<string | null>(null);
     const [connectingId, setConnectingId] = useState<string | null>(null);
     const [showAll, setShowAll] = useState(false);
+    const [isFunding, setIsFunding] = useState(false);
+
+    const isTestnet = currentNetwork.id === 'testnet';
+    const totalBalance = balances.USDC + balances.XLM + balances.USDT;
 
     const handleSelect = async (walletId: string) => {
         setError(null);
@@ -112,6 +126,39 @@ export function ConnectWallet() {
         } finally {
             setConnectingId(null);
         }
+    };
+
+    const fundTestnetAccount = async () => {
+        if (!address) return;
+        setIsFunding(true);
+        try {
+            const friendbotUrl = currentNetwork.friendbotUrl || 'https://friendbot.stellar.org';
+            const response = await fetch(`${friendbotUrl}?addr=${address}`);
+            if (!response.ok) throw new Error("Failed to fund account");
+            
+            // Give 10000 USDC and 1000 XLM for testing
+            applyBalanceUpdate("USDC", balances.USDC + 10000);
+            applyBalanceUpdate("XLM", balances.XLM + 1000);
+            
+            addNotification({
+                title: "Account Funded",
+                message: "Account funded successfully via Friendbot",
+                type: "deposit_confirmed"
+            });
+        } catch (err) {
+            addNotification({
+                title: "Funding Failed",
+                message: "Failed to fund account. Please try again later.",
+                type: "deposit_confirmed"
+            });
+            console.error(err);
+        } finally {
+            setIsFunding(false);
+        }
+    };
+
+    const handleContinue = () => {
+        completeStep("hasConnectedWallet");
     };
 
     const sorted = [...wallets].sort((a, b) => {
@@ -191,17 +238,73 @@ export function ConnectWallet() {
                     className="w-full"
                 >
                     <div className="rounded-2xl sm:rounded-3xl border border-border bg-white px-4 sm:px-6 py-5 shadow-xl shadow-black/[0.03]">
-                        <p className="mb-4 text-xs font-medium text-muted-foreground tracking-wider uppercase text-center">
-                            Choose a wallet
-                        </p>
+                        {isConnected ? (
+                            <div className="flex flex-col items-center">
+                                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-500">
+                                    <CheckCircle2 className="h-8 w-8" />
+                                </div>
+                                <h3 className="text-lg font-medium text-foreground mb-1">Wallet Connected</h3>
+                                <div className="flex items-center gap-2 mb-6">
+                                    <span className="text-sm font-mono text-muted-foreground bg-secondary px-3 py-1 rounded-full">
+                                        {address ? truncateAddress(address) : ""}
+                                    </span>
+                                    <span className="text-xs font-medium text-brand-purple bg-brand-purple/10 px-2 py-1 rounded-full uppercase tracking-wider">
+                                        {isTestnet ? "Testnet" : "Mainnet"}
+                                    </span>
+                                </div>
 
-                        {!walletsLoaded ? (
+                                <div className="w-full rounded-2xl border border-border bg-secondary/30 p-4 mb-6 text-center">
+                                    <p className="text-sm text-muted-foreground mb-1">Available Balance</p>
+                                    <p className="text-2xl font-light font-heading text-foreground">
+                                        ${totalBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </p>
+                                </div>
+
+                                {totalBalance === 0 && isTestnet && (
+                                    <div className="w-full mb-4">
+                                        <button
+                                            onClick={fundTestnetAccount}
+                                            disabled={isFunding}
+                                            className="w-full flex items-center justify-center gap-2 rounded-xl border border-brand-purple/30 bg-brand-purple/5 px-4 py-3 text-sm font-medium text-brand-purple transition-colors hover:bg-brand-purple/10 disabled:opacity-50"
+                                        >
+                                            {isFunding ? (
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                                <Wallet className="h-4 w-4" />
+                                            )}
+                                            {isFunding ? "Funding..." : "Fund with Friendbot"}
+                                        </button>
+                                    </div>
+                                )}
+
+                                <div className="flex w-full gap-3">
+                                    <button
+                                        onClick={disconnect}
+                                        className="flex-1 rounded-xl border border-border bg-white px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+                                    >
+                                        Disconnect
+                                    </button>
+                                    <button
+                                        onClick={handleContinue}
+                                        className="flex-1 rounded-xl bg-foreground px-4 py-3 text-sm font-medium text-background transition-transform hover:scale-[1.02] active:scale-[0.98]"
+                                    >
+                                        Continue
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <p className="mb-4 text-xs font-medium text-muted-foreground tracking-wider uppercase text-center">
+                                    Choose a wallet
+                                </p>
+
+                                {!walletsLoaded ? (
                             <div className="flex items-center justify-center py-12">
                                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                             </div>
                         ) : (
                             <>
-        
+
                                 <div className="grid w-full grid-cols-3 gap-2 sm:gap-3 mb-3">
                                     {featured.map((wallet, i) => (
                                         <motion.div
@@ -293,6 +396,8 @@ export function ConnectWallet() {
                                 </motion.div>
                             )}
                         </AnimatePresence>
+                            </>
+                        )}
                     </div>
                 </motion.div>
 

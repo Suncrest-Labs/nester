@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	MaxFailures        = 5
-	FailureWindow      = 30 * time.Second
+	MaxFailures         = 5
+	FailureWindow       = 30 * time.Second
 	CircuitOpenDuration = 60 * time.Second
-	VaultCacheTTL      = 2 * time.Minute
-	MarketCacheTTL     = 5 * time.Minute
-	PortfolioCacheTTL  = 5 * time.Minute
+	VaultCacheTTL       = 2 * time.Minute
+	MarketCacheTTL      = 5 * time.Minute
+	PortfolioCacheTTL   = 5 * time.Minute
 )
 
 type cacheEntry struct {
@@ -30,15 +30,13 @@ type cacheEntry struct {
 type PrometheusClient struct {
 	cfg        config.PrometheusConfig
 	httpClient *http.Client
-	
-	// Cache
-	cache      map[string]cacheEntry
-	cacheMu    sync.RWMutex
 
-	// Circuit Breaker
-	failures    []time.Time
+	cache   map[string]cacheEntry
+	cacheMu sync.RWMutex
+
+	failures         []time.Time
 	circuitOpenUntil time.Time
-	breakerMu   sync.Mutex
+	breakerMu        sync.Mutex
 }
 
 func NewPrometheusClient(cfg config.PrometheusConfig) *PrometheusClient {
@@ -61,9 +59,13 @@ func (c *PrometheusClient) GetVaultRecommendations(ctx context.Context, vaultID 
 		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
 	}
 
-	url := fmt.Sprintf("%s/api/v1/vaults/%s/recommendations", c.cfg.BaseURL, url.PathEscape(vaultID))
+	endpoint := fmt.Sprintf(
+		"%s/api/v1/vaults/%s/recommendations",
+		c.cfg.BaseURL,
+		url.PathEscape(vaultID),
+	)
 	var recs []intelligence.Recommendation
-	err := c.doRequest(ctx, url, &recs)
+	err := c.doRequest(ctx, endpoint, &recs)
 	if err != nil {
 		c.recordFailure()
 		return nil, fmt.Errorf("failed to get vault recommendations: %w", err)
@@ -83,9 +85,9 @@ func (c *PrometheusClient) GetMarketSentiment(ctx context.Context) (*intelligenc
 		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
 	}
 
-	url := fmt.Sprintf("%s/api/v1/intelligence/market", c.cfg.BaseURL)
+	endpoint := fmt.Sprintf("%s/api/v1/intelligence/market", c.cfg.BaseURL)
 	var report intelligence.SentimentReport
-	err := c.doRequest(ctx, url, &report)
+	err := c.doRequest(ctx, endpoint, &report)
 	if err != nil {
 		c.recordFailure()
 		return nil, fmt.Errorf("failed to get market sentiment: %w", err)
@@ -105,9 +107,13 @@ func (c *PrometheusClient) GetPortfolioInsights(ctx context.Context, userID stri
 		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
 	}
 
-	url := fmt.Sprintf("%s/api/v1/users/%s/insights", c.cfg.BaseURL, url.PathEscape(userID))
+	endpoint := fmt.Sprintf(
+		"%s/api/v1/users/%s/insights",
+		c.cfg.BaseURL,
+		url.PathEscape(userID),
+	)
 	var insights intelligence.PortfolioInsights
-	err := c.doRequest(ctx, url, &insights)
+	err := c.doRequest(ctx, endpoint, &insights)
 	if err != nil {
 		c.recordFailure()
 		return nil, fmt.Errorf("failed to get portfolio insights: %w", err)
@@ -117,8 +123,8 @@ func (c *PrometheusClient) GetPortfolioInsights(ctx context.Context, userID stri
 	return &insights, nil
 }
 
-func (c *PrometheusClient) doRequest(ctx context.Context, url string, target any) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+func (c *PrometheusClient) doRequest(ctx context.Context, endpoint string, target any) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return err
 	}
@@ -127,7 +133,6 @@ func (c *PrometheusClient) doRequest(ctx context.Context, url string, target any
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.cfg.APIKey))
 	}
 
-	// Simple retry logic (up to 3 times)
 	var resp *http.Response
 	for i := 0; i < 3; i++ {
 		resp, err = c.httpClient.Do(req)
@@ -153,6 +158,7 @@ func (c *PrometheusClient) doRequest(ctx context.Context, url string, target any
 func (c *PrometheusClient) getFromCache(key string) (any, bool) {
 	c.cacheMu.RLock()
 	defer c.cacheMu.RUnlock()
+
 	entry, ok := c.cache[key]
 	if !ok || time.Now().After(entry.expiresAt) {
 		return nil, false
@@ -163,6 +169,7 @@ func (c *PrometheusClient) getFromCache(key string) (any, bool) {
 func (c *PrometheusClient) setCache(key string, data any, ttl time.Duration) {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
+
 	c.cache[key] = cacheEntry{
 		data:      data,
 		expiresAt: time.Now().Add(ttl),
@@ -172,11 +179,8 @@ func (c *PrometheusClient) setCache(key string, data any, ttl time.Duration) {
 func (c *PrometheusClient) canCall() bool {
 	c.breakerMu.Lock()
 	defer c.breakerMu.Unlock()
-	
-	if time.Now().Before(c.circuitOpenUntil) {
-		return false
-	}
-	return true
+
+	return !time.Now().Before(c.circuitOpenUntil)
 }
 
 func (c *PrometheusClient) recordFailure() {
@@ -186,19 +190,17 @@ func (c *PrometheusClient) recordFailure() {
 	now := time.Now()
 	c.failures = append(c.failures, now)
 
-	// Keep only failures within the window
 	windowStart := now.Add(-FailureWindow)
-	validFailures := []time.Time{}
-	for _, f := range c.failures {
-		if f.After(windowStart) {
-			validFailures = append(validFailures, f)
+	validFailures := make([]time.Time, 0, len(c.failures))
+	for _, failure := range c.failures {
+		if failure.After(windowStart) {
+			validFailures = append(validFailures, failure)
 		}
 	}
 	c.failures = validFailures
 
 	if len(c.failures) >= MaxFailures {
 		c.circuitOpenUntil = now.Add(CircuitOpenDuration)
-		// Reset failures after tripping the breaker
 		c.failures = nil
 	}
 }

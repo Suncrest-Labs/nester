@@ -1,22 +1,35 @@
 "use client";
 
-import { useEffect, Suspense } from "react";
-import { useWallet } from "@/components/wallet-provider";
-import { Navbar } from "@/components/navbar";
-import Link from "next/link";
+import { useEffect, Suspense, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+
+import { Navbar } from "@/components/navbar";
+import { DepositModal } from "@/components/vault/depositModal";
+import { useWallet } from "@/components/wallet-provider";
+
 import {
-  Vault,
   TrendingUp,
   ShieldCheck,
   ArrowUpRight,
   ArrowDown,
   Users,
+  Vault as VaultIcon,
 } from "lucide-react";
-import { formatTvl, type Vault as VaultType, type RiskTier } from "@/lib/mock-vaults";
+
+import {
+  formatTvl,
+  type Vault as VaultType,
+  type RiskTier,
+} from "@/lib/mock-vaults";
+
 import { useVaultFilters, type SortKey } from "@/hooks/use-vault-filters";
+
+
+// -------------------- RISK STYLES --------------------
 
 const RISK_STYLES: Record<RiskTier, { badge: string; dot: string }> = {
   Conservative: { badge: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500" },
@@ -25,14 +38,12 @@ const RISK_STYLES: Record<RiskTier, { badge: string; dot: string }> = {
   DeFi500: { badge: "bg-purple-100 text-purple-700", dot: "bg-purple-500" },
 };
 
+
+// -------------------- COMPONENTS --------------------
+
 function RiskBadge({ tier }: { tier: RiskTier }) {
   return (
-    <span
-      className={cn(
-        "px-2.5 py-1 rounded-full text-xs font-medium",
-        RISK_STYLES[tier].badge,
-      )}
-    >
+    <span className={cn("px-2.5 py-1 rounded-full text-xs font-medium", RISK_STYLES[tier].badge)}>
       {tier === "DeFi500" ? "DeFi500 Index" : tier}
     </span>
   );
@@ -46,68 +57,72 @@ function EmptyState() {
       className="col-span-2 flex flex-col items-center justify-center py-20 text-center"
     >
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-secondary">
-        <Vault className="h-6 w-6 text-muted-foreground" />
+        <VaultIcon className="h-6 w-6 text-muted-foreground" />
       </div>
       <p className="text-sm font-medium text-foreground/80">
         No vaults match your filter
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
-        Try changing the risk tier filter.
+        Try changing the filter.
       </p>
     </motion.div>
   );
 }
 
-function VaultCard({ vault, index }: { vault: VaultType; index: number }) {
+function VaultCard({
+  vault,
+  index,
+  onSelect,
+}: {
+  vault: VaultType;
+  index: number;
+  onSelect: (v: VaultType) => void;
+}) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, delay: 0.2 + index * 0.08 }}
-      className="group relative overflow-hidden rounded-2xl border border-border bg-white p-6 transition-all hover:border-black/15 hover:shadow-xl flex flex-col"
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-border bg-white p-6 transition-all hover:border-black/15 hover:shadow-xl"
     >
       <div className="mb-4">
         <RiskBadge tier={vault.riskTier} />
       </div>
 
       <div className="mb-5">
-        <h3 className="font-heading text-xl font-light text-foreground mb-1.5">
+        <h3 className="mb-1.5 text-xl font-heading font-light text-foreground">
           {vault.name}
         </h3>
-        <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
+        <p className="line-clamp-2 text-sm text-muted-foreground">
           {vault.description}
         </p>
       </div>
 
-      <div className="flex items-end gap-6 mb-5">
+      <div className="mb-5 flex items-end gap-6">
         <div>
-          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-            Current APY
-          </p>
-          <p className="text-3xl font-heading font-light text-emerald-600">
+          <p className="mb-1 text-[11px] uppercase text-muted-foreground">APY</p>
+          <p className="text-3xl font-heading text-emerald-600">
             {vault.currentApy.toFixed(1)}%
           </p>
         </div>
+
         <div>
-          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-            TVL
-          </p>
-          <p className="text-xl font-heading font-light text-foreground">
-            {formatTvl(vault.tvl)}
-          </p>
+          <p className="mb-1 text-[11px] uppercase text-muted-foreground">TVL</p>
+          <p className="text-xl text-foreground">{formatTvl(vault.tvl)}</p>
         </div>
+
         <div className="ml-auto flex items-center gap-1 text-muted-foreground">
           <Users className="h-3.5 w-3.5" />
           <span className="text-xs">{vault.userCount.toLocaleString()}</span>
         </div>
       </div>
 
-      <div className="border-t border-border pt-4 mb-4">
+      <div className="mb-4 border-t border-border pt-4">
         <div className="flex flex-wrap gap-1.5">
           {vault.allocations.slice(0, 3).map((a) => (
             <span
               key={a.protocol}
-              className="px-2 py-0.5 rounded-full bg-secondary text-[11px] font-medium text-foreground/70"
+              className="rounded-full bg-secondary px-2 py-0.5 text-[11px]"
             >
               {a.percentage}% {a.protocol}
             </span>
@@ -115,35 +130,40 @@ function VaultCard({ vault, index }: { vault: VaultType; index: number }) {
         </div>
       </div>
 
-      <div className="flex gap-2 mb-5">
+      <div className="mb-5 flex gap-2">
         {vault.supportedAssets.map((asset) => (
-          <span
-            key={asset}
-            className="px-2.5 py-1 rounded-full border border-border text-xs font-medium text-foreground/70"
-          >
+          <span key={asset} className="rounded-full border px-2.5 py-1 text-xs">
             {asset}
           </span>
         ))}
       </div>
 
       <div className="mt-auto flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <div
-            className={cn("h-1.5 w-1.5 rounded-full", RISK_STYLES[vault.riskTier].dot)}
-          />
-          <span className="text-xs text-muted-foreground font-medium">
-            {vault.riskTier === "DeFi500" ? "Dynamic" : vault.riskTier} Risk
-          </span>
-        </div>
-        <Link href={`/dashboard/vaults/${vault.id}`}>
-          <button className="flex items-center gap-1.5 text-sm font-medium text-foreground hover:gap-2.5 transition-all group-hover:text-primary">
-            View Details <ArrowUpRight className="h-4 w-4" />
+        <span className="text-xs text-muted-foreground">
+          {vault.riskTier} Risk
+        </span>
+
+        <div className="flex gap-3">
+          <Link href={`/dashboard/vaults/${vault.id}`}>
+            <button className="text-sm hover:text-primary">
+              Details
+            </button>
+          </Link>
+
+          <button
+            onClick={() => onSelect(vault)}
+            className="flex items-center gap-1.5 text-sm font-medium"
+          >
+            Deposit <ArrowUpRight className="h-4 w-4" />
           </button>
-        </Link>
+        </div>
       </div>
     </motion.div>
   );
 }
+
+
+// -------------------- FILTER CONFIG --------------------
 
 const SORT_BUTTONS: { key: SortKey; label: string }[] = [
   { key: "apy", label: "APY" },
@@ -159,124 +179,57 @@ const FILTER_BUTTONS: { key: RiskTier | "all"; label: string }[] = [
   { key: "DeFi500", label: "DeFi500" },
 ];
 
-function VaultsPageContent() {
+
+// -------------------- MAIN CONTENT --------------------
+
+function VaultsPageContent({ onSelect }: { onSelect: (v: VaultType) => void }) {
   const { sortBy, filterTier, setSort, setFilter, filteredAndSorted } =
     useVaultFilters();
 
   return (
     <>
-      {/* Controls */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.1 }}
-        className="mb-8 space-y-3"
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground mr-1">Sort by</span>
+      <div className="mb-8 space-y-3">
+        <div className="flex flex-wrap gap-2">
           {SORT_BUTTONS.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setSort(key)}
-              className={cn(
-                "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                sortBy === key
-                  ? "bg-foreground text-background"
-                  : "bg-secondary text-foreground/60 hover:text-foreground",
-              )}
-            >
+            <button key={key} onClick={() => setSort(key)}>
               {label}
             </button>
           ))}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground mr-1">Filter</span>
-          {FILTER_BUTTONS.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setFilter(key)}
-              className={cn(
-                "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                filterTier === key
-                  ? "bg-foreground text-background"
-                  : "bg-secondary text-foreground/60 hover:text-foreground",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </motion.div>
 
-      {/* Vault Grid */}
+        <div className="flex flex-wrap gap-2">
+          {FILTER_BUTTONS.map(({ key, label }) => (
+            <button key={key} onClick={() => setFilter(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="grid gap-6 sm:grid-cols-2">
         {filteredAndSorted.length === 0 ? (
           <EmptyState />
         ) : (
-          filteredAndSorted.map((vault, i) => (
-            <VaultCard key={vault.id} vault={vault} index={i} />
+          filteredAndSorted.map((v, i) => (
+            <VaultCard key={v.id} vault={v} index={i} onSelect={onSelect} />
           ))
         )}
       </div>
-
-      {/* Info Section */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.6 }}
-        className="mt-12 rounded-3xl bg-secondary/30 border border-border p-8"
-      >
-        <div className="grid gap-8 lg:grid-cols-3">
-          <div className="flex flex-col gap-3">
-            <div className="h-10 w-10 rounded-xl bg-white flex items-center justify-center border border-border">
-              <TrendingUp className="h-5 w-5 text-emerald-600" />
-            </div>
-            <h4 className="font-heading font-medium text-foreground">
-              Auto-Rebalancing
-            </h4>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Our contracts monitor APY fluctuations every block and re-allocate
-              liquidity to the highest yielding sources.
-            </p>
-          </div>
-          <div className="flex flex-col gap-3">
-            <div className="h-10 w-10 rounded-xl bg-white flex items-center justify-center border border-border">
-              <ShieldCheck className="h-5 w-5 text-blue-600" />
-            </div>
-            <h4 className="font-heading font-medium text-foreground">Risk Guarded</h4>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              We prioritize safety by only integrating with protocols that have
-              undergone multiple audits and have at least $50M TVL.
-            </p>
-          </div>
-          <div className="flex flex-col gap-3">
-            <div className="h-10 w-10 rounded-xl bg-white flex items-center justify-center border border-border">
-              <ArrowDown className="h-5 w-5 text-purple-600" />
-            </div>
-            <h4 className="font-heading font-medium text-foreground">
-              Flexible Liquidity
-            </h4>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Receive{" "}
-              <span className="font-mono text-primary">nVault</span> tokens
-              representing your share. While liquidity is instant, some vaults may
-              have time-locked multipliers with early exit fees.
-            </p>
-          </div>
-        </div>
-      </motion.div>
     </>
   );
 }
+
+
+// -------------------- PAGE --------------------
 
 export default function VaultsPage() {
   const { isConnected } = useWallet();
   const router = useRouter();
 
+  const [selectedVault, setSelectedVault] = useState<VaultType | null>(null);
+
   useEffect(() => {
-    if (!isConnected) {
-      router.push("/");
-    }
+    if (!isConnected) router.push("/");
   }, [isConnected, router]);
 
   if (!isConnected) return null;
@@ -285,34 +238,19 @@ export default function VaultsPage() {
     <div className="min-h-screen bg-background">
       <Navbar />
 
-      <main className="mx-auto max-w-384 px-4 md:px-8 lg:px-12 xl:px-16 pt-28 pb-16">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="mb-8"
-        >
-          <div className="flex items-center gap-2 text-primary mb-2">
-            <Vault className="h-4 w-4" />
-            <span className="text-xs font-mono font-medium uppercase tracking-wider">
-              Vaults Engine
-            </span>
-          </div>
-          <h1 className="font-heading text-3xl font-light text-foreground sm:text-4xl">
-            Optimize your Yield
-          </h1>
-          <p className="mt-2 max-w-2xl text-muted-foreground">
-            Select a vault strategy that matches your risk profile. Our automated
-            engine rebalances your position across Stellar and DeFi protocols 24/7.
-          </p>
-        </motion.div>
+      <main className="mx-auto max-w-6xl px-4 pt-28 pb-16">
+        <h1 className="mb-6 text-3xl font-light">Vaults</h1>
 
-        {/* useSearchParams requires Suspense boundary per Next.js App Router */}
         <Suspense>
-          <VaultsPageContent />
+          <VaultsPageContent onSelect={setSelectedVault} />
         </Suspense>
       </main>
+
+      <DepositModal
+        open={!!selectedVault}
+        onClose={() => setSelectedVault(null)}
+        vault={selectedVault}
+      />
     </div>
   );
 }

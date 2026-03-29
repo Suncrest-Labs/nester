@@ -5,8 +5,15 @@ use soroban_sdk::{
 };
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event, ContractError, BASIS_POINT_SCALE};
-use yield_registry::{SourceStatus, YieldRegistryContractClient};
+use nester_common::{emit_event, ContractError, BASIS_POINT_SCALE, SourceStatus};
+
+mod yield_registry_import {
+    use nester_common::{SourceStatus, ProtocolType};
+    soroban_sdk::contractimport!(
+        file = "../../target/wasm32-unknown-unknown/release/yield_registry.wasm"
+    );
+}
+use yield_registry_import::Client as RegistryClient;
 
 const STRATEGY: Symbol = symbol_short!("STRATEGY");
 const WEIGHTS_UPDATED: Symbol = symbol_short!("WTS_SET");
@@ -86,7 +93,7 @@ impl AllocationStrategyContract {
 
         // Validate each source against the registry.
         let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
-        let registry = YieldRegistryContractClient::new(&env, &registry_id);
+        let registry = RegistryClient::new(&env, &registry_id);
 
         for w in weights.iter() {
             if !registry.has_source(&w.source_id) {

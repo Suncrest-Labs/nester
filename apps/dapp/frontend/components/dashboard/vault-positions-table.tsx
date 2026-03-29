@@ -5,6 +5,7 @@ import { VaultPosition, RiskTier } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 import Link from 'next/link';
 import { ExternalLink, Plus, Minus } from "lucide-react";
+import { useSettings } from "@/context/settings-context";
 
 interface VaultPositionsTableProps {
     positions: VaultPosition[];
@@ -17,6 +18,8 @@ const RISK_COLORS: Record<RiskTier, string> = {
 };
 
 export function VaultPositionsTable({ positions }: VaultPositionsTableProps) {
+    const { formatValue } = useSettings();
+
     return (
         <div className="rounded-2xl border border-border bg-white overflow-hidden shadow-sm hover:border-black/15 transition-all">
             <div className="px-6 py-5 border-b border-border bg-secondary/10 flex items-center justify-between">
@@ -73,8 +76,8 @@ export function VaultPositionsTable({ positions }: VaultPositionsTableProps) {
                                     </td>
                                     <td className="px-6 py-5">
                                         <div className="flex flex-col">
-                                            <span className="text-sm font-medium text-foreground">{pos.balance}</span>
-                                            <span className="text-[10px] text-emerald-600 font-mono">+{pos.yieldEarned} earned</span>
+                                            <span className="text-sm font-medium text-foreground">{formatValue(pos.balance)}</span>
+                                            <span className="text-[10px] text-emerald-600 font-mono">+{formatValue(pos.yieldEarned)} earned</span>
                                         </div>
                                     </td>
                                     <td className="px-6 py-5 text-right font-mono text-sm text-emerald-600 font-bold">

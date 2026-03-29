@@ -9,6 +9,8 @@ import {
     type ReactNode,
 } from "react";
 import { getInstallUrl } from "@/lib/wallet-install-urls";
+import { config } from "@/lib/config";
+import { useNetwork } from "@/hooks/useNetwork";
 
 export interface WalletInfo {
     id: string;
@@ -37,8 +39,8 @@ const WalletContext = createContext<WalletState>({
     wallets: [],
     walletsLoaded: false,
     selectedWalletId: null,
-    connect: async () => {},
-    disconnect: () => {},
+    connect: async () => { },
+    disconnect: () => { },
 });
 
 export function useWallet() {
@@ -60,6 +62,7 @@ function extractErrorMessage(err: unknown): string {
 }
 
 export function WalletProvider({ children }: { children: ReactNode }) {
+    const { currentNetwork } = useNetwork();
     const [address, setAddress] = useState<string | null>(null);
     const [isConnecting, setIsConnecting] = useState(false);
     const [wallets, setWallets] = useState<WalletInfo[]>([]);
@@ -83,7 +86,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
                 StellarWalletsKit.init({
                     modules: defaultModules(),
-                    network: "Test SDF Network ; September 2015" as never,
+                    network: currentNetwork.networkPassphrase as never,
                 });
 
                 setKitReady(true);
@@ -147,7 +150,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         };
 
         initKit();
-    }, []);
+    }, [currentNetwork.networkPassphrase]);
 
     const connect = useCallback(
         async (walletId: string) => {

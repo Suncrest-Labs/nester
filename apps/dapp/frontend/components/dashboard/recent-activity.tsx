@@ -11,6 +11,7 @@ import {
     ExternalLink 
 } from "lucide-react";
 import Link from 'next/link';
+import { useSettings } from "@/context/settings-context";
 
 interface RecentActivityProps {
     transactions: Transaction[];
@@ -24,6 +25,7 @@ const TYPE_ICONS = {
 };
 
 export function RecentActivity({ transactions }: RecentActivityProps) {
+    const { formatValue } = useSettings();
     const latestItems = transactions.slice(0, 5);
 
     return (
@@ -73,7 +75,10 @@ export function RecentActivity({ transactions }: RecentActivityProps) {
                                                 tx.amount.startsWith("+") ? "text-emerald-600" : 
                                                 tx.amount.startsWith("-") ? "text-rose-600" : "text-foreground"
                                             )}>
-                                                {tx.amount} <span className="text-[10px] opacity-70 ml-0.5">{tx.asset}</span>
+                                                {tx.amount.startsWith("+") || tx.amount.startsWith("-") 
+                                                    ? `${tx.amount[0]}${formatValue(Math.abs(parseFloat(tx.amount)))}` 
+                                                    : formatValue(parseFloat(tx.amount))}
+                                                <span className="text-[10px] opacity-70 ml-0.5">{tx.asset}</span>
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 text-right">
