@@ -19,6 +19,23 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 )
 
+// decodeAPIData unwraps the API envelope {"success":true,"data":...} and decodes
+// the inner data field into T.
+func decodeAPIData[T any](t *testing.T, body io.Reader) T {
+	t.Helper()
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	var result T
+	if err := json.Unmarshal(envelope.Data, &result); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	return result
+}
+
 func TestVaultHandlerCreateGetAndList(t *testing.T) {
 	userID := uuid.New()
 	otherUserID := uuid.New()
@@ -43,10 +60,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 		t.Fatalf("expected status 201, got %d", response.StatusCode)
 	}
 
-	var created vault.Vault
-	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
-		t.Fatalf("decode create response: %v", err)
-	}
+	created := decodeAPIData[vault.Vault](t, response.Body)
 
 	if _, err := vaultService.RecordDeposit(context.Background(), service.RecordDepositInput{
 		VaultID: created.ID,
@@ -71,10 +85,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 	}
 	defer getResponse.Body.Close()
 
-	var fetched vault.Vault
-	if err := json.NewDecoder(getResponse.Body).Decode(&fetched); err != nil {
-		t.Fatalf("decode get response: %v", err)
-	}
+	fetched := decodeAPIData[vault.Vault](t, getResponse.Body)
 
 	if len(fetched.Allocations) != 2 {
 		t.Fatalf("expected 2 allocations, got %d", len(fetched.Allocations))
@@ -97,10 +108,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 	}
 	defer listResponse.Body.Close()
 
-	var vaults []vault.Vault
-	if err := json.NewDecoder(listResponse.Body).Decode(&vaults); err != nil {
-		t.Fatalf("decode list response: %v", err)
-	}
+	vaults := decodeAPIData[[]vault.Vault](t, listResponse.Body)
 
 	if len(vaults) != 1 {
 		t.Fatalf("expected 1 vault for user, got %d", len(vaults))

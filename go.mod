@@ -1,4 +1,4 @@
-module github.com/Damola09/nester
+module github.com/suncrestlabs/nester
 
 go 1.25
 

@@ -226,6 +226,7 @@ func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 		"004_create_vaults_table.up.sql",
 		"005_create_allocations_table.up.sql",
 		"006_create_settlements_table.up.sql",
+		"007_update_users_table.up.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)

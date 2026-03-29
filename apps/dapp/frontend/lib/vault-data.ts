@@ -25,6 +25,8 @@ export interface VaultDefinition {
     asset: "USDC";
 }
 
+// TODO: Once smart contracts are deployed and API is ready, these vault definitions
+// should be fetched from the backend API instead of being hardcoded.
 export const vaultDefinitions: VaultDefinition[] = [
     {
         id: "conservative",

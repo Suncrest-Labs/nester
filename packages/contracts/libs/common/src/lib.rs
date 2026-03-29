@@ -11,6 +11,26 @@ pub use errors::ContractError;
 pub use events::*;
 pub use storage::*;
 
+use soroban_sdk::contracttype;
+
+/// Lifecycle status of a yield source.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum SourceStatus {
+    Active,
+    Paused,
+    Deprecated,
+}
+
+/// The category of yield-generating protocol.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum ProtocolType {
+    Lending,
+    Staking,
+    LP,
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

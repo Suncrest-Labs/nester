@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { config } from "@/lib/config";
 
 export type Currency = "USD" | "GBP" | "EUR" | "NGN";
 
@@ -15,7 +16,7 @@ export const EXCHANGE_RATES: Record<Currency, number> = {
     USD: 1,
     GBP: 0.79,
     EUR: 0.92,
-    NGN: 1530,
+    NGN: config.defaultNgnRate,
 };
 
 interface SettingsContextType {
@@ -57,10 +58,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const exchangeRate = EXCHANGE_RATES[currency];
 
     return (
-        <SettingsContext.Provider 
-            value={{ 
-                currency, 
-                setCurrency, 
+        <SettingsContext.Provider
+            value={{
+                currency,
+                setCurrency,
                 formatValue,
                 exchangeRate
             }}

@@ -1,9 +1,34 @@
-"use client";
-
-import { useParams } from "next/navigation";
 import { docsContent, docsNav } from "../content";
 import Link from "next/link";
 import { BookOpen, Code, Server, Cpu, Rocket, Brain } from "lucide-react";
+import { Metadata } from "next";
+
+/* ──── Metadata ──── */
+
+type Props = {
+    params: Promise<{ slug?: string[] }>;
+};
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+    const { slug: slugArray } = await params;
+    const slug = slugArray?.[0];
+    const doc = slug ? docsContent[slug] : null;
+
+    if (!doc) {
+        return {
+            title: "Documentation",
+            description: "Technical documentation for the Nester protocol.",
+        };
+    }
+
+    return {
+        title: doc.title,
+        description: doc.content.slice(0, 160).replace(/[#*`>]/g, "").trim() + "...",
+        alternates: {
+            canonical: `/docs/${slug}`,
+        },
+    };
+}
 
 /* ──── Minimal Markdown Renderer ──── */
 
@@ -228,9 +253,8 @@ function DocsLanding() {
     );
 }
 
-export default function DocsPage() {
-    const params = useParams();
-    const slugArray = params.slug as string[] | undefined;
+export default async function DocsPage({ params }: Props) {
+    const { slug: slugArray } = await params;
 
     // No slug = landing page
     if (!slugArray || slugArray.length === 0) {
@@ -286,3 +310,4 @@ export default function DocsPage() {
         </article>
     );
 }
+

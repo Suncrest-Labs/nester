@@ -80,6 +80,10 @@ interface PortfolioState {
     getWithdrawalQuote: (positionId: string, grossAmount: number) => WithdrawalQuote | null;
     recordDeposit: (input: DepositInput) => void;
     recordWithdrawal: (input: WithdrawalInput) => WithdrawalQuote | null;
+    /** Push a live balance update from WebSocket events */
+    applyBalanceUpdate: (asset: string, newBalance: number) => void;
+    /** Push a live yield accrual delta from WebSocket events */
+    applyYieldAccrual: (positionId: string, deltaYield: number) => void;
 }
 
 const defaultBalances = {
@@ -208,6 +212,21 @@ function PortfolioStore({
 
     const getAvailableBalance = (asset = "USDC") => balances[asset] ?? 0;
 
+    // WebSocket live-update helpers — additive only, existing flow unchanged.
+    const applyBalanceUpdate = (asset: string, newBalance: number) => {
+        setBalances((current) => ({ ...current, [asset]: newBalance }));
+    };
+
+    const applyYieldAccrual = (positionId: string, deltaYield: number) => {
+        setStoredPositions((current) =>
+            current.map((position) =>
+                position.id === positionId
+                    ? { ...position, principal: position.principal + deltaYield }
+                    : position
+            )
+        );
+    };
+
     const getWithdrawalQuote = (positionId: string, grossAmount: number) => {
         const position = positions.find((item) => item.id === positionId);
         if (!position || grossAmount <= 0 || grossAmount > position.currentValue) {
@@ -331,6 +350,8 @@ function PortfolioStore({
                 getWithdrawalQuote,
                 recordDeposit,
                 recordWithdrawal,
+                applyBalanceUpdate,
+                applyYieldAccrual,
             }}
         >
             {children}

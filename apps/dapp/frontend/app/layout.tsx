@@ -4,6 +4,7 @@ import { PortfolioProvider } from "@/components/portfolio-provider";
 import { WalletProvider } from "@/components/wallet-provider";
 import { NotificationsProvider } from "@/components/notifications-provider";
 import { NotificationsToaster } from "@/components/notifications-toaster";
+import { WebSocketProvider } from "@/components/websocket-provider";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -50,8 +51,10 @@ export default function RootLayout({
                     <WalletProvider>
                         <NotificationsProvider>
                             <PortfolioProvider>
-                                {children}
-                                <NotificationsToaster />
+                                <WebSocketProvider>
+                                    {children}
+                                    <NotificationsToaster />
+                                </WebSocketProvider>
                             </PortfolioProvider>
                         </NotificationsProvider>
                     </WalletProvider>

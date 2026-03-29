@@ -5,8 +5,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, Loader2, AlertCircle, ChevronDown } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
+import { config } from "@/lib/config";
 
-const FEATURED_IDS = ["freighter", "lobstr", "xbull"];
+const FEATURED_IDS = config.featuredWallets;
 
 function WalletGridCard({
     wallet,
@@ -201,7 +202,7 @@ export function ConnectWallet() {
                             </div>
                         ) : (
                             <>
-        
+
                                 <div className="grid w-full grid-cols-3 gap-2 sm:gap-3 mb-3">
                                     {featured.map((wallet, i) => (
                                         <motion.div

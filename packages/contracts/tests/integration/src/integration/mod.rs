@@ -1,3 +1,4 @@
+// CI trigger: update from 0xDeon fork
 // ---------------------------------------------------------------------------
 // Nester Protocol — Multi-Contract Integration Tests
 //
@@ -20,7 +21,7 @@ use soroban_sdk::{symbol_short, vec, Vec};
 use allocation_strategy_contract::AllocationWeight;
 use nester_access_control::Role;
 use nester_test_utils::NesterHarness;
-use yield_registry::ProtocolType;
+use nester_common::ProtocolType;
 
 // ---------------------------------------------------------------------------
 // Scenario 1 — Full protocol initialisation
@@ -109,7 +110,7 @@ fn strategy_rejects_weights_for_unregistered_source() {
 #[should_panic]
 fn strategy_rejects_weights_for_paused_source() {
     let h = NesterHarness::setup();
-    use yield_registry::SourceStatus;
+    use nester_common::SourceStatus;
 
     let aave = symbol_short!("aave");
     h.registry().register_source(

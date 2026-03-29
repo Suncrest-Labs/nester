@@ -1,3 +1,4 @@
+
 package middleware
 
 import (
@@ -124,6 +125,13 @@ func RateLimit(next http.Handler) http.Handler {
 					api.Error(w, http.StatusTooManyRequests, "wallet deposit limit exceeded: try again later")
 					return
 				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				// If you prefer the 'api' package error handling, replace the line below with:
+				// api.Error(w, http.StatusTooManyRequests, "rate limit exceeded")
+				fmt.Fprintf(w, `{"success":false,"error":{"code":429,"message":"rate limit exceeded"}}`)
+				return
 			}
 		}
 

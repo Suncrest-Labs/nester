@@ -14,11 +14,14 @@ import (
 )
 
 type Config struct {
-	environment string
-	server      ServerConfig
-	database    DatabaseConfig
-	stellar     StellarConfig
-	log         LogConfig
+	environment  string
+	server       ServerConfig
+	database     DatabaseConfig
+	stellar      StellarConfig
+	auth         AuthConfig
+	rateLimit    RateLimitConfig
+	log          LogConfig
+	intelligence IntelligenceConfig
 }
 
 type ServerConfig struct {
@@ -87,6 +90,9 @@ func Load() (*Config, error) {
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
 			format: strings.ToLower(loader.stringDefault("LOG_FORMAT", defaultLogFormat(environment))),
 		},
+		intelligence: IntelligenceConfig{
+			url: loader.requiredURL("INTELLIGENCE_URL"),
+		},
 	}
 
 	cfg.validate(&loader)
@@ -114,8 +120,20 @@ func (c Config) Stellar() StellarConfig {
 	return c.stellar
 }
 
+func (c Config) Auth() AuthConfig {
+	return c.auth
+}
+
+func (c Config) RateLimit() RateLimitConfig {
+	return c.rateLimit
+}
+
 func (c Config) Log() LogConfig {
 	return c.log
+}
+
+func (c Config) Intelligence() IntelligenceConfig {
+	return c.intelligence
 }
 
 func (c *Config) validate(loader *envLoader) {
@@ -145,6 +163,34 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.database.connectionTimeout <= 0 {
 		loader.addError("DATABASE_CONNECTION_TIMEOUT must be greater than 0")
+	}
+
+	if len(strings.TrimSpace(c.auth.secret)) < 32 {
+		loader.addError("AUTH_JWT_SECRET must be at least 32 characters")
+	}
+
+	if c.auth.tokenExpiry <= 0 {
+		loader.addError("AUTH_TOKEN_EXPIRY must be greater than 0")
+	}
+
+	if c.auth.challengeExpiry <= 0 {
+		loader.addError("AUTH_CHALLENGE_EXPIRY must be greater than 0")
+	}
+
+	if c.rateLimit.globalLimit <= 0 {
+		loader.addError("RATELIMIT_GLOBAL_LIMIT must be greater than 0")
+	}
+
+	if c.rateLimit.globalWindow <= 0 {
+		loader.addError("RATELIMIT_GLOBAL_WINDOW must be greater than 0")
+	}
+
+	if c.rateLimit.writeLimit <= 0 {
+		loader.addError("RATELIMIT_WRITE_LIMIT must be greater than 0")
+	}
+
+	if c.rateLimit.writeWindow <= 0 {
+		loader.addError("RATELIMIT_WRITE_WINDOW must be greater than 0")
 	}
 
 	if !isOneOf(c.log.level, "debug", "info", "warn", "error") {
@@ -214,6 +260,38 @@ func (l LogConfig) Level() string {
 
 func (l LogConfig) Format() string {
 	return l.format
+}
+
+func (i IntelligenceConfig) URL() string {
+	return i.url
+}
+
+func (a AuthConfig) Secret() string {
+	return a.secret
+}
+
+func (a AuthConfig) TokenExpiry() time.Duration {
+	return a.tokenExpiry
+}
+
+func (a AuthConfig) ChallengeExpiry() time.Duration {
+	return a.challengeExpiry
+}
+
+func (r RateLimitConfig) GlobalLimit() int {
+	return r.globalLimit
+}
+
+func (r RateLimitConfig) GlobalWindow() time.Duration {
+	return r.globalWindow
+}
+
+func (r RateLimitConfig) WriteLimit() int {
+	return r.writeLimit
+}
+
+func (r RateLimitConfig) WriteWindow() time.Duration {
+	return r.writeWindow
 }
 
 type envLoader struct {

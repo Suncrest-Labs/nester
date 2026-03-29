@@ -26,7 +26,7 @@ use soroban_sdk::{
 };
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event_with_sym, ContractError};
+use nester_common::{emit_event_with_sym, ContractError, SourceStatus, ProtocolType};
 
 const REGISTRY: Symbol = symbol_short!("REGISTRY");
 const SOURCE_ADDED: Symbol = symbol_short!("SRC_ADD");
@@ -51,23 +51,6 @@ pub struct SourceUpdatedEventData {
 // Public types
 // ---------------------------------------------------------------------------
 
-/// Lifecycle status of a yield source.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SourceStatus {
-    Active,
-    Paused,
-    Deprecated,
-}
-
-/// The category of yield-generating protocol.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ProtocolType {
-    Lending,
-    Staking,
-    LP,
-}
 
 /// Full record stored for each registered yield source.
 #[contracttype]

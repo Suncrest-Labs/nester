@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
@@ -49,10 +48,13 @@ func run() error {
 		return err
 	}
 
-	db, err := openDatabase(cfg)
+	pgPool, err := repository.NewPostgresDB(cfg.Database())
 	if err != nil {
 		return err
 	}
+	defer pgPool.Pool.Close()
+
+	db := stdlib.OpenDBFromPool(pgPool.Pool)
 	defer db.Close()
 
 	// Initialize Stellar Client
@@ -154,39 +156,12 @@ func run() error {
 	return nil
 }
 
-func openDatabase(cfg *config.Config) (*sql.DB, error) {
-	db, err := sql.Open("pgx", cfg.Database().DSN())
-	if err != nil {
-		return nil, err
-	}
-
-	db.SetMaxOpenConns(cfg.Database().PoolSize())
-	db.SetMaxIdleConns(min(5, cfg.Database().PoolSize()))
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Database().ConnectionTimeout())
-	defer cancel()
-
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
-	return db, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func healthHandler(db *sql.DB, timeout time.Duration) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func healthHandler(db *repository.PostgresDB, timeout time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		if err := db.PingContext(ctx); err != nil {
+		if err := db.Ping(ctx); err != nil {
 			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 			return
 		}
