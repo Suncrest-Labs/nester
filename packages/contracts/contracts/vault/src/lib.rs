@@ -53,7 +53,7 @@ pub struct DepositEventData {
     pub amount: i128,
     pub shares_minted: i128,
     pub new_balance: i128,
-    pub total_assets: i128,
+    pub total_deposits: i128,
 }
 
 #[contracttype]
@@ -62,7 +62,7 @@ pub struct WithdrawEventData {
     pub amount: i128,
     pub shares_burned: i128,
     pub new_balance: i128,
-    pub total_assets: i128,
+    pub total_deposits: i128,
     pub fee_deducted: i128,
 }
 
@@ -483,7 +483,7 @@ impl VaultContract {
                 amount,
                 shares_minted: shares_to_mint,
                 new_balance: new_user_shares,
-                total_assets: total_assets + amount,
+                total_deposits: total_assets + amount,
             },
         );
 
@@ -558,7 +558,7 @@ impl VaultContract {
                 amount: assets_to_withdraw,
                 shares_burned: shares,
                 new_balance: new_user_shares,
-                total_assets: total_assets - assets_to_withdraw,
+                total_deposits: total_assets - assets_to_withdraw,
                 fee_deducted: total_fee,
             },
         );

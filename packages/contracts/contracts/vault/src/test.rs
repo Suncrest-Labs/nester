@@ -464,9 +464,133 @@ fn test_emergency_withdraw() {
     client.deposit(&user, &1000);
 
     client.pause(&admin);
-    
+
     let returned = client.emergency_withdraw(&user);
     assert_eq!(returned, 1000);
     assert_eq!(client.get_shares(&user), 0);
     assert_eq!(client.get_total_deposits(), 0);
+}
+
+// Exchange rate: after yield is reported, each share redeems more than 1 token.
+#[test]
+fn test_exchange_rate_appreciates_after_yield() {
+    let (env, admin, token_address, _contract_id, client) = setup();
+    let user = Address::generate(&env);
+
+    client.grant_role(&admin, &admin, &Role::Manager);
+
+    mint_tokens(&env, &token_address, &user, 2_000);
+    // Deposit 1000 tokens → 1000 shares (1:1 first depositor)
+    client.deposit(&user, &1_000);
+    assert_eq!(client.get_shares(&user), 1_000);
+    assert_eq!(client.get_balance(&user), 1_000);
+
+    // Report 1000 tokens of yield; total assets = 2000, total shares = 1000
+    mint_tokens(&env, &token_address, &client.address, 1_000);
+    client.report_yield(&admin, &1_000);
+
+    // Each share is now worth 2 tokens
+    assert_eq!(client.get_balance(&user), 2_000);
+}
+
+// Share dilution: a second depositor joining after yield accrual gets fewer shares per token,
+// preserving the exchange rate for the first depositor.
+#[test]
+fn test_second_depositor_share_dilution() {
+    let (env, admin, token_address, _contract_id, client) = setup();
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+
+    client.grant_role(&admin, &admin, &Role::Manager);
+
+    mint_tokens(&env, &token_address, &user_a, 1_000);
+    mint_tokens(&env, &token_address, &user_b, 1_000);
+
+    // user_a deposits 1000 → 1000 shares at 1:1
+    client.deposit(&user_a, &1_000);
+
+    // Vault earns 1000 tokens; exchange rate is now 2:1 (2 tokens per share)
+    mint_tokens(&env, &token_address, &client.address, 1_000);
+    client.report_yield(&admin, &1_000);
+
+    // user_b deposits 1000 tokens at the 2:1 rate → should receive 500 shares
+    let shares_b = client.deposit(&user_b, &1_000);
+    assert_eq!(shares_b, 500);
+    assert_eq!(client.get_shares(&user_b), 500);
+
+    // user_a's 1000 shares still worth 2000 tokens
+    // total assets = 3000, total shares = 1500
+    // user_a: 1000/1500 * 3000 = 2000
+    // user_b:  500/1500 * 3000 = 1000
+    assert_eq!(client.get_balance(&user_a), 2_000);
+    assert_eq!(client.get_balance(&user_b), 1_000);
+}
+
+// Partial withdrawal must not alter the per-share value for remaining holders.
+#[test]
+fn test_partial_withdrawal_preserves_exchange_rate() {
+    let (env, admin, token_address, _contract_id, client) = setup();
+    let user = Address::generate(&env);
+
+    client.grant_role(&admin, &admin, &Role::Manager);
+
+    // Advance past the early-withdrawal lock period so no early-fee distortion
+    env.ledger().set_timestamp(1000 + 90_001);
+
+    mint_tokens(&env, &token_address, &user, 2_000);
+    client.deposit(&user, &2_000);
+
+    // Report 2000 tokens yield; exchange rate = 2:1 (4000 assets / 2000 shares)
+    mint_tokens(&env, &token_address, &client.address, 2_000);
+    client.report_yield(&admin, &2_000);
+
+    assert_eq!(client.get_balance(&user), 4_000);
+
+    // Withdraw half the shares (1000).  Performance fee = 10% of 1000 yield = 100.
+    // Net payout = 1900 tokens.
+    let remaining_shares = client.withdraw(&user, &1_000);
+    assert_eq!(remaining_shares, 1_000);
+
+    // Remaining 1000 shares: total_assets = 4000 - 1900 = 2100,
+    // accrued_fees = 100, available = 2000. Per share = 2000/1000 = 2.
+    assert_eq!(client.get_balance(&user), 2_000);
+}
+
+// Depositing and withdrawing the full balance must leave the vault empty.
+#[test]
+fn test_full_cycle_leaves_vault_empty() {
+    let (env, _admin, token_address, contract_id, client) = setup();
+    let user = Address::generate(&env);
+
+    // Advance past lock period
+    env.ledger().set_timestamp(1000 + 90_001);
+
+    mint_tokens(&env, &token_address, &user, 5_000);
+    client.deposit(&user, &5_000);
+
+    client.withdraw(&user, &5_000);
+
+    assert_eq!(client.get_shares(&user), 0);
+    assert_eq!(client.get_total_deposits(), 0);
+    assert_eq!(TokenClient::new(&env, &token_address).balance(&contract_id), 0);
+}
+
+// Depositing when the vault has reached max capacity must be rejected.
+#[test]
+fn test_deposit_at_exact_cap_succeeds_above_cap_fails() {
+    let (env, admin, token_address, _contract_id, client) = setup();
+    let user = Address::generate(&env);
+
+    client.set_max_deposit(&admin, &300);
+    mint_tokens(&env, &token_address, &user, 1_000);
+
+    // Exactly at cap — should succeed
+    client.deposit(&user, &300);
+    assert_eq!(client.get_balance(&user), 300);
+
+    // One above cap — should fail
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.deposit(&user, &301);
+    }));
+    assert!(result.is_err());
 }
