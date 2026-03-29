@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,11 +13,13 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/indexer"
+	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
+	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/server"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
@@ -49,10 +50,13 @@ func run() error {
 		return err
 	}
 
-	db, err := openDatabase(cfg)
+	pgPool, err := repository.NewPostgresDB(cfg.Database())
 	if err != nil {
 		return err
 	}
+	defer pgPool.Pool.Close()
+
+	db := stdlib.OpenDBFromPool(pgPool.Pool)
 	defer db.Close()
 
 	// Initialize Stellar Client
@@ -94,6 +98,7 @@ func run() error {
 	settlementService := service.NewSettlementService(settlementRepository)
 	settlementHandler := handler.NewSettlementHandler(settlementService)
 
+<<<<<<< HEAD
 	h := server.New(
 		baseLogger,
 		vaultService,
@@ -104,6 +109,50 @@ func run() error {
 	srv := &http.Server{
 		Addr:         cfg.Server().Address(),
 		Handler:      h,
+=======
+	userRepository := postgres.NewUserRepository(db)
+	userService := service.NewUserService(userRepository)
+	userHandler := handler.NewUserHandler(userService)
+
+	authService := service.NewAuthService(userService, cfg.Auth())
+	authHandler := handler.NewAuthHandler(authService)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
+	mux.HandleFunc("GET /healthz", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
+	mux.HandleFunc("GET /readyz", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
+	vaultHandler.Register(mux)
+	settlementHandler.Register(mux)
+	userHandler.Register(mux)
+	authHandler.Register(mux)
+
+	authRules := []middleware.RouteRule{
+		{PathPrefix: "/health", Public: true},
+		{PathPrefix: "/healthz", Public: true},
+		{PathPrefix: "/readyz", Public: true},
+		{PathPrefix: "/api/v1/auth/", Public: true},
+		{PathPrefix: "/api/v1/", Public: false},
+	}
+	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
+	// Global rate limit applies to all requests per IP.
+	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
+	// Write rate limit is stricter and applies only to mutating methods (POST/PUT/PATCH/DELETE).
+	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
+
+	server := &http.Server{
+		Addr: cfg.Server().Address(),
+		Handler: middleware.RecoverPanic(baseLogger)(
+			globalLimiter(
+				writeLimiter(
+					authenticator(
+						middleware.LimitRequestBody(1*1024*1024)(
+							middleware.Logging(baseLogger)(mux),
+						),
+					),
+				),
+			),
+		),
+>>>>>>> origin/main
 		ReadTimeout:  cfg.Server().ReadTimeout(),
 		WriteTimeout: cfg.Server().WriteTimeout(),
 	}
@@ -154,39 +203,12 @@ func run() error {
 	return nil
 }
 
-func openDatabase(cfg *config.Config) (*sql.DB, error) {
-	db, err := sql.Open("pgx", cfg.Database().DSN())
-	if err != nil {
-		return nil, err
-	}
-
-	db.SetMaxOpenConns(cfg.Database().PoolSize())
-	db.SetMaxIdleConns(min(5, cfg.Database().PoolSize()))
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Database().ConnectionTimeout())
-	defer cancel()
-
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
-	return db, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func healthHandler(db *sql.DB, timeout time.Duration) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func healthHandler(db *repository.PostgresDB, timeout time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		if err := db.PingContext(ctx); err != nil {
+		if err := db.Ping(ctx); err != nil {
 			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 			return
 		}

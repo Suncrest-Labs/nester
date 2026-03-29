@@ -9,6 +9,7 @@ import {
     type ReactNode,
 } from "react";
 import { getInstallUrl } from "@/lib/wallet-install-urls";
+import { config } from "@/lib/config";
 
 export interface WalletInfo {
     id: string;
@@ -37,8 +38,8 @@ const WalletContext = createContext<WalletState>({
     wallets: [],
     walletsLoaded: false,
     selectedWalletId: null,
-    connect: async () => {},
-    disconnect: () => {},
+    connect: async () => { },
+    disconnect: () => { },
 });
 
 export function useWallet() {
@@ -83,7 +84,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
                 StellarWalletsKit.init({
                     modules: defaultModules(),
-                    network: "Test SDF Network ; September 2015" as never,
+                    network: config.stellarNetwork as never,
                 });
 
                 setKitReady(true);
