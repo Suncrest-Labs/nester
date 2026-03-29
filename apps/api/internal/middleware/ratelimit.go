@@ -1,3 +1,4 @@
+
 package middleware
 
 import (
@@ -31,7 +32,7 @@ func newLimiter(limit int, window time.Duration) *limiter {
 	}
 }
 
-// allow consumes one token for key.  It returns true when the request is
+// allow consumes one token for key. It returns true when the request is
 // allowed; otherwise it returns false along with an estimated wait duration
 // until the next token becomes available.
 func (l *limiter) allow(key string) (bool, time.Duration) {
@@ -146,6 +147,8 @@ func rateLimitMiddleware(l *limiter, keyFn func(*http.Request) string) func(http
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusTooManyRequests)
+				// If you prefer the 'api' package error handling, replace the line below with:
+				// api.Error(w, http.StatusTooManyRequests, "rate limit exceeded")
 				fmt.Fprintf(w, `{"success":false,"error":{"code":429,"message":"rate limit exceeded"}}`)
 				return
 			}

@@ -4,38 +4,55 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
+	"github.com/suncrestlabs/nester/apps/api/internal/router"
 )
 
-const defaultMaxBodyBytes int64 = 1 << 20 // 1 MiB
+const defaultMaxBodyBytes int64 = 64 * 1024 // 64 KB
+const maxURLLength = 2048
 
-// HealthChecker is a function that returns nil when the service is healthy.
-// Callers may supply a database ping, a no-op, or a stub for tests.
-type HealthChecker func(ctx context.Context) error
-
-// New assembles the full HTTP handler: panic recovery → request-size limit →
-// structured logging → mux.  Routes are registered via the returned *Mux.
-//
-// The returned http.Handler is ready to pass to http.Server.
-func New(logger *slog.Logger, checker HealthChecker) (http.Handler, *http.ServeMux) {
+// New assembles the HTTP handler and returns it along with the underlying mux
+// so callers can register additional routes.  readiness is called by the health
+// endpoints (/health, /healthz) to signal whether the server is ready to serve.
+func New(logger *slog.Logger, readiness func(context.Context) error) (http.Handler, *http.ServeMux) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(checker))
-	mux.HandleFunc("GET /healthz", healthHandler(checker))
 
-	// Build the middleware stack (outermost first):
-	// RecoverPanic → CORS → LimitRequestBody → Logging → mux
-	handler := middleware.RecoverPanic(logger)(
-		middleware.CORS(
-			middleware.LimitRequestBody(defaultMaxBodyBytes)(
-				middleware.Logging(logger)(mux),
-			),
-		),
-	)
-	return handler, mux
+	mux.HandleFunc("GET /health", healthHandler(readiness))
+	mux.HandleFunc("GET /healthz", healthHandler(readiness))
+
+	h := http.Handler(mux)
+	h = middleware.Logging(logger)(h)
+	h = middleware.CORS(h)
+	h = middleware.IPRateLimiter(100, time.Minute)(h)
+	h = middleware.SecurityHeaders(h)
+	h = middleware.RecoverPanic(logger)(h)
+	h = router.ValidateURLLength(maxURLLength)(h)
+	h = middleware.LimitRequestBody(defaultMaxBodyBytes)(h)
+
+	return h, mux
+}
+
+func healthHandler(readiness func(context.Context) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if err := readiness(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{"status": "unavailable", "error": err.Error()})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
 }
 
 // RunWithGracefulShutdown starts srv and blocks until ctx is cancelled, then
@@ -63,22 +80,4 @@ func RunWithGracefulShutdown(ctx context.Context, srv *http.Server, timeout time
 		return err
 	}
 	return <-serverErr
-}
-
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
-func healthHandler(checker HealthChecker) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if checker != nil {
-			if err := checker(r.Context()); err != nil {
-				http.Error(w, "service unavailable", http.StatusServiceUnavailable)
-				return
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}
 }

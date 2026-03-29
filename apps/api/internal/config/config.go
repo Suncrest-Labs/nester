@@ -14,13 +14,14 @@ import (
 )
 
 type Config struct {
-	environment string
-	server      ServerConfig
-	database    DatabaseConfig
-	stellar     StellarConfig
-	auth        AuthConfig
-	rateLimit   RateLimitConfig
-	log         LogConfig
+	environment  string
+	server       ServerConfig
+	database     DatabaseConfig
+	stellar      StellarConfig
+	auth         AuthConfig
+	rateLimit    RateLimitConfig
+	log          LogConfig
+	intelligence IntelligenceConfig
 }
 
 type ServerConfig struct {
@@ -41,6 +42,11 @@ type StellarConfig struct {
 	networkPassphrase string
 	rpcURL            string
 	horizonURL        string
+	sourceKey         string
+}
+
+type IntelligenceConfig struct {
+	url string
 }
 
 type AuthConfig struct {
@@ -95,6 +101,7 @@ func Load() (*Config, error) {
 			networkPassphrase: loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
 			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
 			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
+			sourceKey:         loader.stringDefault("STELLAR_SOURCE_KEY", "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), // Default for read-only
 		},
 		auth: AuthConfig{
 			secret:          loader.requiredString("AUTH_JWT_SECRET"),
@@ -110,6 +117,9 @@ func Load() (*Config, error) {
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
 			format: strings.ToLower(loader.stringDefault("LOG_FORMAT", defaultLogFormat(environment))),
+		},
+		intelligence: IntelligenceConfig{
+			url: loader.requiredURL("INTELLIGENCE_URL"),
 		},
 	}
 
@@ -148,6 +158,10 @@ func (c Config) RateLimit() RateLimitConfig {
 
 func (c Config) Log() LogConfig {
 	return c.log
+}
+
+func (c Config) Intelligence() IntelligenceConfig {
+	return c.intelligence
 }
 
 func (c *Config) validate(loader *envLoader) {
@@ -264,12 +278,20 @@ func (s StellarConfig) HorizonURL() string {
 	return s.horizonURL
 }
 
+func (s StellarConfig) SourceKey() string {
+	return s.sourceKey
+}
+
 func (l LogConfig) Level() string {
 	return l.level
 }
 
 func (l LogConfig) Format() string {
 	return l.format
+}
+
+func (i IntelligenceConfig) URL() string {
+	return i.url
 }
 
 func (a AuthConfig) Secret() string {

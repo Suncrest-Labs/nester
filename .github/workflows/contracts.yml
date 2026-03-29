@@ -1,0 +1,57 @@
+name: Contracts
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          
+      - name: Install Stellar CLI
+        run: |
+          cargo install --locked stellar-cli
+
+      - name: Build Contracts
+        run: make build
+
+  deploy:
+    name: Deploy to Testnet
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          
+      - name: Install Stellar CLI
+        run: |
+          cargo install --locked stellar-cli
+          
+      - name: Build Contracts
+        run: make build
+        
+      - name: Deploy
+        env:
+          STELLAR_ACCOUNT_SECRET: ${{ secrets.STELLAR_ACCOUNT_SECRET }}
+        run: |
+          # Configure identity
+          stellar keys add default --secret-key $STELLAR_ACCOUNT_SECRET
+          # Run deployment script
+          cd packages/contracts && bash scripts/deploy.sh

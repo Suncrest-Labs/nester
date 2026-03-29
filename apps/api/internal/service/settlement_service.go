@@ -1,7 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -40,6 +44,38 @@ type UpdateStatusInput struct {
 // InitiateSettlement validates input, creates a settlement in the `initiated`
 // state, and persists it via the repository.
 func (s *SettlementService) InitiateSettlement(ctx context.Context, input InitiateSettlementInput) (offramp.Settlement, error) {
+	// --- Pre-flight risk check ---
+	riskPayload := map[string]interface{}{
+		"transaction": map[string]interface{}{
+			"amount":     input.Amount.String(),
+			"currency":   input.Currency,
+			"to_account": input.Destination.AccountNumber,
+		},
+		"user_history": map[string]interface{}{}, // TODO: Populate with real user history
+		"context":      map[string]interface{}{},
+	}
+	body, _ := json.Marshal(riskPayload)
+	riskURL := "http://localhost:8000/risk/evaluate" // TODO: Make configurable
+	req, err := http.NewRequestWithContext(ctx, "POST", riskURL, bytes.NewBuffer(body))
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil && resp.StatusCode == 200 {
+			var riskResp struct {
+				Score             float64 `json:"score"`
+				RecommendedAction string  `json:"recommended_action"`
+			}
+			json.NewDecoder(resp.Body).Decode(&riskResp)
+			resp.Body.Close()
+			if riskResp.RecommendedAction == "block" {
+				return offramp.Settlement{}, fmt.Errorf("transaction blocked by risk engine (score %.1f)", riskResp.Score)
+			}
+			if riskResp.RecommendedAction == "hold" {
+				// Optionally, set a status or flag for review
+			}
+		}
+	}
+	// --- End risk check ---
 	if input.UserID == uuid.Nil || input.VaultID == uuid.Nil {
 		return offramp.Settlement{}, offramp.ErrInvalidSettlement
 	}

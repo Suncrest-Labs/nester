@@ -1,8 +1,11 @@
 package stellar
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -13,6 +16,7 @@ type EventPoller struct {
 	listeners map[string][]EventListener
 	mu        sync.RWMutex
 	done      chan struct{}
+	httpClient *http.Client
 }
 
 // EventListener is a callback function for event notifications
@@ -21,8 +25,10 @@ type EventListener func(event *Event)
 // NewEventPoller creates a new event poller
 func NewEventPoller(client *Client) *EventPoller {
 	return &EventPoller{
+		client:    client,
 		listeners: make(map[string][]EventListener),
 		done:      make(chan struct{}),
+		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -74,28 +80,78 @@ func (ep *EventPoller) PollEvents(
 		return nil, fmt.Errorf("contract ID is required")
 	}
 
-	if fromBlock > toBlock {
+	if fromBlock > toBlock && toBlock != 0 {
 		return nil, fmt.Errorf("fromBlock must be <= toBlock")
 	}
 
-	// In production, this would call the Soroban RPC getEvents endpoint
-	// For now, returning empty slice as placeholder
+	// No RPC URL configured — return empty result (placeholder / test mode)
+	if ep.client == nil || ep.client.config.RPCURL == "" {
+		return make([]Event, 0), nil
+	}
 
-	events := make([]Event, 0)
+	params := map[string]interface{}{
+		"startLedger": fromBlock,
+	}
+	if toBlock > 0 {
+		params["endLedger"] = toBlock
+	}
+	if contractID != "*" {
+		params["filters"] = []map[string]interface{}{
+			{"contractIds": []string{contractID}},
+		}
+	}
 
-	// Soroban RPC call would look like:
-	// events, err := ep.client.rpcClient.GetEvents(ctx, GetEventsRequest{
-	//   ContractIDs: []string{contractID},
-	//   StartLedger: fromBlock,
-	//   EndLedger:   toBlock,
-	// })
+	requestBody, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      time.Now().UnixNano(),
+		"method":  "getEvents",
+		"params":  params,
+	})
+	if err != nil {
+		return nil, err
+	}
 
-	// Convert SDK events to domain events
-	// for _, sdkEvent := range events {
-	//   events = append(events, convertSDKEventToDomain(sdkEvent))
-	// }
+	resp, err := ep.httpClient.Post(ep.client.config.RPCURL, "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 
-	return events, nil
+	var rpcResp struct {
+		Result struct {
+			Events []struct {
+				ID              string                 `json:"id"`
+				ContractID      string                 `json:"contractId"`
+				Type            string                 `json:"type"`
+				Ledger          uint64                 `json:"ledger"`
+				LedgerClosedAt  string                 `json:"ledgerClosedAt"`
+				TransactionHash string                 `json:"transactionHash"`
+				Value           map[string]interface{} `json:"value"`
+			} `json:"events"`
+		} `json:"result"`
+		Error interface{} `json:"error"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+		return nil, err
+	}
+
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("RPC error: %v", rpcResp.Error)
+	}
+
+	domainEvents := make([]Event, 0, len(rpcResp.Result.Events))
+	for _, e := range rpcResp.Result.Events {
+		domainEvents = append(domainEvents, Event{
+			ContractID:    e.ContractID,
+			EventType:     e.Type,
+			BlockNumber:   e.Ledger,
+			TransactionID: e.TransactionHash,
+			Data:          e.Value,
+		})
+	}
+
+	return domainEvents, nil
 }
 
 // WatchEvents continuously polls and dispatches events to subscribers
