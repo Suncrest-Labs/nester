@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import List
 from pydantic import BaseModel
 
 class RiskEvaluation(BaseModel):
@@ -38,56 +38,49 @@ class AnomalyScorer:
 
         # 2. Velocity Score
         if velocity_24h > 10:
-            score += 50
+            score += 30
             triggered_rules.append("HIGH_VELOCITY_24H")
         elif velocity_24h > 5:
-            score += 20
+            score += 10
             triggered_rules.append("MODERATE_VELOCITY_24H")
 
-        # 3. Novelty Score
+        # 3. Novel Settlement Account
         if is_novel_account:
-            score += 25
+            score += 20
             triggered_rules.append("NOVEL_SETTLEMENT_ACCOUNT")
 
-        # Cap score
-        score = min(score, 100)
-
-        # Determine action
-        if score <= 30:
-            action = "allow"
-        elif score <= 70:
-            action = "flag"
-        elif score <= 90:
-            action = "hold"
-        else:
-            action = "block"
-
-        explanation = self._generate_explanation(score, triggered_rules)
+        recommended_action = self._recommend_action(score)
+        explanation = self._explain(triggered_rules)
 
         return RiskEvaluation(
             score=score,
             triggered_rules=triggered_rules,
-            recommended_action=action,
+            recommended_action=recommended_action,
             explanation=explanation
         )
 
-    def _generate_explanation(self, score: int, rules: List[str]) -> str:
+    def _recommend_action(self, score: int) -> str:
+        if score < self.thresholds["allow"]:
+            return "allow"
+        elif score < self.thresholds["flag"]:
+            return "flag"
+        elif score < self.thresholds["hold"]:
+            return "hold"
+        else:
+            return "block"
+
+    def _explain(self, rules: List[str]) -> str:
         if not rules:
             return "Transaction appears normal based on historical patterns."
-        
         parts = []
         if "SIGNIFICANT_AMOUNT_DEVIATION" in rules:
-            parts.append("an unusually high amount compared to your typical activity")
+            parts.append("an unusually large withdrawal compared to your history")
         elif "MODERATE_AMOUNT_DEVIATION" in rules:
             parts.append("an amount slightly higher than your usual pattern")
-        
         if "HIGH_VELOCITY_24H" in rules:
             parts.append("a high frequency of transactions in a short period")
         elif "MODERATE_VELOCITY_24H" in rules:
             parts.append("an increased transaction frequency")
-            
         if "NOVEL_SETTLEMENT_ACCOUNT" in rules:
             parts.append("the use of a new settlement destination")
-
-        explanation = "This transaction was flagged due to " + ", ".join(parts) + "."
-        return explanation
+        return "This transaction was flagged due to " + ", ".join(parts) + "."
