@@ -76,8 +76,17 @@ func (ep *EventPoller) PollEvents(
 	fromBlock uint64,
 	toBlock uint64,
 ) ([]Event, error) {
+	if contractID == "" {
+		return nil, fmt.Errorf("contract ID is required")
+	}
+
 	if fromBlock > toBlock && toBlock != 0 {
 		return nil, fmt.Errorf("fromBlock must be <= toBlock")
+	}
+
+	// No RPC URL configured — return empty result (placeholder / test mode)
+	if ep.client == nil || ep.client.config.RPCURL == "" {
+		return make([]Event, 0), nil
 	}
 
 	params := map[string]interface{}{
@@ -86,7 +95,7 @@ func (ep *EventPoller) PollEvents(
 	if toBlock > 0 {
 		params["endLedger"] = toBlock
 	}
-	if contractID != "*" && contractID != "" {
+	if contractID != "*" {
 		params["filters"] = []map[string]interface{}{
 			{"contractIds": []string{contractID}},
 		}
@@ -111,13 +120,13 @@ func (ep *EventPoller) PollEvents(
 	var rpcResp struct {
 		Result struct {
 			Events []struct {
-				ID            string                 `json:"id"`
-				ContractID    string                 `json:"contractId"`
-				Type          string                 `json:"type"`
-				Ledger        uint64                 `json:"ledger"`
-				LedgerClosedAt string                `json:"ledgerClosedAt"`
-				TransactionHash string               `json:"transactionHash"`
-				Value         map[string]interface{} `json:"value"`
+				ID              string                 `json:"id"`
+				ContractID      string                 `json:"contractId"`
+				Type            string                 `json:"type"`
+				Ledger          uint64                 `json:"ledger"`
+				LedgerClosedAt  string                 `json:"ledgerClosedAt"`
+				TransactionHash string                 `json:"transactionHash"`
+				Value           map[string]interface{} `json:"value"`
 			} `json:"events"`
 		} `json:"result"`
 		Error interface{} `json:"error"`

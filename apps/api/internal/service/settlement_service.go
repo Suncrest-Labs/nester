@@ -16,7 +16,7 @@ import (
 )
 
 type SettlementService struct {
-    repository offramp.Repository
+	repository offramp.Repository
 }
 
 func NewSettlementService(repository offramp.Repository) *SettlementService {
@@ -119,7 +119,6 @@ func (s *SettlementService) InitiateSettlement(ctx context.Context, input Initia
 
 	return s.repository.Create(ctx, model)
 }
-
 
 // GetSettlement retrieves a single settlement by ID.
 func (s *SettlementService) GetSettlement(ctx context.Context, id uuid.UUID) (offramp.Settlement, error) {

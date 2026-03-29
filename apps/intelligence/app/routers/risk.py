@@ -1,6 +1,8 @@
+from typing import List
+
 from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import List
+
 from app.services.anomaly_scorer import AnomalyScorer, RiskEvaluation
 
 router = APIRouter(prefix="/api/v1/risk", tags=["risk"])

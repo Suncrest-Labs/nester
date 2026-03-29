@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
@@ -34,7 +35,7 @@ func New(cfg Config) http.Handler {
 	
 	handler := http.Handler(mux)
 	handler = middleware.Logging(cfg.Logger)(handler)
-	handler = middleware.RateLimit(handler)
+	handler = middleware.IPRateLimiter(100, time.Minute)(handler)
 	handler = middleware.SecurityHeaders(handler)
 	handler = middleware.RecoverPanic(cfg.Logger)(handler)
 

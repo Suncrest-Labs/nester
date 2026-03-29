@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -21,7 +19,6 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
-	"github.com/suncrestlabs/nester/apps/api/internal/server"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	"github.com/suncrestlabs/nester/internal/stellar"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
@@ -61,10 +58,10 @@ func run() error {
 
 	// Initialize Stellar Client
 	stellarClient, err := stellar.NewClient(context.Background(), stellar.Config{
-		NetworkID:    cfg.Stellar().NetworkPassphrase(),
-		RPCURL:       cfg.Stellar().RPCURL(),
-		SourceKey:    cfg.Stellar().SourceKey(),
-		Network:      stellar.Testnet, // Default or from config
+		NetworkID: cfg.Stellar().NetworkPassphrase(),
+		RPCURL:    cfg.Stellar().RPCURL(),
+		SourceKey: cfg.Stellar().SourceKey(),
+		Network:   stellar.Testnet,
 	})
 	if err != nil {
 		return fmt.Errorf("stellar client: %w", err)
@@ -98,18 +95,6 @@ func run() error {
 	settlementService := service.NewSettlementService(settlementRepository)
 	settlementHandler := handler.NewSettlementHandler(settlementService)
 
-<<<<<<< HEAD
-	h := server.New(
-		baseLogger,
-		vaultService,
-		settlementService,
-		healthHandler(db, cfg.Database().ConnectionTimeout()),
-	)
-
-	srv := &http.Server{
-		Addr:         cfg.Server().Address(),
-		Handler:      h,
-=======
 	userRepository := postgres.NewUserRepository(db)
 	userService := service.NewUserService(userRepository)
 	userHandler := handler.NewUserHandler(userService)
@@ -134,12 +119,10 @@ func run() error {
 		{PathPrefix: "/api/v1/", Public: false},
 	}
 	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
-	// Global rate limit applies to all requests per IP.
 	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
-	// Write rate limit is stricter and applies only to mutating methods (POST/PUT/PATCH/DELETE).
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 
-	server := &http.Server{
+	srv := &http.Server{
 		Addr: cfg.Server().Address(),
 		Handler: middleware.RecoverPanic(baseLogger)(
 			globalLimiter(
@@ -152,7 +135,6 @@ func run() error {
 				),
 			),
 		),
->>>>>>> origin/main
 		ReadTimeout:  cfg.Server().ReadTimeout(),
 		WriteTimeout: cfg.Server().WriteTimeout(),
 	}
