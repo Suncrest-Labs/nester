@@ -113,7 +113,11 @@ func (h *SettlementHandler) initiateSettlement(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	response.WriteJSON(w, http.StatusCreated, response.Created(model))
+	       // Always set status in response
+	       if model.Status == "" {
+		       model.Status = "initiated"
+	       }
+	       response.WriteJSON(w, http.StatusCreated, response.Created(model))
 }
 
 func (h *SettlementHandler) getSettlement(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +133,11 @@ func (h *SettlementHandler) getSettlement(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	response.WriteJSON(w, http.StatusOK, response.OK(model))
+	       // Always set status in response
+	       if model.Status == "" {
+		       model.Status = req.Status
+	       }
+	       response.WriteJSON(w, http.StatusOK, response.OK(model))
 }
 
 func (h *SettlementHandler) listUserSettlements(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +155,11 @@ func (h *SettlementHandler) listUserSettlements(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	response.WriteJSON(w, http.StatusOK, response.OK(models))
+	       // Always return an array, never an object
+	       if models == nil {
+		       models = []offramp.Settlement{}
+	       }
+	       response.WriteJSON(w, http.StatusOK, models)
 }
 
 func (h *SettlementHandler) updateStatus(w http.ResponseWriter, r *http.Request) {
