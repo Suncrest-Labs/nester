@@ -14,13 +14,13 @@ import (
 )
 
 type Config struct {
-	environment string
-	server      ServerConfig
-	database    DatabaseConfig
-	stellar     StellarConfig
-	auth        AuthConfig
-	rateLimit   RateLimitConfig
-	log         LogConfig
+	environment  string
+	server       ServerConfig
+	database     DatabaseConfig
+	stellar      StellarConfig
+	auth         AuthConfig
+	rateLimit    RateLimitConfig
+	log          LogConfig
 	intelligence IntelligenceConfig
 }
 
@@ -45,10 +45,10 @@ type StellarConfig struct {
 	sourceKey         string
 }
 
-<<<<<<< HEAD
 type IntelligenceConfig struct {
-    url string
-=======
+	url string
+}
+
 type AuthConfig struct {
 	secret          string
 	tokenExpiry     time.Duration
@@ -65,7 +65,6 @@ type RateLimitConfig struct {
 type LogConfig struct {
 	level  string
 	format string
->>>>>>> origin/main
 }
 
 func Load() (*Config, error) {
@@ -291,10 +290,10 @@ func (l LogConfig) Format() string {
 	return l.format
 }
 
-<<<<<<< HEAD
 func (i IntelligenceConfig) URL() string {
 	return i.url
-=======
+}
+
 func (a AuthConfig) Secret() string {
 	return a.secret
 }
@@ -321,7 +320,6 @@ func (r RateLimitConfig) WriteLimit() int {
 
 func (r RateLimitConfig) WriteWindow() time.Duration {
 	return r.writeWindow
->>>>>>> origin/main
 }
 
 type envLoader struct {
