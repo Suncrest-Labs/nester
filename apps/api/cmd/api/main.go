@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,9 +18,8 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/indexer"
-	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
-	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+	"github.com/suncrestlabs/nester/apps/api/internal/server"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	"github.com/suncrestlabs/nester/internal/stellar"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
@@ -58,10 +59,10 @@ func run() error {
 
 	// Initialize Stellar Client
 	stellarClient, err := stellar.NewClient(context.Background(), stellar.Config{
-		NetworkID: cfg.Stellar().NetworkPassphrase(),
-		RPCURL:    cfg.Stellar().RPCURL(),
-		SourceKey: cfg.Stellar().SourceKey(),
-		Network:   stellar.Testnet,
+		NetworkID:    cfg.Stellar().NetworkPassphrase(),
+		RPCURL:       cfg.Stellar().RPCURL(),
+		SourceKey:    cfg.Stellar().SourceKey(),
+		Network:      stellar.Testnet, // Default or from config
 	})
 	if err != nil {
 		return fmt.Errorf("stellar client: %w", err)
@@ -95,46 +96,16 @@ func run() error {
 	settlementService := service.NewSettlementService(settlementRepository)
 	settlementHandler := handler.NewSettlementHandler(settlementService)
 
-	userRepository := postgres.NewUserRepository(db)
-	userService := service.NewUserService(userRepository)
-	userHandler := handler.NewUserHandler(userService)
-
-	authService := service.NewAuthService(userService, cfg.Auth())
-	authHandler := handler.NewAuthHandler(authService)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
-	mux.HandleFunc("GET /healthz", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
-	mux.HandleFunc("GET /readyz", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
-	vaultHandler.Register(mux)
-	settlementHandler.Register(mux)
-	userHandler.Register(mux)
-	authHandler.Register(mux)
-
-	authRules := []middleware.RouteRule{
-		{PathPrefix: "/health", Public: true},
-		{PathPrefix: "/healthz", Public: true},
-		{PathPrefix: "/readyz", Public: true},
-		{PathPrefix: "/api/v1/auth/", Public: true},
-		{PathPrefix: "/api/v1/", Public: false},
-	}
-	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
-	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
-	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
+	h := server.New(
+		baseLogger,
+		vaultService,
+		settlementService,
+		healthHandler(db, cfg.Database().ConnectionTimeout()),
+	)
 
 	srv := &http.Server{
-		Addr: cfg.Server().Address(),
-		Handler: middleware.RecoverPanic(baseLogger)(
-			globalLimiter(
-				writeLimiter(
-					authenticator(
-						middleware.LimitRequestBody(1*1024*1024)(
-							middleware.Logging(baseLogger)(mux),
-						),
-					),
-				),
-			),
-		),
+		Addr:         cfg.Server().Address(),
+		Handler:      h,
 		ReadTimeout:  cfg.Server().ReadTimeout(),
 		WriteTimeout: cfg.Server().WriteTimeout(),
 	}

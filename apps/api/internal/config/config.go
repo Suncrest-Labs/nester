@@ -45,23 +45,6 @@ type StellarConfig struct {
 	sourceKey         string
 }
 
-type IntelligenceConfig struct {
-	url string
-}
-
-type AuthConfig struct {
-	secret          string
-	tokenExpiry     time.Duration
-	challengeExpiry time.Duration
-}
-
-type RateLimitConfig struct {
-	globalLimit  int
-	globalWindow time.Duration
-	writeLimit   int
-	writeWindow  time.Duration
-}
-
 type LogConfig struct {
 	level  string
 	format string
@@ -102,17 +85,6 @@ func Load() (*Config, error) {
 			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
 			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
 			sourceKey:         loader.stringDefault("STELLAR_SOURCE_KEY", "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), // Default for read-only
-		},
-		auth: AuthConfig{
-			secret:          loader.requiredString("AUTH_JWT_SECRET"),
-			tokenExpiry:     loader.durationDefault("AUTH_TOKEN_EXPIRY", 24*time.Hour),
-			challengeExpiry: loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
-		},
-		rateLimit: RateLimitConfig{
-			globalLimit:  loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
-			globalWindow: loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
-			writeLimit:   loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
-			writeWindow:  loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
 		},
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),

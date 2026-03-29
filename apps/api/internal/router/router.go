@@ -35,7 +35,7 @@ func New(cfg Config) http.Handler {
 	
 	handler := http.Handler(mux)
 	handler = middleware.Logging(cfg.Logger)(handler)
-	handler = middleware.IPRateLimiter(100, time.Minute)(handler)
+	handler = middleware.RateLimit(handler)
 	handler = middleware.SecurityHeaders(handler)
 	handler = middleware.RecoverPanic(cfg.Logger)(handler)
 
