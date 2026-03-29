@@ -1,13 +1,13 @@
 package service
 
 import (
-    "context"
-    "fmt"
-    "strings"
-    "time"
-    "encoding/json"
-    "bytes"
-    "net/http"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -20,7 +20,7 @@ type SettlementService struct {
 }
 
 func NewSettlementService(repository offramp.Repository) *SettlementService {
-    return &SettlementService{repository: repository}
+	return &SettlementService{repository: repository}
 }
 
 // InitiateSettlementInput carries caller-supplied data for a new settlement.
@@ -44,140 +44,82 @@ type UpdateStatusInput struct {
 // InitiateSettlement validates input, creates a settlement in the `initiated`
 // state, and persists it via the repository.
 func (s *SettlementService) InitiateSettlement(ctx context.Context, input InitiateSettlementInput) (offramp.Settlement, error) {
-    // --- Pre-flight risk check ---
-    riskPayload := map[string]interface{}{
-        "transaction": map[string]interface{}{
-            "amount":     input.Amount.String(),
-            "currency":   input.Currency,
-            "to_account": input.Destination.AccountNumber,
-        },
-        "user_history": map[string]interface{}{}, // TODO: Populate with real user history
-        "context":      map[string]interface{}{},
-    }
-    body, _ := json.Marshal(riskPayload)
-    riskURL := "http://localhost:8000/risk/evaluate" // TODO: Make configurable
-    req, err := http.NewRequestWithContext(ctx, "POST", riskURL, bytes.NewBuffer(body))
-    if err == nil {
-        req.Header.Set("Content-Type", "application/json")
-        resp, err := http.DefaultClient.Do(req)
-        if err == nil && resp.StatusCode == 200 {
-            var riskResp struct {
-                Score             float64 `json:"score"`
-                RecommendedAction string  `json:"recommended_action"`
-            }
-            json.NewDecoder(resp.Body).Decode(&riskResp)
-            resp.Body.Close()
-            if riskResp.RecommendedAction == "block" {
-                return offramp.Settlement{}, fmt.Errorf("transaction blocked by risk engine (score %.1f)", riskResp.Score)
-            }
-            if riskResp.RecommendedAction == "hold" {
-                // Optionally, set a status or flag for review
-            }
-        }
-    }
-    // --- End risk check ---
-    if input.UserID == uuid.Nil || input.VaultID == uuid.Nil {
-        return offramp.Settlement{}, offramp.ErrInvalidSettlement
-    }
+	// --- Pre-flight risk check ---
+	riskPayload := map[string]interface{}{
+		"transaction": map[string]interface{}{
+			"amount":     input.Amount.String(),
+			"currency":   input.Currency,
+			"to_account": input.Destination.AccountNumber,
+		},
+		"user_history": map[string]interface{}{}, // TODO: Populate with real user history
+		"context":      map[string]interface{}{},
+	}
+	body, _ := json.Marshal(riskPayload)
+	riskURL := "http://localhost:8000/risk/evaluate" // TODO: Make configurable
+	req, err := http.NewRequestWithContext(ctx, "POST", riskURL, bytes.NewBuffer(body))
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil && resp.StatusCode == 200 {
+			var riskResp struct {
+				Score             float64 `json:"score"`
+				RecommendedAction string  `json:"recommended_action"`
+			}
+			json.NewDecoder(resp.Body).Decode(&riskResp)
+			resp.Body.Close()
+			if riskResp.RecommendedAction == "block" {
+				return offramp.Settlement{}, fmt.Errorf("transaction blocked by risk engine (score %.1f)", riskResp.Score)
+			}
+			if riskResp.RecommendedAction == "hold" {
+				// Optionally, set a status or flag for review
+			}
+		}
+	}
+	// --- End risk check ---
+	if input.UserID == uuid.Nil || input.VaultID == uuid.Nil {
+		return offramp.Settlement{}, offramp.ErrInvalidSettlement
+	}
 
-    if input.Amount.Cmp(decimal.Zero) <= 0 {
-        return offramp.Settlement{}, offramp.ErrInvalidAmount
-    }
-    if input.FiatAmount.Cmp(decimal.Zero) <= 0 {
-        return offramp.Settlement{}, offramp.ErrInvalidAmount
-    }
-    if input.ExchangeRate.Cmp(decimal.Zero) <= 0 {
-        return offramp.Settlement{}, offramp.ErrInvalidAmount
-    }
+	if input.Amount.Cmp(decimal.Zero) <= 0 {
+		return offramp.Settlement{}, offramp.ErrInvalidAmount
+	}
+	if input.FiatAmount.Cmp(decimal.Zero) <= 0 {
+		return offramp.Settlement{}, offramp.ErrInvalidAmount
+	}
+	if input.ExchangeRate.Cmp(decimal.Zero) <= 0 {
+		return offramp.Settlement{}, offramp.ErrInvalidAmount
+	}
 
-    if decimalScale(input.Amount) > offramp.MaxAmountScale ||
-        decimalScale(input.FiatAmount) > offramp.MaxAmountScale ||
-        decimalScale(input.ExchangeRate) > offramp.MaxAmountScale {
-        return offramp.Settlement{}, offramp.ErrInvalidPrecision
-    }
+	if decimalScale(input.Amount) > offramp.MaxAmountScale ||
+		decimalScale(input.FiatAmount) > offramp.MaxAmountScale ||
+		decimalScale(input.ExchangeRate) > offramp.MaxAmountScale {
+		return offramp.Settlement{}, offramp.ErrInvalidPrecision
+	}
 
-    if strings.TrimSpace(input.Currency) == "" || strings.TrimSpace(input.FiatCurrency) == "" {
-        return offramp.Settlement{}, offramp.ErrInvalidSettlement
-    }
+	if strings.TrimSpace(input.Currency) == "" || strings.TrimSpace(input.FiatCurrency) == "" {
+		return offramp.Settlement{}, offramp.ErrInvalidSettlement
+	}
 
-    if err := validateDestination(input.Destination); err != nil {
-        return offramp.Settlement{}, err
-    }
+	if err := validateDestination(input.Destination); err != nil {
+		return offramp.Settlement{}, err
+	}
 
-    model := offramp.Settlement{
-        ID:           uuid.New(),
-        UserID:       input.UserID,
-        VaultID:      input.VaultID,
-        Amount:       input.Amount,
-        Currency:     strings.ToUpper(strings.TrimSpace(input.Currency)),
-        FiatCurrency: strings.ToUpper(strings.TrimSpace(input.FiatCurrency)),
-        FiatAmount:   input.FiatAmount,
-        ExchangeRate: input.ExchangeRate,
-        Destination:  input.Destination,
-        Status:       offramp.StatusInitiated,
-    }
+	model := offramp.Settlement{
+		ID:           uuid.New(),
+		UserID:       input.UserID,
+		VaultID:      input.VaultID,
+		Amount:       input.Amount,
+		Currency:     strings.ToUpper(strings.TrimSpace(input.Currency)),
+		FiatCurrency: strings.ToUpper(strings.TrimSpace(input.FiatCurrency)),
+		FiatAmount:   input.FiatAmount,
+		ExchangeRate: input.ExchangeRate,
+		Destination:  input.Destination,
+		Status:       offramp.StatusInitiated,
+	}
 
-    return s.repository.Create(ctx, model)
+	return s.repository.Create(ctx, model)
 }
 
-func (s *SettlementService) evaluateRisk(ctx context.Context, model offramp.Settlement) (offramp.SettlementStatus, error) {
-	history, err := s.repository.GetByUserID(ctx, model.UserID, "")
-	if err != nil {
-		return "", err
-	}
-
-	avg := decimal.Zero
-	count := 0
-	velocity24h := 0
-	isNovelAccount := true
-	now := time.Now().UTC()
-	yesterday := now.Add(-24 * time.Hour)
-
-	for _, prev := range history {
-		if prev.Status == offramp.StatusConfirmed {
-			avg = avg.Add(prev.Amount)
-			count++
-		}
-		if prev.CreatedAt.After(yesterday) {
-			velocity24h++
-		}
-		if prev.Destination.AccountNumber == model.Destination.AccountNumber {
-			isNovelAccount = false
-		}
-	}
-
-	historyAvg := float64(0)
-	if count > 0 {
-		historyAvg, _ = avg.Div(decimal.NewFromInt(int64(count))).Float64()
-	}
-
-	amount, _ := model.Amount.Float64()
-
-	riskResp, err := s.riskClient.Evaluate(ctx, RiskEvaluationRequest{
-		UserID:             model.UserID.String(),
-		Amount:             amount,
-		HistoryAvg:         historyAvg,
-		Velocity24h:        velocity24h,
-		IsNovelAccount:     isNovelAccount,
-		DestinationAccount: model.Destination.AccountNumber,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	switch riskResp.RecommendedAction {
-	case "block":
-		return offramp.StatusBlocked, nil
-	case "hold":
-		return offramp.StatusHeld, nil
-	case "flag":
-		// Flagged transactions still proceed but are marked for review
-		// Here we keep it as initiated or we could add a "flagged" flag
-		return offramp.StatusInitiated, nil
-	default:
-		return offramp.StatusInitiated, nil
-	}
-}
 
 // GetSettlement retrieves a single settlement by ID.
 func (s *SettlementService) GetSettlement(ctx context.Context, id uuid.UUID) (offramp.Settlement, error) {
