@@ -50,7 +50,7 @@ test.describe("Error Handling", () => {
     test("deposit with amount exceeding balance keeps Confirm Deposit disabled", async ({ page }) => {
         await injectWalletSession(page, TEST_ADDRESS);
         await page.goto("/dashboard/vaults");
-        await expect(page.getByRole("heading", { name: /Optimize your Yield/i })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 1, name: "Vaults" })).toBeVisible();
 
         // Open deposit modal for Conservative vault
         const conservativeCard = page.locator("h3", { hasText: "Conservative" }).locator("..").locator("..");
@@ -144,7 +144,7 @@ test.describe("Error Handling", () => {
         // exits the "Awaiting Signature" / "Submitting" states.
         await injectWalletSession(page, TEST_ADDRESS);
         await page.goto("/dashboard/vaults");
-        await expect(page.getByRole("heading", { name: /Optimize your Yield/i })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 1, name: "Vaults" })).toBeVisible();
 
         const conservativeCard = page.locator("h3", { hasText: "Conservative" }).locator("..").locator("..");
         await conservativeCard.getByRole("button", { name: /Deposit/i }).click();

@@ -37,6 +37,16 @@ export async function injectWalletSession(
             // Portfolio provider keys its localStorage store by address.
             window.localStorage.setItem("nester_wallet_id", walletId);
             window.localStorage.setItem("nester_wallet_addr", addr);
+            // Mark onboarding complete so the home page redirects to /dashboard.
+            window.localStorage.setItem(
+                "nester_onboarding",
+                JSON.stringify({
+                    hasSeenWelcome: true,
+                    hasConnectedWallet: true,
+                    hasCompletedTour: true,
+                    hasMadeFirstDeposit: false,
+                })
+            );
         },
         { addr: address, walletId: "freighter" }
     );

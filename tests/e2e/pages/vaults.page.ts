@@ -39,7 +39,7 @@ export class VaultsPage {
     constructor(page: Page) {
         this.page = page;
 
-        this.heading = page.getByRole("heading", { name: /Optimize your Yield/i });
+        this.heading = page.getByRole("heading", { level: 1, name: "Vaults" });
 
         // Each vault card has the vault name as a heading
         this.vaultCards = page.locator(".grid > div").filter({ has: page.locator("button", { hasText: /Deposit/i }) });

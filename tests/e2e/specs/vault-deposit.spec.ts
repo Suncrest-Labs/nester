@@ -27,31 +27,31 @@ test.describe("Vault Deposit Flow", () => {
         await vaultsPage.waitForLoad();
 
         const expectedVaults = [
-            { name: "Conservative", apy: /6-8%/ },
-            { name: "Balanced",     apy: /8-11%/ },
-            { name: "Growth",       apy: /11-15%/ },
-            { name: "DeFi500 Index",apy: /Variable/ },
+            { name: "Conservative Vault", apy: /7\.\d%/ },
+            { name: "Balanced Vault",     apy: /9\.\d%/ },
+            { name: "Growth Vault",       apy: /13\.\d%/ },
+            { name: "DeFi500 Index",      apy: /11\.\d%/ },
         ];
 
         for (const vault of expectedVaults) {
             const card = page.locator("h3", { hasText: vault.name });
             await expect(card).toBeVisible();
 
-            // APY is in the card — check it's present
-            const cardContainer = card.locator("../../..");
+            // APY is in the card — p.font-heading inside the VaultCard (2 levels up from h3)
+            const cardContainer = card.locator("../.."); // h3 → div.mb-5 → VaultCard root
             await expect(cardContainer.locator("p.font-heading").first()).toContainText(vault.apy);
         }
     });
 
-    test("vault cards show lock period and early-exit penalty", async ({ page }) => {
+    test("vault cards show protocol allocations and supported assets", async ({ page }) => {
         const vaultsPage = new VaultsPage(page);
         await vaultsPage.goto();
         await vaultsPage.waitForLoad();
 
-        // Conservative vault: 30 days lock, 0.1% penalty
-        const conservativeCard = page.locator("h3", { hasText: "Conservative" }).locator("..").locator("..");
-        await expect(conservativeCard.getByText("30 days")).toBeVisible();
-        await expect(conservativeCard.getByText("0.1%")).toBeVisible();
+        // Conservative vault shows its allocation protocols and supported assets
+        const conservativeCard = page.locator("h3", { hasText: "Conservative" }).locator("../.."); // VaultCard root
+        await expect(conservativeCard.getByText(/Blend/)).toBeVisible();
+        await expect(conservativeCard.getByText("USDC")).toBeVisible();
     });
 
     test("clicking Deposit opens the deposit modal for the correct vault", async ({ page }) => {
