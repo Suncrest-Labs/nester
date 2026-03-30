@@ -86,6 +86,48 @@ func WalletRateLimiter(limit int, window time.Duration, extractWallet func(*http
 	return rateLimitMiddleware(l, extractWallet)
 }
 
+// WriteMethodRateLimiter returns middleware that applies a stricter per-IP rate
+// limit only to mutating HTTP methods (POST, PUT, PATCH, DELETE). Read-only
+// requests (GET, HEAD, OPTIONS) pass through untouched.
+//
+// This satisfies the per-route-group tier requirement from Issue #10: public
+// read endpoints get the global limit while write/state-changing endpoints get
+// a tighter limit to prevent abuse (e.g., rapid vault creation).
+func WriteMethodRateLimiter(limit int, window time.Duration) func(http.Handler) http.Handler {
+	l := newLimiter(limit, window)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+				// fall through to rate limiting
+			default:
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				ip = r.RemoteAddr
+			}
+
+			allowed, wait := l.allow(ip)
+			if !allowed {
+				retryAfter := int(wait.Seconds())
+				if retryAfter < 1 {
+					retryAfter = 1
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprintf(w, `{"success":false,"error":{"code":"RATE_LIMITED","message":"write rate limit exceeded"}}`)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func rateLimitMiddleware(l *limiter, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

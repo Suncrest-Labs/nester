@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 	"net/http"
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
+	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
 const maxRequestBodyBytes int64 = 1 << 20
@@ -23,10 +25,6 @@ type createVaultRequest struct {
 	ContractAddress string `json:"contract_address"`
 	Currency        string `json:"currency"`
 	Status          string `json:"status,omitempty"`
-}
-
-type errorResponse struct {
-	Error string `json:"error"`
 }
 
 func NewVaultHandler(service *service.VaultService) *VaultHandler {
@@ -43,18 +41,18 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 func (h *VaultHandler) createVault(w http.ResponseWriter, r *http.Request) {
 	var request createVaultRequest
 	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 		return
 	}
 
 	userID, err := uuid.Parse(request.UserID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "user_id must be a valid UUID")
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("user_id must be a valid UUID"))
 		return
 	}
 
 	if err := validateCurrencyCode(request.Currency); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid currency: "+err.Error())
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid currency: "+err.Error()))
 		return
 	}
 
@@ -69,13 +67,13 @@ func (h *VaultHandler) createVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, model)
+	response.WriteJSON(w, http.StatusCreated, response.Created(model))
 }
 
 func (h *VaultHandler) getVault(w http.ResponseWriter, r *http.Request) {
 	vaultID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "vault id must be a valid UUID")
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
 
@@ -85,13 +83,13 @@ func (h *VaultHandler) getVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, model)
+	response.WriteJSON(w, http.StatusOK, response.OK(model))
 }
 
 func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
 	userID, err := uuid.Parse(r.PathValue("userId"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "user id must be a valid UUID")
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("user id must be a valid UUID"))
 		return
 	}
 
@@ -101,36 +99,36 @@ func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, models)
+	response.WriteJSON(w, http.StatusOK, response.OK(models))
 }
 
 func (h *VaultHandler) getAllocations(w http.ResponseWriter, r *http.Request) {
 	vaultID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "vault id must be a valid UUID")
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
 
-	vault, err := h.service.GetVault(r.Context(), vaultID)
+	v, err := h.service.GetVault(r.Context(), vaultID)
 	if err != nil {
 		h.writeDomainError(w, r, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, vault.Allocations)
+	response.WriteJSON(w, http.StatusOK, response.OK(v.Allocations))
 }
 
 func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, vault.ErrVaultNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 	case errors.Is(err, vault.ErrUserNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("user"))
 	case errors.Is(err, vault.ErrInvalidVault), errors.Is(err, vault.ErrInvalidAmount), errors.Is(err, vault.ErrInvalidAllocation):
-		writeError(w, http.StatusBadRequest, err.Error())
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:
 		logpkg.FromContext(r.Context()).Error("vault handler failed", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
 	}
 }
 
@@ -147,17 +145,6 @@ func decodeJSON(r *http.Request, destination any) error {
 
 	return nil
 }
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, errorResponse{Error: message})
-}
-
 
 // validateCurrencyCode verifies the currency code is valid (ISO 4217 or crypto token format)
 func validateCurrencyCode(code string) error {

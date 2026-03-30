@@ -19,6 +19,23 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 )
 
+// decodeAPIData unwraps the API envelope {"success":true,"data":...} and decodes
+// the inner data field into T.
+func decodeAPIData[T any](t *testing.T, body io.Reader) T {
+	t.Helper()
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	var result T
+	if err := json.Unmarshal(envelope.Data, &result); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	return result
+}
+
 func TestVaultHandlerCreateGetAndList(t *testing.T) {
 	userID := uuid.New()
 	otherUserID := uuid.New()
@@ -43,10 +60,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 		t.Fatalf("expected status 201, got %d", response.StatusCode)
 	}
 
-	var created vault.Vault
-	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
-		t.Fatalf("decode create response: %v", err)
-	}
+	created := decodeAPIData[vault.Vault](t, response.Body)
 
 	if _, err := vaultService.RecordDeposit(context.Background(), service.RecordDepositInput{
 		VaultID: created.ID,
@@ -71,10 +85,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 	}
 	defer getResponse.Body.Close()
 
-	var fetched vault.Vault
-	if err := json.NewDecoder(getResponse.Body).Decode(&fetched); err != nil {
-		t.Fatalf("decode get response: %v", err)
-	}
+	fetched := decodeAPIData[vault.Vault](t, getResponse.Body)
 
 	if len(fetched.Allocations) != 2 {
 		t.Fatalf("expected 2 allocations, got %d", len(fetched.Allocations))
@@ -97,10 +108,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 	}
 	defer listResponse.Body.Close()
 
-	var vaults []vault.Vault
-	if err := json.NewDecoder(listResponse.Body).Decode(&vaults); err != nil {
-		t.Fatalf("decode list response: %v", err)
-	}
+	vaults := decodeAPIData[[]vault.Vault](t, listResponse.Body)
 
 	if len(vaults) != 1 {
 		t.Fatalf("expected 1 vault for user, got %d", len(vaults))
@@ -138,8 +146,9 @@ func TestVaultHandlerNotFoundAndInvalidUser(t *testing.T) {
 }
 
 type handlerRepository struct {
-	users  map[uuid.UUID]struct{}
-	vaults map[uuid.UUID]vault.Vault
+	users        map[uuid.UUID]struct{}
+	vaults       map[uuid.UUID]vault.Vault
+	transactions []vault.VaultTransaction
 }
 
 func newHandlerRepository(userIDs ...uuid.UUID) *handlerRepository {
@@ -148,8 +157,9 @@ func newHandlerRepository(userIDs ...uuid.UUID) *handlerRepository {
 		users[userID] = struct{}{}
 	}
 	return &handlerRepository{
-		users:  users,
-		vaults: make(map[uuid.UUID]vault.Vault),
+		users:        users,
+		vaults:       make(map[uuid.UUID]vault.Vault),
+		transactions: make([]vault.VaultTransaction, 0),
 	}
 }
 
@@ -208,6 +218,13 @@ func (r *handlerRepository) RecordDeposit(_ context.Context, id uuid.UUID, amoun
 	model.CurrentBalance = model.CurrentBalance.Add(amount)
 	model.UpdatedAt = time.Now().UTC()
 	r.vaults[id] = cloneHandlerVault(model)
+	r.transactions = append(r.transactions, vault.VaultTransaction{
+		ID:        uuid.New(),
+		VaultID:   id,
+		Type:      "deposit",
+		Amount:    amount,
+		CreatedAt: time.Now().UTC(),
+	})
 	return nil
 }
 
@@ -220,6 +237,58 @@ func (r *handlerRepository) ReplaceAllocations(_ context.Context, vaultID uuid.U
 	model.UpdatedAt = time.Now().UTC()
 	r.vaults[vaultID] = cloneHandlerVault(model)
 	return nil
+}
+
+func (r *handlerRepository) UpdateVault(_ context.Context, id uuid.UUID, contractAddress string, status vault.VaultStatus) error {
+	model, ok := r.vaults[id]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	model.ContractAddress = contractAddress
+	model.Status = status
+	model.UpdatedAt = time.Now().UTC()
+	r.vaults[id] = cloneHandlerVault(model)
+	return nil
+}
+
+func (r *handlerRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	model, ok := r.vaults[id]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	if amount.Cmp(decimal.Zero) <= 0 {
+		return vault.ErrInvalidAmount
+	}
+
+	model.CurrentBalance = model.CurrentBalance.Sub(amount)
+	model.UpdatedAt = time.Now().UTC()
+	r.vaults[id] = cloneHandlerVault(model)
+	r.transactions = append(r.transactions, vault.VaultTransaction{
+		ID:        uuid.New(),
+		VaultID:   id,
+		Type:      "withdrawal",
+		Amount:    amount,
+		CreatedAt: time.Now().UTC(),
+	})
+	return nil
+}
+
+func (r *handlerRepository) SoftDeleteVault(_ context.Context, id uuid.UUID) error {
+	if _, ok := r.vaults[id]; !ok {
+		return vault.ErrVaultNotFound
+	}
+	delete(r.vaults, id)
+	return nil
+}
+
+func (r *handlerRepository) ListDeposits(_ context.Context, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
+	result := make([]vault.VaultTransaction, 0)
+	for _, txn := range r.transactions {
+		if txn.VaultID == vaultID && txn.Type == "deposit" {
+			result = append(result, txn)
+		}
+	}
+	return result, nil
 }
 
 func cloneHandlerVault(model vault.Vault) vault.Vault {

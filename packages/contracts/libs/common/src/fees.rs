@@ -1,5 +1,3 @@
-
-
 pub const BASIS_POINT_SCALE: i128 = 10000;
 pub const SECONDS_PER_YEAR: i128 = 31536000;
 

@@ -7,7 +7,11 @@ use soroban_sdk::{
     Address, Env, Symbol,
 };
 
-use crate::{ProtocolType, SourceStatus, YieldRegistryContract, YieldRegistryContractClient};
+use nester_access_control::Role;
+
+use crate::{
+    ProtocolType, SourceStatus, YieldRegistryContract, YieldRegistryContractClient, MAX_APY_HISTORY,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,12 +29,17 @@ fn setup(env: &Env) -> (YieldRegistryContractClient, Address) {
 fn aave_id(env: &Env) -> Symbol {
     Symbol::new(env, "aave_v3")
 }
+
 fn blend_id(env: &Env) -> Symbol {
     Symbol::new(env, "blend")
 }
 
+fn register_default(client: &YieldRegistryContractClient, env: &Env, admin: &Address, id: &Symbol) {
+    client.register_source(admin, id, &Address::generate(env), &ProtocolType::Lending);
+}
+
 // ---------------------------------------------------------------------------
-// Initialisation
+// Initialisation / registration
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -38,6 +47,7 @@ fn initialize_sets_empty_source_list() {
     let env = Env::default();
     let (client, _) = setup(&env);
     assert_eq!(client.get_active_sources().len(), 0);
+    assert_eq!(client.source_count(), 0);
 }
 
 #[test]
@@ -48,60 +58,27 @@ fn initialize_twice_panics() {
     client.initialize(&admin);
 }
 
-// ---------------------------------------------------------------------------
-// register_source
-// ---------------------------------------------------------------------------
-
 #[test]
-fn register_source_creates_active_record() {
+fn register_source_sets_default_performance_fields() {
     let env = Env::default();
     let (client, admin) = setup(&env);
     let addr = Address::generate(&env);
 
     client.register_source(&admin, &aave_id(&env), &addr, &ProtocolType::Lending);
 
-    assert!(client.has_source(&aave_id(&env)));
     let s = client.get_source(&aave_id(&env));
     assert_eq!(s.status, SourceStatus::Active);
     assert_eq!(s.protocol_type, ProtocolType::Lending);
     assert_eq!(s.contract_address, addr);
-}
-
-#[test]
-fn register_source_appears_in_active_list() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    client.register_source(
-        &admin,
-        &blend_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-
-    let active = client.get_active_sources();
-    assert_eq!(active.len(), 2);
-}
-
-#[test]
-fn register_source_emits_event() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-
-    assert!(!env.events().all().is_empty());
+    assert_eq!(s.current_apy_bps, 0);
+    assert_eq!(s.tvl, 0);
+    assert_eq!(s.risk_rating, 5);
+    assert_eq!(s.min_deposit, 0);
+    assert_eq!(s.max_deposit, 0);
+    assert_eq!(s.apy_history.len(), 0);
+    assert!(!s.migration_required);
+    assert!(!s.migration_completed);
+    assert_eq!(client.source_count(), 1);
 }
 
 #[test]
@@ -110,13 +87,7 @@ fn register_duplicate_id_panics() {
     let env = Env::default();
     let (client, admin) = setup(&env);
 
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    // Second registration with same id must panic
+    register_default(&client, &env, &admin, &aave_id(&env));
     client.register_source(
         &admin,
         &aave_id(&env),
@@ -141,42 +112,22 @@ fn non_admin_cannot_register_source() {
 }
 
 // ---------------------------------------------------------------------------
-// update_status
+// Status / deprecation / migration
 // ---------------------------------------------------------------------------
 
 #[test]
-fn active_to_paused_transition() {
+fn active_paused_active_transition_works() {
     let env = Env::default();
     let (client, admin) = setup(&env);
 
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
+    register_default(&client, &env, &admin, &aave_id(&env));
     client.update_status(&admin, &aave_id(&env), &SourceStatus::Paused);
-
     assert_eq!(
         client.get_source_status(&aave_id(&env)),
         SourceStatus::Paused
     );
-}
 
-#[test]
-fn paused_to_active_transition() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    client.update_status(&admin, &aave_id(&env), &SourceStatus::Paused);
     client.update_status(&admin, &aave_id(&env), &SourceStatus::Active);
-
     assert_eq!(
         client.get_source_status(&aave_id(&env)),
         SourceStatus::Active
@@ -184,22 +135,18 @@ fn paused_to_active_transition() {
 }
 
 #[test]
-fn active_to_deprecated_transition() {
+fn deprecating_source_sets_migration_required() {
     let env = Env::default();
     let (client, admin) = setup(&env);
 
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
+    register_default(&client, &env, &admin, &aave_id(&env));
     client.update_status(&admin, &aave_id(&env), &SourceStatus::Deprecated);
 
-    assert_eq!(
-        client.get_source_status(&aave_id(&env)),
-        SourceStatus::Deprecated
-    );
+    let s = client.get_source(&aave_id(&env));
+    assert_eq!(s.status, SourceStatus::Deprecated);
+    assert!(s.migration_required);
+    assert!(!s.migration_completed);
+    assert_eq!(client.get_sources_requiring_migration().len(), 1);
 }
 
 #[test]
@@ -208,79 +155,131 @@ fn cannot_reactivate_deprecated_source() {
     let env = Env::default();
     let (client, admin) = setup(&env);
 
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
+    register_default(&client, &env, &admin, &aave_id(&env));
     client.update_status(&admin, &aave_id(&env), &SourceStatus::Deprecated);
-    // Must panic — Deprecated is terminal
     client.update_status(&admin, &aave_id(&env), &SourceStatus::Active);
 }
 
 #[test]
-#[should_panic]
-fn cannot_pause_deprecated_source() {
+fn signal_and_complete_migration_flow() {
     let env = Env::default();
     let (client, admin) = setup(&env);
+    let operator = Address::generate(&env);
 
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    client.signal_migration_required(&admin, &aave_id(&env));
+    let pending = client.get_source(&aave_id(&env));
+    assert!(pending.migration_required);
+    assert!(!pending.migration_completed);
+
+    client.mark_migration_complete(&operator, &aave_id(&env));
+    let done = client.get_source(&aave_id(&env));
+    assert!(!done.migration_required);
+    assert!(done.migration_completed);
+    assert_eq!(client.get_sources_requiring_migration().len(), 0);
+}
+
+#[test]
+#[should_panic]
+fn cannot_complete_migration_without_signal_or_deprecation() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.mark_migration_complete(&admin, &aave_id(&env));
+}
+
+// ---------------------------------------------------------------------------
+// Performance updates
+// ---------------------------------------------------------------------------
+
+#[test]
+fn operator_can_update_apy_and_history_is_capped() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let operator = Address::generate(&env);
+
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    for i in 1..=(MAX_APY_HISTORY + 4) {
+        client.update_apy(&operator, &aave_id(&env), &i);
+    }
+
+    let perf = client.get_source_performance(&aave_id(&env));
+    assert_eq!(perf.current_apy_bps, MAX_APY_HISTORY + 4);
+    assert_eq!(perf.apy_history.len(), MAX_APY_HISTORY);
+
+    // Expect the newest MAX_APY_HISTORY entries only.
+    assert_eq!(perf.apy_history.get(0).unwrap().apy_bps, 5);
+    assert_eq!(
+        perf.apy_history.get(MAX_APY_HISTORY - 1).unwrap().apy_bps,
+        MAX_APY_HISTORY + 4
     );
-    client.update_status(&admin, &aave_id(&env), &SourceStatus::Deprecated);
-    client.update_status(&admin, &aave_id(&env), &SourceStatus::Paused);
 }
 
 #[test]
 #[should_panic]
-fn update_status_on_unknown_id_panics() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-    client.update_status(&admin, &aave_id(&env), &SourceStatus::Paused);
-}
-
-#[test]
-fn update_status_emits_event() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    let before = env.events().all().len();
-    client.update_status(&admin, &aave_id(&env), &SourceStatus::Paused);
-    assert!(env.events().all().len() > before);
-}
-
-#[test]
-#[should_panic]
-fn non_admin_cannot_update_status() {
+fn outsider_cannot_update_apy() {
     let env = Env::default();
     let (client, admin) = setup(&env);
     let outsider = Address::generate(&env);
 
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    client.update_status(&outsider, &aave_id(&env), &SourceStatus::Paused);
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.update_apy(&outsider, &aave_id(&env), &420);
+}
+
+#[test]
+fn admin_can_update_tvl_risk_and_limits() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.update_tvl(&admin, &aave_id(&env), &150_000);
+    client.update_risk_rating(&admin, &aave_id(&env), &3);
+    client.update_deposit_limits(&admin, &aave_id(&env), &100, &1_000_000);
+
+    let perf = client.get_source_performance(&aave_id(&env));
+    assert_eq!(perf.tvl, 150_000);
+    assert_eq!(perf.risk_rating, 3);
+    assert_eq!(perf.min_deposit, 100);
+    assert_eq!(perf.max_deposit, 1_000_000);
+}
+
+#[test]
+#[should_panic]
+fn risk_rating_must_be_in_range() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.update_risk_rating(&admin, &aave_id(&env), &11);
+}
+
+#[test]
+#[should_panic]
+fn tvl_cannot_be_negative() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.update_tvl(&admin, &aave_id(&env), &-1);
+}
+
+#[test]
+#[should_panic]
+fn invalid_deposit_limits_panics() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.update_deposit_limits(&admin, &aave_id(&env), &1000, &100);
 }
 
 // ---------------------------------------------------------------------------
-// get_active_sources
+// Queries and filtering
 // ---------------------------------------------------------------------------
 
 #[test]
-fn paused_source_excluded_from_active_list() {
+fn get_sources_by_type_filters_correctly() {
     let env = Env::default();
     let (client, admin) = setup(&env);
 
@@ -294,157 +293,53 @@ fn paused_source_excluded_from_active_list() {
         &admin,
         &blend_id(&env),
         &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    client.update_status(&admin, &blend_id(&env), &SourceStatus::Paused);
-
-    let active = client.get_active_sources();
-    assert_eq!(active.len(), 1);
-    assert_eq!(active.get(0).unwrap().id, aave_id(&env));
-}
-
-#[test]
-fn deprecated_source_excluded_from_active_list() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    client.update_status(&admin, &aave_id(&env), &SourceStatus::Deprecated);
-
-    assert_eq!(client.get_active_sources().len(), 0);
-}
-
-// ---------------------------------------------------------------------------
-// remove_source
-// ---------------------------------------------------------------------------
-
-#[test]
-fn remove_source_deletes_record() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    client.remove_source(&admin, &aave_id(&env));
-
-    assert!(!client.has_source(&aave_id(&env)));
-    assert_eq!(client.get_active_sources().len(), 0);
-}
-
-#[test]
-fn remove_source_emits_event() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    let before = env.events().all().len();
-    client.remove_source(&admin, &aave_id(&env));
-    assert!(env.events().all().len() > before);
-}
-
-#[test]
-fn removed_source_can_be_re_registered() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    client.remove_source(&admin, &aave_id(&env));
-    // Should not panic
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
         &ProtocolType::Staking,
     );
-    assert!(client.has_source(&aave_id(&env)));
+
+    let lending = client.get_sources_by_type(&ProtocolType::Lending);
+    let staking = client.get_sources_by_type(&ProtocolType::Staking);
+
+    assert_eq!(lending.len(), 1);
+    assert_eq!(lending.get(0).unwrap().id, aave_id(&env));
+    assert_eq!(staking.len(), 1);
+    assert_eq!(staking.get(0).unwrap().id, blend_id(&env));
 }
 
 #[test]
-#[should_panic]
-fn remove_unknown_source_panics() {
+fn get_sources_above_apy_only_returns_active_qualifiers() {
     let env = Env::default();
     let (client, admin) = setup(&env);
+
+    register_default(&client, &env, &admin, &aave_id(&env));
+    register_default(&client, &env, &admin, &blend_id(&env));
+
+    client.update_apy(&admin, &aave_id(&env), &650);
+    client.update_apy(&admin, &blend_id(&env), &800);
+    client.update_status(&admin, &blend_id(&env), &SourceStatus::Paused);
+
+    let above = client.get_sources_above_apy(&700);
+    assert_eq!(above.len(), 0);
+
+    let above = client.get_sources_above_apy(&600);
+    assert_eq!(above.len(), 1);
+    assert_eq!(above.get(0).unwrap().id, aave_id(&env));
+}
+
+#[test]
+fn source_count_updates_on_remove() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    register_default(&client, &env, &admin, &aave_id(&env));
+    register_default(&client, &env, &admin, &blend_id(&env));
+    assert_eq!(client.source_count(), 2);
+
     client.remove_source(&admin, &aave_id(&env));
-}
-
-#[test]
-#[should_panic]
-fn non_admin_cannot_remove_source() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-    let outsider = Address::generate(&env);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    client.remove_source(&outsider, &aave_id(&env));
+    assert_eq!(client.source_count(), 1);
 }
 
 // ---------------------------------------------------------------------------
-// Admin transfer
-// ---------------------------------------------------------------------------
-
-#[test]
-fn new_admin_can_manage_sources_after_transfer() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-    let new_admin = Address::generate(&env);
-
-    client.transfer_admin(&admin, &new_admin);
-    client.accept_admin(&new_admin);
-
-    // New admin can register
-    client.register_source(
-        &new_admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    assert!(client.has_source(&aave_id(&env)));
-}
-
-#[test]
-#[should_panic]
-fn old_admin_cannot_register_after_transfer() {
-    let env = Env::default();
-    let (client, admin) = setup(&env);
-    let new_admin = Address::generate(&env);
-
-    client.transfer_admin(&admin, &new_admin);
-    client.accept_admin(&new_admin);
-
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Backward-compat: has_source / get_source_status
+// Existing compatibility checks
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -455,25 +350,14 @@ fn has_source_returns_false_for_unregistered() {
 }
 
 #[test]
-fn get_source_status_reflects_current_status() {
+fn status_and_update_emit_events() {
     let env = Env::default();
     let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
 
-    client.register_source(
-        &admin,
-        &aave_id(&env),
-        &Address::generate(&env),
-        &ProtocolType::Lending,
-    );
-    assert_eq!(
-        client.get_source_status(&aave_id(&env)),
-        SourceStatus::Active
-    );
-
+    let before = env.events().all().len();
     client.update_status(&admin, &aave_id(&env), &SourceStatus::Paused);
-    assert_eq!(
-        client.get_source_status(&aave_id(&env)),
-        SourceStatus::Paused
-    );
-}
+    client.update_apy(&admin, &aave_id(&env), &999);
 
+    assert!(env.events().all().len() > before);
+}

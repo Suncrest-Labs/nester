@@ -27,6 +27,8 @@ import { cn } from "@/lib/utils";
 import { type VaultDefinition } from "@/lib/vault-data";
 import { useWallet } from "@/components/wallet-provider";
 
+import { useNetwork } from "@/hooks/useNetwork";
+
 type ActionState = "input" | "confirming" | "submitting" | "success" | "error";
 
 function formatCurrency(amount: number) {
@@ -103,6 +105,7 @@ export function DepositModal({
     onClose: () => void;
     vault: VaultDefinition | null;
 }) {
+    const { currentNetwork } = useNetwork();
     const { address } = useWallet();
     const { getAvailableBalance, recordDeposit } = usePortfolio();
     const [amountInput, setAmountInput] = useState("");
@@ -137,12 +140,13 @@ export function DepositModal({
         try {
             const txXdr = await buildMockTransactionXdr(
                 address,
-                `deposit:${vault.id}:${amount.toFixed(2)}`
+                `deposit:${vault.id}:${amount.toFixed(2)}`,
+                currentNetwork.networkPassphrase
             );
-            const { walletPopupUsed } = await signWithWalletOrMock(txXdr);
+            const { walletPopupUsed } = await signWithWalletOrMock(txXdr, currentNetwork.networkPassphrase);
 
             setState("submitting");
-            const submission = await simulateSubmission();
+            const submission = await simulateSubmission(currentNetwork.explorerUrl);
 
             recordDeposit({
                 vault,
@@ -173,6 +177,14 @@ export function DepositModal({
                 <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
                     <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
                         <div className="rounded-3xl border border-border bg-white p-5">
+                            <div className="mb-4">
+                                <span className={cn(
+                                    "text-xs font-medium px-2 py-1 rounded-full uppercase tracking-wider",
+                                    currentNetwork.id === 'testnet' ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                                )}>
+                                    {currentNetwork.id.toUpperCase()} TRANSACTION
+                                </span>
+                            </div>
                             <div className="flex items-start justify-between">
                                 <div>
                                     <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
@@ -259,6 +271,14 @@ export function DepositModal({
                                         {vault.performanceFeePct}%
                                     </span>
                                 </div>
+                                {currentNetwork.id === 'mainnet' && (
+                                    <div className="flex items-center justify-between text-sm">
+                                        <span className="text-muted-foreground">Estimated Network Fee</span>
+                                        <span className="font-medium text-foreground">
+                                            ~0.00001 XLM
+                                        </span>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -407,6 +427,7 @@ export function WithdrawModal({
     onClose: () => void;
     position: PortfolioPosition | null;
 }) {
+    const { currentNetwork } = useNetwork();
     const { address } = useWallet();
     const { getWithdrawalQuote, recordWithdrawal } = usePortfolio();
     const [amountInput, setAmountInput] = useState("");
@@ -450,12 +471,13 @@ export function WithdrawModal({
         try {
             const txXdr = await buildMockTransactionXdr(
                 address,
-                `withdraw:${position.vaultId}:${amount.toFixed(2)}`
+                `withdraw:${position.vaultId}:${amount.toFixed(2)}`,
+                currentNetwork.networkPassphrase
             );
-            const { walletPopupUsed } = await signWithWalletOrMock(txXdr);
+            const { walletPopupUsed } = await signWithWalletOrMock(txXdr, currentNetwork.networkPassphrase);
 
             setState("submitting");
-            const submission = await simulateSubmission();
+            const submission = await simulateSubmission(currentNetwork.explorerUrl);
             const result = recordWithdrawal({
                 positionId: position.id,
                 grossAmount: quote.grossAmount,
@@ -491,6 +513,14 @@ export function WithdrawModal({
                 <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
                     <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
                         <div className="rounded-3xl border border-border bg-white p-5">
+                            <div className="mb-4">
+                                <span className={cn(
+                                    "text-xs font-medium px-2 py-1 rounded-full uppercase tracking-wider",
+                                    currentNetwork.id === 'testnet' ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                                )}>
+                                    {currentNetwork.id.toUpperCase()} TRANSACTION
+                                </span>
+                            </div>
                             <div className="grid gap-3 sm:grid-cols-2">
                                 <div className="rounded-2xl border border-border bg-secondary/20 p-4">
                                     <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
@@ -602,6 +632,14 @@ export function WithdrawModal({
                                             {formatCurrency(quote?.sharesBurned ?? 0)}
                                         </span>
                                     </div>
+                                    {currentNetwork.id === 'mainnet' && (
+                                        <div className="flex items-center justify-between text-sm">
+                                            <span className="text-muted-foreground">Estimated Network Fee</span>
+                                            <span className="font-medium text-foreground">
+                                                ~0.00001 XLM
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>

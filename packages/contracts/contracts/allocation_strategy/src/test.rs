@@ -3,24 +3,36 @@
 extern crate std;
 
 use super::*;
+use nester_access_control::Role;
+use nester_common::{ProtocolType as RegistryProtocolType, SourceStatus as RegistrySourceStatus};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events},
-    vec, Address, Env,
+    vec, Address, Env, Symbol,
 };
-use yield_registry::{
-    ProtocolType as RegistryProtocolType, SourceStatus as RegistrySourceStatus,
-    YieldRegistryContract, YieldRegistryContractClient,
-};
+use yield_registry::{YieldRegistryContract, YieldRegistryContractClient};
 
-// Helper: register a source with the registry using the new API.
 fn reg(
     registry: &YieldRegistryContractClient,
     env: &Env,
     admin: &Address,
     id: soroban_sdk::Symbol,
 ) {
-    registry.register_source(admin, &id, &Address::generate(env), &RegistryProtocolType::Lending);
+    registry.register_source(
+        admin,
+        &id,
+        &Address::generate(env),
+        &RegistryProtocolType::Lending,
+    );
+}
+
+fn weight_for(weights: &Vec<AllocationWeight>, id: Symbol) -> u32 {
+    for w in weights.iter() {
+        if w.source_id == id {
+            return w.weight_bps;
+        }
+    }
+    panic!("weight not found")
 }
 
 #[test]
@@ -192,7 +204,7 @@ fn sends_remainder_to_highest_weight() {
 }
 
 #[test]
-fn only_admin_can_update_weights() {
+fn rejects_unauthorized_weight_updates() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -225,6 +237,38 @@ fn only_admin_can_update_weights() {
 }
 
 #[test]
+fn operator_can_set_weights() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let operator = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize(&admin, &registry_id);
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    client.set_weights(
+        &operator,
+        &vec![
+            &env,
+            AllocationWeight {
+                source_id: symbol_short!("aave"),
+                weight_bps: 10_000,
+            },
+        ],
+    );
+
+    assert_eq!(client.get_weights().len(), 1);
+}
+
+#[test]
 fn rejects_inactive_sources() {
     let env = Env::default();
     env.mock_all_auths();
@@ -236,8 +280,11 @@ fn rejects_inactive_sources() {
     let registry = YieldRegistryContractClient::new(&env, &registry_id);
     registry.initialize(&admin);
     reg(&registry, &env, &admin, symbol_short!("aave"));
-    // Pause the source
-    registry.update_status(&admin, &symbol_short!("aave"), &RegistrySourceStatus::Paused);
+    registry.update_status(
+        &admin,
+        &symbol_short!("aave"),
+        &RegistrySourceStatus::Paused,
+    );
 
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     client.initialize(&admin, &registry_id);
@@ -256,4 +303,67 @@ fn rejects_inactive_sources() {
     }));
 
     assert!(result.is_err());
+}
+
+#[test]
+fn suggest_weights_empty_when_no_sources() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize(&admin, &registry_id);
+
+    assert_eq!(client.suggest_weights().len(), 0);
+}
+
+#[test]
+fn suggest_weights_uses_apy_and_risk_scores() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    reg(&registry, &env, &admin, symbol_short!("blend"));
+    reg(&registry, &env, &admin, symbol_short!("comp"));
+
+    // score(aave)  = 800 * (11-2) = 7_200
+    // score(blend) = 1000 * (11-9) = 2_000
+    // score(comp)  = 400 * (11-1) = 4_000
+    registry.update_apy(&admin, &symbol_short!("aave"), &800);
+    registry.update_risk_rating(&admin, &symbol_short!("aave"), &2);
+
+    registry.update_apy(&admin, &symbol_short!("blend"), &1_000);
+    registry.update_risk_rating(&admin, &symbol_short!("blend"), &9);
+
+    registry.update_apy(&admin, &symbol_short!("comp"), &400);
+    registry.update_risk_rating(&admin, &symbol_short!("comp"), &1);
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize(&admin, &registry_id);
+
+    let suggested = client.suggest_weights();
+    assert_eq!(suggested.len(), 3);
+    assert_eq!(
+        weight_for(&suggested, symbol_short!("aave"))
+            + weight_for(&suggested, symbol_short!("blend"))
+            + weight_for(&suggested, symbol_short!("comp")),
+        10_000
+    );
+
+    assert_eq!(weight_for(&suggested, symbol_short!("aave")), 5_455);
+    assert_eq!(weight_for(&suggested, symbol_short!("blend")), 1_515);
+    assert_eq!(weight_for(&suggested, symbol_short!("comp")), 3_030);
 }

@@ -116,3 +116,39 @@ Emitted when a role is revoked.
 Emitted when an admin transfer is completed.
 - **Topics**: `(ACCESS, ADMIN_TRANSFER, new_admin: Address)`
 - **Data**: `{ old_admin: Address }`
+
+## Timelock Events (Contract Symbol: `TIMELOCK`)
+
+### PROPOSE
+Emitted when a timelocked operation is proposed.
+- **Topics**: `(TIMELOCK, PROPOSE, proposed_by: Address)`
+- **Data**:
+    ```rust
+    {
+        op_type: Symbol,
+        execute_after: u64,
+        proposed_by: Address
+    }
+    ```
+
+### EXECUTE
+Emitted when a timelocked operation is executed.
+- **Topics**: `(TIMELOCK, EXECUTE, executed_by: Address)`
+- **Data**:
+    ```rust
+    {
+        op_type: Symbol,
+        executed_by: Address
+    }
+    ```
+
+### CANCEL
+Emitted when a timelocked operation is cancelled.
+- **Topics**: `(TIMELOCK, CANCEL, cancelled_by: Address)`
+- **Data**:
+    ```rust
+    {
+        op_type: Symbol,
+        cancelled_by: Address
+    }
+    ```

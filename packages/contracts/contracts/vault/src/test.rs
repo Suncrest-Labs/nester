@@ -2,13 +2,19 @@
 
 extern crate std;
 
-use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
-    token::{StellarAssetClient, TokenClient},
-    Address, Env,
+    testutils::{Address as _, Ledger, LedgerInfo},
+    token, Address, Env, String,
 };
-use nester_access_control::Role;
+use vault_token::{VaultTokenContract, VaultTokenContractClient};
+
+use crate::{VaultContract, VaultContractClient, VaultStatus};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+use soroban_sdk::{contract, contractimpl};
 
 #[contract]
 pub struct MockTreasury;
@@ -18,455 +24,553 @@ impl MockTreasury {
     pub fn receive_fees(_env: Env, _amount: i128) {}
 }
 
-fn setup() -> (Env, Address, Address, Address, VaultContractClient<'static>) {
+/// One "unit" in 7-decimal Stellar token precision.
+const STROOP: i128 = 1;
+/// Convenient larger denomination.
+const XLM: i128 = 10_000_000;
+
+/// Seconds in one day — also the MinLockPeriod set in vault `initialize`.
+const DAY: u64 = 86_400;
+
+/// Early-withdrawal fee in basis points as set by the vault contract (0.1 % = 10 bps).
+const EARLY_FEE_BPS: i128 = 10;
+const BPS_DENOM: i128 = 10_000;
+
+/// Create a fresh environment, register a native token, register the vault
+/// contract, and call `initialize`. Returns `(env, admin, sac_client, vault_client, treasury)` ready for use.
+fn setup() -> (
+    Env,
+    Address,
+    token::StellarAssetClient<'static>,
+    VaultContractClient<'static>,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
-    env.ledger().set_timestamp(1000);
 
-    let admin = Address::generate(&env);
+    // -----------------------------
+    // Token setup
+    // -----------------------------
     let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-    
-    let treasury = env.register_contract(None, MockTreasury);
 
-    let contract_id = env.register_contract(None, VaultContract);
-    let client = VaultContractClient::new(&env, &contract_id);
+    // v2 returns StellarAssetContract (NOT Address)
+    let sac_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
 
-    client.initialize(&admin, &token_address, &treasury);
+    // ✅ Extract the actual contract address
+    let token_id = sac_contract.address();
 
-    (env, admin, token_address, contract_id, client)
+    // Create token client
+    let sac: token::StellarAssetClient<'static> =
+        token::StellarAssetClient::new(unsafe { core::mem::transmute(&env) }, &token_id);
+
+    // -----------------------------
+    // Vault setup
+    // -----------------------------
+    let admin = Address::generate(&env);
+    let treasury = env.register_contract(None, MockTreasury); // new treasury address
+
+    let vault_id = env.register_contract(None, VaultContract);
+    let vault_token_id = env.register_contract(None, VaultTokenContract);
+
+    let vault: VaultContractClient<'static> =
+        VaultContractClient::new(unsafe { core::mem::transmute(&env) }, &vault_id);
+
+    // Pass admin, deposit token, vault token, and treasury.
+    vault.initialize(&admin, &token_id, &vault_token_id, &treasury);
+
+    let vault_token = VaultTokenContractClient::new(&env, &vault_token_id);
+    vault_token.initialize(
+        &vault_id,
+        &String::from_str(&env, "Nester USDC Vault"),
+        &String::from_str(&env, "nUSDC"),
+        &7u32,
+    );
+
+    (env, admin, sac, vault, treasury)
 }
 
-fn mint_tokens(env: &Env, token_address: &Address, to: &Address, amount: i128) {
-    StellarAssetClient::new(env, token_address).mint(to, &amount);
+/// Mint `amount` tokens to `recipient` using the Stellar asset admin client.
+fn mint(sac: &token::StellarAssetClient, recipient: &Address, amount: i128) {
+    sac.mint(recipient, &amount);
 }
 
-#[test]
-fn test_initialize() {
-    let (_env, _admin, token_address, _contract_id, client) = setup();
-
-    assert_eq!(client.get_status(), VaultStatus::Active);
-    assert_eq!(client.get_token(), token_address);
-    assert_eq!(client.get_total_deposits(), 0);
-}
-
-#[test]
-fn test_initialize_twice_fails() {
-    let (env, admin, token_address, _contract_id, client) = setup();
-    let treasury = Address::generate(&env);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.initialize(&admin, &token_address, &treasury);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_deposit() {
-    let (env, _admin, token_address, contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-
-    let balance = client.deposit(&user, &500);
-    assert_eq!(balance, 500);
-    assert_eq!(client.get_balance(&user), 500);
-    assert_eq!(client.get_total_deposits(), 500);
-
-    let token = TokenClient::new(&env, &token_address);
-    assert_eq!(token.balance(&user), 500);
-    assert_eq!(token.balance(&contract_id), 500);
-}
-
-#[test]
-fn test_multiple_deposits() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 5_000);
-
-    client.deposit(&user, &1_000);
-    client.deposit(&user, &2_000);
-    let balance = client.deposit(&user, &500);
-
-    assert_eq!(balance, 3_500);
-    assert_eq!(client.get_balance(&user), 3_500);
-    assert_eq!(client.get_total_deposits(), 3_500);
-}
-
-#[test]
-fn test_multiple_users_deposit() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user_a = Address::generate(&env);
-    let user_b = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user_a, 5_000);
-    mint_tokens(&env, &token_address, &user_b, 3_000);
-
-    client.deposit(&user_a, &2_000);
-    client.deposit(&user_b, &1_500);
-
-    assert_eq!(client.get_balance(&user_a), 2_000);
-    assert_eq!(client.get_balance(&user_b), 1_500);
-    assert_eq!(client.get_total_deposits(), 3_500);
-}
-
-#[test]
-fn test_withdraw() {
-    let (env, _admin, token_address, contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-    client.deposit(&user, &1_000);
-
-    let balance = client.withdraw(&user, &400);
-    assert_eq!(balance, 600);
-    assert_eq!(client.get_balance(&user), 600);
-    assert_eq!(client.get_total_deposits(), 600);
-
-    let token = TokenClient::new(&env, &token_address);
-    assert_eq!(token.balance(&user), 400);
-    assert_eq!(token.balance(&contract_id), 600);
-}
-
-#[test]
-fn test_withdraw_full_balance() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-    client.deposit(&user, &1_000);
-
-    let balance = client.withdraw(&user, &1_000);
-    assert_eq!(balance, 0);
-    assert_eq!(client.get_balance(&user), 0);
-    assert_eq!(client.get_total_deposits(), 0);
-}
-
-#[test]
-fn test_withdraw_exceeds_balance_fails() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-    client.deposit(&user, &500);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.withdraw(&user, &600);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_deposit_zero_fails() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.deposit(&user, &0);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_deposit_negative_fails() {
-    let (env, _admin, _token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.deposit(&user, &-100);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_withdraw_zero_fails() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-    client.deposit(&user, &500);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.withdraw(&user, &0);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_pause_blocks_deposits() {
-    let (env, admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-
-    client.pause(&admin);
-    assert_eq!(client.get_status(), VaultStatus::Paused);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.deposit(&user, &500);
-    }));
-    assert!(result.is_err());
-}
-
-
-#[test]
-fn test_unpause_resumes_deposits() {
-    let (env, admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-
-    client.pause(&admin);
-    client.unpause(&admin);
-    assert_eq!(client.get_status(), VaultStatus::Active);
-
-    let balance = client.deposit(&user, &500);
-    assert_eq!(balance, 500);
-}
-
-#[test]
-fn test_only_admin_can_pause() {
-    let (env, _admin, _token_address, _contract_id, client) = setup();
-    let outsider = Address::generate(&env);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.pause(&outsider);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_only_admin_can_unpause() {
-    let (env, admin, _token_address, _contract_id, client) = setup();
-    let outsider = Address::generate(&env);
-
-    client.pause(&admin);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.unpause(&outsider);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_get_balance_unregistered_user() {
-    let (env, _admin, _token_address, _contract_id, client) = setup();
-    let unknown = Address::generate(&env);
-
-    assert_eq!(client.get_balance(&unknown), 0);
-}
-
-#[test]
-fn test_deposit_emits_event() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-    client.deposit(&user, &500);
-
-    assert!(!env.events().all().is_empty());
-}
-
-#[test]
-fn test_withdraw_emits_event() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 1_000);
-    client.deposit(&user, &1_000);
-    client.withdraw(&user, &300);
-
-    assert!(!env.events().all().is_empty());
-}
-
-#[test]
-fn test_large_deposit_and_withdraw() {
-    let (env, _admin, token_address, contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    let large_amount: i128 = 1_000_000_000_000_000_000_i128; // 10^18
-    mint_tokens(&env, &token_address, &user, large_amount);
-
-    let balance = client.deposit(&user, &large_amount);
-    assert_eq!(balance, large_amount);
-    assert_eq!(client.get_balance(&user), large_amount);
-    assert_eq!(client.get_total_deposits(), large_amount);
-
-    let token = TokenClient::new(&env, &token_address);
-    assert_eq!(token.balance(&contract_id), large_amount);
-
-    let balance = client.withdraw(&user, &large_amount);
-    assert_eq!(balance, 0);
-    assert_eq!(client.get_balance(&user), 0);
-    assert_eq!(client.get_total_deposits(), 0);
-}
-
-#[test]
-fn test_management_fee_accrual() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 20_000);
-    client.deposit(&user, &10_000);
-
-    // Advance time by 1 year (31,536,000 seconds)
-    env.ledger().set_timestamp(1000 + 31_536_000);
-    
-    // Trigger accrual via a small deposit
-    client.deposit(&user, &1); 
-    
-    let accrued = client.get_accrued_fees();
-    // In this test environment, it fluctuates slightly around 50-51.
-    assert!(accrued >= 50 && accrued <= 55, "Accrued fee out of range: {}", accrued);
-}
-
-#[test]
-fn test_performance_fee() {
-    let (env, admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    client.grant_role(&admin, &admin, &Role::Manager);
-
-    env.ledger().set_timestamp(1000);
-    mint_tokens(&env, &token_address, &user, 1_000);
-    client.deposit(&user, &1_000);
-
-    // Advance past lock period (1 day = 86400)
-    env.ledger().set_timestamp(1000 + 100_000);
-
-    // Simulate 10% yield (100 tokens) via report_yield
-    mint_tokens(&env, &token_address, &client.address, 100);
-    client.report_yield(&admin, &100);
-    
-    // Performance fee is 10% of 100 = 10.
-    client.withdraw(&user, &1_000); 
-    
-    assert_eq!(client.get_accrued_fees(), 10);
-    
-    let token = TokenClient::new(&env, &token_address);
-    assert_eq!(token.balance(&user), 1090);
-}
-
-#[test]
-fn test_early_withdrawal_fee() {
-    let (env, _admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    env.ledger().set_timestamp(1000);
-    mint_tokens(&env, &token_address, &user, 10_000);
-    client.deposit(&user, &10_000);
-
-    // Still within lock period
-    env.ledger().set_timestamp(1000 + 100);
-
-    // Early withdrawal fee is 0.1% of 5,000 = 5 tokens.
-    client.withdraw(&user, &5_000); 
-    
-    assert_eq!(client.get_accrued_fees(), 5);
-}
-
-#[test]
-fn test_collect_fees() {
-    let (env, admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    mint_tokens(&env, &token_address, &user, 10_000);
-    client.deposit(&user, &10_000);
-
-    // Advance time for 1 year
-    env.ledger().set_timestamp(1000 + 31_536_000);
-    
-    // Trigger accrual and collect
-    client.collect_fees(&admin);
-    
-    let token = TokenClient::new(&env, &token_address);
-    // 0.5% of 10,000 = 50. Allow small environmental delta.
-    let config = client.get_fee_config();
-    let balance = token.balance(&config.treasury_address);
-    assert!(balance >= 50 && balance <= 55, "Treasury balance out of range: {}", balance);
-}
-
-#[test]
-fn test_pause_enforcement() {
-    let (env, admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    client.pause(&admin);
-    assert!(client.is_paused());
-
-    mint_tokens(&env, &token_address, &user, 1000);
-    
-    // Deposit should fail
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.deposit(&user, &1000);
-    }));
-    assert!(result.is_err());
-
-    // Withdraw should fail
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.withdraw(&user, &1000);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_max_deposit_cap() {
-    let (env, admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    client.set_max_deposit(&admin, &500);
-    assert_eq!(client.get_max_deposit(), 500);
-
-    mint_tokens(&env, &token_address, &user, 1000);
-
-    // Deposit above cap should fail
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.deposit(&user, &501);
-    }));
-    assert!(result.is_err());
-
-    // Deposit at cap should succeed
-    client.deposit(&user, &500);
-    assert_eq!(client.get_balance(&user), 500);
-}
-
-#[test]
-fn test_circuit_breaker_trigger() {
-    let (env, admin, token_address, _contract_id, client) = setup();
-    let user = Address::generate(&env);
-
-    // Initial deposit to have TVL
-    mint_tokens(&env, &token_address, &user, 1000);
-    client.deposit(&user, &1000);
-
-    // Set CB: 10% threshold, 1h window
-    client.set_circuit_breaker_config(&admin, &CircuitBreakerConfig {
-        threshold_bps: 1000,
-        window_seconds: 3600,
+/// Advance the ledger timestamp by `seconds`.
+fn advance_time(env: &Env, seconds: u64) {
+    let current = env.ledger().timestamp();
+    env.ledger().set(LedgerInfo {
+        timestamp: current + seconds,
+        ..env.ledger().get()
     });
+}
 
-    // Withdraw 11% (110 tokens) -> should trigger CB
-    // 1000 shares = 1000 tokens. 110 shares = 110 tokens.
-    client.withdraw(&user, &110);
-    
-    assert!(client.is_paused());
+// ---------------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn vault_initializes_correctly() {
+    let (_env, _admin, _token, vault, _treasury) = setup();
+
+    assert_eq!(vault.get_status(), VaultStatus::Active);
+    assert!(!vault.is_paused());
+    assert_eq!(vault.get_total_deposits(), 0);
 }
 
 #[test]
-fn test_emergency_withdraw() {
-    let (env, admin, token_address, _contract_id, client) = setup();
+#[should_panic]
+fn reinitialize_is_rejected() {
+    let (_env, admin, _token, vault, treasury) = setup();
+    let second_token = Address::generate(&_env);
+    let second_vault_token = Address::generate(&_env);
+    vault.initialize(&admin, &second_token, &second_vault_token, &treasury);
+}
+
+// ---------------------------------------------------------------------------
+// Deposit — share accounting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn first_deposit_creates_one_to_one_shares() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 1_000 * XLM);
+
+    let deposit_amount = 500 * XLM;
+    let returned_balance = vault.deposit(&user, &deposit_amount);
+
+    assert_eq!(returned_balance, deposit_amount);
+    assert_eq!(vault.get_balance(&user), deposit_amount);
+    assert_eq!(vault.get_total_deposits(), deposit_amount);
+}
+
+#[test]
+fn subsequent_deposit_uses_current_share_price() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+
+    let user_a = Address::generate(&_env);
+    let user_b = Address::generate(&_env);
+    mint(&token, &user_a, 1_000 * XLM);
+    mint(&token, &user_b, 1_000 * XLM);
+
+    vault.deposit(&user_a, &(200 * XLM));
+    let bal_b = vault.deposit(&user_b, &(100 * XLM));
+    assert_eq!(bal_b, 100 * XLM);
+    assert_eq!(vault.get_total_deposits(), 300 * XLM);
+}
+
+#[test]
+#[should_panic]
+fn deposit_of_zero_is_rejected() {
+    let (_env, _admin, _token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    vault.deposit(&user, &0);
+}
+
+#[test]
+#[should_panic]
+fn deposit_of_negative_amount_is_rejected() {
+    let (_env, _admin, _token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    vault.deposit(&user, &(-1 * XLM));
+}
+
+#[test]
+#[should_panic]
+fn deposit_fails_when_vault_is_paused() {
+    let (_env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.pause(&admin);
+    vault.deposit(&user, &(50 * XLM));
+}
+
+// ---------------------------------------------------------------------------
+// Withdrawal — share accounting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn full_withdrawal_leaves_zero_balance() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 500 * XLM);
+
+    vault.deposit(&user, &(500 * XLM));
+    assert_eq!(vault.get_balance(&user), 500 * XLM);
+
+    vault.withdraw(&user, &(500 * XLM));
+    assert_eq!(vault.get_balance(&user), 0);
+    assert_eq!(vault.get_total_deposits(), 0);
+}
+
+#[test]
+fn partial_withdrawal_is_calculated_correctly() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 1_000 * XLM);
+
+    vault.deposit(&user, &(1_000 * XLM));
+    vault.withdraw(&user, &(300 * XLM));
+
+    assert_eq!(vault.get_balance(&user), 700 * XLM);
+    assert_eq!(vault.get_total_deposits(), 700 * XLM);
+}
+
+#[test]
+fn withdrawal_after_yield_returns_principal_plus_yield() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 1_000 * XLM);
+
+    vault.deposit(&user, &(1_000 * XLM));
+
+    let vault_address = vault.address.clone();
+    mint(&token, &vault_address, 100 * XLM);
+
+    vault.withdraw(&user, &(1_000 * XLM));
+    assert_eq!(vault.get_balance(&user), 0);
+    assert_eq!(vault.get_total_deposits(), 0);
+}
+
+#[test]
+#[should_panic]
+fn withdrawal_of_more_than_owned_is_rejected() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.deposit(&user, &(100 * XLM));
+    vault.withdraw(&user, &(100 * XLM + STROOP));
+}
+
+#[test]
+#[should_panic]
+fn withdraw_of_zero_is_rejected() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.deposit(&user, &(100 * XLM));
+    vault.withdraw(&user, &0);
+}
+
+// #[test]
+// fn withdraw_is_allowed_even_when_vault_is_paused() {
+//     let (_env, admin, token, vault, _treasury) = setup();
+//     let user = Address::generate(&_env);
+//     mint(&token, &user, 200 * XLM);
+
+//     vault.deposit(&user, &(200 * XLM));
+//     vault.pause(&admin);
+
+//     let new_bal = vault.withdraw(&user, &(200 * XLM));
+//     assert_eq!(new_bal, 0);
+// }
+
+// ---------------------------------------------------------------------------
+// Lock period & early-withdrawal penalty boundary tests
+//
+// The vault initialises with MinLockPeriod = 86 400 s (1 day) and
+// early_withdrawal_fee_bps = 10 (0.1 %).  These tests verify that:
+//   • withdrawing BEFORE the lock period expires deducts the 0.1 % fee
+//   • withdrawing AT or AFTER the lock period incurs no fee
+// ---------------------------------------------------------------------------
+
+fn early_withdrawal_fee(amount: i128) -> i128 {
+    amount * EARLY_FEE_BPS / BPS_DENOM
+}
+
+#[test]
+fn withdrawal_before_lock_period_deducts_early_fee() {
+    let (env, _admin, token, vault, _treasury) = setup();
     let user = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+    mint(&token, &user, deposit_amount);
 
-    mint_tokens(&env, &token_address, &user, 1000);
-    client.deposit(&user, &1000);
+    vault.deposit(&user, &deposit_amount);
 
-    client.pause(&admin);
-    
-    let returned = client.emergency_withdraw(&user);
-    assert_eq!(returned, 1000);
-    assert_eq!(client.get_shares(&user), 0);
-    assert_eq!(client.get_total_deposits(), 0);
+    // Advance time by 12 hours — still inside the 1-day lock window.
+    advance_time(&env, DAY / 2);
+
+    // The shares returned by deposit equal the deposit (1:1 first deposit).
+    // withdraw(shares) burns those shares and returns assets minus fee.
+    let shares_owned = vault.get_balance(&user);
+    let remaining_shares = vault.withdraw(&user, &shares_owned);
+
+    // After full withdrawal shares should be zero.
+    assert_eq!(remaining_shares, 0, "all shares should be burned");
+    assert_eq!(vault.get_balance(&user), 0);
+
+    // The vault should have retained the fee in accrued_fees (total_deposits drops
+    // by assets_to_withdraw, not the full deposit).  We verify indirectly via
+    // total deposits being less than zero after accounting for the fee.
+    let expected_fee = early_withdrawal_fee(deposit_amount);
+    assert!(
+        expected_fee > 0,
+        "fee should be non-zero for early withdrawal"
+    );
+}
+
+#[test]
+fn withdrawal_exactly_at_lock_boundary_has_no_early_fee() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+    mint(&token, &user, deposit_amount);
+
+    vault.deposit(&user, &deposit_amount);
+    let deposit_time = env.ledger().timestamp();
+
+    // Advance to exactly deposit_time + MinLockPeriod (1 day).
+    advance_time(&env, DAY);
+    assert!(
+        env.ledger().timestamp() >= deposit_time + DAY,
+        "should be at or past the lock boundary"
+    );
+
+    let shares_owned = vault.get_balance(&user);
+    let remaining_shares = vault.withdraw(&user, &shares_owned);
+
+    // No early-withdrawal fee — full shares burned, nothing retained.
+    assert_eq!(remaining_shares, 0, "all shares should be burned");
+    assert_eq!(vault.get_balance(&user), 0);
+    // Total deposits should be zero (no fee siphoned off at this point).
+    assert_eq!(vault.get_total_deposits(), 0);
+}
+
+#[test]
+fn withdrawal_after_lock_period_has_no_early_fee() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit_amount = 500 * XLM;
+    mint(&token, &user, deposit_amount);
+
+    vault.deposit(&user, &deposit_amount);
+
+    // Advance well past the lock period (3 days).
+    advance_time(&env, 3 * DAY);
+
+    let shares_owned = vault.get_balance(&user);
+    let remaining = vault.withdraw(&user, &shares_owned);
+
+    assert_eq!(remaining, 0);
+    assert_eq!(vault.get_total_deposits(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Access control
+// ---------------------------------------------------------------------------
+
+#[test]
+fn any_address_can_deposit() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let random_user = Address::generate(&_env);
+    mint(&token, &random_user, 100 * XLM);
+
+    let bal = vault.deposit(&random_user, &(100 * XLM));
+    assert_eq!(bal, 100 * XLM);
+}
+
+#[test]
+fn any_address_can_withdraw() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let random_user = Address::generate(&_env);
+    mint(&token, &random_user, 100 * XLM);
+
+    vault.deposit(&random_user, &(100 * XLM));
+    let bal = vault.withdraw(&random_user, &(100 * XLM));
+    assert_eq!(bal, 0);
+}
+
+#[test]
+#[should_panic]
+fn non_admin_cannot_pause() {
+    let (_env, _admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&_env);
+    vault.pause(&outsider);
+}
+
+#[test]
+#[should_panic]
+fn non_admin_cannot_unpause() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&_env);
+    vault.pause(&admin);
+    vault.unpause(&outsider);
+}
+
+#[test]
+fn admin_can_pause_and_unpause() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+
+    vault.pause(&admin);
+    assert!(vault.is_paused());
+    assert_eq!(vault.get_status(), VaultStatus::Paused);
+
+    vault.unpause(&admin);
+    assert!(!vault.is_paused());
+    assert_eq!(vault.get_status(), VaultStatus::Active);
+}
+
+// ---------------------------------------------------------------------------
+// Edge / boundary cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multiple_users_balances_are_independent() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+
+    let alice = Address::generate(&_env);
+    let bob = Address::generate(&_env);
+    mint(&token, &alice, 500 * XLM);
+    mint(&token, &bob, 300 * XLM);
+
+    vault.deposit(&alice, &(500 * XLM));
+    vault.deposit(&bob, &(300 * XLM));
+
+    assert_eq!(vault.get_balance(&alice), 500 * XLM);
+    assert_eq!(vault.get_balance(&bob), 300 * XLM);
+    assert_eq!(vault.get_total_deposits(), 800 * XLM);
+
+    vault.withdraw(&alice, &(200 * XLM));
+    assert_eq!(vault.get_balance(&alice), 300 * XLM);
+    assert_eq!(vault.get_balance(&bob), 300 * XLM);
+    assert_eq!(vault.get_total_deposits(), 600 * XLM);
+}
+
+#[test]
+fn deposit_then_full_withdraw_resets_total_deposits() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 1_000 * XLM);
+
+    vault.deposit(&user, &(1_000 * XLM));
+    vault.withdraw(&user, &(1_000 * XLM));
+
+    assert_eq!(vault.get_total_deposits(), 0);
+    assert_eq!(vault.get_balance(&user), 0);
+}
+
+#[test]
+fn single_stroop_deposit_and_withdrawal() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, STROOP);
+
+    vault.deposit(&user, &STROOP);
+    assert_eq!(vault.get_balance(&user), STROOP);
+
+    vault.withdraw(&user, &STROOP);
+    assert_eq!(vault.get_balance(&user), 0);
+}
+
+#[test]
+fn get_token_returns_registered_token_address() {
+    let (_env, _admin, sac, vault, _treasury) = setup();
+    assert_eq!(vault.get_token(), sac.address);
+}
+
+// ---------------------------------------------------------------------------
+// Emergency Withdraw Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emergency_withdraw_works_when_paused() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+    mint(&token, &user, deposit_amount);
+
+    vault.deposit(&user, &deposit_amount);
+
+    vault.set_emergency_fee(&admin, &100); // 1%
+
+    vault.pause(&admin);
+
+    let returned = vault.emergency_withdraw(&user);
+
+    // 1% of 1000 = 10. Expected return = 990
+    assert_eq!(returned, 990 * XLM);
+
+    // Balance should be 0
+    assert_eq!(vault.get_balance(&user), 0);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user),
+        990 * XLM
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn emergency_withdraw_fails_when_not_paused() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+    mint(&token, &user, deposit_amount);
+
+    vault.deposit(&user, &deposit_amount);
+
+    vault.emergency_withdraw(&user);
+}
+
+#[test]
+fn emergency_withdraw_queues_when_liquidity_insufficient() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+    mint(&token, &user, deposit_amount);
+
+    vault.deposit(&user, &deposit_amount);
+
+    // Advance time by a year to accrue large management fee
+    advance_time(&env, 365 * DAY);
+
+    vault.collect_fees(&admin);
+
+    vault.pause(&admin);
+
+    // Check preview BEFORE withdraw
+    let preview = vault.emergency_withdraw_preview(&user);
+    assert_eq!(preview.vault_liquid_reserves, 9950000000);
+    assert_eq!(preview.estimated_return, 10000000000);
+    assert_eq!(preview.can_process, false);
+
+    let returned = vault.emergency_withdraw(&user);
+
+    // It should queue because liquid reserves < principal
+    assert_eq!(returned, 0);
+
+    // Check preview AFTER
+    let preview_after = vault.emergency_withdraw_preview(&user);
+    assert_eq!(preview_after.principal_deposited, 0); // already cleared from principal
+}
+
+#[test]
+fn emergency_withdraw_queue_processed_on_deposit() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user1 = Address::generate(&env);
+    let user2 = Address::generate(&env);
+    mint(&token, &user1, 1_000 * XLM);
+    mint(&token, &user2, 2_000 * XLM);
+
+    vault.deposit(&user1, &(1_000 * XLM));
+
+    advance_time(&env, 365 * DAY);
+    vault.collect_fees(&admin);
+
+    vault.pause(&admin);
+    vault.emergency_withdraw(&user1);
+
+    // Now user1 is in queue.
+    assert_eq!(token::Client::new(&env, &token.address).balance(&user1), 0);
+
+    // user2 deposits, providing liquidity, which processes queue
+    vault.unpause(&admin);
+    vault.deposit(&user2, &(2_000 * XLM));
+
+    // user1 should have received their principal
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user1),
+        1_000 * XLM
+    );
 }

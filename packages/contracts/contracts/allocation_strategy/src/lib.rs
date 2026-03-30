@@ -1,15 +1,78 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, vec, Address, Env,
+    IntoVal, Symbol, Val, Vec,
 };
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event, ContractError, BASIS_POINT_SCALE};
-use yield_registry::{SourceStatus, YieldRegistryContractClient};
+use nester_common::{emit_event, ContractError, ProtocolType, SourceStatus, BASIS_POINT_SCALE};
 
 const STRATEGY: Symbol = symbol_short!("STRATEGY");
 const WEIGHTS_UPDATED: Symbol = symbol_short!("WTS_SET");
+const MAX_RISK_RATING: u32 = 10;
+
+#[contracttype]
+#[derive(Clone, Debug)]
+struct RegistryApySnapshot {
+    pub apy_bps: u32,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+struct RegistrySource {
+    pub id: Symbol,
+    pub contract_address: Address,
+    pub protocol_type: ProtocolType,
+    pub status: SourceStatus,
+    pub added_at: u64,
+    pub current_apy_bps: u32,
+    pub apy_history: Vec<RegistryApySnapshot>,
+    pub tvl: i128,
+    pub risk_rating: u32,
+    pub min_deposit: i128,
+    pub max_deposit: i128,
+    pub last_updated: u64,
+    pub migration_required: bool,
+    pub migration_completed: bool,
+    pub migration_completed_at: u64,
+}
+
+struct RegistryClient<'a> {
+    env: &'a Env,
+    contract_id: &'a Address,
+}
+
+impl<'a> RegistryClient<'a> {
+    fn new(env: &'a Env, contract_id: &'a Address) -> Self {
+        Self { env, contract_id }
+    }
+
+    fn has_source(&self, source_id: &Symbol) -> bool {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::new(self.env, "has_source"),
+            vec![self.env, source_id.clone().into_val(self.env)],
+        )
+    }
+
+    fn get_source_status(&self, source_id: &Symbol) -> SourceStatus {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::new(self.env, "get_source_status"),
+            vec![self.env, source_id.clone().into_val(self.env)],
+        )
+    }
+
+    fn get_active_sources(&self) -> Vec<RegistrySource> {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::new(self.env, "get_active_sources"),
+            Vec::<Val>::new(self.env),
+        )
+    }
+}
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -86,7 +149,7 @@ impl AllocationStrategyContract {
 
         // Validate each source against the registry.
         let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
-        let registry = YieldRegistryContractClient::new(&env, &registry_id);
+        let registry = RegistryClient::new(&env, &registry_id);
 
         for w in weights.iter() {
             if !registry.has_source(&w.source_id) {
@@ -110,6 +173,22 @@ impl AllocationStrategyContract {
                 new_weights: weights,
             },
         );
+    }
+
+    /// Suggest APY/risk-aware weights using active registry sources.
+    ///
+    /// Scoring model:
+    /// * Higher APY increases score.
+    /// * Higher risk decreases score.
+    /// * Score = max(APY, 1) * (11 - risk_rating), with risk clamped to 1..=10.
+    ///
+    /// Returns weights that sum to 10_000 bps. No state is written.
+    pub fn suggest_weights(env: Env) -> Vec<AllocationWeight> {
+        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let registry = RegistryClient::new(&env, &registry_id);
+        let active_sources = registry.get_active_sources();
+
+        suggest_weights_from_sources(&env, active_sources)
     }
 
     /// Return the currently stored allocation weights.
@@ -160,7 +239,7 @@ impl AllocationStrategyContract {
 
         // Assign rounding remainder to the highest-weight source.
         let remainder = total - total_allocated;
-        if remainder > 0 {
+        if remainder > 0 && n > 0 {
             let (sym, amount) = allocations.get(max_idx).unwrap();
             allocations.set(max_idx, (sym, amount + remainder));
         }
@@ -214,8 +293,74 @@ impl AllocationStrategyContract {
 // Private helpers
 // ---------------------------------------------------------------------------
 
+fn suggest_weights_from_sources(env: &Env, sources: Vec<RegistrySource>) -> Vec<AllocationWeight> {
+    if sources.is_empty() {
+        return Vec::new(env);
+    }
+
+    let mut scored: Vec<(Symbol, i128)> = Vec::new(env);
+    let mut total_score: i128 = 0;
+    let mut max_score: i128 = -1;
+    let mut max_idx: u32 = 0;
+
+    for i in 0..sources.len() {
+        let source = sources.get(i).unwrap();
+        let score = source_score(&source);
+        total_score += score;
+
+        if score > max_score {
+            max_score = score;
+            max_idx = i;
+        }
+
+        scored.push_back((source.id, score));
+    }
+
+    let mut weights = Vec::<AllocationWeight>::new(env);
+    let mut allocated: u32 = 0;
+
+    for (source_id, score) in scored.iter() {
+        let weight_bps = ((score * BASIS_POINT_SCALE as i128) / total_score) as u32;
+        allocated += weight_bps;
+        weights.push_back(AllocationWeight {
+            source_id,
+            weight_bps,
+        });
+    }
+
+    // Allocate basis-point rounding remainder to the best-scoring source.
+    let remainder = BASIS_POINT_SCALE - allocated;
+    if remainder > 0 {
+        let mut top = weights.get(max_idx).unwrap();
+        top.weight_bps += remainder;
+        weights.set(max_idx, top);
+    }
+
+    weights
+}
+
+fn source_score(source: &RegistrySource) -> i128 {
+    let raw_risk = source.risk_rating;
+    let clamped_risk = if raw_risk == 0 {
+        MAX_RISK_RATING
+    } else if raw_risk > MAX_RISK_RATING {
+        MAX_RISK_RATING
+    } else {
+        raw_risk
+    };
+
+    let risk_factor = (MAX_RISK_RATING + 1 - clamped_risk) as i128;
+    let apy = if source.current_apy_bps == 0 {
+        1_i128
+    } else {
+        source.current_apy_bps as i128
+    };
+
+    apy * risk_factor
+}
+
 /// Panic with [`ContractError::Unauthorized`] unless `account` holds Admin or
-/// Operator.  Day-to-day operations (e.g. weight updates) are open to both.
+/// Operator. Day-to-day operations (e.g. weight updates) are open to both.
 fn require_admin_or_operator(env: &Env, account: &Address) {
     if !AccessControl::has_role(env, account, Role::Admin)
         && !AccessControl::has_role(env, account, Role::Operator)

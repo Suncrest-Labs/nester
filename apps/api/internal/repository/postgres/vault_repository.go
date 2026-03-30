@@ -52,7 +52,7 @@ func (r *VaultRepository) GetVault(ctx context.Context, id uuid.UUID) (vault.Vau
 	query := `
 		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, created_at, updated_at
 		FROM vaults
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 	`
 
 	model, err := scanVault(r.db.QueryRowContext(ctx, query, id.String()))
@@ -73,7 +73,7 @@ func (r *VaultRepository) GetUserVaults(ctx context.Context, userID uuid.UUID) (
 	query := `
 		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, created_at, updated_at
 		FROM vaults
-		WHERE user_id = $1
+		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC
 	`
 
@@ -109,7 +109,7 @@ func (r *VaultRepository) GetUserVaults(ctx context.Context, userID uuid.UUID) (
 func (r *VaultRepository) UpdateVaultBalances(ctx context.Context, id uuid.UUID, totalDeposited decimal.Decimal, currentBalance decimal.Decimal) error {
 	result, err := r.db.ExecContext(
 		ctx,
-		`UPDATE vaults SET total_deposited = $2, current_balance = $3, updated_at = NOW() WHERE id = $1`,
+		`UPDATE vaults SET total_deposited = $2, current_balance = $3, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
 		id.String(),
 		totalDeposited.String(),
 		currentBalance.String(),
@@ -134,13 +134,19 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, amoun
 		return vault.ErrInvalidAmount
 	}
 
-	result, err := r.db.ExecContext(
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE vaults
 		 SET total_deposited = total_deposited + $2::numeric,
 		     current_balance = current_balance + $2::numeric,
 		     updated_at = NOW()
-		 WHERE id = $1`,
+		 WHERE id = $1 AND deleted_at IS NULL`,
 		id.String(),
 		amount.String(),
 	)
@@ -156,7 +162,16 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, amoun
 		return vault.ErrVaultNotFound
 	}
 
-	return nil
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (vault_id, type, amount) VALUES ($1, 'deposit', $2::numeric)`,
+		id.String(),
+		amount.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	return tx.Commit()
 }
 
 func (r *VaultRepository) ReplaceAllocations(ctx context.Context, vaultID uuid.UUID, allocations []vault.Allocation) error {
@@ -201,6 +216,135 @@ func (r *VaultRepository) ReplaceAllocations(ctx context.Context, vaultID uuid.U
 
 	return nil
 }
+
+// UpdateVault performs a partial update on a vault row (contract address and/or
+// status). The caller is responsible for pre-validating the state transition.
+func (r *VaultRepository) UpdateVault(ctx context.Context, id uuid.UUID, contractAddress string, status vault.VaultStatus) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET contract_address = $2, status = $3, updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		id.String(),
+		contractAddress,
+		string(status),
+	)
+	if err != nil {
+		return mapRepositoryError(err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return vault.ErrVaultNotFound
+	}
+
+	return nil
+}
+
+// RecordWithdrawal decrements current_balance atomically and writes a ledger
+// entry. It does NOT touch total_deposited (deposits are never reversed).
+func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	if amount.Cmp(decimal.Zero) <= 0 {
+		return vault.ErrInvalidAmount
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET current_balance = current_balance - $2::numeric,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		id.String(),
+		amount.String(),
+	)
+	if err != nil {
+		return mapRepositoryError(err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return vault.ErrVaultNotFound
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (vault_id, type, amount) VALUES ($1, 'withdrawal', $2::numeric)`,
+		id.String(),
+		amount.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	return tx.Commit()
+}
+
+// SoftDeleteVault stamps deleted_at so reads exclude this vault going forward.
+func (r *VaultRepository) SoftDeleteVault(ctx context.Context, id uuid.UUID) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE vaults SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
+		id.String(),
+	)
+	if err != nil {
+		return mapRepositoryError(err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return vault.ErrVaultNotFound
+	}
+
+	return nil
+}
+
+// ListDeposits returns all deposit transactions for a vault ordered newest
+// first.
+func (r *VaultRepository) ListDeposits(ctx context.Context, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, vault_id, type, amount, COALESCE(tx_hash, ''), created_at
+		 FROM vault_transactions
+		 WHERE vault_id = $1 AND type = 'deposit'
+		 ORDER BY created_at DESC`,
+		vaultID.String(),
+	)
+	if err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	defer rows.Close()
+
+	txns := make([]vault.VaultTransaction, 0)
+	for rows.Next() {
+		txn, err := scanVaultTransaction(rows)
+		if err != nil {
+			return nil, err
+		}
+		txns = append(txns, txn)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return txns, nil
+}
+
+// ── scanners ─────────────────────────────────────────────────────────────────
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -273,6 +417,45 @@ func scanVault(row scanner) (vault.Vault, error) {
 	}, nil
 }
 
+func scanVaultTransaction(row scanner) (vault.VaultTransaction, error) {
+	var (
+		id        string
+		vaultID   string
+		txType    string
+		amount    string
+		txHash    string
+		createdAt time.Time
+	)
+
+	if err := row.Scan(&id, &vaultID, &txType, &amount, &txHash, &createdAt); err != nil {
+		return vault.VaultTransaction{}, err
+	}
+
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return vault.VaultTransaction{}, fmt.Errorf("parse transaction id: %w", err)
+	}
+
+	parsedVaultID, err := uuid.Parse(vaultID)
+	if err != nil {
+		return vault.VaultTransaction{}, fmt.Errorf("parse transaction vault_id: %w", err)
+	}
+
+	parsedAmount, err := decimal.NewFromString(amount)
+	if err != nil {
+		return vault.VaultTransaction{}, fmt.Errorf("parse transaction amount: %w", err)
+	}
+
+	return vault.VaultTransaction{
+		ID:        parsedID,
+		VaultID:   parsedVaultID,
+		Type:      txType,
+		Amount:    parsedAmount,
+		TxHash:    txHash,
+		CreatedAt: createdAt,
+	}, nil
+}
+
 func loadAllocations(ctx context.Context, db queryer, vaultID uuid.UUID) ([]vault.Allocation, error) {
 	rows, err := db.QueryContext(
 		ctx,
@@ -338,7 +521,7 @@ func loadAllocations(ctx context.Context, db queryer, vaultID uuid.UUID) ([]vaul
 
 func ensureVaultExists(ctx context.Context, tx *sql.Tx, vaultID uuid.UUID) error {
 	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT TRUE FROM vaults WHERE id = $1`, vaultID.String()).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT TRUE FROM vaults WHERE id = $1 AND deleted_at IS NULL`, vaultID.String()).Scan(&exists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return vault.ErrVaultNotFound
 		}
