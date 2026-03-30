@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,4 +109,30 @@ func TestPrometheusClient_Retry(t *testing.T) {
 	assert.Len(t, recs, 1)
 	assert.Equal(t, "Success After Retry", recs[0].Title)
 	assert.Equal(t, int32(3), atomic.LoadInt32(&callCount))
+}
+
+func TestPrometheusClient_URLSanitization(t *testing.T) {
+	var requestedURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedURL = r.URL.String()
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	cfg := config.PrometheusConfig{
+		BaseURL: server.URL,
+		Timeout: 1 * time.Second,
+	}
+	client := NewPrometheusClient(cfg)
+
+	// Test with a vaultID that contains characters requiring escaping
+	vaultID := "vault/123?query=true"
+	_, err := client.GetVaultRecommendations(context.Background(), vaultID)
+	assert.NoError(t, err)
+
+	// Check if the vaultID was properly escaped in the URL
+	// The expected URL should contain the escaped version of vaultID
+	expectedPath := "/api/v1/vaults/" + url.PathEscape(vaultID) + "/recommendations"
+	assert.Contains(t, requestedURL, expectedPath)
 }

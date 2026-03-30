@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"sync"
@@ -67,6 +68,7 @@ func (c *PrometheusClient) GetVaultRecommendations(ctx context.Context, vaultID 
 	var recs []intelligence.Recommendation
 	err := c.doRequest(ctx, endpoint, &recs)
 	if err != nil {
+		log.Printf("ERROR: prometheus_client request failed for vault %s: %v", vaultID, err)
 		c.recordFailure()
 		return nil, fmt.Errorf("failed to get vault recommendations: %w", err)
 	}
@@ -89,6 +91,7 @@ func (c *PrometheusClient) GetMarketSentiment(ctx context.Context) (*intelligenc
 	var report intelligence.SentimentReport
 	err := c.doRequest(ctx, endpoint, &report)
 	if err != nil {
+		log.Printf("ERROR: prometheus_client request failed for market sentiment: %v", err)
 		c.recordFailure()
 		return nil, fmt.Errorf("failed to get market sentiment: %w", err)
 	}
@@ -115,6 +118,7 @@ func (c *PrometheusClient) GetPortfolioInsights(ctx context.Context, userID stri
 	var insights intelligence.PortfolioInsights
 	err := c.doRequest(ctx, endpoint, &insights)
 	if err != nil {
+		log.Printf("ERROR: prometheus_client request failed for user %s insights: %v", userID, err)
 		c.recordFailure()
 		return nil, fmt.Errorf("failed to get portfolio insights: %w", err)
 	}
