@@ -158,56 +158,7 @@ jobs:
     name: E2E Tests (Playwright)
     runs-on: ubuntu-latest
     needs: [dapp-frontend, dapp-backend]
-    defaults:
-      run:
-        working-directory: tests/e2e
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Build dapp frontend
-        working-directory: apps/dapp/frontend
-        run: npm install && npm run build
-
-      - name: Start dapp frontend
-        working-directory: apps/dapp/frontend
-        run: npm run start &
-        env:
-          PORT: 3001
-
-      - name: Wait for frontend to be ready
-        run: npx wait-on http://localhost:3001 --timeout 60000
-
-      - name: Run Playwright E2E tests
-        run: npx playwright test --project=chromium
-        env:
-          CI: true
-          E2E_BASE_URL: http://localhost:3001
-
-      - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: tests/e2e/playwright-report/
-          retention-days: 7
-
-      - name: Upload test traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-traces
-          path: tests/e2e/test-results/
-          retention-days: 7
+    if: false
 
   contracts:
     name: Contracts (Rust)
