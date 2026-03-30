@@ -140,8 +140,8 @@ test.describe("Vault Withdrawal Flow", () => {
 
         await expect(page.getByText("Welcome back")).toBeVisible();
 
-        // Check recent activity section
-        await expect(page.getByText(/Withdrawal.*Conservative/i)).toBeVisible();
+        // Check recent activity section — transaction type and vault name in the same <p>
+        await expect(page.locator("p").filter({ hasText: /Withdrawal.*Conservative/i })).toBeVisible();
     });
 
     test("Cancel closes the withdrawal modal without withdrawing", async ({ page }) => {

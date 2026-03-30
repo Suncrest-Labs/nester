@@ -82,7 +82,8 @@ test.describe("Onboarding & Wallet Connection", () => {
         // No wallet session injected — direct navigation to dashboard
         await page.goto("/dashboard");
         await page.waitForURL("**/", { timeout: 8_000 });
-        await expect(page).toHaveURL(/^\//);
+        // Match against the full URL (e.g. http://localhost:3001/)
+        await expect(page).toHaveURL(/localhost:\d+\/?$/);
     });
 
     test("four stat cards are visible after connecting", async ({ page }) => {

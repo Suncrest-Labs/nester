@@ -115,7 +115,7 @@ function buildQuotes(
 }
 
 export default function SettlementsPage() {
-    const { isConnected } = useWallet();
+    const { isConnected, isInitializing } = useWallet();
     const { addNotification } = useNotifications();
     const router = useRouter();
 
@@ -136,10 +136,10 @@ export default function SettlementsPage() {
     const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
-        if (!isConnected) {
+        if (!isInitializing && !isConnected) {
             router.push("/");
         }
-    }, [isConnected, router]);
+    }, [isConnected, isInitializing, router]);
 
     const numericAmount = parseFloat(sendAmount) || 0;
     const allFieldsFilled =
@@ -215,7 +215,7 @@ export default function SettlementsPage() {
         };
     }, [allFieldsFilled, numericAmount, selectedBank, receiveCurrency, runQuoteScan, silentRefresh]);
 
-    if (!isConnected) return null;
+    if (isInitializing || !isConnected) return null;
 
     const displayReceive = selectedQuote
         ? selectedQuote.receiveAmount

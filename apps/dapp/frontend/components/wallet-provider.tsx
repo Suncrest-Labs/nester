@@ -23,6 +23,7 @@ interface WalletState {
     address: string | null;
     isConnected: boolean;
     isConnecting: boolean;
+    isInitializing: boolean;
     wallets: WalletInfo[];
     walletsLoaded: boolean;
     selectedWalletId: string | null;
@@ -34,6 +35,7 @@ const WalletContext = createContext<WalletState>({
     address: null,
     isConnected: false,
     isConnecting: false,
+    isInitializing: true,
     wallets: [],
     walletsLoaded: false,
     selectedWalletId: null,
@@ -62,6 +64,7 @@ function extractErrorMessage(err: unknown): string {
 export function WalletProvider({ children }: { children: ReactNode }) {
     const [address, setAddress] = useState<string | null>(null);
     const [isConnecting, setIsConnecting] = useState(false);
+    const [isInitializing, setIsInitializing] = useState(true);
     const [wallets, setWallets] = useState<WalletInfo[]>([]);
     const [walletsLoaded, setWalletsLoaded] = useState(false);
     const [selectedWalletId, setSelectedWalletId] = useState<string | null>(
@@ -95,6 +98,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                 ]);
                 setWalletsLoaded(true);
                 setKitReady(true);
+                setIsInitializing(false);
                 return;
             }
 
@@ -168,6 +172,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             } catch (err) {
                 console.error("Failed to initialize wallet kit:", err);
                 setWalletsLoaded(true);
+            } finally {
+                setIsInitializing(false);
             }
         };
 
@@ -247,6 +253,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                 address,
                 isConnected: !!address,
                 isConnecting,
+                isInitializing,
                 wallets,
                 walletsLoaded,
                 selectedWalletId,

@@ -22,6 +22,8 @@ export default defineConfig({
         {
             name: "chromium",
             use: { ...devices["Desktop Chrome"] },
+            // Mobile spec must run only in the mobile project (has its own device setup)
+            testIgnore: ["**/vault-deposit-mobile.spec.ts"],
         },
         {
             name: "mobile",

@@ -66,10 +66,10 @@ export class SettlementsPage {
 
         this.accountNumberInput = page.locator('input[placeholder="Enter 10-digit account number"]');
 
-        this.quotesPanel = page.locator("div").filter({ hasText: /Quotes/ }).filter({ has: page.locator("span", { hasText: /Live|Scanning|Comparing|Ranking/ }) }).first();
-        this.bestBadge = page.locator("span", { hasText: "Best" });
+        this.quotesPanel = page.locator("div").filter({ hasText: /Quotes/ }).first();
+        this.bestBadge = page.locator("span").filter({ hasText: /^Best$/ });
         this.quoteRows = page.locator("button").filter({ hasText: /% fee/ });
-        this.liveIndicator = page.locator("span", { hasText: "Live" });
+        this.liveIndicator = page.getByText("Live", { exact: true }).first();
 
         this.submitButton = page.locator("button").filter({ hasText: /Withdraw|Enter an amount|Select a bank|Enter account number|Finding best rate/ });
 

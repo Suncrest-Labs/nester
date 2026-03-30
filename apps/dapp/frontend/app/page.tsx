@@ -6,16 +6,16 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 export default function Home() {
-    const { isConnected } = useWallet();
+    const { isConnected, isInitializing } = useWallet();
     const router = useRouter();
 
     useEffect(() => {
-        if (isConnected) {
+        if (!isInitializing && isConnected) {
             router.push("/dashboard");
         }
-    }, [isConnected, router]);
+    }, [isConnected, isInitializing, router]);
 
-    if (isConnected) return null;
+    if (isInitializing || isConnected) return null;
 
     return <ConnectWallet />;
 }

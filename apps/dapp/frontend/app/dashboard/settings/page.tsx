@@ -30,7 +30,7 @@ type NotificationSettings = {
 import { useSettings } from "@/context/settings-context";
 
 export default function SettingsPage() {
-    const { isConnected, address, disconnect } = useWallet();
+    const { isConnected, isInitializing, address, disconnect } = useWallet();
     const { currency, setCurrency } = useSettings();
     const router = useRouter();
     const [copied, setCopied] = useState(false);
@@ -45,10 +45,10 @@ export default function SettingsPage() {
     const [autoDisconnect, setAutoDisconnect] = useState("30");
 
     useEffect(() => {
-        if (!isConnected) {
+        if (!isInitializing && !isConnected) {
             router.push("/");
         }
-    }, [isConnected, router]);
+    }, [isConnected, isInitializing, router]);
 
     // Load from LocalStorage
     useEffect(() => {
@@ -85,7 +85,7 @@ export default function SettingsPage() {
         }
     };
 
-    if (!isConnected) return null;
+    if (isInitializing || !isConnected) return null;
 
     return (
         <div className="min-h-screen bg-background text-foreground selection:bg-emerald-100 selection:text-emerald-900">

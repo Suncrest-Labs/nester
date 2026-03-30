@@ -18,7 +18,7 @@ import { useWallet } from "@/components/wallet-provider";
 import { vaultDefinitions, type VaultDefinition } from "@/lib/vault-data";
 
 export default function VaultsPage() {
-    const { isConnected } = useWallet();
+    const { isConnected, isInitializing } = useWallet();
     const { positions } = usePortfolio();
     const router = useRouter();
     const [selectedVault, setSelectedVault] = useState<VaultDefinition | null>(
@@ -26,10 +26,10 @@ export default function VaultsPage() {
     );
 
     useEffect(() => {
-        if (!isConnected) {
+        if (!isInitializing && !isConnected) {
             router.push("/");
         }
-    }, [isConnected, router]);
+    }, [isConnected, isInitializing, router]);
 
     const exposureByVault = useMemo(() => {
         return positions.reduce<Record<string, number>>((acc, position) => {
@@ -38,7 +38,7 @@ export default function VaultsPage() {
         }, {});
     }, [positions]);
 
-    if (!isConnected) return null;
+    if (isInitializing || !isConnected) return null;
 
     return (
         <div className="min-h-screen bg-background">

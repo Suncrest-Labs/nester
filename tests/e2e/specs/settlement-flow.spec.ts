@@ -69,8 +69,9 @@ test.describe("Settlement Flow", () => {
         });
 
         // Quote scanning progress indicator appears (scanning / comparing / ranking)
+        // Use .first() to avoid strict mode when multiple spans match the pattern
         await expect(
-            page.locator("span").filter({ hasText: /Scanning|Comparing|Ranking|Live/i })
+            page.locator("span").filter({ hasText: /Scanning|Comparing|Ranking|Live/i }).first()
         ).toBeVisible({ timeout: 5_000 });
     });
 
@@ -146,7 +147,7 @@ test.describe("Settlement Flow", () => {
         if (rowCount >= 2) {
             await quoteRows.nth(1).click();
             // Routing footer should update to reflect the selected node
-            await expect(page.locator("span").filter({ hasText: /Routing through/i })).toBeVisible();
+            await expect(page.getByText(/Routing through/i)).toBeVisible();
         }
     });
 

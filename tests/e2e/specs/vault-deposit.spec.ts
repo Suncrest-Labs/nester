@@ -151,7 +151,7 @@ test.describe("Vault Deposit Flow", () => {
         await expect(page.getByText("Welcome back")).toBeVisible();
 
         // Recent Activity should show a Deposit entry for Growth vault
-        await expect(page.getByText(/Deposit.*Growth/i)).toBeVisible();
+        await expect(page.locator("p").filter({ hasText: /Deposit.*Growth/i })).toBeVisible();
     });
 
     test("Max button fills the deposit input with full USDC balance", async ({ page }) => {
