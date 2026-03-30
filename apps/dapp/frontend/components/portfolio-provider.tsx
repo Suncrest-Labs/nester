@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { useWallet } from "@/components/wallet-provider";
-import { getVaultById, type VaultDefinition } from "@/lib/vault-data";
+import { getVaultById } from "@/lib/vault-data";
 
 export type PortfolioTransactionType =
     | "Deposit"
@@ -51,7 +51,14 @@ export interface PortfolioPosition extends StoredPosition {
 }
 
 interface DepositInput {
-    vault: VaultDefinition;
+    vault: {
+        id: string;
+        name: string;
+        asset: "USDC";
+        apy: number;
+        lockDays: number;
+        earlyWithdrawalPenaltyPct: number;
+    };
     amount: number;
     txHash: string;
 }
