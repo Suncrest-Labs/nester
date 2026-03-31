@@ -3,6 +3,8 @@ import { Space_Grotesk, Inter, Cormorant } from "next/font/google";
 import { PortfolioProvider } from "@/components/portfolio-provider";
 import { WalletProvider } from "@/components/wallet-provider";
 import { NotificationsProvider } from "@/components/notifications-provider";
+import { ToastProvider } from "@/components/toast-provider";
+import { ToastViewport } from "@/components/toast-viewport";
 import { NotificationsToaster } from "@/components/notifications-toaster";
 import { WebSocketProvider } from "@/components/websocket-provider";
 import "./globals.css";
@@ -57,16 +59,19 @@ export default function RootLayout({
                     <NetworkBanner />
                     <SettingsProvider>
                         <WalletProvider>
-                            <NotificationsProvider>
-                                <PortfolioProvider>
-                                    <WebSocketProvider>
-                                        <OnboardingProvider>
-                                            {children}
-                                            <NotificationsToaster />
-                                        </OnboardingProvider>
-                                    </WebSocketProvider>
-                                </PortfolioProvider>
-                            </NotificationsProvider>
+                            <ToastProvider>
+                                <NotificationsProvider>
+                                    <PortfolioProvider>
+                                        <WebSocketProvider>
+                                            <OnboardingProvider>
+                                                {children}
+                                                <ToastViewport />
+                                                <NotificationsToaster />
+                                            </OnboardingProvider>
+                                        </WebSocketProvider>
+                                    </PortfolioProvider>
+                                </NotificationsProvider>
+                            </ToastProvider>
                         </WalletProvider>
                     </SettingsProvider>
                 </NetworkProvider>

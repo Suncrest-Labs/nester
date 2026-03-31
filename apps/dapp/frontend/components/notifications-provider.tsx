@@ -6,7 +6,6 @@ import {
     useContext,
     useEffect,
     useMemo,
-    useRef,
     useState,
     type ReactNode,
 } from "react";
@@ -15,36 +14,25 @@ import {
     type AppNotification,
     type NotificationDraft,
 } from "@/lib/notifications";
-
-interface ToastItem {
-    id: string;
-    title: string;
-    message: string;
-    actionUrl?: string;
-    actionLabel?: string;
-}
+import { useToast } from "@/components/toast-provider";
 
 interface NotificationsState {
     notifications: AppNotification[];
     unreadCount: number;
-    toasts: ToastItem[];
     addNotification: (
         notification: NotificationDraft,
         options?: { showToast?: boolean }
     ) => void;
     markAsRead: (id: string) => void;
     markAllAsRead: () => void;
-    dismissToast: (id: string) => void;
 }
 
 const NotificationsContext = createContext<NotificationsState>({
     notifications: [],
     unreadCount: 0,
-    toasts: [],
     addNotification: () => {},
     markAsRead: () => {},
     markAllAsRead: () => {},
-    dismissToast: () => {},
 });
 
 const NOTIFICATIONS_STORAGE_KEY = "nester.notifications.v1";
@@ -56,12 +44,24 @@ function buildId(prefix: string) {
     return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 }
 
+function toastVariantForType(type: NotificationDraft["type"]) {
+    switch (type) {
+        case "deposit_confirmed":
+        case "withdrawal_processed":
+            return "success" as const;
+        case "ai_alert":
+        case "rebalance_event":
+            return "warning" as const;
+        case "offramp_status":
+        default:
+            return "info" as const;
+    }
+}
+
 export function NotificationsProvider({ children }: { children: ReactNode }) {
-      // v1: Notifications are client-side only and persisted across page reloads via localStorage.
+    const toast = useToast();
     const [notifications, setNotifications] =
         useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
-    const [toasts, setToasts] = useState<ToastItem[]>([]);
-    const timerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
     useEffect(() => {
         if (typeof window === "undefined") {
@@ -113,16 +113,6 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         );
     }, [notifications]);
 
-    const dismissToast = useCallback((id: string) => {
-        setToasts((prev) => prev.filter((toast) => toast.id !== id));
-
-        const timer = timerRef.current[id];
-        if (timer) {
-            clearTimeout(timer);
-            delete timerRef.current[id];
-        }
-    }, []);
-
     const addNotification = useCallback(
         (notification: NotificationDraft, options?: { showToast?: boolean }) => {
             const newNotification: AppNotification = {
@@ -138,24 +128,26 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
                 return;
             }
 
-            const toastId = buildId("toast");
-            setToasts((prev) => [
-                {
-                    id: toastId,
-                    title: notification.title,
-                    message: notification.message,
-                    actionUrl: notification.actionUrl,
-                    actionLabel: notification.actionLabel,
-                },
-                ...prev,
-            ]);
+            const toastOpts = {
+                description: notification.message,
+                action: notification.actionUrl
+                    ? {
+                          label: notification.actionLabel || "View Transaction",
+                          href: notification.actionUrl,
+                      }
+                    : undefined,
+            };
 
-            timerRef.current[toastId] = setTimeout(() => {
-                setToasts((prev) => prev.filter((toast) => toast.id !== toastId));
-                delete timerRef.current[toastId];
-            }, 5000);
+            const variant = toastVariantForType(notification.type);
+            if (variant === "success") {
+                toast.success(notification.title, toastOpts);
+            } else if (variant === "warning") {
+                toast.warning(notification.title, toastOpts);
+            } else {
+                toast.info(notification.title, toastOpts);
+            }
         },
-        []
+        [toast]
     );
 
     const markAsRead = useCallback((id: string) => {
@@ -174,13 +166,6 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         );
     }, []);
 
-    useEffect(() => {
-        return () => {
-            Object.values(timerRef.current).forEach((timer) => clearTimeout(timer));
-            timerRef.current = {};
-        };
-    }, []);
-
     const unreadCount = useMemo(
         () => notifications.filter((notification) => !notification.read).length,
         [notifications]
@@ -190,21 +175,11 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         () => ({
             notifications,
             unreadCount,
-            toasts,
             addNotification,
             markAsRead,
             markAllAsRead,
-            dismissToast,
         }),
-        [
-            notifications,
-            unreadCount,
-            toasts,
-            addNotification,
-            markAsRead,
-            markAllAsRead,
-            dismissToast,
-        ]
+        [notifications, unreadCount, addNotification, markAsRead, markAllAsRead]
     );
 
     return (

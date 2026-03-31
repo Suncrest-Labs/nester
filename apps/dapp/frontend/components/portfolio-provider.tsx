@@ -2,9 +2,11 @@
 
 import {
     createContext,
+    useCallback,
     useContext,
     useEffect,
     useMemo,
+    useRef,
     useState,
     type ReactNode,
 } from "react";
@@ -83,6 +85,12 @@ interface PortfolioState {
     balances: Record<string, number>;
     positions: PortfolioPosition[];
     transactions: PortfolioTransaction[];
+    isLoading: boolean;
+    /** Set when portfolio API returns an error; use with `ApiErrorState`. */
+    fetchErrorStatus: number | null;
+    /** Call from API hooks when a request fails (pass `null` to clear). */
+    reportFetchError: (status: number | null) => void;
+    refetch: () => void;
     getAvailableBalance: (asset?: string) => number;
     getWithdrawalQuote: (positionId: string, grossAmount: number) => WithdrawalQuote | null;
     recordDeposit: (input: DepositInput) => void;
@@ -193,6 +201,45 @@ function PortfolioStore({
     const [transactions, setTransactions] = useState<PortfolioTransaction[]>(
         initialState.transactions
     );
+    const [isLoading, setIsLoading] = useState(() => Boolean(address));
+    const [fetchErrorStatus, setFetchErrorStatus] = useState<number | null>(
+        null
+    );
+    const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        if (!address) {
+            setIsLoading(false);
+            return;
+        }
+        setIsLoading(true);
+        if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+        loadTimerRef.current = setTimeout(() => {
+            setIsLoading(false);
+            loadTimerRef.current = null;
+        }, 420);
+        return () => {
+            if (loadTimerRef.current) {
+                clearTimeout(loadTimerRef.current);
+                loadTimerRef.current = null;
+            }
+        };
+    }, [address]);
+
+    const refetch = useCallback(() => {
+        setFetchErrorStatus(null);
+        if (!address) return;
+        setIsLoading(true);
+        if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+        loadTimerRef.current = setTimeout(() => {
+            setIsLoading(false);
+            loadTimerRef.current = null;
+        }, 420);
+    }, [address]);
+
+    const reportFetchError = useCallback((status: number | null) => {
+        setFetchErrorStatus(status);
+    }, []);
 
     useEffect(() => {
         if (!address || typeof window === "undefined") return;
@@ -353,6 +400,10 @@ function PortfolioStore({
                 balances,
                 positions,
                 transactions,
+                isLoading,
+                fetchErrorStatus,
+                reportFetchError,
+                refetch,
                 getAvailableBalance,
                 getWithdrawalQuote,
                 recordDeposit,

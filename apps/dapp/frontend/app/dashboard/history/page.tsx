@@ -7,6 +7,12 @@ import {
     type PortfolioTransactionType,
 } from "@/components/portfolio-provider";
 import { Navbar } from "@/components/navbar";
+import {
+    ErrorBoundary,
+    PageError,
+    ApiErrorState,
+    HistoryPageSkeleton,
+} from "@/components/ui";
 import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -45,8 +51,13 @@ const STATUS_COLORS = {
 const PAGE_SIZE = 10;
 
 export default function HistoryPage() {
-    const { isConnected } = useWallet();
-    const { transactions } = usePortfolio();
+    const { isConnected, disconnect } = useWallet();
+    const {
+        transactions,
+        isLoading,
+        fetchErrorStatus,
+        refetch,
+    } = usePortfolio();
     const router = useRouter();
     
     const [searchQuery, setSearchQuery] = useState("");
@@ -119,6 +130,28 @@ export default function HistoryPage() {
             <Navbar />
 
             <main className="mx-auto max-w-[1536px] px-4 md:px-8 lg:px-12 xl:px-16 pt-28 pb-16">
+                {fetchErrorStatus != null ? (
+                    <ApiErrorState
+                        status={fetchErrorStatus}
+                        onRetry={refetch}
+                        onReconnect={() => {
+                            disconnect();
+                            router.push("/");
+                        }}
+                    />
+                ) : isLoading ? (
+                    <HistoryPageSkeleton />
+                ) : (
+                    <ErrorBoundary
+                        fallback={({ reset }) => (
+                            <PageError
+                                onRetry={() => {
+                                    refetch();
+                                    reset();
+                                }}
+                            />
+                        )}
+                    >
                 {/* Header Section */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -160,12 +193,12 @@ export default function HistoryPage() {
                             </div>
                             <h2 className="font-heading text-2xl font-light text-foreground mb-3">No transactions yet</h2>
                             <p className="text-muted-foreground leading-relaxed mb-8">
-                                You haven&apos;t made any transactions. Browse our vaults to start earning optimized yield.
+                                No transaction history yet. Your deposits and withdrawals will appear here.
                             </p>
                             <div className="p-[3px] rounded-full border border-black/15 shadow-lg bg-white inline-block">
                                 <Link href="/dashboard/vaults">
-                                    <button className="rounded-full bg-brand-dark px-8 py-3 text-sm font-medium text-white hover:bg-black transition-all">
-                                        Browse Vaults
+                                    <button type="button" className="rounded-full bg-brand-dark px-8 py-3 text-sm font-medium text-white hover:bg-black transition-all">
+                                        Go to Vaults
                                     </button>
                                 </Link>
                             </div>
@@ -437,6 +470,8 @@ export default function HistoryPage() {
                             </div>
                         </motion.div>
                     </>
+                )}
+                    </ErrorBoundary>
                 )}
             </main>
         </div>

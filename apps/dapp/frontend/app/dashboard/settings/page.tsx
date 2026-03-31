@@ -7,6 +7,12 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
+    ErrorBoundary,
+    PageError,
+    SettingsPageSkeleton,
+} from "@/components/ui";
+import { useShellLoading } from "@/hooks/use-shell-loading";
+import {
     Wallet,
     Bell,
     Shield,
@@ -34,6 +40,7 @@ export default function SettingsPage() {
     const { currency, setCurrency } = useSettings();
     const router = useRouter();
     const [copied, setCopied] = useState(false);
+    const shellLoading = useShellLoading(isConnected, 320);
 
     // Preferences State with LocalStorage
     const [notifications, setNotifications] = useState<NotificationSettings>({
@@ -93,6 +100,14 @@ export default function SettingsPage() {
 
             <main className="mx-auto max-w-[1536px] px-4 md:px-8 lg:px-12 xl:px-16 pt-28 pb-16">
                 <div className="max-w-4xl">
+                    {shellLoading ? (
+                        <SettingsPageSkeleton />
+                    ) : (
+                        <ErrorBoundary
+                            fallback={({ reset }) => (
+                                <PageError onRetry={reset} />
+                            )}
+                        >
                     {/* Header */}
                     <motion.div
                         initial={{ opacity: 0, x: -20 }}
@@ -283,6 +298,8 @@ export default function SettingsPage() {
                             </div>
                         </SettingsSection>
                     </div>
+                        </ErrorBoundary>
+                    )}
                 </div>
             </main>
         </div>

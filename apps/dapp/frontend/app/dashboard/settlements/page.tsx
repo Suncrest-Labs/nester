@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useWallet } from "@/components/wallet-provider";
 import { useNotifications } from "@/components/notifications-provider";
 import { Navbar } from "@/components/navbar";
@@ -8,6 +9,12 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import {
+    ErrorBoundary,
+    PageError,
+    SettlementsPageSkeleton,
+} from "@/components/ui";
+import { useShellLoading } from "@/hooks/use-shell-loading";
 import {
     ChevronDown,
     ArrowDownUp,
@@ -20,6 +27,7 @@ import {
     Loader2,
     CheckCircle2,
     ArrowRight,
+    Landmark,
 } from "lucide-react";
 
 import { BANKS, type LPNode, LP_NODES } from "@/lib/settlement-data";
@@ -91,6 +99,8 @@ export default function SettlementsPage() {
     const { isConnected } = useWallet();
     const { addNotification } = useNotifications();
     const router = useRouter();
+    const shellLoading = useShellLoading(isConnected, 360);
+    const [settlementRecords] = useState<{ id: string }[]>([]);
 
     const [sendAmount, setSendAmount] = useState("");
     const [sendAsset, setSendAsset] = useState(SEND_ASSETS[0]);
@@ -219,6 +229,12 @@ export default function SettlementsPage() {
         <div className="min-h-screen bg-background">
             <Navbar />
             <main className="mx-auto max-w-xl px-4 pt-20 md:pt-28 pb-24 md:pb-16">
+                {shellLoading ? (
+                    <SettlementsPageSkeleton />
+                ) : (
+                    <ErrorBoundary
+                        fallback={({ reset }) => <PageError onRetry={reset} />}
+                    >
                 {/* Header */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -686,10 +702,11 @@ export default function SettlementsPage() {
                 </AnimatePresence>
 
                 <motion.div
+                    id="offramp-learn"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ duration: 0.4, delay: 0.3 }}
-                    className="mt-4 flex items-center justify-center gap-2"
+                    className="mt-4 scroll-mt-28 flex items-center justify-center gap-2"
                 >
                     <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
                     <span className="text-[11px] text-muted-foreground text-center">
@@ -706,11 +723,28 @@ export default function SettlementsPage() {
                     <h3 className="font-heading text-sm font-medium text-foreground mb-3">
                         Recent Settlements
                     </h3>
-                    <div className="flex flex-col items-center justify-center py-6 text-center">
-                        <Clock className="h-5 w-5 text-muted-foreground/30 mb-2" />
-                        <p className="text-xs text-muted-foreground">No settlements yet</p>
-                    </div>
+                    {settlementRecords.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center px-2 py-8 text-center sm:py-10">
+                            <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-secondary">
+                                <Landmark className="h-5 w-5 text-muted-foreground" />
+                            </div>
+                            <p className="text-sm font-medium text-foreground">
+                                No settlements initiated
+                            </p>
+                            <p className="mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
+                                Convert your yield to local currency anytime.
+                            </p>
+                            <Link
+                                href="#offramp-learn"
+                                className="mt-5 text-sm font-medium text-foreground/70 underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                            >
+                                Learn About Offramp
+                            </Link>
+                        </div>
+                    ) : null}
                 </motion.div>
+                    </ErrorBoundary>
+                )}
             </main>
         </div>
     );
