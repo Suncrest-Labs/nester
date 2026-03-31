@@ -1,10 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Env,
-};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
 #[contract]
 pub struct MockVault;
@@ -37,7 +34,7 @@ fn test_initialize() {
 #[test]
 fn test_receive_fees() {
     let (env, _admin, vault, client) = setup();
-    
+
     env.as_contract(&vault, || {
         client.receive_fees(&1000);
     });
@@ -50,9 +47,11 @@ fn test_withdraw() {
     let (env, admin, _vault, client) = setup();
     let to = Address::generate(&env);
     let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
     let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_address);
-    
+
     token_client.mint(&client.address, &5000);
 
     client.withdraw(&admin, &to, &token_address, &2000);

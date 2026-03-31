@@ -4,8 +4,9 @@ extern crate std;
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger, LedgerInfo},
-    token, Address, Env,
+    token, Address, Env, String,
 };
+use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
 use crate::{VaultContract, VaultContractClient, VaultStatus};
 
@@ -69,12 +70,21 @@ fn setup() -> (
     let treasury = env.register_contract(None, MockTreasury); // new treasury address
 
     let vault_id = env.register_contract(None, VaultContract);
+    let vault_token_id = env.register_contract(None, VaultTokenContract);
 
     let vault: VaultContractClient<'static> =
         VaultContractClient::new(unsafe { core::mem::transmute(&env) }, &vault_id);
 
-    // Pass admin, token, and treasury
-    vault.initialize(&admin, &token_id, &treasury);
+    // Pass admin, deposit token, vault token, and treasury.
+    vault.initialize(&admin, &token_id, &vault_token_id, &treasury);
+
+    let vault_token = VaultTokenContractClient::new(&env, &vault_token_id);
+    vault_token.initialize(
+        &vault_id,
+        &String::from_str(&env, "Nester USDC Vault"),
+        &String::from_str(&env, "nUSDC"),
+        &7u32,
+    );
 
     (env, admin, sac, vault, treasury)
 }
@@ -111,7 +121,8 @@ fn vault_initializes_correctly() {
 fn reinitialize_is_rejected() {
     let (_env, admin, _token, vault, treasury) = setup();
     let second_token = Address::generate(&_env);
-    vault.initialize(&admin, &second_token, &treasury);
+    let second_vault_token = Address::generate(&_env);
+    vault.initialize(&admin, &second_token, &second_vault_token, &treasury);
 }
 
 // ---------------------------------------------------------------------------

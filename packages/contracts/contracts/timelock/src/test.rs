@@ -13,9 +13,7 @@ use soroban_sdk::{
 
 use nester_access_control::AccessControl;
 
-use crate::{
-    Timelock, TimelockStatus, DEFAULT_DELAY, EXPIRY_WINDOW, MAX_DELAY, MIN_DELAY,
-};
+use crate::{Timelock, TimelockStatus, DEFAULT_DELAY, EXPIRY_WINDOW, MAX_DELAY, MIN_DELAY};
 
 // ---------------------------------------------------------------------------
 // Minimal dummy contract for test context

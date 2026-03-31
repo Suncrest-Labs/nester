@@ -4,6 +4,7 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
     IntoVal, Symbol,
 };
+use vault_token::VaultTokenContractClient;
 
 use nester_access_control::{AccessControl, Role};
 use nester_common::{emit_event, ContractError};
@@ -134,10 +135,9 @@ pub enum VaultStatus {
 #[derive(Clone)]
 enum DataKey {
     Token,
+    VaultToken,
     Status,
-    Balance(Address), // Stores shares
-    TotalShares,      // Stores total shares in circulation
-    TotalAssets,      // Stores total assets (tokens) in vault (pre-fee)
+    TotalAssets, // Stores total assets (tokens) in vault (pre-fee)
     FeeConfig,
     LastFeeAccrual,
     AccruedFees,
@@ -177,28 +177,20 @@ fn is_paused(env: &Env) -> bool {
         .unwrap_or(true)
 }
 
-fn get_shares(env: &Env, user: &Address) -> i128 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Balance(user.clone()))
-        .unwrap_or(0)
-}
-
-fn set_shares(env: &Env, user: &Address, amount: i128) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::Balance(user.clone()), &amount);
-}
-
-fn get_total_shares(env: &Env) -> i128 {
+fn get_vault_token(env: &Env) -> Address {
     env.storage()
         .instance()
-        .get(&DataKey::TotalShares)
-        .unwrap_or(0)
+        .get(&DataKey::VaultToken)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
-fn set_total_shares(env: &Env, amount: i128) {
-    env.storage().instance().set(&DataKey::TotalShares, &amount);
+fn vault_token_client(env: &Env) -> VaultTokenContractClient<'_> {
+    let vault_token = get_vault_token(env);
+    VaultTokenContractClient::new(env, &vault_token)
+}
+
+fn get_shares(env: &Env, user: &Address) -> i128 {
+    vault_token_client(env).balance(user)
 }
 
 fn get_total_assets(env: &Env) -> i128 {
@@ -210,6 +202,13 @@ fn get_total_assets(env: &Env) -> i128 {
 
 fn set_total_assets(env: &Env, amount: i128) {
     env.storage().instance().set(&DataKey::TotalAssets, &amount);
+}
+
+fn sync_vault_token_total_assets(env: &Env) {
+    let gross = get_total_assets(env);
+    let accrued = get_accrued_fees(env);
+    let net_assets = if gross > accrued { gross - accrued } else { 0 };
+    vault_token_client(env).set_total_assets(&net_assets);
 }
 
 fn get_accrued_fees(env: &Env) -> i128 {
@@ -290,6 +289,7 @@ fn accrue_management_fee(env: &Env) {
         if fee > 0 {
             let accrued = get_accrued_fees(env);
             set_accrued_fees(env, accrued + fee);
+            sync_vault_token_total_assets(env);
         }
         env.storage().instance().set(&DataKey::LastFeeAccrual, &now);
     }
@@ -353,7 +353,13 @@ pub struct VaultContract;
 #[contractimpl]
 impl VaultContract {
     /// Initialise the vault, setting `admin` as the sole Admin.
-    pub fn initialize(env: Env, admin: Address, token_address: Address, treasury: Address) {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        token_address: Address,
+        vault_token_address: Address,
+        treasury: Address,
+    ) {
         // AccessControl::initialize handles AlreadyInitialized guard and require_auth
         AccessControl::initialize(&env, &admin);
         env.storage()
@@ -361,8 +367,10 @@ impl VaultContract {
             .set(&DataKey::Token, &token_address);
         env.storage()
             .instance()
+            .set(&DataKey::VaultToken, &vault_token_address);
+        env.storage()
+            .instance()
             .set(&DataKey::Status, &VaultStatus::Active);
-        env.storage().instance().set(&DataKey::TotalShares, &0_i128);
         env.storage().instance().set(&DataKey::TotalAssets, &0_i128);
         env.storage().instance().set(&DataKey::AccruedFees, &0_i128);
         env.storage()
@@ -521,6 +529,7 @@ impl VaultContract {
 
         let total_assets = get_total_assets(&env);
         set_total_assets(&env, total_assets + amount);
+        sync_vault_token_total_assets(&env);
     }
 
     pub fn collect_fees(env: Env, caller: Address) {
@@ -558,6 +567,7 @@ impl VaultContract {
 
             let total_assets = get_total_assets(&env);
             set_total_assets(&env, total_assets - fees);
+            sync_vault_token_total_assets(&env);
 
             let current_reserves = get_vault_liquid_reserves(&env);
             set_vault_liquid_reserves(&env, current_reserves - fees);
@@ -590,20 +600,9 @@ impl VaultContract {
 
         token::Client::new(&env, &token_address).transfer(&user, &contract_address, &amount);
 
-        let total_shares = get_total_shares(&env);
         let total_assets = get_total_assets(&env);
-        let accrued_fees = get_accrued_fees(&env);
-        let available_assets = total_assets - accrued_fees;
-
-        let shares_to_mint = if total_shares == 0 || available_assets == 0 {
-            amount
-        } else {
-            amount * total_shares / available_assets
-        };
-
-        let new_user_shares = get_shares(&env, &user) + shares_to_mint;
-        set_shares(&env, &user, new_user_shares);
-        set_total_shares(&env, total_shares + shares_to_mint);
+        let shares_to_mint = vault_token_client(&env).mint_for_deposit(&user, &amount);
+        let new_user_shares = get_shares(&env, &user);
         set_total_assets(&env, total_assets + amount);
 
         let current_principal = get_user_principal(&env, &user);
@@ -696,12 +695,9 @@ impl VaultContract {
             panic_with_error!(&env, ContractError::InsufficientBalance);
         }
 
-        let total_shares = get_total_shares(&env);
         let total_assets = get_total_assets(&env);
         let accrued_fees = get_accrued_fees(&env);
-        let available_assets = total_assets - accrued_fees;
-
-        let mut assets_to_withdraw = shares * available_assets / total_shares;
+        let mut assets_to_withdraw = vault_token_client(&env).amount_for_shares(&shares);
 
         // Trigger circuit breaker check
         check_circuit_breaker(&env, assets_to_withdraw);
@@ -751,9 +747,8 @@ impl VaultContract {
             &assets_to_withdraw,
         );
 
+        let _ = vault_token_client(&env).burn_for_withdrawal(&user, &shares);
         let new_user_shares = current_shares - shares;
-        set_shares(&env, &user, new_user_shares);
-        set_total_shares(&env, total_shares - shares);
         set_total_assets(&env, total_assets - assets_to_withdraw);
 
         let current_principal = get_user_principal(&env, &user);
@@ -834,12 +829,13 @@ impl VaultContract {
         let liquid_reserves = get_vault_liquid_reserves(&env);
 
         let shares = get_shares(&env, &user);
-        let total_shares = get_total_shares(&env);
         let total_assets = get_total_assets(&env);
-
-        set_shares(&env, &user, 0);
-        set_total_shares(&env, total_shares - shares);
-        set_total_assets(&env, total_assets - principal);
+        let burned_assets = if shares > 0 {
+            vault_token_client(&env).burn_for_withdrawal(&user, &shares)
+        } else {
+            0
+        };
+        set_total_assets(&env, total_assets - burned_assets);
         set_user_principal(&env, &user, 0);
 
         emit_event(
@@ -908,16 +904,10 @@ impl VaultContract {
     pub fn get_balance(env: Env, user: Address) -> i128 {
         require_initialized(&env);
         let shares = get_shares(&env, &user);
-        let total_shares = get_total_shares(&env);
-        if total_shares == 0 {
+        if shares <= 0 {
             return 0;
         }
-
-        let total_assets = get_total_assets(&env);
-        let accrued_fees = get_accrued_fees(&env);
-        let available_assets = total_assets - accrued_fees;
-
-        shares * available_assets / total_shares
+        vault_token_client(&env).amount_for_shares(&shares)
     }
 
     pub fn get_shares(env: Env, user: Address) -> i128 {
@@ -946,6 +936,11 @@ impl VaultContract {
             .instance()
             .get(&DataKey::Token)
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
+    }
+
+    pub fn get_vault_token(env: Env) -> Address {
+        require_initialized(&env);
+        get_vault_token(&env)
     }
 
     pub fn is_paused(env: Env) -> bool {

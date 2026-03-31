@@ -3,8 +3,8 @@
 pub mod constants;
 pub mod errors;
 pub mod events;
-pub mod storage;
 pub mod fees;
+pub mod storage;
 
 pub use constants::*;
 pub use errors::ContractError;

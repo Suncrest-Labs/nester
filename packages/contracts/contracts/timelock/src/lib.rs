@@ -23,9 +23,7 @@
 
 #![no_std]
 
-use soroban_sdk::{
-    contracttype, panic_with_error, symbol_short, Address, Bytes, Env, Symbol, Vec,
-};
+use soroban_sdk::{contracttype, panic_with_error, symbol_short, Address, Bytes, Env, Symbol, Vec};
 
 use nester_access_control::{AccessControl, Role};
 use nester_common::{emit_event, ContractError};
@@ -163,9 +161,7 @@ impl Timelock {
             status: TimelockStatus::Pending,
         };
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Operation(id), &op);
+        env.storage().persistent().set(&DataKey::Operation(id), &op);
 
         // Append to the ID list
         let mut ids: Vec<u64> = env

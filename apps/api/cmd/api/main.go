@@ -61,6 +61,15 @@ func run() error {
 	userService := service.NewUserService(userRepository)
 	userHandler := handler.NewUserHandler(userService)
 
+	adminRepository := postgres.NewAdminRepository(db)
+	adminService := service.NewAdminService(
+		adminRepository,
+		nil,
+		cfg.Stellar().HorizonURL(),
+		cfg.SettlementProviderURL(),
+	)
+	adminHandler := handler.NewAdminHandler(adminService)
+
 	authService := service.NewAuthService(userService, cfg.Auth())
 	authHandler := handler.NewAuthHandler(authService)
 
@@ -71,6 +80,7 @@ func run() error {
 	vaultHandler.Register(mux)
 	settlementHandler.Register(mux)
 	userHandler.Register(mux)
+	adminHandler.Register(mux)
 	authHandler.Register(mux)
 
 	authRules := []middleware.RouteRule{
@@ -78,6 +88,7 @@ func run() error {
 		{PathPrefix: "/healthz", Public: true},
 		{PathPrefix: "/readyz", Public: true},
 		{PathPrefix: "/api/v1/auth/", Public: true},
+		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}
 	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
@@ -92,7 +103,7 @@ func run() error {
 			globalLimiter(
 				writeLimiter(
 					authenticator(
-						middleware.LimitRequestBody(1*1024*1024)(
+						middleware.LimitRequestBody(1 * 1024 * 1024)(
 							middleware.Logging(baseLogger)(mux),
 						),
 					),

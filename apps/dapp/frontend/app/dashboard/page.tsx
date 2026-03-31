@@ -20,6 +20,7 @@ import {
 } from "@/components/portfolio-provider";
 import { WithdrawModal } from "@/components/vault-action-modals";
 import { truncateAddress } from "@/lib/utils";
+import { PrometheusPanel } from "@/components/ai/prometheusPanel";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
 
 export default function Dashboard() {
@@ -136,6 +137,7 @@ export default function Dashboard() {
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
+                    {/* ── Vaults ── */}
                     <motion.div
                         data-tour="vault-list"
                         initial={{ opacity: 0, y: 20 }}
@@ -219,13 +221,13 @@ export default function Dashboard() {
                         )}
                     </motion.div>
 
+                    {/* ── Prometheus Advisory Panel ── */}
                     <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.5, delay: 0.5 }}
-                        className="rounded-2xl border border-border bg-white p-5 sm:p-6"
                     >
-                        <div className="mb-5 flex items-center justify-between sm:mb-6">
+                        <div className="mb-4 flex items-center justify-between">
                             <h2 className="font-heading text-base font-light text-foreground sm:text-lg">
                                 <span className="font-display italic">Prometheus</span>{" "}
                                 Insights
@@ -238,48 +240,19 @@ export default function Dashboard() {
                             </div>
                         </div>
 
-                        {positions.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-10 text-center sm:py-12">
-                                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary sm:h-14 sm:w-14">
-                                    <Sparkles className="h-5 w-5 text-muted-foreground sm:h-6 sm:w-6" />
-                                </div>
-                                <p className="text-sm font-medium text-foreground/80">
-                                    No insights available
-                                </p>
-                                <p className="mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
-                                    Connect a vault to receive AI-driven recommendations on yield optimization and risk management.
-                                </p>
-                            </div>
+                        {address ? (
+                            <PrometheusPanel userId={address} />
                         ) : (
-                            <div className="space-y-4">
-                                <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                                    <p className="text-sm font-medium text-emerald-800">
-                                        Yield opportunity detected
-                                    </p>
-                                    <p className="mt-2 text-sm leading-relaxed text-emerald-800/80">
-                                        Your active positions are earning a combined $
-                                        {positions
-                                            .reduce(
-                                                (sum, position) => sum + position.yieldEarned,
-                                                0
-                                            )
-                                            .toFixed(2)}{" "}
-                                        in simulated yield. Matured positions can now be withdrawn without penalties.
-                                    </p>
-                                </div>
-                                <div className="rounded-2xl border border-border bg-secondary/20 p-4">
-                                    <p className="text-sm font-medium text-foreground">
-                                        Suggested action
-                                    </p>
-                                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                                        If you need liquidity soon, prioritize withdrawing from matured positions first. Otherwise, add new funds through the vaults page to compound your exposure.
-                                    </p>
-                                </div>
+                            <div className="rounded-2xl border border-border bg-white p-5">
+                                <p className="text-xs text-muted-foreground">
+                                    Connect your wallet to activate Prometheus.
+                                </p>
                             </div>
                         )}
                     </motion.div>
                 </div>
 
+                {/* ── Recent Activity ── */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}

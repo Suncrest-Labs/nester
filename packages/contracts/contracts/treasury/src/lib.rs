@@ -1,11 +1,12 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Symbol, token
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
+    Symbol,
 };
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{ContractError};
+use nester_common::ContractError;
 
 const TREASURY: Symbol = symbol_short!("TREASURY");
 const RECEIVE: Symbol = symbol_short!("RECEIVE");
@@ -29,7 +30,9 @@ impl TreasuryContract {
         }
         AccessControl::initialize(&env, &admin);
         env.storage().instance().set(&DataKey::Vault, &vault);
-        env.storage().instance().set(&DataKey::TotalReceived, &0_i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalReceived, &0_i128);
     }
 
     pub fn receive_fees(env: Env, amount: i128) {
@@ -40,8 +43,14 @@ impl TreasuryContract {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
 
-        let total: i128 = env.storage().instance().get(&DataKey::TotalReceived).unwrap_or(0);
-        env.storage().instance().set(&DataKey::TotalReceived, &(total + amount));
+        let total: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalReceived)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalReceived, &(total + amount));
 
         env.events().publish((TREASURY, RECEIVE), amount);
     }
@@ -60,7 +69,10 @@ impl TreasuryContract {
     }
 
     pub fn get_total_received(env: Env) -> i128 {
-        env.storage().instance().get(&DataKey::TotalReceived).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalReceived)
+            .unwrap_or(0)
     }
 
     pub fn get_vault(env: Env) -> Address {
@@ -70,4 +82,3 @@ impl TreasuryContract {
 
 #[cfg(test)]
 mod test;
-

@@ -14,13 +14,14 @@ import (
 )
 
 type Config struct {
-	environment string
-	server      ServerConfig
-	database    DatabaseConfig
-	stellar     StellarConfig
-	auth        AuthConfig
-	rateLimit   RateLimitConfig
-	log         LogConfig
+	environment           string
+	server                ServerConfig
+	database              DatabaseConfig
+	stellar               StellarConfig
+	settlementProviderURL string
+	auth                  AuthConfig
+	rateLimit             RateLimitConfig
+	log                   LogConfig
 }
 
 type ServerConfig struct {
@@ -96,6 +97,7 @@ func Load() (*Config, error) {
 			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
 			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
 		},
+		settlementProviderURL: loader.stringDefault("SETTLEMENT_PROVIDER_URL", ""),
 		auth: AuthConfig{
 			secret:          loader.requiredString("AUTH_JWT_SECRET"),
 			tokenExpiry:     loader.durationDefault("AUTH_TOKEN_EXPIRY", 24*time.Hour),
@@ -136,6 +138,10 @@ func (c Config) Database() DatabaseConfig {
 
 func (c Config) Stellar() StellarConfig {
 	return c.stellar
+}
+
+func (c Config) SettlementProviderURL() string {
+	return c.settlementProviderURL
 }
 
 func (c Config) Auth() AuthConfig {
