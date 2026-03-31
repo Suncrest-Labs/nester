@@ -29,6 +29,7 @@ import {
     ApiErrorState,
     DashboardPageSkeleton,
 } from "@/components/ui";
+import { PrometheusPanel } from "@/components/ai/prometheusPanel";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
 
 function DashboardContent({
@@ -203,43 +204,14 @@ function DashboardContent({
                             />
                         )}
                     >
-                        {positions.length === 0 ? (
+                        {address ? (
+                            <PrometheusPanel userId={address} />
+                        ) : (
                             <EmptyState
                                 icon={Sparkles}
                                 title="No insights available"
-                                description="Connect a vault to receive AI-driven recommendations on yield optimization and risk management."
+                                description="Connect your wallet to receive AI-driven recommendations on yield optimization and risk management."
                             />
-                        ) : (
-                            <div className="space-y-4">
-                                <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                                    <p className="text-sm font-medium text-emerald-800">
-                                        Yield opportunity detected
-                                    </p>
-                                    <p className="mt-2 text-sm leading-relaxed text-emerald-800/80">
-                                        Your active positions are earning a combined $
-                                        {positions
-                                            .reduce(
-                                                (sum, position) =>
-                                                    sum + position.yieldEarned,
-                                                0
-                                            )
-                                            .toFixed(2)}{" "}
-                                        in simulated yield. Matured positions can now be
-                                        withdrawn without penalties.
-                                    </p>
-                                </div>
-                                <div className="rounded-2xl border border-border bg-secondary/20 p-4">
-                                    <p className="text-sm font-medium text-foreground">
-                                        Suggested action
-                                    </p>
-                                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                                        If you need liquidity soon, prioritize withdrawing
-                                        from matured positions first. Otherwise, add new
-                                        funds through the vaults page to compound your
-                                        exposure.
-                                    </p>
-                                </div>
-                            </div>
                         )}
                     </ErrorBoundary>
                 </motion.div>

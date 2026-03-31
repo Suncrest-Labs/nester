@@ -16,7 +16,7 @@ import {
 import { usePortfolio } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
-import { type VaultDefinition } from "@/lib/vault-data";
+import { type Vault as VaultDefinition } from "@/lib/mock-vaults";
 import {
   buildDepositTransaction,
   signTransaction,
@@ -32,7 +32,13 @@ import {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type ActionState = "input" | "building" | "signing" | "submitting" | "success" | "error";
+type ActionState =
+  | "input"
+  | "building"
+  | "signing"
+  | "submitting"
+  | "success"
+  | "error";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -99,7 +105,9 @@ function ModalShell({
                   <h2 className="mt-2 font-heading text-2xl font-light text-foreground">
                     {title}
                   </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {subtitle}
+                  </p>
                 </div>
                 <button
                   onClick={onClose}
@@ -120,9 +128,15 @@ function ModalShell({
 // ── Transaction steps ─────────────────────────────────────────────────────────
 
 const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
-  { label: "Build contract call", activeStates: ["building", "signing", "submitting", "success"] },
-  { label: "Sign with wallet",    activeStates: ["signing", "submitting", "success"] },
-  { label: "Submit and confirm",  activeStates: ["success"] },
+  {
+    label: "Build contract call",
+    activeStates: ["building", "signing", "submitting", "success"],
+  },
+  {
+    label: "Sign with wallet",
+    activeStates: ["signing", "submitting", "success"],
+  },
+  { label: "Submit and confirm", activeStates: ["success"] },
 ];
 
 // ── DepositModal ──────────────────────────────────────────────────────────────
@@ -131,6 +145,18 @@ interface DepositModalProps {
   open: boolean;
   onClose: () => void;
   vault: VaultDefinition | null;
+}
+
+function getVaultMeta(vault: VaultDefinition) {
+  const lockMatch = vault.maturityTerms.match(/(\d+)/);
+  return {
+    apy: vault.currentApy / 100,
+    apyLabel: vault.apyRange,
+    lockDays: lockMatch ? Number(lockMatch[1]) : 0,
+    managementFeePct: 0.5,
+    performanceFeePct: 10,
+    asset: (vault.supportedAssets[0] ?? "USDC") as "USDC",
+  };
 }
 
 /**
@@ -159,24 +185,22 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const [receipt, setReceipt] = useState<TransactionReceipt | null>(null);
 
   const amount = Number(amountInput) || 0;
-  const balance = getAvailableBalance(vault?.asset ?? "USDC");
+  const meta = vault ? getVaultMeta(vault) : null;
+  const balance = getAvailableBalance(meta?.asset ?? "USDC");
 
   const validationError = useMemo(() => {
     if (!amount) return null;
     if (amount <= 0) return "Amount must be greater than 0.";
     if (amount < 1) return "Minimum deposit is 1 USDC.";
-    if (amount > balance) return `Insufficient balance. You have ${formatCurrency(balance)} USDC available.`;
+    if (amount > balance)
+      return `Insufficient balance. You have ${formatCurrency(balance)} USDC available.`;
     return null;
   }, [amount, balance]);
 
   const canSubmit =
-    !!vault &&
-    !!address &&
-    amount > 0 &&
-    !validationError &&
-    state === "input";
+    !!vault && !!address && amount > 0 && !validationError && state === "input";
 
-  const estimatedYield = vault ? amount * vault.apy : 0;
+  const estimatedYield = meta ? amount * meta.apy : 0;
 
   const reset = () => {
     setAmountInput("");
@@ -210,7 +234,18 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
       const txReceipt = await submitTransaction(signedXdr);
 
       // Record in portfolio state
-      recordDeposit({ vault, amount, txHash: txReceipt.txHash });
+      recordDeposit({
+        vault: {
+          id: vault.id,
+          name: vault.name,
+          asset: meta?.asset || "USDC",
+          apy: meta?.apy || 0,
+          lockDays: meta?.lockDays || 0,
+          earlyWithdrawalPenaltyPct: 0.1,
+        },
+        amount,
+        txHash: txReceipt.txHash,
+      });
 
       setReceipt(txReceipt);
       setState("success");
@@ -238,7 +273,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                     {vault.name}
                   </p>
                   <p className="mt-2 font-heading text-3xl font-light text-emerald-600">
-                    {vault.apyLabel}
+                    {meta?.apyLabel}
                   </p>
                 </div>
                 <div className="rounded-2xl bg-secondary px-3 py-2 text-right">
@@ -259,7 +294,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                 <div
                   className={cn(
                     "flex items-center gap-3 rounded-2xl border bg-[#fafafa] px-4 py-4 transition-colors",
-                    validationError ? "border-destructive/50" : "border-border"
+                    validationError ? "border-destructive/50" : "border-border",
                   )}
                 >
                   <input
@@ -301,13 +336,33 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
               {/* Preview */}
               <div className="mt-5 space-y-3 rounded-2xl border border-border bg-secondary/30 p-4">
                 {[
-                  { label: "Estimated annual yield", value: `${formatCurrency(estimatedYield)} USDC` },
-                  { label: "nVault shares to receive", value: formatCurrency(amount) },
-                  { label: "Lock period", value: `${vault.lockDays} days` },
-                  { label: "Management fee (annual)", value: `${vault.managementFeePct}%` },
-                  { label: "Performance fee (on yield)", value: `${vault.performanceFeePct}%` },
+                  {
+                    label: "Estimated annual yield",
+                    value: `${formatCurrency(estimatedYield)} USDC`,
+                  },
+                  {
+                    label: "nVault shares to receive",
+                    value: formatCurrency(amount),
+                  },
+                  {
+                    label: "Lock period",
+                    value: meta?.lockDays
+                      ? `${meta.lockDays} days`
+                      : vault.maturityTerms,
+                  },
+                  {
+                    label: "Management fee (annual)",
+                    value: `${meta?.managementFeePct ?? 0.5}%`,
+                  },
+                  {
+                    label: "Performance fee (on yield)",
+                    value: `${meta?.performanceFeePct ?? 10}%`,
+                  },
                 ].map(({ label, value }) => (
-                  <div key={label} className="flex items-center justify-between text-sm">
+                  <div
+                    key={label}
+                    className="flex items-center justify-between text-sm"
+                  >
                     <span className="text-muted-foreground">{label}</span>
                     <span className="font-medium text-foreground">{value}</span>
                   </div>
@@ -342,7 +397,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                             ? "border-emerald-200 bg-emerald-50 text-emerald-600"
                             : active
                               ? "border-blue-200 bg-blue-50 text-blue-600"
-                              : "border-border bg-secondary/40 text-muted-foreground"
+                              : "border-border bg-secondary/40 text-muted-foreground",
                         )}
                       >
                         {active ? (
@@ -353,7 +408,9 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                           <Clock3 className="h-4 w-4" />
                         )}
                       </div>
-                      <span className="text-sm text-foreground/80">{label}</span>
+                      <span className="text-sm text-foreground/80">
+                        {label}
+                      </span>
                     </div>
                   );
                 })}
@@ -367,7 +424,8 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                     <p className="text-sm font-medium">Deposit confirmed</p>
                   </div>
                   <p className="mt-2 text-sm text-emerald-800/80">
-                    {formatCurrency(amount)} USDC deposited into the {vault.name} vault.
+                    {formatCurrency(amount)} USDC deposited into the{" "}
+                    {vault.name} vault.
                   </p>
                   <p className="mt-1 font-mono text-[11px] text-emerald-800/60">
                     {truncateTxHash(receipt.txHash)}
@@ -396,13 +454,13 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
               )}
 
               {/* Info note when idle */}
-              {(state === "input") && (
+              {state === "input" && (
                 <div className="mt-5 rounded-2xl border border-border bg-secondary/20 p-4">
                   <div className="flex items-start gap-3">
                     <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
                     <p className="text-xs leading-relaxed text-muted-foreground">
-                      A Freighter popup will appear to confirm signing. No funds leave
-                      your wallet until you approve the transaction.
+                      A Freighter popup will appear to confirm signing. No funds
+                      leave your wallet until you approve the transaction.
                     </p>
                   </div>
                 </div>
@@ -420,7 +478,14 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
 
                 {state !== "success" && (
                   <button
-                    onClick={state === "error" ? () => { setState("input"); setErrorMsg(""); } : handleDeposit}
+                    onClick={
+                      state === "error"
+                        ? () => {
+                            setState("input");
+                            setErrorMsg("");
+                          }
+                        : handleDeposit
+                    }
                     disabled={
                       state === "building" ||
                       state === "signing" ||
