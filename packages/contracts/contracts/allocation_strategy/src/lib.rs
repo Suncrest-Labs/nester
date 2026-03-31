@@ -761,14 +761,13 @@ fn registry_get_source_status(
 }
 
 fn registry_get_active_sources(env: &Env, registry_id: &Address) -> Vec<RegistryYieldSource> {
-    // Defensive: always return a Vec<RegistryYieldSource> and handle conversion errors
-    let result: Result<Vec<RegistryYieldSource>, _> = env.try_invoke_contract(
+    match env.try_invoke_contract::<Vec<RegistryYieldSource>>(
         registry_id,
         &Symbol::new(env, "get_active_sources"),
         ().into_val(env),
-    );
-    match result {
-        Ok(v) => v,
+    ) {
+        Ok(Ok(v)) => v,
+        Ok(Err(_)) => Vec::new(env),
         Err(_) => Vec::new(env),
     }
 }
