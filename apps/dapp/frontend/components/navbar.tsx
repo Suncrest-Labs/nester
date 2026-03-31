@@ -9,6 +9,46 @@ import { truncateAddress, cn } from "@/lib/utils";
 import { LogOut, Copy, Check, ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useWebSocketContext } from "@/components/websocket-provider";
+import { type WSConnectionStatus } from "@/lib/ws-events";
+import { NetworkSelector } from "@/components/network/NetworkSelector";
+
+// ---------------------------------------------------------------------------
+// WebSocket connection status indicator
+// ---------------------------------------------------------------------------
+
+const WS_STATUS_CONFIG: Record<
+    WSConnectionStatus,
+    { dot: string; label: string; pulse: boolean }
+> = {
+    connected:    { dot: "bg-emerald-500", label: "Live",           pulse: true  },
+    reconnecting: { dot: "bg-amber-400",   label: "Reconnecting…",  pulse: true  },
+    offline:      { dot: "bg-red-400",     label: "Offline",         pulse: false },
+};
+
+function WsStatusIndicator() {
+    const { status, manualReconnect } = useWebSocketContext();
+    const config = WS_STATUS_CONFIG[status];
+
+    return (
+        <button
+            onClick={status === "offline" ? manualReconnect : undefined}
+            title={
+                status === "offline"
+                    ? "WebSocket offline — click to retry"
+                    : `WebSocket ${status}`
+            }
+            className="flex items-center gap-1.5 rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground/70 transition-colors hover:border-black/15"
+        >
+            <span
+                className={`h-1.5 w-1.5 rounded-full ${config.dot} ${
+                    config.pulse ? "animate-pulse" : ""
+                }`}
+            />
+            {config.label}
+        </button>
+    );
+}
 
 export function Navbar() {
     const pathname = usePathname();
@@ -81,6 +121,7 @@ export function Navbar() {
                                 <Link
                                     key={item.label}
                                     href={item.href}
+                                    data-tour={item.label === "Settlements" ? "settlements-tab" : undefined}
                                     className={cn(
                                         "text-[15px] font-medium transition-colors relative py-2",
                                         pathname === item.href
@@ -100,6 +141,8 @@ export function Navbar() {
                     <div className="flex items-center gap-3">
                         {isConnected && address ? (
                             <>
+                                <NetworkSelector />
+                                <WsStatusIndicator />
                                 <NotificationBell />
 
                                 <div

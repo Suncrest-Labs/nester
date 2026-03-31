@@ -3,7 +3,6 @@ package handler
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -107,12 +106,9 @@ func TestSettlementHandler_PostCreates201(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("want 201, got %d", resp.StatusCode)
 	}
-	var body offramp.Settlement
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.Status != offramp.StatusInitiated {
-		t.Fatalf("want initiated, got %s", body.Status)
+	settlement := decodeAPIData[offramp.Settlement](t, resp.Body)
+	if settlement.Status != offramp.StatusInitiated {
+		t.Fatalf("want initiated, got %s", settlement.Status)
 	}
 }
 
@@ -258,10 +254,7 @@ func TestSettlementHandler_PatchStatus200(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	var out offramp.Settlement
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	out := decodeAPIData[offramp.Settlement](t, resp.Body)
 	if out.Status != offramp.StatusLiquidityMatched {
 		t.Fatalf("want liquidity_matched, got %s", out.Status)
 	}
@@ -290,10 +283,7 @@ func TestSettlementHandler_ListUserSettlementsWithStatus(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	var list []offramp.Settlement
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	list := decodeAPIData[[]offramp.Settlement](t, resp.Body)
 	if len(list) != 1 {
 		t.Fatalf("want 1 settlement, got %d", len(list))
 	}

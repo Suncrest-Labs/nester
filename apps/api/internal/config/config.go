@@ -14,11 +14,14 @@ import (
 )
 
 type Config struct {
-	environment string
-	server      ServerConfig
-	database    DatabaseConfig
-	stellar     StellarConfig
-	log         LogConfig
+	environment           string
+	server                ServerConfig
+	database              DatabaseConfig
+	stellar               StellarConfig
+	settlementProviderURL string
+	auth                  AuthConfig
+	rateLimit             RateLimitConfig
+	log                   LogConfig
 }
 
 type ServerConfig struct {
@@ -39,6 +42,19 @@ type StellarConfig struct {
 	networkPassphrase string
 	rpcURL            string
 	horizonURL        string
+}
+
+type AuthConfig struct {
+	secret          string
+	tokenExpiry     time.Duration
+	challengeExpiry time.Duration
+}
+
+type RateLimitConfig struct {
+	globalLimit  int
+	globalWindow time.Duration
+	writeLimit   int
+	writeWindow  time.Duration
 }
 
 type LogConfig struct {
@@ -81,6 +97,18 @@ func Load() (*Config, error) {
 			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
 			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
 		},
+		settlementProviderURL: loader.stringDefault("SETTLEMENT_PROVIDER_URL", ""),
+		auth: AuthConfig{
+			secret:          loader.requiredString("AUTH_JWT_SECRET"),
+			tokenExpiry:     loader.durationDefault("AUTH_TOKEN_EXPIRY", 24*time.Hour),
+			challengeExpiry: loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
+		},
+		rateLimit: RateLimitConfig{
+			globalLimit:  loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
+			globalWindow: loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
+			writeLimit:   loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
+			writeWindow:  loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
+		},
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
 			format: strings.ToLower(loader.stringDefault("LOG_FORMAT", defaultLogFormat(environment))),
@@ -110,6 +138,18 @@ func (c Config) Database() DatabaseConfig {
 
 func (c Config) Stellar() StellarConfig {
 	return c.stellar
+}
+
+func (c Config) SettlementProviderURL() string {
+	return c.settlementProviderURL
+}
+
+func (c Config) Auth() AuthConfig {
+	return c.auth
+}
+
+func (c Config) RateLimit() RateLimitConfig {
+	return c.rateLimit
 }
 
 func (c Config) Log() LogConfig {
@@ -143,6 +183,34 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.database.connectionTimeout <= 0 {
 		loader.addError("DATABASE_CONNECTION_TIMEOUT must be greater than 0")
+	}
+
+	if len(strings.TrimSpace(c.auth.secret)) < 32 {
+		loader.addError("AUTH_JWT_SECRET must be at least 32 characters")
+	}
+
+	if c.auth.tokenExpiry <= 0 {
+		loader.addError("AUTH_TOKEN_EXPIRY must be greater than 0")
+	}
+
+	if c.auth.challengeExpiry <= 0 {
+		loader.addError("AUTH_CHALLENGE_EXPIRY must be greater than 0")
+	}
+
+	if c.rateLimit.globalLimit <= 0 {
+		loader.addError("RATELIMIT_GLOBAL_LIMIT must be greater than 0")
+	}
+
+	if c.rateLimit.globalWindow <= 0 {
+		loader.addError("RATELIMIT_GLOBAL_WINDOW must be greater than 0")
+	}
+
+	if c.rateLimit.writeLimit <= 0 {
+		loader.addError("RATELIMIT_WRITE_LIMIT must be greater than 0")
+	}
+
+	if c.rateLimit.writeWindow <= 0 {
+		loader.addError("RATELIMIT_WRITE_WINDOW must be greater than 0")
 	}
 
 	if !isOneOf(c.log.level, "debug", "info", "warn", "error") {
@@ -208,6 +276,34 @@ func (l LogConfig) Level() string {
 
 func (l LogConfig) Format() string {
 	return l.format
+}
+
+func (a AuthConfig) Secret() string {
+	return a.secret
+}
+
+func (a AuthConfig) TokenExpiry() time.Duration {
+	return a.tokenExpiry
+}
+
+func (a AuthConfig) ChallengeExpiry() time.Duration {
+	return a.challengeExpiry
+}
+
+func (r RateLimitConfig) GlobalLimit() int {
+	return r.globalLimit
+}
+
+func (r RateLimitConfig) GlobalWindow() time.Duration {
+	return r.globalWindow
+}
+
+func (r RateLimitConfig) WriteLimit() int {
+	return r.writeLimit
+}
+
+func (r RateLimitConfig) WriteWindow() time.Duration {
+	return r.writeWindow
 }
 
 type envLoader struct {

@@ -4,16 +4,19 @@ import { PortfolioProvider } from "@/components/portfolio-provider";
 import { WalletProvider } from "@/components/wallet-provider";
 import { NotificationsProvider } from "@/components/notifications-provider";
 import { NotificationsToaster } from "@/components/notifications-toaster";
+import { WebSocketProvider } from "@/components/websocket-provider";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
     subsets: ["latin"],
     variable: "--font-space-grotesk",
+    display: "swap",
 });
 
 const inter = Inter({
     subsets: ["latin"],
     variable: "--font-inter",
+    display: "swap",
 });
 
 const cormorant = Cormorant({
@@ -21,6 +24,7 @@ const cormorant = Cormorant({
     weight: ["300", "400"],
     style: ["normal", "italic"],
     variable: "--font-cormorant",
+    display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -34,6 +38,9 @@ export const metadata: Metadata = {
 };
 
 import { SettingsProvider } from "@/context/settings-context";
+import { OnboardingProvider } from "@/hooks/useOnboarding";
+import { NetworkProvider } from "@/context/NetworkProvider";
+import { NetworkBanner } from "@/components/network/NetworkSelector";
 
 export default function RootLayout({
     children,
@@ -46,16 +53,23 @@ export default function RootLayout({
                 suppressHydrationWarning
                 className={`${spaceGrotesk.variable} ${inter.variable} ${cormorant.variable} antialiased`}
             >
-                <SettingsProvider>
-                    <WalletProvider>
-                        <NotificationsProvider>
-                            <PortfolioProvider>
-                                {children}
-                                <NotificationsToaster />
-                            </PortfolioProvider>
-                        </NotificationsProvider>
-                    </WalletProvider>
-                </SettingsProvider>
+                <NetworkProvider>
+                    <NetworkBanner />
+                    <SettingsProvider>
+                        <WalletProvider>
+                            <NotificationsProvider>
+                                <PortfolioProvider>
+                                    <WebSocketProvider>
+                                        <OnboardingProvider>
+                                            {children}
+                                            <NotificationsToaster />
+                                        </OnboardingProvider>
+                                    </WebSocketProvider>
+                                </PortfolioProvider>
+                            </NotificationsProvider>
+                        </WalletProvider>
+                    </SettingsProvider>
+                </NetworkProvider>
             </body>
         </html>
     );

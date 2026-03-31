@@ -680,6 +680,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nester-rent-escrow"
+version = "0.1.0"
+dependencies = [
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "nester-snapshots"
+version = "0.1.0"
+
+[[package]]
 name = "nester-test-utils"
 version = "0.1.0"
 dependencies = [
@@ -690,6 +703,16 @@ dependencies = [
  "vault-contract",
  "vault-token-contract",
  "yield-registry-contract",
+]
+
+[[package]]
+name = "nester-timelock"
+version = "0.1.0"
+dependencies = [
+ "nester-access-control",
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
 ]
 
 [[package]]
@@ -1362,6 +1385,7 @@ dependencies = [
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",
+ "vault-token-contract",
 ]
 
 [[package]]

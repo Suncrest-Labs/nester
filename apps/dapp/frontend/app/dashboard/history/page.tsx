@@ -27,6 +27,7 @@ import {
     Vault as VaultIcon
 } from "lucide-react";
 import { cn, truncateAddress } from "@/lib/utils";
+import { getExplorerTxUrl } from "@/utils/explorer";
 
 const TYPE_ICONS = {
     "Deposit": ArrowDownLeft,
@@ -338,7 +339,7 @@ export default function HistoryPage() {
                                                             </td>
                                                             <td className="px-6 py-4 text-right">
                                                                 <a 
-                                                                    href={`https://stellar.expert/explorer/testnet/tx/${tx.txHash}`} 
+                                                                    href={getExplorerTxUrl(tx.txHash)} 
                                                                     target="_blank" 
                                                                     rel="noopener noreferrer"
                                                                     className="inline-flex items-center gap-1.5 text-xs text-primary hover:text-primary-foreground hover:bg-primary px-2 py-1 rounded-lg transition-all group/link"

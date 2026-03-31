@@ -1,3 +1,4 @@
+// CI trigger: update from 0xDeon fork
 // ---------------------------------------------------------------------------
 // Nester Protocol — Multi-Contract Integration Tests
 //
@@ -19,8 +20,8 @@ use soroban_sdk::{symbol_short, vec, Vec};
 
 use allocation_strategy_contract::AllocationWeight;
 use nester_access_control::Role;
+use nester_common::ProtocolType;
 use nester_test_utils::NesterHarness;
-use yield_registry::ProtocolType;
 
 // ---------------------------------------------------------------------------
 // Scenario 1 — Full protocol initialisation
@@ -33,7 +34,10 @@ fn all_contracts_initialise_cleanly() {
     let h = NesterHarness::setup();
 
     // Vault: not paused after initialisation.
-    assert!(!h.vault().is_paused(), "vault should not be paused after init");
+    assert!(
+        !h.vault().is_paused(),
+        "vault should not be paused after init"
+    );
 
     // Token: supply and assets start at zero.
     assert_eq!(h.token().total_supply(), 0);
@@ -41,11 +45,19 @@ fn all_contracts_initialise_cleanly() {
 
     // Registry: no sources registered yet.
     let active = h.registry().get_active_sources();
-    assert_eq!(active.len(), 0, "registry should have no sources after init");
+    assert_eq!(
+        active.len(),
+        0,
+        "registry should have no sources after init"
+    );
 
     // Strategy: no weights set yet.
     let weights = h.strategy().get_weights();
-    assert_eq!(weights.len(), 0, "strategy should have no weights after init");
+    assert_eq!(
+        weights.len(),
+        0,
+        "strategy should have no weights after init"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -68,18 +80,20 @@ fn strategy_set_weights_validates_sources_via_registry() {
         &h.create_user(), // mock contract address
         &ProtocolType::Lending,
     );
-    h.registry().register_source(
-        &h.admin,
-        &blend,
-        &h.create_user(),
-        &ProtocolType::Lending,
-    );
+    h.registry()
+        .register_source(&h.admin, &blend, &h.create_user(), &ProtocolType::Lending);
 
     // Both sources are active; set_weights should succeed.
     let weights: Vec<AllocationWeight> = vec![
         &h.env,
-        AllocationWeight { source_id: aave.clone(), weight_bps: 6_000 },
-        AllocationWeight { source_id: blend.clone(), weight_bps: 4_000 },
+        AllocationWeight {
+            source_id: aave.clone(),
+            weight_bps: 6_000,
+        },
+        AllocationWeight {
+            source_id: blend.clone(),
+            weight_bps: 4_000,
+        },
     ];
     h.strategy().set_weights(&h.admin, &weights);
 
@@ -99,7 +113,10 @@ fn strategy_rejects_weights_for_unregistered_source() {
     let ghost = symbol_short!("ghost");
     let weights: Vec<AllocationWeight> = vec![
         &h.env,
-        AllocationWeight { source_id: ghost, weight_bps: 10_000 },
+        AllocationWeight {
+            source_id: ghost,
+            weight_bps: 10_000,
+        },
     ];
     h.strategy().set_weights(&h.admin, &weights); // must panic
 }
@@ -109,21 +126,21 @@ fn strategy_rejects_weights_for_unregistered_source() {
 #[should_panic]
 fn strategy_rejects_weights_for_paused_source() {
     let h = NesterHarness::setup();
-    use yield_registry::SourceStatus;
+    use nester_common::SourceStatus;
 
     let aave = symbol_short!("aave");
-    h.registry().register_source(
-        &h.admin,
-        &aave,
-        &h.create_user(),
-        &ProtocolType::Lending,
-    );
+    h.registry()
+        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
     // Pause the source so it is no longer active.
-    h.registry().update_status(&h.admin, &aave, &SourceStatus::Paused);
+    h.registry()
+        .update_status(&h.admin, &aave, &SourceStatus::Paused);
 
     let weights: Vec<AllocationWeight> = vec![
         &h.env,
-        AllocationWeight { source_id: aave, weight_bps: 10_000 },
+        AllocationWeight {
+            source_id: aave,
+            weight_bps: 10_000,
+        },
     ];
     h.strategy().set_weights(&h.admin, &weights); // must panic
 }
@@ -141,13 +158,21 @@ fn calculate_allocation_distributes_total_proportionally() {
     let aave = symbol_short!("aave");
     let blend = symbol_short!("blend");
 
-    h.registry().register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
-    h.registry().register_source(&h.admin, &blend, &h.create_user(), &ProtocolType::Staking);
+    h.registry()
+        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
+    h.registry()
+        .register_source(&h.admin, &blend, &h.create_user(), &ProtocolType::Staking);
 
     let weights: Vec<AllocationWeight> = vec![
         &h.env,
-        AllocationWeight { source_id: aave.clone(), weight_bps: 7_000 },
-        AllocationWeight { source_id: blend.clone(), weight_bps: 3_000 },
+        AllocationWeight {
+            source_id: aave.clone(),
+            weight_bps: 7_000,
+        },
+        AllocationWeight {
+            source_id: blend.clone(),
+            weight_bps: 3_000,
+        },
     ];
     h.strategy().set_weights(&h.admin, &weights);
 
@@ -178,15 +203,25 @@ fn calculate_allocation_assigns_remainder_to_highest_weight_source() {
     let c = symbol_short!("c");
 
     for id in [&a, &b, &c] {
-        h.registry().register_source(&h.admin, id, &h.create_user(), &ProtocolType::Lending);
+        h.registry()
+            .register_source(&h.admin, id, &h.create_user(), &ProtocolType::Lending);
     }
 
     // 33.33% each — intentionally uneven for a total of 10.
     let weights: Vec<AllocationWeight> = vec![
         &h.env,
-        AllocationWeight { source_id: a.clone(), weight_bps: 3_334 },
-        AllocationWeight { source_id: b.clone(), weight_bps: 3_333 },
-        AllocationWeight { source_id: c.clone(), weight_bps: 3_333 },
+        AllocationWeight {
+            source_id: a.clone(),
+            weight_bps: 3_334,
+        },
+        AllocationWeight {
+            source_id: b.clone(),
+            weight_bps: 3_333,
+        },
+        AllocationWeight {
+            source_id: c.clone(),
+            weight_bps: 3_333,
+        },
     ];
     h.strategy().set_weights(&h.admin, &weights);
 
@@ -209,12 +244,17 @@ fn admin_can_grant_operator_who_can_set_weights() {
     let operator = h.create_user();
     let aave = symbol_short!("aave");
 
-    h.registry().register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
-    h.strategy().grant_role(&h.admin, &operator, &Role::Operator);
+    h.registry()
+        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
+    h.strategy()
+        .grant_role(&h.admin, &operator, &Role::Operator);
 
     let weights: Vec<AllocationWeight> = vec![
         &h.env,
-        AllocationWeight { source_id: aave, weight_bps: 10_000 },
+        AllocationWeight {
+            source_id: aave,
+            weight_bps: 10_000,
+        },
     ];
     // Operator should be allowed to set weights.
     h.strategy().set_weights(&operator, &weights);
@@ -231,11 +271,15 @@ fn non_operator_cannot_set_weights() {
     let outsider = h.create_user();
     let aave = symbol_short!("aave");
 
-    h.registry().register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
+    h.registry()
+        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
 
     let weights: Vec<AllocationWeight> = vec![
         &h.env,
-        AllocationWeight { source_id: aave, weight_bps: 10_000 },
+        AllocationWeight {
+            source_id: aave,
+            weight_bps: 10_000,
+        },
     ];
     h.strategy().set_weights(&outsider, &weights); // must panic
 }
@@ -288,23 +332,40 @@ fn non_admin_cannot_pause_vault() {
     // Use a fresh environment with no mocked auths so the role check fires.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let env2 = soroban_sdk::Env::default();
-        let admin2  = soroban_sdk::Address::generate(&env2);
+        let admin2 = soroban_sdk::Address::generate(&env2);
         let outsider = soroban_sdk::Address::generate(&env2);
 
         // Bootstrap the vault (needs mock_all_auths for initialize).
         env2.mock_all_auths();
         let token_admin2 = soroban_sdk::Address::generate(&env2);
-        let deposit_token2 = env2.register_stellar_asset_contract_v2(token_admin2).address();
+        let deposit_token2 = env2
+            .register_stellar_asset_contract_v2(token_admin2)
+            .address();
         let vault_id2 = env2.register_contract(None, vault_contract::VaultContract);
         let treasury2 = soroban_sdk::Address::generate(&env2);
-        vault_contract::VaultContractClient::new(&env2, &vault_id2).initialize(&admin2, &deposit_token2, &treasury2);
+        let vault_token_id2 = env2.register_contract(None, vault_token::VaultTokenContract);
+        vault_contract::VaultContractClient::new(&env2, &vault_id2).initialize(
+            &admin2,
+            &deposit_token2,
+            &vault_token_id2,
+            &treasury2,
+        );
+        vault_token::VaultTokenContractClient::new(&env2, &vault_token_id2).initialize(
+            &vault_id2,
+            &soroban_sdk::String::from_str(&env2, "Nester USDC Vault"),
+            &soroban_sdk::String::from_str(&env2, "nUSDC"),
+            &7u32,
+        );
 
         // Strip all mocked auths so the role guard runs normally.
         env2.set_auths(&[]);
         vault_contract::VaultContractClient::new(&env2, &vault_id2).pause(&outsider);
     }));
 
-    assert!(result.is_err(), "non-admin should not be able to pause the vault");
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to pause the vault"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -334,10 +395,13 @@ fn two_users_receive_proportional_yield_on_withdrawal() {
 
     // Each user redeems all their shares.
     let alice_out = h.token().burn_for_withdrawal(&alice, &10_000_i128);
-    let bob_out   = h.token().burn_for_withdrawal(&bob,   &10_000_i128);
+    let bob_out = h.token().burn_for_withdrawal(&bob, &10_000_i128);
 
     assert_eq!(alice_out, 12_000, "alice should receive 50% of 24_000");
-    assert_eq!(bob_out,   12_000, "bob should receive 50% of remaining assets");
+    assert_eq!(
+        bob_out, 12_000,
+        "bob should receive 50% of remaining assets"
+    );
     assert_eq!(h.token().total_supply(), 0);
     assert_eq!(h.token().total_assets(), 0);
 }
@@ -348,7 +412,7 @@ fn late_depositor_does_not_capture_prior_yield() {
     let h = NesterHarness::setup();
 
     let alice = h.create_user();
-    let bob   = h.create_user();
+    let bob = h.create_user();
 
     h.seed_token_balance(&alice, 10_000);
     // Yield: 10_000 → 12_000
@@ -365,4 +429,28 @@ fn late_depositor_does_not_capture_prior_yield() {
 
     let bob_out = h.token().burn_for_withdrawal(&bob, &10_000_i128);
     assert_eq!(bob_out, 12_000, "bob receives exactly what he deposited");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 7 — Vault <-> VaultToken integration
+// ---------------------------------------------------------------------------
+
+/// Vault deposits must mint vault-token shares, and withdrawals must burn them.
+#[test]
+fn vault_deposit_and_withdraw_syncs_vault_token_supply() {
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+
+    h.mint_deposit_tokens(&user, 2_000);
+    let user_shares = h.vault().deposit(&user, &1_000);
+    assert_eq!(user_shares, 1_000);
+    assert_eq!(h.token().balance(&user), 1_000);
+    assert_eq!(h.token().total_supply(), 1_000);
+    assert_eq!(h.token().total_assets(), 1_000);
+
+    // Partial withdraw burns shares in the vault-token contract.
+    let remaining = h.vault().withdraw(&user, &400);
+    assert_eq!(remaining, 600);
+    assert_eq!(h.token().balance(&user), 600);
+    assert_eq!(h.token().total_supply(), 600);
 }
