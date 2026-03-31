@@ -47,7 +47,7 @@ const STROOP: i128 = 1;
 /// Convenient larger denomination.
 const XLM: i128 = 10_000_000;
 
-/// Seconds in one day — also the MinLockPeriod set in vault `initialize`.
+/// Seconds in one day â€” also the MinLockPeriod set in vault `initialize`.
 const DAY: u64 = 86_400;
 
 /// Early-withdrawal fee in basis points as set by the vault contract (0.1 % = 10 bps).
