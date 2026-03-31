@@ -15,7 +15,6 @@ use crate::{VaultContract, VaultContractClient, VaultStatus};
 // Helpers
 // ---------------------------------------------------------------------------
 
-use soroban_sdk::{contract, contractimpl};
 
 #[contract]
 pub struct MockTreasury;
