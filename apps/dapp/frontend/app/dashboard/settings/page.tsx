@@ -3,7 +3,7 @@
 import { useWallet } from "@/components/wallet-provider";
 import { Navbar } from "@/components/navbar";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
@@ -57,21 +57,13 @@ export default function SettingsPage() {
 
         if (savedNotifications) {
             try {
-                // To avoid calling setState() directly within an effect during rendering
-                const parsed = JSON.parse(savedNotifications);
-                if (JSON.stringify(parsed) !== JSON.stringify(notifications)) {
-                    const timer = setTimeout(() => { setNotifications(parsed); }, 0);
-                    return () => clearTimeout(timer);
-                }
+                setNotifications(JSON.parse(savedNotifications));
             } catch (e) {
                 console.error("Failed to parse notifications", e);
             }
         }
-        if (savedTimeout) {
-            const timer = setTimeout(() => { setAutoDisconnect(savedTimeout); }, 0);
-            return () => clearTimeout(timer);
-        }
-    }, [notifications]);
+        if (savedTimeout) setAutoDisconnect(savedTimeout);
+    }, []);
 
     // Save helpers
     const toggleNotification = (key: keyof NotificationSettings) => {
@@ -298,8 +290,15 @@ export default function SettingsPage() {
 }
 
 // Sub-components
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function SettingsSection({ title, icon: Icon, children, delay = 0, className }: any) {
+interface SettingsSectionProps {
+    title: string;
+    icon: React.ElementType;
+    children: React.ReactNode;
+    delay?: number;
+    className?: string;
+}
+
+function SettingsSection({ title, icon: Icon, children, delay = 0, className }: SettingsSectionProps) {
     return (
         <motion.section
             initial={{ opacity: 0, y: 20 }}
@@ -318,8 +317,15 @@ function SettingsSection({ title, icon: Icon, children, delay = 0, className }: 
     );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function ToggleItem({ label, description, active, onToggle, highlight }: any) {
+interface ToggleItemProps {
+    label: string;
+    description: string;
+    active: boolean;
+    onToggle: () => void;
+    highlight?: boolean;
+}
+
+function ToggleItem({ label, description, active, onToggle, highlight }: ToggleItemProps) {
     return (
         <div
             onClick={onToggle}
@@ -351,8 +357,14 @@ function ToggleItem({ label, description, active, onToggle, highlight }: any) {
     );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function SessionItem({ icon: Icon, device, status, current }: any) {
+interface SessionItemProps {
+    icon: React.ElementType;
+    device: string;
+    status: string;
+    current?: boolean;
+}
+
+function SessionItem({ icon: Icon, device, status, current }: SessionItemProps) {
     return (
         <div className="flex items-center justify-between p-3.5 rounded-xl border border-border/60 bg-white hover:border-black/15 transition-all group cursor-default">
             <div className="flex items-center gap-4">

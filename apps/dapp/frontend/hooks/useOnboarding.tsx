@@ -43,18 +43,13 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         const stored = localStorage.getItem("nester_onboarding");
         if (stored) {
             try {
-                const parsed = JSON.parse(stored);
-                if (JSON.stringify(parsed) !== JSON.stringify(state)) {
-                    const timer = setTimeout(() => { setState(parsed); }, 0);
-                    return () => clearTimeout(timer);
-                }
+                setState(JSON.parse(stored));
             } catch (e) {
                 console.error("Failed to parse onboarding state", e);
             }
         }
-        const timer = setTimeout(() => { setIsLoaded(true); }, 0);
-        return () => clearTimeout(timer);
-    }, [state]);
+        setIsLoaded(true);
+    }, []);
 
     useEffect(() => {
         if (isLoaded) {

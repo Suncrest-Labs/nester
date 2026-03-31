@@ -24,6 +24,7 @@ import {
     Loader2,
     CheckCircle2,
     ArrowRight,
+    AlertCircle,
 } from "lucide-react";
 
 import { BANKS, type LPNode, LP_NODES } from "@/lib/settlement-data";
@@ -143,6 +144,7 @@ export default function SettlementsPage() {
     const [scannedCount, setScannedCount] = useState(0);
     const [quotes, setQuotes] = useState<QuoteResult[]>([]);
     const [selectedQuote, setSelectedQuote] = useState<QuoteResult | null>(null);
+    const [showLargeWarning, setShowLargeWarning] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -238,6 +240,12 @@ export default function SettlementsPage() {
             return;
         }
 
+        if (numericAmount > 10000 && !showLargeWarning) {
+            setShowLargeWarning(true);
+            return;
+        }
+
+        setShowLargeWarning(false);
         addNotification(
             {
                 type: "withdrawal_processed",
@@ -591,6 +599,18 @@ export default function SettlementsPage() {
                         </div>
                     )}
 
+                    {/* Large amount warning */}
+                    {showLargeWarning && (
+                        <div className="mx-4 sm:mx-5 mb-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                            <div className="flex items-start gap-2">
+                                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                                <span>
+                                    You&apos;re about to withdraw ${numericAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })} — are you sure?
+                                </span>
+                            </div>
+                        </div>
+                    )}
+
                     {/* CTA Button */}
                     <div className="p-4 sm:p-5 pt-0">
                         <button
@@ -606,7 +626,9 @@ export default function SettlementsPage() {
                                         ? "Enter account number"
                                         : quotePhase !== "done"
                                             ? "Finding best rate..."
-                                            : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
+                                            : showLargeWarning
+                                                ? "Yes, confirm withdrawal"
+                                                : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
                         </button>
                     </div>
                 </motion.div>
