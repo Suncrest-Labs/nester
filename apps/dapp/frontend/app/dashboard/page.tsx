@@ -20,7 +20,6 @@ import {
 } from "@/components/portfolio-provider";
 import { WithdrawModal } from "@/components/vault-action-modals";
 import { truncateAddress } from "@/lib/utils";
-import { PrometheusPanel } from "@/components/ai/prometheusPanel";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
 
 export default function Dashboard() {
@@ -91,7 +90,7 @@ export default function Dashboard() {
         <div className="min-h-screen bg-background">
             <Navbar />
 
-            <main className="mx-auto max-w-[1536px] px-4 pb-24 pt-20 md:px-8 md:pb-16 md:pt-28 lg:px-12 xl:px-16">
+            <main className="mx-auto max-w-[1536px] px-4 pb-24 pt-32 md:px-8 md:pb-16 md:pt-36 lg:px-12 xl:px-16">
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -136,7 +135,7 @@ export default function Dashboard() {
                     ))}
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 sm:gap-6">
                     {/* ── Vaults ── */}
                     <motion.div
                         data-tour="vault-list"
@@ -217,36 +216,6 @@ export default function Dashboard() {
                                         </div>
                                     </div>
                                 ))}
-                            </div>
-                        )}
-                    </motion.div>
-
-                    {/* ── Prometheus Advisory Panel ── */}
-                    <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 0.5 }}
-                    >
-                        <div className="mb-4 flex items-center justify-between">
-                            <h2 className="font-heading text-base font-light text-foreground sm:text-lg">
-                                <span className="font-display italic">Prometheus</span>{" "}
-                                Insights
-                            </h2>
-                            <div className="flex items-center gap-1.5">
-                                <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                <span className="text-xs text-muted-foreground">
-                                    AI Advisory
-                                </span>
-                            </div>
-                        </div>
-
-                        {address ? (
-                            <PrometheusPanel userId={address} />
-                        ) : (
-                            <div className="rounded-2xl border border-border bg-white p-5">
-                                <p className="text-xs text-muted-foreground">
-                                    Connect your wallet to activate Prometheus.
-                                </p>
                             </div>
                         )}
                     </motion.div>

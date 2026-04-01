@@ -41,6 +41,7 @@ import { SettingsProvider } from "@/context/settings-context";
 import { OnboardingProvider } from "@/hooks/useOnboarding";
 import { NetworkProvider } from "@/context/NetworkProvider";
 import { NetworkBanner } from "@/components/network/NetworkSelector";
+import { PrometheusChatbot } from "@/components/ai/prometheusChatbot";
 
 export default function RootLayout({
     children,
@@ -54,15 +55,16 @@ export default function RootLayout({
                 className={`${spaceGrotesk.variable} ${inter.variable} ${cormorant.variable} antialiased`}
             >
                 <NetworkProvider>
-                    <NetworkBanner />
                     <SettingsProvider>
                         <WalletProvider>
                             <NotificationsProvider>
+                                <NetworkBanner />
                                 <PortfolioProvider>
                                     <WebSocketProvider>
                                         <OnboardingProvider>
                                             {children}
                                             <NotificationsToaster />
+                                            <PrometheusChatbot />
                                         </OnboardingProvider>
                                     </WebSocketProvider>
                                 </PortfolioProvider>
