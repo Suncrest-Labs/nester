@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
+import { z } from "zod/v4";
 import { validateAmount } from "@/lib/validation";
 import {
     AlertCircle,
@@ -142,7 +142,7 @@ export function DepositModal({
         trigger,
         reset: resetForm
     } = useForm<FormValues>({
-        resolver: zodResolver(formSchema),
+        resolver: zodResolver(formSchema as any),
         mode: "onBlur",
         defaultValues: { amount: "" }
     });
@@ -533,7 +533,7 @@ export function WithdrawModal({
         trigger,
         reset: resetForm
     } = useForm<FormValues>({
-        resolver: zodResolver(formSchema),
+        resolver: zodResolver(formSchema as any),
         mode: "onBlur",
         defaultValues: { amount: "" }
     });

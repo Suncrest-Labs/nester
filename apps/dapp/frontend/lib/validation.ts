@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 
 // Helper for validating USDC precision (max 6 decimals)
 export const validateUSDCPrecision = (val: string | number) => {
