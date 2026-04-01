@@ -61,6 +61,26 @@ export const VAULTS: Vault[] = [
     apyHistory: generateApyHistory(7.4, 0.4),
   },
   {
+    id: "stocks",
+    name: "Stocks Vault",
+    description:
+      "Gain exposure to tokenized stocks with automated portfolio management. Diversified across leading equities and ETFs, rebalanced for optimal risk-adjusted returns.",
+    riskTier: "Balanced",
+    currentApy: 8.5,
+    apyRange: "7–10%",
+    tvl: 1_800_000,
+    userCount: 1_050,
+    allocations: [
+      { protocol: "Tokenized S&P 500", percentage: 50, apy: 8.2, color: "#1E88E5" },
+      { protocol: "Tech ETF", percentage: 30, apy: 9.1, color: "#43A047" },
+      { protocol: "Dividend Stocks", percentage: 20, apy: 7.4, color: "#FDD835" },
+    ],
+    supportedAssets: ["USDC", "USDT"],
+    maturityTerms: "Flexible — withdraw anytime",
+    earlyWithdrawalPenalty: "0.5% within 14 days",
+    apyHistory: generateApyHistory(8.5, 0.8),
+  },
+  {
     id: "balanced",
     name: "Balanced Vault",
     description:
