@@ -108,23 +108,11 @@ function VaultCard({
 
         <div>
           <p className="mb-1 text-[11px] uppercase text-muted-foreground">TVL</p>
-          <p className="text-xl text-foreground">{formatTvl(vault.tvl)}</p>
+          <p className="text-3xl font-heading text-black">{formatTvl(vault.tvl)}</p>
         </div>
-        {/* 4. Remove user count display */}
       </div>
 
-      <div className="mb-4 border-t border-border pt-4">
-        <div className="flex flex-wrap gap-1.5">
-          {vault.allocations.slice(0, 3).map((a) => (
-            <span
-              key={a.protocol}
-              className="rounded-full bg-secondary px-2 py-0.5 text-[11px]"
-            >
-              {a.percentage}% {a.protocol}
-            </span>
-          ))}
-        </div>
-      </div>
+      {/* Removed allocation tags section */}
 
       <div className="mb-5 flex items-center -space-x-2">
         {/* Show XLM for all vaults except Savings Vault */}
@@ -144,10 +132,7 @@ function VaultCard({
         )}
       </div>
 
-      <div className="mt-auto flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">
-          {vault.riskTier} Risk
-        </span>
+      <div className="mt-auto flex items-center justify-end">
 
         <div className="flex gap-3">
           <Link href={`/dashboard/vaults/${vault.id}`}>

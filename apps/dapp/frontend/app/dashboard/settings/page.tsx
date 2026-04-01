@@ -8,7 +8,8 @@
 // ─── Active: redirect to Portfolio ───────────────────────────────────────────
 export { default } from "@/app/dashboard/portfolio/page";
 
-/* ─── Disabled settings page (kept for reference) ────────────────────────────
+/*
+// ─── Disabled settings page (kept for reference) ────────────────────────────
 
 import { useWallet } from "@/components/wallet-provider";
 import { Navbar } from "@/components/navbar";
@@ -38,7 +39,7 @@ type NotificationSettings = {
 };
 
 import { useSettings } from "@/context/settings-context";
-
+*/
 export default function SettingsPage() {
     const { isConnected, address, disconnect } = useWallet();
     const { currency, setCurrency } = useSettings();
