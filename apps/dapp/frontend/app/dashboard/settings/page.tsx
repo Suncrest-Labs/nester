@@ -1,4 +1,14 @@
+/**
+ * SETTINGS PAGE — Temporarily disabled.
+ * Replaced by the Portfolio Tracker page at /dashboard/portfolio.
+ * Uncomment the export below and remove the redirect to restore.
+ */
 "use client";
+
+// ─── Active: redirect to Portfolio ───────────────────────────────────────────
+export { default } from "@/app/dashboard/portfolio/page";
+
+/* ─── Disabled settings page (kept for reference) ────────────────────────────
 
 import { useWallet } from "@/components/wallet-provider";
 import { Navbar } from "@/components/navbar";
@@ -91,7 +101,7 @@ export default function SettingsPage() {
         <div className="min-h-screen bg-background text-foreground selection:bg-emerald-100 selection:text-emerald-900">
             <Navbar />
 
-            <main className="mx-auto max-w-[1536px] px-4 md:px-8 lg:px-12 xl:px-16 pt-28 pb-16">
+            <main className="mx-auto max-w-[1536px] px-4 md:px-8 lg:px-12 xl:px-16 pt-36 pb-16">
                 <div className="max-w-4xl">
                     {/* Header */}
                     <motion.div
@@ -389,3 +399,5 @@ function SessionItem({ icon: Icon, device, status, current }: SessionItemProps) 
         </div>
     );
 }
+
+─── End of disabled settings page ─────────────────────────────────────────── */

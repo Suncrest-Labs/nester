@@ -56,7 +56,7 @@ export default function VaultDetailPage() {
     <div className="min-h-screen bg-background">
       <Navbar />
 
-      <main className="mx-auto max-w-384 px-4 md:px-8 lg:px-12 xl:px-16 pt-28 pb-16">
+      <main className="mx-auto max-w-384 px-4 md:px-8 lg:px-12 xl:px-16 pt-36 pb-16">
         {/* Back Button */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}

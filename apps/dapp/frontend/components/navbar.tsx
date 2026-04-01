@@ -9,46 +9,7 @@ import { truncateAddress, cn } from "@/lib/utils";
 import { LogOut, Copy, Check, ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useWebSocketContext } from "@/components/websocket-provider";
-import { type WSConnectionStatus } from "@/lib/ws-events";
-import { NetworkSelector } from "@/components/network/NetworkSelector";
 
-// ---------------------------------------------------------------------------
-// WebSocket connection status indicator
-// ---------------------------------------------------------------------------
-
-const WS_STATUS_CONFIG: Record<
-    WSConnectionStatus,
-    { dot: string; label: string; pulse: boolean }
-> = {
-    connected:    { dot: "bg-emerald-500", label: "Live",           pulse: true  },
-    reconnecting: { dot: "bg-amber-400",   label: "Reconnecting…",  pulse: true  },
-    offline:      { dot: "bg-red-400",     label: "Offline",         pulse: false },
-};
-
-function WsStatusIndicator() {
-    const { status, manualReconnect } = useWebSocketContext();
-    const config = WS_STATUS_CONFIG[status];
-
-    return (
-        <button
-            onClick={status === "offline" ? manualReconnect : undefined}
-            title={
-                status === "offline"
-                    ? "WebSocket offline — click to retry"
-                    : `WebSocket ${status}`
-            }
-            className="flex items-center gap-1.5 rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground/70 transition-colors hover:border-black/15"
-        >
-            <span
-                className={`h-1.5 w-1.5 rounded-full ${config.dot} ${
-                    config.pulse ? "animate-pulse" : ""
-                }`}
-            />
-            {config.label}
-        </button>
-    );
-}
 
 export function Navbar() {
     const pathname = usePathname();
@@ -85,10 +46,10 @@ export function Navbar() {
     return (
         <nav
             className={cn(
-                "fixed top-0 left-0 right-0 z-50 transition-all duration-300 border-b",
+                "fixed top-10 left-0 right-0 z-50 transition-all duration-300 border-b",
                 isScrolled
-                    ? "bg-white/80 backdrop-blur-md border-border py-3"
-                    : "bg-transparent border-transparent py-4"
+                    ? "bg-white/80 backdrop-blur-md border-border shadow-sm py-3"
+                    : "bg-white/60 backdrop-blur-sm border-transparent py-4"
             )}
         >
             <div className="mx-auto max-w-384 px-4 md:px-8 lg:px-12 xl:px-16">
@@ -112,16 +73,15 @@ export function Navbar() {
                                 { label: "Dashboard", href: "/dashboard" },
                                 { label: "Vaults", href: "/dashboard/vaults" },
                                 {
-                                    label: "Settlements",
+                                    label: "Offramp",
                                     href: "/dashboard/settlements",
                                 },
-                                { label: "History", href: "/dashboard/history" },
-                                { label: "Settings", href: "/dashboard/settings" },
+                                { label: "Portfolio", href: "/dashboard/portfolio" },
                             ].map((item) => (
                                 <Link
                                     key={item.label}
                                     href={item.href}
-                                    data-tour={item.label === "Settlements" ? "settlements-tab" : undefined}
+                                    data-tour={item.label === "Offramp" ? "settlements-tab" : undefined}
                                     className={cn(
                                         "text-[15px] font-medium transition-colors relative py-2",
                                         pathname === item.href
@@ -141,8 +101,6 @@ export function Navbar() {
                     <div className="flex items-center gap-3">
                         {isConnected && address ? (
                             <>
-                                <NetworkSelector />
-                                <WsStatusIndicator />
                                 <NotificationBell />
 
                                 <div
@@ -211,13 +169,13 @@ export function Navbar() {
                                                         : "Copy Address"}
                                                 </button>
                                                 <Link
-                                                    href="/dashboard/settings"
+                                                    href="/dashboard/portfolio"
                                                     className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-foreground/70 hover:bg-secondary hover:text-foreground transition-colors"
                                                     onClick={() => setShowMenu(false)}
                                                 >
                                                     <span className="flex items-center gap-3">
-                                                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                                                        Settings
+                                                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><polyline points="7 10 10 13 13 10 17 14"/></svg>
+                                                        Portfolio
                                                     </span>
                                                 </Link>
                                                 <button
