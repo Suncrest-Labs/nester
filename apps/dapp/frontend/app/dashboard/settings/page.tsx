@@ -401,4 +401,4 @@ function SessionItem({ icon: Icon, device, status, current }: SessionItemProps) 
     );
 }
 
-─── End of disabled settings page ─────────────────────────────────────────── */
+*/
