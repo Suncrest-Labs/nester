@@ -549,7 +549,7 @@ export default function PortfolioPage() {
         <div className="min-h-screen bg-white">
             <Navbar />
 
-            <main className="mx-auto max-w-7xl px-4 pb-24 pt-28 md:px-8 md:pb-16 md:pt-32 lg:px-12">
+            <main className="mx-auto max-w-7xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
 
                 {/* ── Address Bar ───────────────────────────────────────────── */}
                 <motion.div
@@ -601,7 +601,7 @@ export default function PortfolioPage() {
                             className="flex h-8 items-center gap-2 rounded-lg border border-black/10 px-3 text-xs font-medium text-black/60 hover:border-black/20 hover:text-black transition-all"
                         >
                             <Search className="h-3.5 w-3.5" />
-                            Search address
+                            <span className="hidden sm:inline">Search address</span>
                         </button>
                         {activeAddress && (
                             <button
@@ -626,7 +626,7 @@ export default function PortfolioPage() {
                             className="mb-6 overflow-hidden"
                         >
                             <div className="rounded-2xl border border-black/10 bg-white p-4 shadow-sm">
-                                <div className="flex gap-2">
+                                <div className="flex flex-col gap-2 sm:flex-row">
                                     <div className="relative flex-1">
                                         <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-black/30" />
                                         <input
@@ -640,27 +640,29 @@ export default function PortfolioPage() {
                                             autoFocus
                                         />
                                     </div>
-                                    <button
-                                        onClick={handleSearch}
-                                        disabled={!searchInput.trim() || loading}
-                                        className="flex h-10 items-center gap-1.5 rounded-xl bg-black px-4 text-sm font-medium text-white transition-opacity disabled:opacity-40"
-                                    >
-                                        Search
-                                    </button>
-                                    {address && (
+                                    <div className="flex gap-2">
                                         <button
-                                            onClick={() => {
-                                                setSearchInput("");
-                                                loadAssets(address);
-                                                setSearchOpen(false);
-                                            }}
-                                            disabled={loading}
-                                            className="flex h-10 items-center gap-1.5 rounded-xl border border-black/10 px-4 text-sm font-medium text-black/70 hover:border-black/20 transition-all"
+                                            onClick={handleSearch}
+                                            disabled={!searchInput.trim() || loading}
+                                            className="flex h-10 flex-1 sm:flex-none items-center justify-center gap-1.5 rounded-xl bg-black px-4 text-sm font-medium text-white transition-opacity disabled:opacity-40"
                                         >
-                                            <Wallet className="h-3.5 w-3.5" />
-                                            My Wallet
+                                            Search
                                         </button>
-                                    )}
+                                        {address && (
+                                            <button
+                                                onClick={() => {
+                                                    setSearchInput("");
+                                                    loadAssets(address);
+                                                    setSearchOpen(false);
+                                                }}
+                                                disabled={loading}
+                                                className="flex h-10 flex-1 sm:flex-none items-center justify-center gap-1.5 rounded-xl border border-black/10 px-4 text-sm font-medium text-black/70 hover:border-black/20 transition-all"
+                                            >
+                                                <Wallet className="h-3.5 w-3.5" />
+                                                My Wallet
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </motion.div>
