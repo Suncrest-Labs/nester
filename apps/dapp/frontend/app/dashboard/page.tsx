@@ -70,7 +70,7 @@ export default function Dashboard() {
         <div className="min-h-screen bg-white">
             <Navbar />
 
-            <main className="mx-auto max-w-5xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
+            <main className="mx-auto max-w-7xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
 
                 {/* Header */}
                 <motion.div
@@ -123,7 +123,7 @@ export default function Dashboard() {
                     <div className="mb-5 flex items-center justify-between">
                         <h2 className="text-base text-black sm:text-lg">Your Vaults</h2>
                         <Link
-                            href="/dashboard/vaults"
+                            href="/vaults"
                             data-tour="deposit-cta"
                             className="flex min-h-10 items-center text-xs text-black/40 transition-colors hover:text-black"
                         >
@@ -140,7 +140,7 @@ export default function Dashboard() {
                             <p className="mt-1 max-w-xs text-xs leading-relaxed text-black/35">
                                 Create your first vault position to start earning optimized yield across DeFi protocols.
                             </p>
-                            <Link href="/dashboard/vaults" className="mt-5">
+                            <Link href="/vaults" className="mt-5">
                                 <button className="rounded-full bg-black px-6 py-2.5 text-sm text-white transition-opacity hover:opacity-75">
                                     Get Started
                                 </button>

@@ -12,10 +12,10 @@ import { motion, AnimatePresence } from "framer-motion";
 
 const NAV_LINKS = [
     { label: "Dashboard", href: "/dashboard" },
-    { label: "Vaults", href: "/dashboard/vaults" },
-    { label: "Savings", href: "/dashboard/savings" },
-    { label: "Offramp", href: "/dashboard/settlements" },
-    { label: "Portfolio", href: "/dashboard/portfolio" },
+    { label: "Vaults", href: "/vaults" },
+    { label: "Savings", href: "/savings" },
+    { label: "Offramp", href: "/offramp" },
+    { label: "Portfolio", href: "/portfolio" },
 ];
 
 export function Navbar() {
@@ -164,7 +164,7 @@ export function Navbar() {
                                                         {copied ? "Copied!" : "Copy Address"}
                                                     </button>
                                                     <Link
-                                                        href="/dashboard/portfolio"
+                                                        href="/portfolio"
                                                         className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-foreground/70 hover:bg-secondary hover:text-foreground transition-colors"
                                                         onClick={() => setShowMenu(false)}
                                                     >

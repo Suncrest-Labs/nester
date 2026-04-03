@@ -185,7 +185,7 @@ function VaultRow({ vault, index, onSelect }: { vault: VaultType; index: number;
             {/* Actions */}
             <div className="flex items-center gap-2 shrink-0">
                 <span className="sm:hidden font-mono text-sm text-black">{vault.currentApy.toFixed(1)}%</span>
-                <Link href={`/dashboard/vaults/${vault.id}`}>
+                <Link href={`/vaults/${vault.id}`}>
                     <button className="h-8 rounded-lg border border-black/10 px-3 text-xs text-black/45 hover:border-black/20 hover:text-black transition-colors">
                         Details
                     </button>
@@ -263,7 +263,7 @@ function VaultGridCard({ vault, index, onSelect }: { vault: VaultType; index: nu
 
             {/* Actions */}
             <div className="flex gap-2">
-                <Link href={`/dashboard/vaults/${vault.id}`} className="flex-1">
+                <Link href={`/vaults/${vault.id}`} className="flex-1">
                     <button className="h-9 w-full rounded-xl border border-black/10 text-xs text-black/45 hover:border-black/20 hover:text-black transition-colors">
                         Details
                     </button>
@@ -361,7 +361,7 @@ export default function VaultsPage() {
         <div className="min-h-screen bg-white">
             <Navbar />
 
-            <main className="mx-auto max-w-5xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
+            <main className="mx-auto max-w-7xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
 
                 {/* Header */}
                 <motion.div

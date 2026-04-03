@@ -31,7 +31,7 @@ export default function VaultDetailPage() {
         <div className="min-h-screen bg-white">
             <Navbar />
 
-            <main className="mx-auto max-w-5xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
+            <main className="mx-auto max-w-7xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
 
                 {/* Back */}
                 <motion.div
@@ -41,7 +41,7 @@ export default function VaultDetailPage() {
                     className="mb-7"
                 >
                     <Link
-                        href="/dashboard/vaults"
+                        href="/vaults"
                         className="inline-flex items-center gap-1.5 text-xs text-black/40 hover:text-black transition-colors"
                     >
                         <ArrowLeft className="h-3.5 w-3.5" />
