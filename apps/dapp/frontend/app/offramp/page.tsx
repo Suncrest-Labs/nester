@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
+import { z } from "zod/v4";
 import { validateAmount, validateBankAccount } from "@/lib/validation";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -108,7 +108,7 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
-export default function SettlementsPage() {
+export default function OfframpPage() {
     const { isConnected } = useWallet();
     const { addNotification } = useNotifications();
     const router = useRouter();
@@ -120,7 +120,7 @@ export default function SettlementsPage() {
         formState: { errors, isValid, isDirty },
         trigger,
     } = useForm<FormValues>({
-        resolver: zodResolver(formSchema),
+        resolver: zodResolver(formSchema as any),
         mode: "onBlur",
         defaultValues: {
             amount: "",
@@ -263,7 +263,7 @@ export default function SettlementsPage() {
     return (
         <div className="min-h-screen bg-background">
             <Navbar />
-            <main className="mx-auto max-w-xl px-4 pt-20 md:pt-28 pb-24 md:pb-16">
+            <main className="mx-auto max-w-xl px-4 pt-32 md:pt-36 pb-24 md:pb-16">
                 {/* Header */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -832,11 +832,11 @@ export default function SettlementsPage() {
                     className="mt-8 rounded-2xl border border-border bg-white p-5"
                 >
                     <h3 className="font-heading text-sm font-medium text-foreground mb-3">
-                        Recent Settlements
+                        Recent Offramps
                     </h3>
                     <div className="flex flex-col items-center justify-center py-6 text-center">
                         <Clock className="h-5 w-5 text-muted-foreground/30 mb-2" />
-                        <p className="text-xs text-muted-foreground">No settlements yet</p>
+                        <p className="text-xs text-muted-foreground">No offramps yet</p>
                     </div>
                 </motion.div>
             </main>

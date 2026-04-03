@@ -26,7 +26,7 @@ export function VaultPositionsTable({ positions }: VaultPositionsTableProps) {
                 <h2 className="font-heading text-lg font-light text-foreground">
                     Your Vaults
                 </h2>
-                <Link href="/dashboard/vaults">
+                <Link href="/vaults">
                     <button className="text-xs font-semibold text-primary hover:underline transition-all">
                         View All
                     </button>
@@ -41,7 +41,7 @@ export function VaultPositionsTable({ positions }: VaultPositionsTableProps) {
                     <p className="mt-1 max-w-xs text-xs text-muted-foreground leading-relaxed px-4">
                         Create your first vault to start earning optimized yield.
                     </p>
-                    <Link href="/dashboard/vaults" className="mt-6">
+                    <Link href="/vaults" className="mt-6">
                         <button className="rounded-full bg-primary px-6 py-2.5 text-xs font-semibold text-white transition-all shadow-md shadow-primary/20 hover:scale-[1.02] active:scale-[0.98]">
                             Browse Vaults
                         </button>
@@ -64,7 +64,7 @@ export function VaultPositionsTable({ positions }: VaultPositionsTableProps) {
                                 <tr key={pos.id} className="group hover:bg-secondary/20 transition-colors">
                                     <td className="px-6 py-5">
                                         <Link 
-                                            href={`/dashboard/vaults/${pos.id}`}
+                                            href={`/vaults/${pos.id}`}
                                             className="flex flex-col hover:opacity-70 transition-opacity"
                                         >
                                             <span className="text-sm font-semibold text-foreground flex items-center gap-1.5">

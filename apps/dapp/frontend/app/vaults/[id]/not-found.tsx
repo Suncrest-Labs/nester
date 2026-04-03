@@ -14,7 +14,7 @@ export default function VaultNotFound() {
         The vault you&apos;re looking for doesn&apos;t exist or has been removed.
       </p>
       <Link
-        href="/dashboard/vaults"
+        href="/vaults"
         className="inline-flex items-center gap-2 rounded-full border border-border px-5 py-2 text-sm font-medium hover:border-black/20 transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />
