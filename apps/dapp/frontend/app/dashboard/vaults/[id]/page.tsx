@@ -6,169 +6,180 @@ import { useWallet } from "@/components/wallet-provider";
 import { Navbar } from "@/components/navbar";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowLeft, TrendingUp } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { getVaultById } from "@/lib/mock-vaults";
-import type { RiskTier } from "@/lib/types/vault";
+import { ArrowLeft, TrendingUp, Users } from "lucide-react";
+import { getVaultById, formatTvl } from "@/lib/mock-vaults";
 import { APYChart } from "@/components/vaults/apy-chart";
 import { AllocationDonut } from "@/components/vaults/allocation-donut";
-import { VaultMetrics } from "@/components/vaults/vault-metrics";
-import { VaultTerms } from "@/components/vaults/vault-terms";
 import { UserPosition } from "@/components/vaults/user-position";
-
-const RISK_STYLES: Record<RiskTier, string> = {
-  Conservative: "bg-emerald-100 text-emerald-700",
-  Balanced: "bg-blue-100 text-blue-700",
-  Growth: "bg-orange-100 text-orange-700",
-  DeFi500: "bg-purple-100 text-purple-700",
-};
-
-function RiskBadge({ tier }: { tier: RiskTier }) {
-  return (
-    <span
-      className={cn(
-        "px-2.5 py-1 rounded-full text-xs font-medium",
-        RISK_STYLES[tier],
-      )}
-    >
-      {tier === "DeFi500" ? "DeFi500 Index" : tier}
-    </span>
-  );
-}
+import Image from "next/image";
 
 export default function VaultDetailPage() {
-  const { isConnected } = useWallet();
-  const router = useRouter();
-  const { id } = useParams();
+    const { isConnected } = useWallet();
+    const router = useRouter();
+    const { id } = useParams();
 
-  useEffect(() => {
-    if (!isConnected) {
-      router.push("/");
-    }
-  }, [isConnected, router]);
+    useEffect(() => {
+        if (!isConnected) router.push("/");
+    }, [isConnected, router]);
 
-  if (!isConnected) return null;
+    if (!isConnected) return null;
 
-  const vault = getVaultById(id?.toString() ?? "");
-  if (!vault) notFound();
+    const vault = getVaultById(id?.toString() ?? "");
+    if (!vault) notFound();
 
-  return (
-    <div className="min-h-screen bg-background">
-      <Navbar />
+    return (
+        <div className="min-h-screen bg-white">
+            <Navbar />
 
-      <main className="mx-auto max-w-384 px-4 md:px-8 lg:px-12 xl:px-16 pt-36 pb-16">
-        {/* Back Button */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
-        >
-          <Link
-            href="/dashboard/vaults"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            All Vaults
-          </Link>
-        </motion.div>
+            <main className="mx-auto max-w-5xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
 
-        {/* Page Header */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.05 }}
-          className="mb-8"
-        >
-          <div className="mb-3">
-            <RiskBadge tier={vault.riskTier} />
-          </div>
-          <h1 className="font-heading text-3xl font-light text-foreground sm:text-4xl">
-            {vault.name}
-          </h1>
-          <p className="mt-2 max-w-2xl text-muted-foreground">
-            {vault.description}
-          </p>
-          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-secondary text-sm text-foreground/70">
-            <TrendingUp className="h-3.5 w-3.5 text-emerald-600" />
-            <span>
-              Target APY:{" "}
-              <span className="font-medium text-emerald-600">
-                {vault.apyRange}
-              </span>
-            </span>
-          </div>
-        </motion.div>
+                {/* Back */}
+                <motion.div
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className="mb-7"
+                >
+                    <Link
+                        href="/dashboard/vaults"
+                        className="inline-flex items-center gap-1.5 text-xs text-black/40 hover:text-black transition-colors"
+                    >
+                        <ArrowLeft className="h-3.5 w-3.5" />
+                        All Vaults
+                    </Link>
+                </motion.div>
 
-        {/* Two-Column Layout */}
-        <div className="grid gap-6 lg:grid-cols-5">
-          {/* Left Column — Charts */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
-            className="lg:col-span-3 space-y-6"
-          >
-            <APYChart data={vault.apyHistory} />
-            <AllocationDonut allocations={vault.allocations} />
-          </motion.div>
+                {/* Header */}
+                <motion.div
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, delay: 0.05 }}
+                    className="mb-8"
+                >
+                    <div className="flex items-start justify-between gap-4 flex-wrap">
+                        <div>
+                            <span className="text-[10px] uppercase tracking-widest text-black/35 mb-2 block">
+                                {vault.riskTier === "DeFi500" ? "DeFi500 Index" : vault.riskTier}
+                            </span>
+                            <h1 className="text-2xl text-black sm:text-3xl">{vault.name}</h1>
+                            <p className="mt-2 max-w-xl text-sm leading-relaxed text-black/45">
+                                {vault.description}
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 rounded-xl border border-black/8 px-4 py-2">
+                            <TrendingUp className="h-3.5 w-3.5 text-black/35" />
+                            <span className="text-xs text-black/45">Target APY</span>
+                            <span className="font-mono text-sm text-black">{vault.apyRange}</span>
+                        </div>
+                    </div>
+                </motion.div>
 
-          {/* Right Column — Metrics & Actions */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.15 }}
-            className="lg:col-span-2 space-y-5"
-          >
-            <VaultMetrics
-              currentApy={vault.currentApy}
-              tvl={vault.tvl}
-              userCount={vault.userCount}
-            />
+                {/* Key metrics strip */}
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3, delay: 0.1 }}
+                    className="mb-8 grid grid-cols-3 gap-3 sm:gap-4"
+                >
+                    {[
+                        { label: "Current APY", value: `${vault.currentApy.toFixed(1)}%` },
+                        { label: "TVL",          value: formatTvl(vault.tvl) },
+                        { label: "Depositors",   value: vault.userCount.toLocaleString() },
+                    ].map((m) => (
+                        <div key={m.label} className="rounded-2xl border border-black/8 bg-white px-5 py-4">
+                            <p className="font-mono text-xl text-black sm:text-2xl">{m.value}</p>
+                            <p className="mt-0.5 text-[11px] text-black/35">{m.label}</p>
+                        </div>
+                    ))}
+                </motion.div>
 
-            {/* Supported Assets */}
-            <div className="rounded-2xl border border-border bg-white p-5">
-              <p className="font-heading text-sm font-medium text-foreground mb-3">
-                Supported Assets
-              </p>
-              <div className="flex gap-2">
-                {vault.supportedAssets.map((asset) => (
-                  <span
-                    key={asset}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border text-sm font-medium text-foreground"
-                  >
-                    <span
-                      className="h-2 w-2 rounded-full"
-                      style={{ background: "#2EBAC6" }}
-                    />
-                    {asset}
-                  </span>
-                ))}
-              </div>
-            </div>
+                {/* Two-column layout */}
+                <div className="grid gap-5 lg:grid-cols-5">
 
-            <VaultTerms
-              maturityTerms={vault.maturityTerms}
-              earlyWithdrawalPenalty={vault.earlyWithdrawalPenalty}
-            />
+                    {/* Left: Charts */}
+                    <motion.div
+                        initial={{ opacity: 0, y: 16 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.15 }}
+                        className="space-y-5 lg:col-span-3"
+                    >
+                        <div className="rounded-2xl border border-black/8 bg-white p-5">
+                            <p className="mb-4 text-xs text-black/35 uppercase tracking-widest">APY History</p>
+                            <APYChart data={vault.apyHistory} />
+                        </div>
+                        <div className="rounded-2xl border border-black/8 bg-white p-5">
+                            <p className="mb-4 text-xs text-black/35 uppercase tracking-widest">Allocation</p>
+                            <AllocationDonut allocations={vault.allocations} />
+                        </div>
+                    </motion.div>
 
-            <UserPosition />
+                    {/* Right: Info + actions */}
+                    <motion.div
+                        initial={{ opacity: 0, y: 16 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.2 }}
+                        className="space-y-4 lg:col-span-2"
+                    >
+                        {/* Supported assets */}
+                        <div className="rounded-2xl border border-black/8 bg-white p-5">
+                            <p className="mb-3 text-xs text-black/35 uppercase tracking-widest">Supported Assets</p>
+                            <div className="flex gap-2 flex-wrap">
+                                {vault.supportedAssets
+                                    .filter((a) => ["USDC", "XLM"].includes(a))
+                                    .map((asset) => (
+                                        <div key={asset} className="flex items-center gap-1.5 rounded-full border border-black/8 px-3 py-1.5">
+                                            <Image
+                                                src={`/${asset.toLowerCase()}.png`}
+                                                alt={asset}
+                                                width={16}
+                                                height={16}
+                                                className="rounded-full"
+                                            />
+                                            <span className="text-xs text-black/60">{asset}</span>
+                                        </div>
+                                    ))}
+                            </div>
+                        </div>
 
-            {/* Deposit CTA */}
-            <div className="rounded-2xl border border-border bg-white p-5">
-              <button
-                disabled
-                className="w-full rounded-xl bg-foreground text-background py-4 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-              >
-                Deposit into {vault.name}
-              </button>
-              <p className="text-center text-[11px] text-muted-foreground mt-2.5">
-                Deposit flow coming soon —{" "}
-                <span className="font-mono text-foreground/40">#30</span>
-              </p>
-            </div>
-          </motion.div>
+                        {/* Terms */}
+                        <div className="rounded-2xl border border-black/8 bg-white p-5 space-y-3">
+                            <p className="text-xs text-black/35 uppercase tracking-widest">Terms</p>
+                            <div className="flex justify-between text-xs">
+                                <span className="text-black/40">Maturity</span>
+                                <span className="text-black">{vault.maturityTerms}</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                                <span className="text-black/40">Early withdrawal</span>
+                                <span className="text-black">{vault.earlyWithdrawalPenalty}</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                                <span className="text-black/40">Depositors</span>
+                                <span className="inline-flex items-center gap-1 text-black">
+                                    <Users className="h-3 w-3 text-black/30" />
+                                    {vault.userCount.toLocaleString()}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* User position */}
+                        <UserPosition />
+
+                        {/* Deposit CTA */}
+                        <div className="rounded-2xl border border-black/8 bg-white p-5">
+                            <button
+                                disabled
+                                className="w-full rounded-xl bg-black py-3.5 text-sm text-white transition-opacity disabled:opacity-35 disabled:cursor-not-allowed"
+                            >
+                                Deposit into {vault.name}
+                            </button>
+                            <p className="mt-2.5 text-center text-[11px] text-black/30">
+                                Deposit flow coming soon —{" "}
+                                <span className="font-mono">#30</span>
+                            </p>
+                        </div>
+                    </motion.div>
+                </div>
+            </main>
         </div>
-      </main>
-    </div>
-  );
+    );
 }
