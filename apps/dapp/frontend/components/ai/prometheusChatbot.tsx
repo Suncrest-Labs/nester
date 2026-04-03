@@ -96,11 +96,12 @@ export function PrometheusChatbot() {
         setStreaming(false)
         return
       }
+      const chunk = e.data.replace(/\\n/g, '\n')
       setMessages((prev) => {
         const updated = [...prev]
         const last = updated[updated.length - 1]
         if (last?.role === 'assistant') {
-          updated[updated.length - 1] = { ...last, content: last.content + e.data }
+          updated[updated.length - 1] = { ...last, content: last.content + chunk }
         }
         return updated
       })
