@@ -145,13 +145,8 @@ async def stream_chat(user_id: str, message: str) -> AsyncIterator[str]:
 # Structured analysis (non-streaming)
 # ---------------------------------------------------------------------------
 
-_JSON_STRIP = (
-    lambda raw: raw.strip()
-    .removeprefix("```json")
-    .removeprefix("```")
-    .removesuffix("```")
-    .strip()
-)
+def _json_strip(raw: str) -> str:
+    return raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
 
 async def get_portfolio_insights(user_id: str) -> list[dict]:
@@ -178,7 +173,7 @@ async def get_portfolio_insights(user_id: str) -> list[dict]:
                 max_output_tokens=ANALYZE_MAX_TOKENS,
             ),
         )
-        return json.loads(_JSON_STRIP(response.text))
+        return json.loads(_json_strip(response.text))
     except Exception:
         logger.exception("Failed to get portfolio insights for user %s", user_id)
         return []
@@ -206,7 +201,7 @@ async def get_market_sentiment() -> dict:
                 max_output_tokens=200,
             ),
         )
-        return json.loads(_JSON_STRIP(response.text))
+        return json.loads(_json_strip(response.text))
     except Exception:
         logger.exception("Failed to get market sentiment")
         return {
@@ -240,7 +235,7 @@ async def get_vault_recommendations(vault_id: str) -> dict:
                 max_output_tokens=ANALYZE_MAX_TOKENS,
             ),
         )
-        return json.loads(_JSON_STRIP(response.text))
+        return json.loads(_json_strip(response.text))
     except Exception:
         logger.exception(
             "Failed to get vault recommendations for vault %s", vault_id
