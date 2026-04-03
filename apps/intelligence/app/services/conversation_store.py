@@ -17,14 +17,14 @@ class ConversationStore:
     def __init__(self, ttl_minutes: int = 60, max_turns: int = 20) -> None:
         self._ttl = timedelta(minutes=ttl_minutes)
         self._max_turns = max_turns  # keep last N messages to cap token spend
-        self._store: dict[str, list[dict]] = {}
+        self._store: dict[str, list[dict[str, str]]] = {}
         self._touched: dict[str, datetime] = {}
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def get(self, user_id: str) -> list[dict]:
+    def get(self, user_id: str) -> list[dict[str, str]]:
         self._evict_stale()
         return list(self._store.get(user_id, []))
 

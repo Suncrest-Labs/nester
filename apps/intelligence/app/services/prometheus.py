@@ -3,9 +3,10 @@
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Any, cast
 
-from google import genai
-from google.genai import types
+from google import genai  # type: ignore[import-not-found]
+from google.genai import types  # type: ignore[import-not-found]
 
 from app.config import settings
 from app.services.conversation_store import store as conversation_store
@@ -80,7 +81,7 @@ is reading a sidebar panel, not an article. Do not use bullet points for simple 
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _to_gemini_history(history: list[dict]) -> list[types.Content]:
+def _to_gemini_history(history: list[dict[str, str]]) -> list[types.Content]:
     """Convert conversation store format to Gemini Content objects.
 
     Conversation store uses {"role": "user"|"assistant", "content": str}.
@@ -149,7 +150,7 @@ def _json_strip(raw: str) -> str:
     return raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
 
-async def get_portfolio_insights(user_id: str) -> list[dict]:
+async def get_portfolio_insights(user_id: str) -> list[dict[str, Any]]:
     """Return 2 insight cards for the user's portfolio."""
     schema = (
         '[{"title": str, "body": str, "confidence": float,'
@@ -173,13 +174,13 @@ async def get_portfolio_insights(user_id: str) -> list[dict]:
                 max_output_tokens=ANALYZE_MAX_TOKENS,
             ),
         )
-        return json.loads(_json_strip(response.text))
+        return cast(list[dict[str, Any]], json.loads(_json_strip(response.text)))
     except Exception:
         logger.exception("Failed to get portfolio insights for user %s", user_id)
         return []
 
 
-async def get_market_sentiment() -> dict:
+async def get_market_sentiment() -> dict[str, Any]:
     """Return a market sentiment summary for the Stellar DeFi / stablecoin space."""
     schema = (
         '{"signal": "bull"|"bear"|"neutral", "summary": str (1 sentence),'
@@ -201,7 +202,7 @@ async def get_market_sentiment() -> dict:
                 max_output_tokens=200,
             ),
         )
-        return json.loads(_json_strip(response.text))
+        return cast(dict[str, Any], json.loads(_json_strip(response.text)))
     except Exception:
         logger.exception("Failed to get market sentiment")
         return {
@@ -212,7 +213,7 @@ async def get_market_sentiment() -> dict:
         }
 
 
-async def get_vault_recommendations(vault_id: str) -> dict:
+async def get_vault_recommendations(vault_id: str) -> dict[str, Any]:
     """Return AI commentary and recommendations for a specific vault."""
     schema = (
         '{"vaultId": str, "commentary": str, "percentileRank": int (0-100),'
@@ -235,7 +236,7 @@ async def get_vault_recommendations(vault_id: str) -> dict:
                 max_output_tokens=ANALYZE_MAX_TOKENS,
             ),
         )
-        return json.loads(_json_strip(response.text))
+        return cast(dict[str, Any], json.loads(_json_strip(response.text)))
     except Exception:
         logger.exception(
             "Failed to get vault recommendations for vault %s", vault_id
