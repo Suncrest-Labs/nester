@@ -55,7 +55,7 @@ export function Navbar() {
                             </Link>
                         ))}
                     </div>
-                    <Link href="http://localhost:3001" target="_blank">
+                    <Link href="https://nesterdapp.netlify.app" target="_blank">
                         <Button
                             className="bg-[#0D0E1C] hover:bg-[#0D0E1C]/90 text-white rounded-full px-6 font-medium text-sm transition-all shadow-none"
                         >
@@ -87,7 +87,7 @@ export function Navbar() {
                                 ))}
                             </div>
                             <div className="mt-auto mb-8">
-                                <Link href="http://localhost:3001" target="_blank" className="w-full">
+                                <Link href="https://nesterdapp.netlify.app" target="_blank" className="w-full">
                                     <Button className="w-full bg-[#0D0E1C] hover:bg-[#0D0E1C]/90 text-white rounded-full">
                                         Nester for Web
                                     </Button>
