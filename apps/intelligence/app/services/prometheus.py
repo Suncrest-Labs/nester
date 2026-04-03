@@ -32,10 +32,13 @@ def get_client() -> genai.Client:
 
 SYSTEM_PROMPT = """You are Prometheus, the financial intelligence layer of Nester.
 
-Nester is a yield-bearing savings platform built on the Stellar blockchain. It lets users in Africa (primarily Nigeria, Ghana, and Kenya) deposit USDC or XLM into yield-generating vaults, earn APY, and withdraw earnings directly to their local bank accounts (NGN, GHS, KES).
+Nester is a yield-bearing savings platform built on the Stellar blockchain. It lets users in
+Africa (primarily Nigeria, Ghana, and Kenya) deposit USDC or XLM into yield-generating vaults,
+earn APY, and withdraw earnings directly to their local bank accounts (NGN, GHS, KES).
 
 ## Your role
-Help users make smart decisions about their Nester vaults, understand their portfolio, and optimise their yield strategy. You are knowledgeable about:
+Help users make smart decisions about their Nester vaults, understand their portfolio, and
+optimise their yield strategy. You are knowledgeable about:
 - DeFi yield strategies on Stellar
 - Nester's vault risk tiers: Conservative, Balanced, Growth, DeFi500
 - Stellar-native assets: USDC, XLM
@@ -57,16 +60,20 @@ You do NOT answer questions about:
 - Anything outside personal savings and yield on the Nester platform
 
 If asked something outside scope, respond with:
-"That is outside what I can help with — I am focused on your Nester savings and vaults. Is there something about your portfolio or yield strategy I can help with?"
+"That is outside what I can help with — I am focused on your Nester savings and vaults. "
+"Is there something about your portfolio or yield strategy I can help with?"
 
 ## Vault tiers (reference)
 - **Conservative** — Stablecoin-only, lowest risk, ~4–6% APY. Good for emergency funds.
 - **Balanced** — Mix of stablecoin and blue-chip DeFi, ~8–12% APY. Good for medium-term goals.
-- **Growth** — Higher-yield DeFi strategies, ~15–25% APY. Suited for long-term horizon with risk tolerance.
+- **Growth** — Higher-yield DeFi strategies, ~15–25% APY. Suited for long-term horizon with
+  risk tolerance.
 - **DeFi500** — Curated top-500 DeFi index exposure, ~20–30% APY. Highest risk, highest reward.
 
 ## Tone
-Be direct and specific. Use plain language — avoid jargon unless the user is clearly comfortable with it. When you recommend something, say why in one sentence. Keep responses concise; the user is reading a sidebar panel, not an article. Do not use bullet points for simple answers."""
+Be direct and specific. Use plain language — avoid jargon unless the user is clearly comfortable
+with it. When you recommend something, say why in one sentence. Keep responses concise; the user
+is reading a sidebar panel, not an article. Do not use bullet points for simple answers."""
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +89,9 @@ def _to_gemini_history(history: list[dict]) -> list[types.Content]:
     result = []
     for msg in history:
         role = "model" if msg["role"] == "assistant" else "user"
-        result.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+        result.append(
+            types.Content(role=role, parts=[types.Part(text=msg["content"])])
+        )
     return result
 
 
@@ -136,15 +145,27 @@ async def stream_chat(user_id: str, message: str) -> AsyncIterator[str]:
 # Structured analysis (non-streaming)
 # ---------------------------------------------------------------------------
 
+_JSON_STRIP = (
+    lambda raw: raw.strip()
+    .removeprefix("```json")
+    .removeprefix("```")
+    .removesuffix("```")
+    .strip()
+)
+
+
 async def get_portfolio_insights(user_id: str) -> list[dict]:
     """Return 2 insight cards for the user's portfolio."""
+    schema = (
+        '[{"title": str, "body": str, "confidence": float,'
+        ' "action": {"label": str, "href": str} | null}]'
+    )
     prompt = (
         f"Generate 2 concise portfolio insight cards for a Nester user (id: {user_id}). "
-        "Each card should have a short title, a one-sentence body, a confidence score (0.0–1.0), "
-        "and optionally an action with a label and href. "
+        "Each card should have a short title, a one-sentence body, a confidence score "
+        "(0.0–1.0), and optionally an action with a label and href. "
         "Focus on practical savings advice relevant to Nester vaults on Stellar. "
-        "Respond with a JSON array only, no markdown, matching this schema: "
-        '[{"title": str, "body": str, "confidence": float, "action": {"label": str, "href": str} | null}]'
+        f"Respond with a JSON array only, no markdown, matching this schema: {schema}"
     )
 
     client = get_client()
@@ -157,8 +178,7 @@ async def get_portfolio_insights(user_id: str) -> list[dict]:
                 max_output_tokens=ANALYZE_MAX_TOKENS,
             ),
         )
-        raw = response.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        return json.loads(raw)
+        return json.loads(_JSON_STRIP(response.text))
     except Exception:
         logger.exception("Failed to get portfolio insights for user %s", user_id)
         return []
@@ -166,11 +186,14 @@ async def get_portfolio_insights(user_id: str) -> list[dict]:
 
 async def get_market_sentiment() -> dict:
     """Return a market sentiment summary for the Stellar DeFi / stablecoin space."""
+    schema = (
+        '{"signal": "bull"|"bear"|"neutral", "summary": str (1 sentence),'
+        ' "confidence": float (0.0–1.0), "updatedAt": str (ISO timestamp now)}'
+    )
     prompt = (
-        "Give a brief market sentiment assessment for the Stellar DeFi and stablecoin yield space "
-        "as it relates to Nester users in Africa. "
-        "Respond with JSON only, no markdown, matching this schema: "
-        '{"signal": "bull"|"bear"|"neutral", "summary": str (1 sentence), "confidence": float (0.0–1.0), "updatedAt": str (ISO timestamp now)}'
+        "Give a brief market sentiment assessment for the Stellar DeFi and stablecoin "
+        "yield space as it relates to Nester users in Africa. "
+        f"Respond with JSON only, no markdown, matching this schema: {schema}"
     )
 
     client = get_client()
@@ -183,8 +206,7 @@ async def get_market_sentiment() -> dict:
                 max_output_tokens=200,
             ),
         )
-        raw = response.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        return json.loads(raw)
+        return json.loads(_JSON_STRIP(response.text))
     except Exception:
         logger.exception("Failed to get market sentiment")
         return {
@@ -197,11 +219,15 @@ async def get_market_sentiment() -> dict:
 
 async def get_vault_recommendations(vault_id: str) -> dict:
     """Return AI commentary and recommendations for a specific vault."""
+    schema = (
+        '{"vaultId": str, "commentary": str, "percentileRank": int (0-100),'
+        ' "recommendations": [str], "confidence": float}'
+    )
     prompt = (
         f"Give an AI commentary and recommendations for Nester vault id '{vault_id}'. "
-        "Assume it is a yield-bearing Stellar vault. Be specific about what type of user this vault suits. "
-        "Respond with JSON only, no markdown, matching this schema: "
-        '{"vaultId": str, "commentary": str, "percentileRank": int (0-100), "recommendations": [str], "confidence": float}'
+        "Assume it is a yield-bearing Stellar vault. "
+        "Be specific about what type of user this vault suits. "
+        f"Respond with JSON only, no markdown, matching this schema: {schema}"
     )
 
     client = get_client()
@@ -214,10 +240,11 @@ async def get_vault_recommendations(vault_id: str) -> dict:
                 max_output_tokens=ANALYZE_MAX_TOKENS,
             ),
         )
-        raw = response.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        return json.loads(raw)
+        return json.loads(_JSON_STRIP(response.text))
     except Exception:
-        logger.exception("Failed to get vault recommendations for vault %s", vault_id)
+        logger.exception(
+            "Failed to get vault recommendations for vault %s", vault_id
+        )
         return {
             "vaultId": vault_id,
             "commentary": "Recommendations temporarily unavailable.",
