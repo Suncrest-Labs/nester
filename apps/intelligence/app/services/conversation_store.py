@@ -29,6 +29,7 @@ class ConversationStore:
         return list(self._store.get(user_id, []))
 
     def append(self, user_id: str, role: str, content: str) -> None:
+        self._evict_stale()
         if user_id not in self._store:
             self._store[user_id] = []
         self._store[user_id].append({"role": role, "content": content})

@@ -81,9 +81,9 @@ const SAVINGS_VAULTS: SavingsVault[] = [
         type: "stablecoin-yield",
         name: "Stablecoin Yield",
         description:
-            "Spread across multiple stablecoin liquidity pools — USDC, USDT, and DAI — for diversified, optimised stable yield.",
+            "Spread across USDC and XLM liquidity pools for diversified, optimised stable yield.",
         summary:
-            "Funds are split across USDC/USDT/DAI pools. Rebalanced weekly to chase the highest stable yield. Minimises single-protocol risk while keeping APY competitive.",
+            "Funds are split across USDC/XLM pools. Rebalanced weekly to chase the highest stable yield. Minimises single-protocol risk while keeping APY competitive.",
         apy: 0.105,
         apyLabel: "9–12%",
         lockDays: null,

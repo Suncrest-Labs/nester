@@ -390,9 +390,6 @@ function VaultPositionsSection({ positions }: { positions: ReturnType<typeof use
     return (
         <div className="space-y-2">
             {positions.map((pos, i) => {
-                const progressPct = pos.isMatured
-                    ? 100
-                    : Math.min(100, ((pos.principal / pos.currentValue) * 100));
                 const daysTotal = Math.round(
                     (new Date(pos.maturityAt).getTime() - new Date(pos.depositedAt).getTime()) /
                     (1000 * 60 * 60 * 24)
@@ -456,7 +453,6 @@ function VaultPositionsSection({ positions }: { positions: ReturnType<typeof use
                                 </p>
                             </div>
                         </div>
-                        {void progressPct}
                     </motion.div>
                 );
             })}
