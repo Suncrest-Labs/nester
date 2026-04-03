@@ -223,16 +223,16 @@ function VaultsPageContent({ onSelect }: { onSelect: (v: VaultType) => void }) {
 // -------------------- PAGE --------------------
 
 export default function VaultsPage() {
-  const { isConnected } = useWallet();
+  const { isConnected, isInitializing } = useWallet();
   const router = useRouter();
 
   const [selectedVault, setSelectedVault] = useState<VaultType | null>(null);
 
   useEffect(() => {
-    if (!isConnected) router.push("/");
-  }, [isConnected, router]);
+    if (!isInitializing && !isConnected) router.push("/");
+  }, [isConnected, isInitializing, router]);
 
-  if (!isConnected) return null;
+  if (isInitializing || !isConnected) return null;
 
   return (
     <div className="min-h-screen bg-background">

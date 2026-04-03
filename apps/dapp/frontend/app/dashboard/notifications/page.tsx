@@ -18,18 +18,18 @@ function formatDate(timestamp: string) {
 }
 
 export default function NotificationsPage() {
-    const { isConnected } = useWallet();
+    const { isConnected, isInitializing } = useWallet();
     const router = useRouter();
     const { notifications, unreadCount, markAsRead, markAllAsRead } =
         useNotifications();
 
     useEffect(() => {
-        if (!isConnected) {
+        if (!isInitializing && !isConnected) {
             router.push("/");
         }
-    }, [isConnected, router]);
+    }, [isConnected, isInitializing, router]);
 
-    if (!isConnected) return null;
+    if (isInitializing || !isConnected) return null;
 
     return (
         <div className="min-h-screen bg-background">

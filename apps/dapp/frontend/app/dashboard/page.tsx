@@ -24,17 +24,17 @@ import { PrometheusPanel } from "@/components/ai/prometheusPanel";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
 
 export default function Dashboard() {
-    const { isConnected, address } = useWallet();
+    const { isConnected, isInitializing, address } = useWallet();
     const { positions, transactions, balances } = usePortfolio();
     const router = useRouter();
     const [selectedPosition, setSelectedPosition] =
         useState<PortfolioPosition | null>(null);
 
     useEffect(() => {
-        if (!isConnected) {
+        if (!isInitializing && !isConnected) {
             router.push("/");
         }
-    }, [isConnected, router]);
+    }, [isConnected, isInitializing, router]);
 
     const stats = useMemo(() => {
         const totalBalance = positions.reduce(
@@ -85,7 +85,7 @@ export default function Dashboard() {
 
     const recentTransactions = transactions.slice(0, 5);
 
-    if (!isConnected) return null;
+    if (isInitializing || !isConnected) return null;
 
     return (
         <div className="min-h-screen bg-background">

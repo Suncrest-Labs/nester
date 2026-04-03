@@ -8,17 +8,17 @@ import { WelcomeModal } from "@/components/onboarding/WelcomeModal";
 import { useOnboarding } from "@/hooks/useOnboarding";
 
 export default function Home() {
-    const { isConnected } = useWallet();
+    const { isConnected, isInitializing } = useWallet();
     const { hasConnectedWallet } = useOnboarding();
     const router = useRouter();
 
     useEffect(() => {
-        if (isConnected && hasConnectedWallet) {
+        if (!isInitializing && isConnected && hasConnectedWallet) {
             router.push("/dashboard");
         }
-    }, [isConnected, hasConnectedWallet, router]);
+    }, [isConnected, isInitializing, hasConnectedWallet, router]);
 
-    if (isConnected && hasConnectedWallet) return null;
+    if (isInitializing || (isConnected && hasConnectedWallet)) return null;
 
     return (
         <>

@@ -25,6 +25,7 @@ interface WalletState {
     address: string | null;
     isConnected: boolean;
     isConnecting: boolean;
+    isInitializing: boolean;
     wallets: WalletInfo[];
     walletsLoaded: boolean;
     selectedWalletId: string | null;
@@ -36,6 +37,7 @@ const WalletContext = createContext<WalletState>({
     address: null,
     isConnected: false,
     isConnecting: false,
+    isInitializing: true,
     wallets: [],
     walletsLoaded: false,
     selectedWalletId: null,
@@ -65,6 +67,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const { currentNetwork } = useNetwork();
     const [address, setAddress] = useState<string | null>(null);
     const [isConnecting, setIsConnecting] = useState(false);
+    const [isInitializing, setIsInitializing] = useState(true);
     const [wallets, setWallets] = useState<WalletInfo[]>([]);
     const [walletsLoaded, setWalletsLoaded] = useState(false);
     const [selectedWalletId, setSelectedWalletId] = useState<string | null>(
@@ -76,6 +79,35 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         if (typeof window === "undefined") return;
 
         const initKit = async () => {
+            // E2E test bypass: if the page has injected a mock wallet session
+            // via window.__e2e_wallet__, restore it directly without calling
+            // the real wallet kit (which requires a browser extension).
+            // Only active in test environments — never in production.
+            const e2eWallet = process.env.NODE_ENV !== "production"
+                ? (window as unknown as Record<string, unknown>)
+                    .__e2e_wallet__ as
+                    | { address: string; walletId: string }
+                    | undefined
+                : undefined;
+            if (e2eWallet?.address && e2eWallet?.walletId) {
+                setAddress(e2eWallet.address);
+                setSelectedWalletId(e2eWallet.walletId);
+                setWallets([
+                    {
+                        id: e2eWallet.walletId,
+                        name: "Freighter",
+                        icon: "",
+                        url: "https://freighter.app",
+                        installUrl: "https://freighter.app",
+                        isAvailable: true,
+                    },
+                ]);
+                setWalletsLoaded(true);
+                setKitReady(true);
+                setIsInitializing(false);
+                return;
+            }
+
             try {
                 const { StellarWalletsKit } = await import(
                     "@creit.tech/stellar-wallets-kit"
@@ -146,6 +178,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             } catch (err) {
                 console.error("Failed to initialize wallet kit:", err);
                 setWalletsLoaded(true);
+            } finally {
+                setIsInitializing(false);
             }
         };
 
@@ -225,6 +259,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                 address,
                 isConnected: !!address,
                 isConnecting,
+                isInitializing,
                 wallets,
                 walletsLoaded,
                 selectedWalletId,

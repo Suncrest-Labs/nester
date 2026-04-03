@@ -45,7 +45,7 @@ const STATUS_COLORS = {
 const PAGE_SIZE = 10;
 
 export default function HistoryPage() {
-    const { isConnected } = useWallet();
+    const { isConnected, isInitializing } = useWallet();
     const { transactions } = usePortfolio();
     const router = useRouter();
     
@@ -57,10 +57,10 @@ export default function HistoryPage() {
     const [currentPage, setCurrentPage] = useState(1);
 
     useEffect(() => {
-        if (!isConnected) {
+        if (!isInitializing && !isConnected) {
             router.push("/");
         }
-    }, [isConnected, router]);
+    }, [isConnected, isInitializing, router]);
 
     const filteredTransactions = useMemo(() => {
         return transactions.filter(tx => {
@@ -110,7 +110,7 @@ export default function HistoryPage() {
         URL.revokeObjectURL(url);
     };
 
-    if (!isConnected) return null;
+    if (isInitializing || !isConnected) return null;
 
     const isInitiallyEmpty = transactions.length === 0;
 
