@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Send, Sparkles, Loader2, X } from 'lucide-react'
+import { Send, Sparkles, X } from 'lucide-react'
 import { intelligence, type ChatMessage } from '@/lib/api/intelligence'
 import { useWallet } from '@/components/wallet-provider'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -30,8 +30,24 @@ function QuickPrompts({ onSelect }: { onSelect: (p: string) => void }) {
   )
 }
 
+function TypingDots() {
+  return (
+    <div className="flex items-center justify-start">
+      <div className="mr-2 mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary">
+        <Sparkles className="h-2.5 w-2.5 text-foreground/50" />
+      </div>
+      <div className="flex items-center gap-1 rounded-2xl border border-border bg-white px-3 py-2.5">
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40 [animation-delay:0ms]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40 [animation-delay:150ms]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40 [animation-delay:300ms]" />
+      </div>
+    </div>
+  )
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user'
+  const paragraphs = message.content.split('\n').filter((p) => p.trim() !== '')
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       {!isUser && (
@@ -46,7 +62,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             : 'border border-border bg-white text-foreground'
         }`}
       >
-        {message.content}
+        {paragraphs.map((p, i) => (
+          <p key={i} className={i > 0 ? 'mt-2' : ''}>
+            {p}
+          </p>
+        ))}
       </div>
     </div>
   )
@@ -146,9 +166,6 @@ export function PrometheusChatbot() {
                 </p>
                 <p className="text-[10px] text-muted-foreground">DeFi Advisory</p>
               </div>
-              {streaming && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-              )}
               <button
                 onClick={() => setOpen(false)}
                 className="flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
@@ -164,7 +181,15 @@ export function PrometheusChatbot() {
                   Ask me anything about your portfolio or DeFi markets.
                 </p>
               ) : (
-                messages.map((msg, i) => <MessageBubble key={i} message={msg} />)
+                messages.map((msg, i) => {
+                  const isLastAndEmpty =
+                    streaming && i === messages.length - 1 && msg.role === 'assistant' && msg.content === ''
+                  return isLastAndEmpty ? (
+                    <TypingDots key={i} />
+                  ) : (
+                    <MessageBubble key={i} message={msg} />
+                  )
+                })
               )}
               <div ref={messagesEndRef} />
             </div>
