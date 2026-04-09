@@ -1,13 +1,11 @@
 import {
   Contract,
-  Networks,
   rpc as SorobanRpc,
   Transaction,
   TransactionBuilder,
   BASE_FEE,
   nativeToScVal,
   Address,
-  xdr,
 } from "@stellar/stellar-sdk";
 
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
@@ -29,6 +27,9 @@ const getCurrentNetwork = () => {
 export const VAULT_CONTRACT_ID =
   process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID ?? "";
 
+export const VAULT_XLM_CONTRACT_ID =
+  process.env.NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID ?? "";
+
 export const USDC_CONTRACT_ID =
   process.env.NEXT_PUBLIC_USDC_CONTRACT_ID ?? "";
 
@@ -39,16 +40,13 @@ export interface DepositParams {
   walletAddress: string;
   /** Vault contract ID on Soroban. */
   contractId: string;
-  /** USDC token contract ID. */
-  tokenAddress: string;
-  /** Amount in USDC (human-readable, e.g. 100.50). Converted to stroops internally. */
+  /** Amount in USDC/XLM (human-readable, e.g. 100.50). Converted to stroops internally. */
   amount: number;
 }
 
 export interface WithdrawParams {
   walletAddress: string;
   contractId: string;
-  tokenAddress: string;
   /** Number of nVault shares to burn. */
   shares: number;
 }
@@ -112,13 +110,13 @@ function getServer(rpcUrl: string): SorobanRpc.Server {
 /**
  * Build a Soroban `deposit` contract invocation transaction.
  *
- * The vault contract's `deposit(from, token, amount)` function is called.
- * Amount is converted from human-readable USDC to stroops (7 decimal places).
+ * The vault contract's `deposit(user, amount)` function is called.
+ * Amount is converted from human-readable value to stroops (7 decimal places).
  */
 export async function buildDepositTransaction(
   params: DepositParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, tokenAddress, amount } = params;
+  const { walletAddress, contractId, amount } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
@@ -136,7 +134,6 @@ export async function buildDepositTransaction(
       contract.call(
         "deposit",
         new Address(walletAddress).toScVal(),
-        new Address(tokenAddress).toScVal(),
         nativeToScVal(amountStroops, { type: "i128" })
       )
     )
@@ -160,12 +157,12 @@ export async function buildDepositTransaction(
 /**
  * Build a Soroban `withdraw` contract invocation transaction.
  *
- * The vault contract's `withdraw(from, token, shares)` function is called.
+ * The vault contract's `withdraw(from, shares)` function is called.
  */
 export async function buildWithdrawTransaction(
   params: WithdrawParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, tokenAddress, shares } = params;
+  const { walletAddress, contractId, shares } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
@@ -183,7 +180,6 @@ export async function buildWithdrawTransaction(
       contract.call(
         "withdraw",
         new Address(walletAddress).toScVal(),
-        new Address(tokenAddress).toScVal(),
         nativeToScVal(sharesStroops, { type: "i128" })
       )
     )
@@ -203,36 +199,33 @@ export async function buildWithdrawTransaction(
   return { xdr: assembled.toXDR(), transaction: assembled };
 }
 
-// ── Freighter signing ─────────────────────────────────────────────────────────
+// ── Wallet signing ────────────────────────────────────────────────────────────
 
 /**
- * Request the user to sign a transaction via Freighter (or any injected
- * Stellar wallet). Returns the signed XDR string.
+ * Request the user to sign a transaction via stellar-wallets-kit.
+ * Returns the signed XDR string.
  *
- * @throws {UserRejectedError} if the user dismisses the Freighter popup.
+ * @throws {UserRejectedError} if the user dismisses the wallet popup.
  */
 export async function signTransaction(txXdr: string): Promise<string> {
-  // Access Freighter via the global injected by the browser extension.
-  // @creit.tech/stellar-wallets-kit exposes the same interface.
-  const freighter = (window as typeof window & { freighter?: {
-    signTransaction: (xdr: string, opts: { networkPassphrase: string }) => Promise<{ signedTxXdr: string; error?: string }>
-  } }).freighter;
+  const { StellarWalletsKit } = await import("@creit.tech/stellar-wallets-kit");
 
-  if (!freighter) {
+  const walletModule = StellarWalletsKit.selectedModule;
+  if (!walletModule) {
     throw new Error(
-      "No Stellar wallet detected. Please install Freighter (freighter.app) and try again."
+      "No Stellar wallet connected. Please connect a wallet and try again."
     );
   }
 
   const network = getCurrentNetwork();
 
-  const result = await freighter.signTransaction(txXdr, {
-    networkPassphrase: network.networkPassphrase,
-  });
-
-  // Freighter signals user rejection via a specific error message string
-  if (result.error) {
-    const msg = result.error.toLowerCase();
+  let result: { signedTxXdr: string };
+  try {
+    result = await walletModule.signTransaction(txXdr, {
+      networkPassphrase: network.networkPassphrase,
+    });
+  } catch (err) {
+    const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
     if (
       msg.includes("user declined") ||
       msg.includes("user rejected") ||
@@ -241,7 +234,7 @@ export async function signTransaction(txXdr: string): Promise<string> {
     ) {
       throw new UserRejectedError();
     }
-    throw new Error(result.error);
+    throw err;
   }
 
   return result.signedTxXdr;

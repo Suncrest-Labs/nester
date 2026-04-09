@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Bell, CheckCheck, Circle } from "lucide-react";
 import { useWallet } from "@/components/wallet-provider";
-import { Navbar } from "@/components/navbar";
+import { AppShell } from "@/components/app-shell";
 import { useNotifications } from "@/components/notifications-provider";
 
 function formatDate(timestamp: string) {
@@ -32,10 +32,9 @@ export default function NotificationsPage() {
     if (!isConnected) return null;
 
     return (
-        <div className="min-h-screen bg-background">
-            <Navbar />
+        <AppShell>
 
-            <main className="mx-auto max-w-384 px-4 md:px-8 lg:px-12 xl:px-16 pt-36 pb-16">
+            <div>
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -129,7 +128,7 @@ export default function NotificationsPage() {
                         ))
                     )}
                 </motion.div>
-            </main>
-        </div>
+            </div>
+        </AppShell>
     );
 }

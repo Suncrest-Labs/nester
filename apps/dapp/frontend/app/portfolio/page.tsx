@@ -2,7 +2,7 @@
 
 import { useWallet } from "@/components/wallet-provider";
 import { usePortfolio } from "@/components/portfolio-provider";
-import { Navbar } from "@/components/navbar";
+import { AppShell } from "@/components/app-shell";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -27,7 +27,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
-import { WithdrawModal, TransferModal } from "@/components/vault-action-modals";
+import { TransferModal } from "@/components/vault-action-modals";
+import { WithdrawModal } from "@/components/vault/withdrawModal";
 import { type PortfolioPosition } from "@/components/portfolio-provider";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 
@@ -585,10 +586,7 @@ export default function PortfolioPage() {
     if (!isConnected) return null;
 
     return (
-        <div className="min-h-screen bg-white">
-            <Navbar />
-
-            <main className="mx-auto max-w-7xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
+        <AppShell>
 
                 {/* ── Address Bar ───────────────────────────────────────────── */}
                 <motion.div
@@ -1023,7 +1021,6 @@ export default function PortfolioPage() {
                         </motion.div>
                     )}
                 </AnimatePresence>
-            </main>
-        </div>
+        </AppShell>
     );
 }

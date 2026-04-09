@@ -107,6 +107,8 @@ interface PortfolioState {
     applyBalanceUpdate: (asset: string, newBalance: number) => void;
     /** Push a live yield accrual delta from WebSocket events */
     applyYieldAccrual: (positionId: string, deltaYield: number) => void;
+    /** Re-fetch wallet balances from Horizon (call after on-chain tx confirms) */
+    refreshBalances: () => Promise<void>;
 }
 
 const defaultBalances = {
@@ -260,6 +262,35 @@ function PortfolioStore({
 
         fetchOnChainBalances();
     }, [address, currentNetwork.horizonUrl]);
+
+    const refreshBalances = async () => {
+        if (!address) return;
+        try {
+            const res = await fetch(
+                `${currentNetwork.horizonUrl}/accounts/${address}`
+            );
+            if (!res.ok) return;
+            const data = await res.json() as {
+                balances?: Array<{
+                    asset_type: string;
+                    asset_code?: string;
+                    balance: string;
+                }>;
+            };
+            const raw = data.balances ?? [];
+            const xlm = raw.find((b) => b.asset_type === "native");
+            const usdc = raw.find(
+                (b) => b.asset_type !== "native" && b.asset_code === "USDC"
+            );
+            setBalances((prev) => ({
+                ...prev,
+                XLM: xlm ? parseFloat(xlm.balance) : (prev.XLM ?? 0),
+                USDC: usdc ? parseFloat(usdc.balance) : (prev.USDC ?? 0),
+            }));
+        } catch {
+            // silently ignore
+        }
+    };
 
     const positions = useMemo(
         () =>
@@ -467,6 +498,7 @@ function PortfolioStore({
                 recordWithdrawal,
                 applyBalanceUpdate,
                 applyYieldAccrual,
+                refreshBalances,
             }}
         >
             {children}

@@ -1385,7 +1385,6 @@ dependencies = [
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",
- "vault-token-contract",
 ]
 
 [[package]]

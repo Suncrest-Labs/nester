@@ -78,7 +78,8 @@ impl VaultTokenContract {
         if env.storage().instance().has(&DataKey::Vault) {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
-        vault.require_auth();
+        // No vault.require_auth() here — vault isn't initialized yet when this is called.
+        // Auth for vault-only operations is enforced in mint_for_deposit, burn_for_withdrawal, etc.
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage().instance().set(&DataKey::Name, &name);
         env.storage().instance().set(&DataKey::Symbol, &symbol);

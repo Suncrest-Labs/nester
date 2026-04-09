@@ -17,10 +17,21 @@ import {
     Clock,
     X,
 } from "lucide-react";
-import { Navbar } from "@/components/navbar";
+import { AppShell } from "@/components/app-shell";
 import { useWallet } from "@/components/wallet-provider";
 import { usePortfolio } from "@/components/portfolio-provider";
 import { cn } from "@/lib/utils";
+import {
+    buildDepositTransaction,
+    signTransaction,
+    submitTransaction,
+    VAULT_CONTRACT_ID,
+    VAULT_XLM_CONTRACT_ID,
+    UserRejectedError,
+    TransactionFailedError,
+    TransactionTimeoutError,
+    truncateTxHash,
+} from "@/lib/stellar/transaction";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,7 +46,6 @@ interface SavingsVault {
     apy: number;
     apyLabel: string;
     lockDays: number | null;
-    minDeposit: number;
     penaltyPct: number;
     badge: string;
     features: string[];
@@ -56,7 +66,7 @@ const SAVINGS_VAULTS: SavingsVault[] = [
         apy: 0.052,
         apyLabel: "4–6%",
         lockDays: null,
-        minDeposit: 10,
+
         penaltyPct: 0,
         badge: "No lockup",
         features: ["Withdraw anytime", "No exit fee", "Daily yield accrual"],
@@ -73,7 +83,7 @@ const SAVINGS_VAULTS: SavingsVault[] = [
         apy: 0.088,
         apyLabel: "8–10%",
         lockDays: null,
-        minDeposit: 50,
+
         penaltyPct: 0,
         badge: "Auto-reinvest",
         features: ["Daily auto-compounding", "No manual claiming", "No exit fee"],
@@ -90,7 +100,7 @@ const SAVINGS_VAULTS: SavingsVault[] = [
         apy: 0.105,
         apyLabel: "9–12%",
         lockDays: null,
-        minDeposit: 100,
+
         penaltyPct: 0,
         badge: "Multi-pool",
         features: ["Multi-stablecoin exposure", "Weekly rebalance", "No exit fee"],
@@ -107,7 +117,7 @@ const SAVINGS_VAULTS: SavingsVault[] = [
         apy: 0.052,
         apyLabel: "4–6%",
         lockDays: null,
-        minDeposit: 10,
+
         penaltyPct: 0,
         badge: "Goal-based",
         features: ["Named savings goal", "Target amount tracking", "Withdraw anytime"],
@@ -218,16 +228,12 @@ function SavingsVaultCard({
             </div>
 
             {/* Meta row */}
-            <div className="mb-6 grid grid-cols-3 gap-2">
+            <div className="mb-6 grid grid-cols-2 gap-2">
                 <div className="rounded-xl bg-black/[0.025] px-3 py-3 text-center">
                     <p className="font-mono text-sm text-black">
                         {vault.lockDays ? `${vault.lockDays}d` : "None"}
                     </p>
                     <p className="text-[10px] text-black/35 mt-0.5">Lock</p>
-                </div>
-                <div className="rounded-xl bg-black/[0.025] px-3 py-3 text-center">
-                    <p className="font-mono text-sm text-black">${vault.minDeposit}</p>
-                    <p className="text-[10px] text-black/35 mt-0.5">Min</p>
                 </div>
                 <div className="rounded-xl bg-black/[0.025] px-3 py-3 text-center">
                     <p className="font-mono text-sm text-black">{vault.penaltyPct}%</p>
@@ -256,10 +262,14 @@ function DepositModal({
     vault: SavingsVault | null;
     onClose: () => void;
 }) {
-    const { balances, recordDeposit } = usePortfolio();
+    const { balances, recordDeposit, refreshBalances } = usePortfolio();
+    const { address } = useWallet();
     const [amount, setAmount] = useState("");
     const [goalName, setGoalName] = useState("");
     const [selectedAsset, setSelectedAsset] = useState<"USDC" | "XLM">("USDC");
+    const [txState, setTxState] = useState<"idle" | "building" | "signing" | "submitting" | "success" | "error">("idle");
+    const [errorMsg, setErrorMsg] = useState("");
+    const [txHash, setTxHash] = useState("");
 
     useEffect(() => {
         if (!vault) {
@@ -284,9 +294,8 @@ function DepositModal({
               year: "numeric",
           })
         : null;
-    const underMin = parsedAmount > 0 && parsedAmount < vault.minDeposit;
     const overBalance = parsedAmount > available;
-    const canSubmit = parsedAmount >= vault.minDeposit && !overBalance;
+    const canSubmit = parsedAmount > 0 && !overBalance;
 
     const Icon = TYPE_ICONS[vault.type];
 
@@ -393,8 +402,7 @@ function DepositModal({
                                                            [&::-webkit-inner-spin-button]:appearance-none"
                                             />
                                         </div>
-                                        <div className="mt-2 flex items-center justify-between text-xs text-black/35">
-                                            <span>Min <span className="font-mono">{vault.minDeposit}</span> {selectedAsset}</span>
+                                        <div className="mt-2 flex items-center justify-end text-xs text-black/35">
                                             <button
                                                 onClick={() => setAmount(String(available))}
                                                 className="hover:text-black transition-colors"
@@ -402,11 +410,6 @@ function DepositModal({
                                                 Available: <span className="font-mono">{available.toFixed(2)}</span> {selectedAsset}
                                             </button>
                                         </div>
-                                        {underMin && (
-                                            <p className="mt-1.5 text-xs text-black/40">
-                                                Minimum deposit is <span className="font-mono">${vault.minDeposit}</span>
-                                            </p>
-                                        )}
                                         {overBalance && (
                                             <p className="mt-1.5 text-xs text-red-400">
                                                 Exceeds available balance
@@ -503,28 +506,73 @@ function DepositModal({
                                 </div>
                             </div>
 
+                            {/* Error */}
+                            {txState === "error" && errorMsg && (
+                                <p className="mt-4 rounded-lg bg-red-50 px-4 py-2.5 text-xs text-red-600">{errorMsg}</p>
+                            )}
+
                             {/* CTA */}
                             <button
-                                disabled={!canSubmit}
-                                onClick={() => {
-                                    if (!vault || !canSubmit) return;
-                                    recordDeposit({
-                                        vault: {
-                                            id: vault.id,
-                                            name: vault.name,
-                                            asset: selectedAsset,
-                                            apy: vault.apy,
-                                            lockDays: vault.lockDays,
-                                            earlyWithdrawalPenaltyPct: vault.penaltyPct,
-                                        },
-                                        amount: parsedAmount,
-                                        txHash: "",
-                                    });
-                                    onClose();
+                                disabled={!canSubmit || txState !== "idle"}
+                                onClick={async () => {
+                                    if (!vault || !canSubmit || !address) return;
+                                    setErrorMsg("");
+                                    try {
+                                        const contractId = selectedAsset === "XLM"
+                                            ? (VAULT_XLM_CONTRACT_ID || `mock_${vault.id}_xlm`)
+                                            : (VAULT_CONTRACT_ID || `mock_${vault.id}`);
+
+                                        setTxState("building");
+                                        const { xdr } = await buildDepositTransaction({
+                                            walletAddress: address,
+                                            contractId,
+                                            amount: parsedAmount,
+                                        });
+
+                                        setTxState("signing");
+                                        const signedXdr = await signTransaction(xdr);
+
+                                        setTxState("submitting");
+                                        const receipt = await submitTransaction(signedXdr);
+
+                                        setTxHash(receipt.txHash);
+                                        setTxState("success");
+                                        refreshBalances();
+                                        recordDeposit({
+                                            vault: {
+                                                id: vault.id,
+                                                name: vault.name,
+                                                asset: selectedAsset,
+                                                apy: vault.apy,
+                                                lockDays: vault.lockDays,
+                                                earlyWithdrawalPenaltyPct: vault.penaltyPct,
+                                            },
+                                            amount: parsedAmount,
+                                            txHash: receipt.txHash,
+                                        });
+                                        setTimeout(onClose, 1500);
+                                    } catch (err) {
+                                        if (err instanceof UserRejectedError) {
+                                            setTxState("idle");
+                                        } else if (err instanceof TransactionFailedError) {
+                                            setErrorMsg(err.reason);
+                                            setTxState("error");
+                                        } else if (err instanceof TransactionTimeoutError) {
+                                            setErrorMsg("Transaction timed out. Check the explorer for status.");
+                                            setTxState("error");
+                                        } else {
+                                            setErrorMsg(err instanceof Error ? err.message : "Deposit failed");
+                                            setTxState("error");
+                                        }
+                                    }
                                 }}
                                 className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-black py-3.5 text-sm text-white transition-opacity disabled:opacity-35"
                             >
-                                Confirm Deposit
+                                {txState === "building" && "Building transaction…"}
+                                {txState === "signing" && "Waiting for signature…"}
+                                {txState === "submitting" && "Submitting…"}
+                                {txState === "success" && (txHash ? `Deposited · ${truncateTxHash(txHash)}` : "Deposited!")}
+                                {(txState === "idle" || txState === "error") && "Confirm Deposit"}
                             </button>
                         </div>
                     </motion.div>
@@ -599,10 +647,7 @@ export default function SavingsPage() {
             : SAVINGS_VAULTS.filter((v) => v.type === filter);
 
     return (
-        <div className="min-h-screen bg-white">
-            <Navbar />
-
-            <main className="mx-auto max-w-7xl px-4 pb-20 pt-24 md:px-8 md:pb-16 md:pt-32 lg:px-12">
+        <AppShell>
 
                 {/* ── Page header ──────────────────────────────────────────── */}
                 <motion.div
@@ -707,9 +752,7 @@ export default function SavingsPage() {
                         />
                     ))}
                 </div>
-            </main>
-
             <DepositModal vault={selectedVault} onClose={() => setSelectedVault(null)} />
-        </div>
+        </AppShell>
     );
 }

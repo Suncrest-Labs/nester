@@ -1,53 +1,47 @@
 import { useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { VAULTS } from "@/lib/mock-vaults";
-import type { RiskTier } from "@/lib/types/vault";
+import type { MarketType } from "@/lib/types/vault";
 
-export type SortKey = "apy" | "tvl" | "risk";
-
-const RISK_ORDER: Record<RiskTier, number> = {
-  Conservative: 0,
-  Balanced: 1,
-  Growth: 2,
-  DeFi500: 3,
-};
+export type SortKey = "apy" | "tvl" | "utilization";
+export type FilterType = MarketType | "all";
 
 export function useVaultFilters() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
 
-  const sortBy = (searchParams.get("sort") as SortKey) ?? "apy";
-  const filterTier = (searchParams.get("filter") as RiskTier | "all") ?? "all";
+  const sortBy = (searchParams.get("sort") as SortKey) ?? "tvl";
+  const filterType = (searchParams.get("filter") as FilterType) ?? "all";
 
   function setSort(key: SortKey) {
     const params = new URLSearchParams(searchParams.toString());
-    if (key === "apy") params.delete("sort");
+    if (key === "tvl") params.delete("sort");
     else params.set("sort", key);
     const qs = params.toString();
     router.replace(`${pathname}${qs ? `?${qs}` : ""}`);
   }
 
-  function setFilter(tier: RiskTier | "all") {
+  function setFilter(type: FilterType) {
     const params = new URLSearchParams(searchParams.toString());
-    if (tier === "all") params.delete("filter");
-    else params.set("filter", tier);
+    if (type === "all") params.delete("filter");
+    else params.set("filter", type);
     const qs = params.toString();
     router.replace(`${pathname}${qs ? `?${qs}` : ""}`);
   }
 
   const filteredAndSorted = useMemo(() => {
     const vaults =
-      filterTier === "all"
+      filterType === "all"
         ? VAULTS
-        : VAULTS.filter((v) => v.riskTier === filterTier);
+        : VAULTS.filter((v) => v.marketType === filterType);
     return [...vaults].sort((a, b) => {
       if (sortBy === "apy") return b.currentApy - a.currentApy;
       if (sortBy === "tvl") return b.tvl - a.tvl;
-      if (sortBy === "risk") return RISK_ORDER[a.riskTier] - RISK_ORDER[b.riskTier];
+      if (sortBy === "utilization") return b.utilization - a.utilization;
       return 0;
     });
-  }, [filterTier, sortBy]);
+  }, [filterType, sortBy]);
 
-  return { sortBy, filterTier, setSort, setFilter, filteredAndSorted };
+  return { sortBy, filterType, setSort, setFilter, filteredAndSorted };
 }

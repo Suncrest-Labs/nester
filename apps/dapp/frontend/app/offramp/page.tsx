@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useWallet } from "@/components/wallet-provider";
 import { useNotifications } from "@/components/notifications-provider";
-import { Navbar } from "@/components/navbar";
+import { AppShell } from "@/components/app-shell";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useForm, Controller } from "react-hook-form";
@@ -261,9 +261,8 @@ export default function OfframpPage() {
     });
 
     return (
-        <div className="min-h-screen bg-background">
-            <Navbar />
-            <main className="mx-auto max-w-xl px-4 pt-32 md:pt-36 pb-24 md:pb-16">
+        <AppShell>
+            <div className="mx-auto max-w-xl">
                 {/* Header */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -839,7 +838,7 @@ export default function OfframpPage() {
                         <p className="text-xs text-muted-foreground">No offramps yet</p>
                     </div>
                 </motion.div>
-            </main>
-        </div>
+            </div>
+        </AppShell>
     );
 }
