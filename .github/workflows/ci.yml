@@ -182,5 +182,8 @@ jobs:
       - name: Build allocation_strategy WASM
         run: cargo build --release --target wasm32-unknown-unknown -p allocation-strategy-contract
 
+      - name: Build vault_token WASM
+        run: cargo build --release --target wasm32-unknown-unknown -p vault-token-contract
+
       - name: Test contracts
         run: cargo test --lib
