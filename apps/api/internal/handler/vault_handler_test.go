@@ -14,10 +14,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 )
+
+// fakeAuthMiddleware injects an auth.User into the request context for testing.
+func fakeAuthMiddleware(userID uuid.UUID) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := auth.NewContext(r.Context(), auth.User{ID: userID.String()})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
 
 // decodeAPIData unwraps the API envelope {"success":true,"data":...} and decodes
 // the inner data field into T.
@@ -46,10 +57,10 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
-	body := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"CA-001","currency":"USDC"}`)
+	body := bytes.NewBufferString(`{"contract_address":"CA-001","currency":"USDC"}`)
 	response, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -102,6 +113,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 		t.Fatalf("CreateVault(other user) error = %v", err)
 	}
 
+	// Note: fakeAuthMiddleware uses userID, so the auth check in listUserVaults will pass
 	listResponse, err := http.Get(server.URL + "/api/v1/users/" + userID.String() + "/vaults")
 	if err != nil {
 		t.Fatalf("GET /api/v1/users/{userId}/vaults error = %v", err)
@@ -121,7 +133,7 @@ func TestVaultHandlerNotFoundAndInvalidUser(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(uuid.New())(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	notFoundResponse, err := http.Get(server.URL + "/api/v1/vaults/" + uuid.New().String())
