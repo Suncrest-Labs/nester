@@ -105,6 +105,68 @@ Nester is non-custodial. Users maintain full ownership of assets through smart c
 
 ---
 
+## Getting Started
+
+The fastest way to run the full stack locally is Docker Compose. You only need Docker and Docker Compose installed — no Go, Node, or Python required on your host.
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Docker Compose v2)
+- An Anthropic API key (optional — intelligence service falls back to a placeholder)
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/suncrestlabs/nester.git
+cd nester
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY if you want the intelligence service
+```
+
+### 2. Start all services
+
+```bash
+make dev
+```
+
+This builds and starts PostgreSQL, the Go API, the Next.js frontend, and the FastAPI intelligence service. On first run Docker pulls base images and compiles everything — expect 2–5 minutes.
+
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3001 |
+| API | http://localhost:8080 |
+| API health | http://localhost:8080/health |
+| Intelligence | http://localhost:8000 |
+| PostgreSQL | localhost:5432 |
+
+The database is seeded automatically with a test user, two vaults, allocations, and settlements in various states.
+
+### 3. Useful commands
+
+```bash
+make dev-logs    # tail logs from all services
+make dev-db      # open a psql shell in the dev database
+make dev-down    # stop all services
+make dev-reset   # wipe volumes and restart fresh
+```
+
+### Hot reload
+
+- **Go API** — [air](https://github.com/air-verse/air) watches `apps/api/` and recompiles on every `.go` file save.
+- **Next.js** — standard Next.js fast refresh works via the volume mount.
+
+### Connecting to the database manually
+
+```bash
+make dev-db
+# or
+docker compose exec postgres psql -U nester nester_dev
+```
+
+Test credentials: user `550e8400-e29b-41d4-a716-446655440001` / `testuser@nester.dev`.
+
+---
+
 ## Roadmap
 
 | Phase | Focus | Status |

@@ -36,6 +36,7 @@ pnpm-debug.log*
 
 # Env files
 .env*
+!.env.example
 !apps/api/.env.example
 
 # Vercel
