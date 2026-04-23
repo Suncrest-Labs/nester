@@ -580,7 +580,7 @@ impl VaultContract {
     }
 
     /// Deposit funds into the vault.
-    pub fn deposit(env: Env, user: Address, amount: i128) -> i128 {
+    pub fn deposit(env: Env, user: Address, amount: i128, min_shares_out: i128) -> i128 {
         require_initialized(&env);
         require_active(&env);
 
@@ -596,6 +596,9 @@ impl VaultContract {
         if amount <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
+        if min_shares_out < 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
 
         user.require_auth();
         accrue_management_fee(&env);
@@ -606,7 +609,11 @@ impl VaultContract {
         token::Client::new(&env, &token_address).transfer(&user, &contract_address, &amount);
 
         let total_assets = get_total_assets(&env);
-        let shares_to_mint = vault_token_client(&env).mint_for_deposit(&user, &amount);
+        let shares_to_mint = vault_token_client(&env).shares_for_deposit(&amount);
+        if shares_to_mint < min_shares_out {
+            panic_with_error!(&env, ContractError::SlippageExceeded);
+        }
+        let _ = vault_token_client(&env).mint_for_deposit(&user, &amount);
         let new_user_shares = get_shares(&env, &user);
         set_total_assets(&env, total_assets + amount);
 
@@ -684,11 +691,14 @@ impl VaultContract {
     }
 
     /// Withdraw funds from the vault.
-    pub fn withdraw(env: Env, user: Address, shares: i128) -> i128 {
+    pub fn withdraw(env: Env, user: Address, shares: i128, min_assets_out: i128) -> i128 {
         require_initialized(&env);
         require_active(&env);
 
         if shares <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        if min_assets_out < 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
 
@@ -743,6 +753,9 @@ impl VaultContract {
         }
 
         assets_to_withdraw -= total_fee;
+        if assets_to_withdraw < min_assets_out {
+            panic_with_error!(&env, ContractError::SlippageExceeded);
+        }
         set_accrued_fees(&env, accrued_fees + total_fee);
 
         let token_address = self::VaultContract::get_token(env.clone());
@@ -907,6 +920,22 @@ impl VaultContract {
         let shares = get_shares(&env, &user);
         if shares <= 0 {
             return 0;
+        }
+        vault_token_client(&env).amount_for_shares(&shares)
+    }
+
+    pub fn preview_deposit(env: Env, amount: i128) -> i128 {
+        require_initialized(&env);
+        if amount <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        vault_token_client(&env).shares_for_deposit(&amount)
+    }
+
+    pub fn preview_withdraw(env: Env, shares: i128) -> i128 {
+        require_initialized(&env);
+        if shares <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
         }
         vault_token_client(&env).amount_for_shares(&shares)
     }

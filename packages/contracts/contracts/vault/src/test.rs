@@ -206,7 +206,7 @@ fn first_deposit_creates_one_to_one_shares() {
     mint(&token, &user, 1_000 * XLM);
 
     let deposit_amount = 500 * XLM;
-    let returned_balance = vault.deposit(&user, &deposit_amount);
+    let returned_balance = vault.deposit(&user, &deposit_amount, &0);
 
     assert_eq!(returned_balance, deposit_amount);
     assert_eq!(vault.get_balance(&user), deposit_amount);
@@ -222,10 +222,20 @@ fn subsequent_deposit_uses_current_share_price() {
     mint(&token, &user_a, 1_000 * XLM);
     mint(&token, &user_b, 1_000 * XLM);
 
-    vault.deposit(&user_a, &(200 * XLM));
-    let bal_b = vault.deposit(&user_b, &(100 * XLM));
+    vault.deposit(&user_a, &(200 * XLM), &0);
+    let bal_b = vault.deposit(&user_b, &(100 * XLM), &0);
     assert_eq!(bal_b, 100 * XLM);
     assert_eq!(vault.get_total_deposits(), 300 * XLM);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn deposit_reverts_when_min_shares_out_is_not_met() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 1_000 * XLM);
+
+    vault.deposit(&user, &(100 * XLM), &(100 * XLM + STROOP));
 }
 
 #[test]
@@ -233,7 +243,7 @@ fn subsequent_deposit_uses_current_share_price() {
 fn deposit_of_zero_is_rejected() {
     let (_env, _admin, _token, vault, _treasury) = setup();
     let user = Address::generate(&_env);
-    vault.deposit(&user, &0);
+    vault.deposit(&user, &0, &0);
 }
 
 #[test]
@@ -241,7 +251,7 @@ fn deposit_of_zero_is_rejected() {
 fn deposit_of_negative_amount_is_rejected() {
     let (_env, _admin, _token, vault, _treasury) = setup();
     let user = Address::generate(&_env);
-    vault.deposit(&user, &(-1 * XLM));
+    vault.deposit(&user, &(-1 * XLM), &0);
 }
 
 #[test]
@@ -252,7 +262,7 @@ fn deposit_fails_when_vault_is_paused() {
     mint(&token, &user, 100 * XLM);
 
     vault.pause(&admin);
-    vault.deposit(&user, &(50 * XLM));
+    vault.deposit(&user, &(50 * XLM), &0);
 }
 
 // ---------------------------------------------------------------------------
@@ -265,10 +275,10 @@ fn full_withdrawal_leaves_zero_balance() {
     let user = Address::generate(&_env);
     mint(&token, &user, 500 * XLM);
 
-    vault.deposit(&user, &(500 * XLM));
+    vault.deposit(&user, &(500 * XLM), &0);
     assert_eq!(vault.get_balance(&user), 500 * XLM);
 
-    vault.withdraw(&user, &(500 * XLM));
+    vault.withdraw(&user, &(500 * XLM), &0);
     assert_eq!(vault.get_balance(&user), 0);
     assert_eq!(vault.get_total_deposits(), 0);
 }
@@ -279,8 +289,8 @@ fn partial_withdrawal_is_calculated_correctly() {
     let user = Address::generate(&_env);
     mint(&token, &user, 1_000 * XLM);
 
-    vault.deposit(&user, &(1_000 * XLM));
-    vault.withdraw(&user, &(300 * XLM));
+    vault.deposit(&user, &(1_000 * XLM), &0);
+    vault.withdraw(&user, &(300 * XLM), &0);
 
     assert_eq!(vault.get_balance(&user), 700 * XLM);
     assert_eq!(vault.get_total_deposits(), 700 * XLM);
@@ -292,12 +302,12 @@ fn withdrawal_after_yield_returns_principal_plus_yield() {
     let user = Address::generate(&_env);
     mint(&token, &user, 1_000 * XLM);
 
-    vault.deposit(&user, &(1_000 * XLM));
+    vault.deposit(&user, &(1_000 * XLM), &0);
 
     let vault_address = vault.address.clone();
     mint(&token, &vault_address, 100 * XLM);
 
-    vault.withdraw(&user, &(1_000 * XLM));
+    vault.withdraw(&user, &(1_000 * XLM), &0);
     assert_eq!(vault.get_balance(&user), 0);
     assert_eq!(vault.get_total_deposits(), 0);
 }
@@ -313,15 +323,15 @@ fn withdrawal_does_not_charge_perf_fee_on_preexisting_yield() {
     mint(&token, &alice, alice_deposit);
     mint(&token, &bob, bob_deposit);
 
-    vault.deposit(&alice, &alice_deposit);
+    vault.deposit(&alice, &alice_deposit, &0);
     vault.grant_role(&admin, &admin, &Role::Manager);
 
     // Simulate accounting yield that belongs to Alice's holding period.
     vault.report_yield(&admin, &(100 * XLM));
 
-    vault.deposit(&bob, &bob_deposit);
+    vault.deposit(&bob, &bob_deposit, &0);
     let bob_shares = vault.get_shares(&bob);
-    vault.withdraw(&bob, &bob_shares);
+    vault.withdraw(&bob, &bob_shares, &0);
 
     // Bob only pays early-withdrawal fee (0.1% of 1000 = 1), no performance fee.
     assert_eq!(token::Client::new(&env, &token.address).balance(&bob), 999 * XLM);
@@ -336,19 +346,30 @@ fn withdrawal_charges_perf_fee_only_on_realized_user_yield() {
 
     mint(&token, &user, deposit);
     mint(&token, &liquidity_provider, deposit);
-    vault.deposit(&user, &deposit);
+    vault.deposit(&user, &deposit, &0);
     vault.grant_role(&admin, &admin, &Role::Manager);
 
     // Double share price in accounting so user has 1000 of realized yield.
     vault.report_yield(&admin, &deposit);
     // Add liquid reserves so transfer can satisfy the larger withdrawal amount.
-    vault.deposit(&liquidity_provider, &deposit);
+    vault.deposit(&liquidity_provider, &deposit, &0);
 
     let shares = vault.get_shares(&user);
-    vault.withdraw(&user, &shares);
+    vault.withdraw(&user, &shares, &0);
 
     // Gross assets = 2000, performance fee = 100, early fee = 2, net = 1898.
     assert_eq!(token::Client::new(&env, &token.address).balance(&user), 1_898 * XLM);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn withdraw_reverts_when_min_assets_out_is_not_met() {
+    let (_env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 1_000 * XLM);
+
+    vault.deposit(&user, &(1_000 * XLM), &0);
+    vault.withdraw(&user, &(500 * XLM), &(500 * XLM + STROOP));
 }
 
 #[test]
@@ -358,8 +379,8 @@ fn withdrawal_of_more_than_owned_is_rejected() {
     let user = Address::generate(&_env);
     mint(&token, &user, 100 * XLM);
 
-    vault.deposit(&user, &(100 * XLM));
-    vault.withdraw(&user, &(100 * XLM + STROOP));
+    vault.deposit(&user, &(100 * XLM), &0);
+    vault.withdraw(&user, &(100 * XLM + STROOP), &0);
 }
 
 #[test]
@@ -369,8 +390,8 @@ fn withdraw_of_zero_is_rejected() {
     let user = Address::generate(&_env);
     mint(&token, &user, 100 * XLM);
 
-    vault.deposit(&user, &(100 * XLM));
-    vault.withdraw(&user, &0);
+    vault.deposit(&user, &(100 * XLM), &0);
+    vault.withdraw(&user, &0, &0);
 }
 
 // #[test]
@@ -406,7 +427,7 @@ fn withdrawal_before_lock_period_deducts_early_fee() {
     let deposit_amount = 1_000 * XLM;
     mint(&token, &user, deposit_amount);
 
-    vault.deposit(&user, &deposit_amount);
+    vault.deposit(&user, &deposit_amount, &0);
 
     // Advance time by 12 hours — still inside the 1-day lock window.
     advance_time(&env, DAY / 2);
@@ -414,7 +435,7 @@ fn withdrawal_before_lock_period_deducts_early_fee() {
     // The shares returned by deposit equal the deposit (1:1 first deposit).
     // withdraw(shares) burns those shares and returns assets minus fee.
     let shares_owned = vault.get_balance(&user);
-    let remaining_shares = vault.withdraw(&user, &shares_owned);
+    let remaining_shares = vault.withdraw(&user, &shares_owned, &0);
 
     // After full withdrawal shares should be zero.
     assert_eq!(remaining_shares, 0, "all shares should be burned");
@@ -437,7 +458,7 @@ fn withdrawal_exactly_at_lock_boundary_has_no_early_fee() {
     let deposit_amount = 1_000 * XLM;
     mint(&token, &user, deposit_amount);
 
-    vault.deposit(&user, &deposit_amount);
+    vault.deposit(&user, &deposit_amount, &0);
     let deposit_time = env.ledger().timestamp();
 
     // Advance to exactly deposit_time + MinLockPeriod (1 day).
@@ -448,7 +469,7 @@ fn withdrawal_exactly_at_lock_boundary_has_no_early_fee() {
     );
 
     let shares_owned = vault.get_balance(&user);
-    let remaining_shares = vault.withdraw(&user, &shares_owned);
+    let remaining_shares = vault.withdraw(&user, &shares_owned, &0);
 
     // No early-withdrawal fee — full shares burned, nothing retained.
     assert_eq!(remaining_shares, 0, "all shares should be burned");
@@ -464,13 +485,13 @@ fn withdrawal_after_lock_period_has_no_early_fee() {
     let deposit_amount = 500 * XLM;
     mint(&token, &user, deposit_amount);
 
-    vault.deposit(&user, &deposit_amount);
+    vault.deposit(&user, &deposit_amount, &0);
 
     // Advance well past the lock period (3 days).
     advance_time(&env, 3 * DAY);
 
     let shares_owned = vault.get_balance(&user);
-    let remaining = vault.withdraw(&user, &shares_owned);
+    let remaining = vault.withdraw(&user, &shares_owned, &0);
 
     assert_eq!(remaining, 0);
     assert_eq!(vault.get_total_deposits(), 0);
@@ -486,7 +507,7 @@ fn any_address_can_deposit() {
     let random_user = Address::generate(&_env);
     mint(&token, &random_user, 100 * XLM);
 
-    let bal = vault.deposit(&random_user, &(100 * XLM));
+    let bal = vault.deposit(&random_user, &(100 * XLM), &0);
     assert_eq!(bal, 100 * XLM);
 }
 
@@ -496,8 +517,8 @@ fn any_address_can_withdraw() {
     let random_user = Address::generate(&_env);
     mint(&token, &random_user, 100 * XLM);
 
-    vault.deposit(&random_user, &(100 * XLM));
-    let bal = vault.withdraw(&random_user, &(100 * XLM));
+    vault.deposit(&random_user, &(100 * XLM), &0);
+    let bal = vault.withdraw(&random_user, &(100 * XLM), &0);
     assert_eq!(bal, 0);
 }
 
@@ -544,14 +565,14 @@ fn multiple_users_balances_are_independent() {
     mint(&token, &alice, 500 * XLM);
     mint(&token, &bob, 300 * XLM);
 
-    vault.deposit(&alice, &(500 * XLM));
-    vault.deposit(&bob, &(300 * XLM));
+    vault.deposit(&alice, &(500 * XLM), &0);
+    vault.deposit(&bob, &(300 * XLM), &0);
 
     assert_eq!(vault.get_balance(&alice), 500 * XLM);
     assert_eq!(vault.get_balance(&bob), 300 * XLM);
     assert_eq!(vault.get_total_deposits(), 800 * XLM);
 
-    vault.withdraw(&alice, &(200 * XLM));
+    vault.withdraw(&alice, &(200 * XLM), &0);
     assert_eq!(vault.get_balance(&alice), 300 * XLM);
     assert_eq!(vault.get_balance(&bob), 300 * XLM);
     assert_eq!(vault.get_total_deposits(), 600 * XLM);
@@ -563,8 +584,8 @@ fn deposit_then_full_withdraw_resets_total_deposits() {
     let user = Address::generate(&_env);
     mint(&token, &user, 1_000 * XLM);
 
-    vault.deposit(&user, &(1_000 * XLM));
-    vault.withdraw(&user, &(1_000 * XLM));
+    vault.deposit(&user, &(1_000 * XLM), &0);
+    vault.withdraw(&user, &(1_000 * XLM), &0);
 
     assert_eq!(vault.get_total_deposits(), 0);
     assert_eq!(vault.get_balance(&user), 0);
@@ -576,10 +597,10 @@ fn single_stroop_deposit_and_withdrawal() {
     let user = Address::generate(&_env);
     mint(&token, &user, STROOP);
 
-    vault.deposit(&user, &STROOP);
+    vault.deposit(&user, &STROOP, &0);
     assert_eq!(vault.get_balance(&user), STROOP);
 
-    vault.withdraw(&user, &STROOP);
+    vault.withdraw(&user, &STROOP, &0);
     assert_eq!(vault.get_balance(&user), 0);
 }
 
@@ -600,7 +621,7 @@ fn emergency_withdraw_works_when_paused() {
     let deposit_amount = 1_000 * XLM;
     mint(&token, &user, deposit_amount);
 
-    vault.deposit(&user, &deposit_amount);
+    vault.deposit(&user, &deposit_amount, &0);
 
     vault.set_emergency_fee(&admin, &100); // 1%
 
@@ -627,7 +648,7 @@ fn emergency_withdraw_fails_when_not_paused() {
     let deposit_amount = 1_000 * XLM;
     mint(&token, &user, deposit_amount);
 
-    vault.deposit(&user, &deposit_amount);
+    vault.deposit(&user, &deposit_amount, &0);
 
     vault.emergency_withdraw(&user);
 }
@@ -639,7 +660,7 @@ fn emergency_withdraw_queues_when_liquidity_insufficient() {
     let deposit_amount = 1_000 * XLM;
     mint(&token, &user, deposit_amount);
 
-    vault.deposit(&user, &deposit_amount);
+    vault.deposit(&user, &deposit_amount, &0);
 
     // Advance time by a year to accrue large management fee
     advance_time(&env, 365 * DAY);
@@ -672,7 +693,7 @@ fn emergency_withdraw_queue_processed_on_deposit() {
     mint(&token, &user1, 1_000 * XLM);
     mint(&token, &user2, 2_000 * XLM);
 
-    vault.deposit(&user1, &(1_000 * XLM));
+    vault.deposit(&user1, &(1_000 * XLM), &0);
 
     advance_time(&env, 365 * DAY);
     vault.collect_fees(&admin);
@@ -685,7 +706,7 @@ fn emergency_withdraw_queue_processed_on_deposit() {
 
     // user2 deposits, providing liquidity, which processes queue
     vault.unpause(&admin);
-    vault.deposit(&user2, &(2_000 * XLM));
+    vault.deposit(&user2, &(2_000 * XLM), &0);
 
     // user1 should have received their principal
     assert_eq!(
