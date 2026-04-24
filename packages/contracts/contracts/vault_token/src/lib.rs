@@ -147,8 +147,16 @@ impl VaultTokenContract {
     /// Burn `amount` of `from`'s own shares (SEP-41 user-initiated burn).
     pub fn burn(env: Env, from: Address, amount: i128) {
         from.require_auth();
+        let total_supply = get_total_supply(&env);
+        let total_assets = get_total_assets(&env);
+        let assets_to_reduce = if total_supply > 0 && total_assets > 0 {
+            amount * total_assets / total_supply
+        } else {
+            0
+        };
         spend_balance(&env, &from, amount);
-        set_total_supply(&env, get_total_supply(&env) - amount);
+        set_total_supply(&env, total_supply - amount);
+        set_total_assets(&env, total_assets - assets_to_reduce);
         env.events().publish((symbol_short!("burn"), from), amount);
     }
 
@@ -156,8 +164,16 @@ impl VaultTokenContract {
     pub fn burn_from(env: Env, spender: Address, from: Address, amount: i128) {
         spender.require_auth();
         spend_allowance(&env, &from, &spender, amount);
+        let total_supply = get_total_supply(&env);
+        let total_assets = get_total_assets(&env);
+        let assets_to_reduce = if total_supply > 0 && total_assets > 0 {
+            amount * total_assets / total_supply
+        } else {
+            0
+        };
         spend_balance(&env, &from, amount);
-        set_total_supply(&env, get_total_supply(&env) - amount);
+        set_total_supply(&env, total_supply - amount);
+        set_total_assets(&env, total_assets - assets_to_reduce);
         env.events()
             .publish((symbol_short!("burn_frm"), spender, from), amount);
     }

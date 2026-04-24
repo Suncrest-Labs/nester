@@ -391,7 +391,7 @@ fn burn_reduces_supply() {
 
     assert_eq!(client.balance(&user), 3_000);
     assert_eq!(client.total_supply(), 3_000);
-    // Note: SEP-41 burn does NOT update total_assets; that's vault logic
+    assert_eq!(client.total_assets(), 3_000);
 }
 
 #[test]
@@ -409,6 +409,7 @@ fn burn_from_uses_allowance() {
 
     assert_eq!(client.balance(&user), 4_000);
     assert_eq!(client.total_supply(), 4_000);
+    assert_eq!(client.total_assets(), 4_000);
     assert_eq!(client.allowance(&user, &spender), 2_000);
 }
 
