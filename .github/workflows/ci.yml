@@ -75,6 +75,71 @@ jobs:
       - name: Build
         run: npm run build
 
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit Rust dependencies
+        run: cargo audit
+        working-directory: packages/contracts
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Audit Go dependencies
+        run: govulncheck ./...
+        working-directory: apps/api
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        run: gosec ./...
+        working-directory: apps/api
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Audit JavaScript dependencies
+        run: pnpm audit --audit-level=high
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python audit tools
+        run: pip install pip-audit bandit
+
+      - name: Audit Python dependencies
+        run: pip-audit -r requirements.txt
+        working-directory: apps/intelligence
+
+      - name: Run bandit
+        run: bandit -r app -ll
+        working-directory: apps/intelligence
+
   api:
     name: API (Go)
     runs-on: ubuntu-latest
