@@ -2,12 +2,53 @@ package handler
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/bank"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
+
+// resolveRateLimiter enforces 10 name-enquiry calls per IP per minute.
+// Each call costs money (Paystack/Flutterwave billing), so this is a hard cap.
+var resolveRateLimiter = newIPLimiter(10, time.Minute)
+
+// ipLimiter is a simple per-IP sliding-window counter.
+type ipLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*ipBucket
+	limit   int
+	window  time.Duration
+}
+
+type ipBucket struct {
+	count     int
+	windowEnd time.Time
+}
+
+func newIPLimiter(limit int, window time.Duration) *ipLimiter {
+	return &ipLimiter{buckets: make(map[string]*ipBucket), limit: limit, window: window}
+}
+
+func (l *ipLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	b, ok := l.buckets[ip]
+	if !ok || now.After(b.windowEnd) {
+		l.buckets[ip] = &ipBucket{count: 1, windowEnd: now.Add(l.window)}
+		return true
+	}
+	if b.count >= l.limit {
+		return false
+	}
+	b.count++
+	return true
+}
 
 // BankHandler exposes endpoints for bank listing and account name resolution.
 type BankHandler struct {
@@ -51,6 +92,25 @@ func (h *BankHandler) listBanks(w http.ResponseWriter, r *http.Request) {
 //
 // PII: account numbers and names are never written to logs.
 func (h *BankHandler) resolveAccount(w http.ResponseWriter, r *http.Request) {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		ip = fwd
+	}
+	if !resolveRateLimiter.allow(ip) {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(time.Minute.Seconds())))
+		response.WriteJSON(w, http.StatusTooManyRequests, response.Response{
+			Success: false,
+			Error: &response.ErrorBody{
+				Code:    "RATE_LIMITED",
+				Message: "Too many account resolution requests. Maximum 10 per minute.",
+			},
+		})
+		return
+	}
+
 	q := r.URL.Query()
 	accountNumber := q.Get("account_number")
 	bankCode := q.Get("bank_code")

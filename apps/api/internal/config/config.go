@@ -283,6 +283,10 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("LOG_FORMAT must be one of json, text")
 	}
 
+	if strings.TrimSpace(c.bank.paystackKey) == "" && strings.TrimSpace(c.bank.flutterwaveKey) == "" {
+		loader.addError("at least one of PAYSTACK_SECRET_KEY or FLUTTERWAVE_SECRET_KEY must be set")
+	}
+
 	validateAllowedOrigins(c.environment, c.allowedOrigins, loader)
 }
 
