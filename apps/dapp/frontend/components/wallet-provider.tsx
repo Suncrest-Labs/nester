@@ -112,11 +112,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                 setWallets(walletList);
                 setWalletsLoaded(true);
 
-                // Check if there's a previously saved session
+                // Rehydrate session from sessionStorage (cleared on tab close;
+                // never persisted to localStorage which is accessible to all
+                // scripts on the page and therefore an XSS risk).
                 const savedWalletId =
-                    localStorage.getItem("nester_wallet_id");
+                    sessionStorage.getItem("nester_wallet_id");
                 const savedAddress =
-                    localStorage.getItem("nester_wallet_addr");
+                    sessionStorage.getItem("nester_wallet_addr");
                 if (savedWalletId && savedAddress) {
                     const savedWallet = walletList.find(
                         (w) => w.id === savedWalletId && w.isAvailable
@@ -124,12 +126,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                     if (savedWallet) {
                         try {
                             StellarWalletsKit.setWallet(savedWalletId);
-                            // Use the module directly to request the address
                             const walletModule = StellarWalletsKit.selectedModule;
                             const { address: addr } =
                                 await walletModule.getAddress();
                             if (addr) {
-                                // Update the kit's internal state
                                 const { activeAddress } = await import(
                                     "@creit.tech/stellar-wallets-kit/state"
                                 );
@@ -138,8 +138,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                                 setSelectedWalletId(savedWalletId);
                             }
                         } catch {
-                            localStorage.removeItem("nester_wallet_id");
-                            localStorage.removeItem("nester_wallet_addr");
+                            sessionStorage.removeItem("nester_wallet_id");
+                            sessionStorage.removeItem("nester_wallet_addr");
                         }
                     }
                 }
@@ -190,8 +190,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
                     setAddress(addr);
                     setSelectedWalletId(walletId);
-                    localStorage.setItem("nester_wallet_id", walletId);
-                    localStorage.setItem("nester_wallet_addr", addr);
+                    sessionStorage.setItem("nester_wallet_id", walletId);
+                    sessionStorage.setItem("nester_wallet_addr", addr);
                 }
             } catch (err) {
                 const message = extractErrorMessage(err);
@@ -215,8 +215,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         }
         setAddress(null);
         setSelectedWalletId(null);
-        localStorage.removeItem("nester_wallet_id");
-        localStorage.removeItem("nester_wallet_addr");
+        sessionStorage.removeItem("nester_wallet_id");
+        sessionStorage.removeItem("nester_wallet_addr");
     }, []);
 
     return (
