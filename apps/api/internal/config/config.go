@@ -24,6 +24,7 @@ type Config struct {
 	rateLimit             RateLimitConfig
 	log                   LogConfig
 	allowedOrigins        []string
+	bank                  BankConfig
 }
 
 type ServerConfig struct {
@@ -69,6 +70,11 @@ type LogConfig struct {
 
 type RedisConfig struct {
 	addr string
+}
+
+type BankConfig struct {
+	paystackKey    string
+	flutterwaveKey string
 }
 
 func Load() (*Config, error) {
@@ -129,6 +135,10 @@ func Load() (*Config, error) {
 			format: strings.ToLower(loader.stringDefault("LOG_FORMAT", defaultLogFormat(environment))),
 		},
 		allowedOrigins: loader.stringSliceDefault("ALLOWED_ORIGINS", nil),
+		bank: BankConfig{
+			paystackKey:    loader.stringDefault("PAYSTACK_SECRET_KEY", ""),
+			flutterwaveKey: loader.stringDefault("FLUTTERWAVE_SECRET_KEY", ""),
+		},
 	}
 
 	cfg.validate(&loader)
@@ -186,6 +196,18 @@ func (c Config) AllowedOrigins() []string {
 
 func (r RedisConfig) Addr() string {
 	return r.addr
+}
+
+func (c Config) Bank() BankConfig {
+	return c.bank
+}
+
+func (b BankConfig) PaystackKey() string {
+	return b.paystackKey
+}
+
+func (b BankConfig) FlutterwaveKey() string {
+	return b.flutterwaveKey
 }
 
 func (c *Config) validate(loader *envLoader) {
