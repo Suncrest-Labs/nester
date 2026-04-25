@@ -12,7 +12,7 @@ interface UseWebSocketOptions {
     /** WebSocket server URL, e.g. wss://api.nester.fi/ws */
     url: string;
     /** JWT for authenticating the session on connect */
-    token: string;
+    token: string | null;
     /** Channels to subscribe to on connect, then again after reconnection */
     channels: string[];
     /** Called for every event message received */
@@ -25,10 +25,13 @@ interface UseWebSocketOptions {
     pollInterval?: number;
     /** Optional: called to fetch latest snapshot via REST when polling */
     onPoll?: () => Promise<void>;
+    /** Called when authentication fails */
+    onAuthError?: (message: string) => void;
 }
 
 export interface UseWebSocketReturn {
     isConnected: boolean;
+    isAuthenticated: boolean;
     status: WSConnectionStatus;
     lastEvent: WSEvent | null;
     subscribe: (channel: string) => void;
@@ -50,9 +53,11 @@ export function useWebSocket({
     reconnectInterval = BASE_RECONNECT_INTERVAL_MS,
     pollInterval = POLL_INTERVAL_MS,
     onPoll,
+    onAuthError,
 }: UseWebSocketOptions): UseWebSocketReturn {
     const [status, setStatus] = useState<WSConnectionStatus>("offline");
     const [lastEvent, setLastEvent] = useState<WSEvent | null>(null);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
 
     // Keep stable references so interval/event callbacks don't go stale.
     const wsRef = useRef<WebSocket | null>(null);
@@ -63,13 +68,17 @@ export function useWebSocket({
     const channelsRef = useRef<string[]>(channels);
     const onEventRef = useRef(onEvent);
     const onPollRef = useRef(onPoll);
+    const onAuthErrorRef = useRef(onAuthError);
     const tokenRef = useRef(token);
+    const isAuthenticatedRef = useRef(isAuthenticated);
 
     // Keep refs in sync without triggering reconnects.
     useEffect(() => { channelsRef.current = channels; }, [channels]);
     useEffect(() => { onEventRef.current = onEvent; }, [onEvent]);
     useEffect(() => { onPollRef.current = onPoll; }, [onPoll]);
+    useEffect(() => { onAuthErrorRef.current = onAuthError; }, [onAuthError]);
     useEffect(() => { tokenRef.current = token; }, [token]);
+    useEffect(() => { isAuthenticatedRef.current = isAuthenticated; }, [isAuthenticated]);
 
     const stopPoll = useCallback(() => {
         if (pollTimerRef.current !== null) {
@@ -99,6 +108,13 @@ export function useWebSocket({
     const connect = useCallback(() => {
         if (!isMountedRef.current) return;
 
+        if (!tokenRef.current) {
+            if (process.env.NODE_ENV === "development") {
+                console.warn("WebSocket connect aborted: No auth token provided.");
+            }
+            return;
+        }
+
         // Close any existing socket cleanly.
         if (wsRef.current) {
             wsRef.current.onopen = null;
@@ -108,6 +124,8 @@ export function useWebSocket({
             wsRef.current.close();
             wsRef.current = null;
         }
+
+        setIsAuthenticated(false);
 
         let ws: WebSocket;
         try {
@@ -123,19 +141,48 @@ export function useWebSocket({
 
         ws.onopen = () => {
             if (!isMountedRef.current) return;
+            if (!tokenRef.current) {
+                ws.close();
+                return;
+            }
+
             attemptsRef.current = 0;
             setStatus("connected");
             stopPoll();
 
-            // Authenticate, then subscribe to channels.
-            ws.send(JSON.stringify({ type: "auth", token: tokenRef.current }));
-            sendSubscriptions(ws);
+            // Authenticate AFTER connection opens
+            ws.send(JSON.stringify({ type: "authenticate", token: tokenRef.current }));
         };
 
         ws.onmessage = (evt: MessageEvent) => {
             if (!isMountedRef.current) return;
             try {
                 const data = JSON.parse(evt.data as string) as WSEvent;
+
+                if (data.type === "auth_success") {
+                    setIsAuthenticated(true);
+                    sendSubscriptions(ws);
+                    return;
+                }
+
+                if (data.type === "auth_error") {
+                    const errorMsg = data.payload?.message as string | undefined || "Authentication failed";
+                    console.error("WebSocket Auth Error:", errorMsg);
+                    if (onAuthErrorRef.current) {
+                        onAuthErrorRef.current(errorMsg);
+                    }
+                    // Close connection immediately and prevent infinite loops
+                    attemptsRef.current = reconnectAttempts; // max out attempts to prevent auto-reconnect
+                    ws.close();
+                    setStatus("offline");
+                    return;
+                }
+
+                // Do NOT process messages until authentication is confirmed
+                if (!isAuthenticatedRef.current) {
+                    return;
+                }
+
                 setLastEvent(data);
                 onEventRef.current(data);
             } catch {
@@ -179,6 +226,7 @@ export function useWebSocket({
             wsRef.current.close();
             wsRef.current = null;
         }
+        setIsAuthenticated(false);
     }, [stopPoll]);
 
     const disconnect = useCallback(() => {
@@ -205,20 +253,26 @@ export function useWebSocket({
         }
     }, []);
 
-    // Establish the connection on mount.
+    // Establish the connection on mount or when token changes.
     useEffect(() => {
         isMountedRef.current = true;
-        connect();
+        if (token) {
+            connect();
+        } else {
+            // Disconnect and clean up if token is removed
+            teardown();
+            if (isMountedRef.current) setStatus("offline");
+        }
+
         return () => {
             isMountedRef.current = false;
             teardown();
         };
-        // connect / teardown are stable — only run on mount/unmount.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [token, connect, teardown]);
 
     return {
         isConnected: status === "connected",
+        isAuthenticated,
         status,
         lastEvent,
         subscribe,

@@ -29,6 +29,7 @@ import { NetworkProvider } from "@/context/NetworkProvider";
 import { NetworkBanner } from "@/components/network/NetworkSelector";
 import { PrometheusChatbot } from "@/components/ai/prometheusChatbot";
 import { ReactQueryProvider } from "@/components/react-query-provider";
+import { AuthProvider } from "@/components/auth-provider";
 
 export default function RootLayout({
     children,
@@ -45,18 +46,20 @@ export default function RootLayout({
                     <NetworkProvider>
                         <SettingsProvider>
                             <WalletProvider>
-                                <NotificationsProvider>
-                                    <NetworkBanner />
-                                    <PortfolioProvider>
-                                        <WebSocketProvider>
-                                            <OnboardingProvider>
-                                                {children}
-                                                <NotificationsToaster />
-                                                <PrometheusChatbot />
-                                            </OnboardingProvider>
-                                        </WebSocketProvider>
-                                    </PortfolioProvider>
-                                </NotificationsProvider>
+                                <AuthProvider>
+                                    <NotificationsProvider>
+                                        <NetworkBanner />
+                                        <PortfolioProvider>
+                                            <WebSocketProvider>
+                                                <OnboardingProvider>
+                                                    {children}
+                                                    <NotificationsToaster />
+                                                    <PrometheusChatbot />
+                                                </OnboardingProvider>
+                                            </WebSocketProvider>
+                                        </PortfolioProvider>
+                                    </NotificationsProvider>
+                                </AuthProvider>
                             </WalletProvider>
                         </SettingsProvider>
                     </NetworkProvider>

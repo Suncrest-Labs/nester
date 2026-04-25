@@ -10,6 +10,7 @@ import {
 import { useWallet } from "@/components/wallet-provider";
 import { usePortfolio } from "@/components/portfolio-provider";
 import { useNotifications } from "@/components/notifications-provider";
+import { useAuth } from "@/components/auth-provider";
 import { useWebSocket, type UseWebSocketReturn } from "@/hooks/useWebSocket";
 import {
     type WSConnectionStatus,
@@ -32,6 +33,8 @@ interface WebSocketContextValue {
     status: WSConnectionStatus;
     /** True only when the socket is fully open */
     isConnected: boolean;
+    /** True only when the socket is fully authenticated */
+    isAuthenticated: boolean;
     /** The most recent raw event received */
     lastEvent: WSEvent | null;
     /** Imperatively subscribe to an additional channel */
@@ -47,6 +50,7 @@ interface WebSocketContextValue {
 const WebSocketContext = createContext<WebSocketContextValue>({
     status: "offline",
     isConnected: false,
+    isAuthenticated: false,
     lastEvent: null,
     subscribe: () => {},
     unsubscribe: () => {},
@@ -70,13 +74,16 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "";
  * existing mock/localStorage flow is completely unaffected.
  */
 export function WebSocketProvider({ children }: { children: ReactNode }) {
-    const { address } = useWallet();
+    const { address, disconnect: disconnectWallet } = useWallet();
     const { applyBalanceUpdate, applyYieldAccrual } = usePortfolio();
     const { addNotification } = useNotifications();
+    const { token, setToken } = useAuth();
 
-    // Derive a simple JWT placeholder from the wallet address.
-    // Replace with a real auth token once the backend is ready.
-    const token = address ? `mock_jwt_${address}` : "";
+    // 🚨 SECURITY NOTE:
+    // WebSocket authentication MUST use backend-issued JWT.
+    // NEVER construct tokens on the frontend.
+    // NEVER use wallet address as authentication.
+    // Reintroducing mock auth will create a critical vulnerability.
 
     // Build the list of channels the connected user should subscribe to.
     const channels = useMemo<string[]>(() => {
@@ -182,8 +189,24 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         [applyBalanceUpdate, applyYieldAccrual, addNotification]
     );
 
+    const handleAuthError = useCallback((message: string) => {
+        setToken(null);
+        if (disconnectWallet) {
+            disconnectWallet();
+        }
+        addNotification(
+            {
+                type: "offramp_status", // Re-using a generic type or create an auth specific one if it existed.
+                title: "Session Expired",
+                message: message || "Your session has expired. Please reconnect your wallet.",
+            },
+            { showToast: true }
+        );
+    }, [setToken, disconnectWallet, addNotification]);
+
     const {
         isConnected,
+        isAuthenticated,
         status,
         lastEvent,
         subscribe,
@@ -196,12 +219,14 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         token,
         channels,
         onEvent: handleEvent,
+        onAuthError: handleAuthError,
     });
 
     const value = useMemo<WebSocketContextValue>(
         () => ({
             status: WS_URL ? status : "offline",
             isConnected: WS_URL ? isConnected : false,
+            isAuthenticated: WS_URL ? isAuthenticated : false,
             lastEvent,
             subscribe,
             unsubscribe,
@@ -210,7 +235,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         }),
         // WS_URL is a module-level constant — intentionally excluded from deps.
          
-        [status, isConnected, lastEvent, subscribe, unsubscribe, disconnect, manualReconnect]
+        [status, isConnected, isAuthenticated, lastEvent, subscribe, unsubscribe, disconnect, manualReconnect]
     );
 
     return (
