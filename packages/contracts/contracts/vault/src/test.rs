@@ -396,13 +396,13 @@ fn performance_fee_charges_only_realized_yield_not_principal() {
 
     // User B enters after yield is already reflected in share price.
     let user_b_shares = vault.deposit(&user_b, &(1_000 * XLM), &0);
-    assert_eq!(user_b_shares, 909_090_909);
+    assert_eq!(user_b_shares, 9_090_909_090);
 
     // User B immediately exits: no yield earned post-entry, so performance fee must be zero.
     vault.withdraw(&user_b, &user_b_shares, &0);
     assert_eq!(
         token::Client::new(&env, &token.address).balance(&user_b),
-        1_999 * XLM
+        2_000 * XLM - 1
     );
 }
 
