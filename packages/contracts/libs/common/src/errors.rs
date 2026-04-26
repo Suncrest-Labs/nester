@@ -20,4 +20,6 @@ pub enum ContractError {
     TimelockInvalidDelay = 15,
     TimelockAlreadyExecuted = 16,
     SlippageExceeded = 17,
+    FeeTooHigh = 18,
+    ConfigOutOfRange = 19,
 }

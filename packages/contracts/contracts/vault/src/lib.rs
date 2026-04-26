@@ -20,6 +20,7 @@ const WITHDRAW: Symbol = symbol_short!("WITHDRAW");
 const PAUSE: Symbol = symbol_short!("PAUSE");
 const UNPAUSE: Symbol = symbol_short!("UNPAUSE");
 const CB_TRIGGER: Symbol = symbol_short!("CB_TRIG");
+const FEE_CONFIG_UPDATED: Symbol = symbol_short!("FEE_CFG");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -28,6 +29,13 @@ pub struct FeeConfig {
     pub management_fee_bps: u32,       // annual basis points (e.g., 50 = 0.5%)
     pub early_withdrawal_fee_bps: u32, // bps (e.g., 10 = 0.1%)
     pub treasury_address: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeConfigUpdatedEventData {
+    pub old_config: FeeConfig,
+    pub new_config: FeeConfig,
 }
 
 #[contracttype]
@@ -421,12 +429,18 @@ impl VaultContract {
     pub fn set_max_deposit(env: Env, caller: Address, amount: i128) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if amount <= 0 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
         env.storage().instance().set(&DataKey::MaxDeposit, &amount);
     }
 
     pub fn set_rebalance_threshold(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if bps < 100 || bps > 5000 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
         env.storage()
             .instance()
             .set(&DataKey::RebalanceThreshold, &bps);
@@ -435,6 +449,9 @@ impl VaultContract {
     pub fn set_circuit_breaker_config(env: Env, caller: Address, config: CircuitBreakerConfig) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if config.window_seconds == 0 || config.threshold_bps < 1000 || config.threshold_bps > 10000 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
         env.storage()
             .instance()
             .set(&DataKey::CircuitBreakerConfig, &config);
@@ -443,22 +460,53 @@ impl VaultContract {
     pub fn set_early_withdrawal_fee(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if bps > nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS {
+            panic_with_error!(&env, ContractError::FeeTooHigh);
+        }
         let mut config = get_fee_config(&env);
+        let old_config = config.clone();
         config.early_withdrawal_fee_bps = bps;
         env.storage().instance().set(&DataKey::FeeConfig, &config);
+        emit_event(
+            &env,
+            VAULT,
+            FEE_CONFIG_UPDATED,
+            caller.clone(),
+            FeeConfigUpdatedEventData {
+                old_config,
+                new_config: config,
+            },
+        );
     }
 
     pub fn set_fee_config(env: Env, caller: Address, config: FeeConfig) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if config.management_fee_bps > nester_common::MAX_MANAGEMENT_FEE_BPS
+            || config.performance_fee_bps > nester_common::MAX_PERFORMANCE_FEE_BPS
+            || config.early_withdrawal_fee_bps > nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS
+        {
+            panic_with_error!(&env, ContractError::FeeTooHigh);
+        }
+        let old_config = get_fee_config(&env);
         env.storage().instance().set(&DataKey::FeeConfig, &config);
+        emit_event(
+            &env,
+            VAULT,
+            FEE_CONFIG_UPDATED,
+            caller.clone(),
+            FeeConfigUpdatedEventData {
+                old_config,
+                new_config: config,
+            },
+        );
     }
 
     pub fn set_emergency_fee(env: Env, admin: Address, fee_bps: u32) -> Result<(), ContractError> {
         admin.require_auth();
         AccessControl::require_role(&env, &admin, Role::Admin);
-        if fee_bps > 500 {
-            panic_with_error!(&env, ContractError::InvalidAmount); // Max 500 bps (5%)
+        if fee_bps > nester_common::MAX_EMERGENCY_FEE_BPS {
+            panic_with_error!(&env, ContractError::FeeTooHigh);
         }
         env.storage()
             .instance()
@@ -593,7 +641,7 @@ impl VaultContract {
             panic_with_error!(&env, ContractError::ExceedsLimit);
         }
 
-        if amount <= 0 {
+        if amount < nester_common::MIN_DEPOSIT_AMOUNT {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
         if min_shares_out < 0 {
