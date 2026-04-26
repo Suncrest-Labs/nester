@@ -6,7 +6,9 @@ use soroban_sdk::{
 };
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event, ContractError, ProtocolType, SourceStatus, BASIS_POINT_SCALE};
+use nester_common::{
+    emit_event, fees::mul_div, ContractError, ProtocolType, SourceStatus, BASIS_POINT_SCALE,
+};
 
 const STRATEGY: Symbol = symbol_short!("STRATEGY");
 const WEIGHTS_UPDATED: Symbol = symbol_short!("WTS_SET");
@@ -76,6 +78,24 @@ pub struct AllocationWeight {
 pub struct SourceApy {
     pub source_id: Symbol,
     pub apy_bps: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentAllocation {
+    pub source_id: Symbol,
+    pub amount: i128,
+}
+
+/// A single transfer required to move toward target weights.
+///
+/// `delta` is positive when funds need to flow INTO the source,
+/// negative when funds need to be withdrawn FROM it.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AllocationDelta {
+    pub source_id: Symbol,
+    pub delta: i128,
 }
 
 #[contracttype]
@@ -320,6 +340,91 @@ impl AllocationStrategyContract {
         false
     }
 
+    /// Compute per-source transfers required to move from `current_allocations`
+    /// to the stored target weights, given `total` assets across all sources.
+    ///
+    /// Positive `delta` = source is under-allocated, needs funds added.
+    /// Negative `delta` = source is over-allocated, needs funds removed.
+    /// Returned vector is keyed by every source present in either the targets
+    /// or `current_allocations` so callers see the full picture.
+    pub fn calculate_rebalance_deltas(
+        env: Env,
+        current_allocations: Vec<CurrentAllocation>,
+        total: i128,
+    ) -> Vec<AllocationDelta> {
+        let target_weights = Self::get_weights(env.clone());
+        let target_amounts = allocation_amounts(&target_weights, total);
+
+        let mut deltas = Vec::new(&env);
+        let mut seen = Vec::new(&env);
+
+        for (source_id, target_amount) in target_amounts.iter() {
+            let current = current_amount_for(&current_allocations, &source_id);
+            seen.push_back(source_id.clone());
+            deltas.push_back(AllocationDelta {
+                source_id,
+                delta: target_amount - current,
+            });
+        }
+
+        // Surface sources held but not in current target weights so callers
+        // know to drain them entirely.
+        for current in current_allocations.iter() {
+            if !contains_symbol(&seen, &current.source_id) {
+                deltas.push_back(AllocationDelta {
+                    source_id: current.source_id,
+                    delta: -current.amount,
+                });
+            }
+        }
+
+        deltas
+    }
+
+    /// Returns `true` when `actual_allocations` are within the configured
+    /// rebalance threshold of the stored target weights, `false` otherwise.
+    /// `total` is the sum of all source balances; pass 0 to skip the check
+    /// (treats empty vault as in-spec).
+    pub fn validate_allocations(
+        env: Env,
+        actual_allocations: Vec<CurrentAllocation>,
+        total: i128,
+    ) -> bool {
+        if total <= 0 {
+            return true;
+        }
+
+        let threshold_bps = Self::get_strategy_params(env.clone()).rebalance_threshold_bps as i128;
+        let target_weights = Self::get_weights(env.clone());
+        let scale = BASIS_POINT_SCALE as i128;
+
+        let mut seen = Vec::new(&env);
+        for w in target_weights.iter() {
+            seen.push_back(w.source_id.clone());
+        }
+        for a in actual_allocations.iter() {
+            if !contains_symbol(&seen, &a.source_id) {
+                seen.push_back(a.source_id.clone());
+            }
+        }
+
+        for source_id in seen.iter() {
+            let target_bps = lookup_weight(&target_weights, &source_id) as i128;
+            let actual_amount = current_amount_for(&actual_allocations, &source_id);
+            // actual_bps = actual_amount * scale / total
+            let actual_bps = match mul_div(actual_amount, scale, total) {
+                Ok(v) => v,
+                Err(e) => panic_with_error!(&env, e),
+            };
+            let drift = (actual_bps - target_bps).abs();
+            if drift > threshold_bps {
+                return false;
+            }
+        }
+
+        true
+    }
+
     pub fn get_source_allocation(env: Env, source_id: Symbol) -> i128 {
         env.storage()
             .instance()
@@ -375,7 +480,10 @@ fn suggest_weights_from_sources(env: &Env, sources: Vec<RegistrySource>) -> Vec<
     let mut allocated: u32 = 0;
 
     for (source_id, score) in scored.iter() {
-        let weight_bps = ((score * BASIS_POINT_SCALE as i128) / total_score) as u32;
+        let weight_bps = match mul_div(score, BASIS_POINT_SCALE as i128, total_score) {
+            Ok(v) => v as u32,
+            Err(e) => panic_with_error!(env, e),
+        };
         allocated += weight_bps;
         weights.push_back(AllocationWeight {
             source_id,
@@ -660,7 +768,10 @@ fn allocation_amounts(weights: &Vec<AllocationWeight>, total_amount: i128) -> Ve
     let mut max_weight = 0_u32;
 
     for (index, weight) in weights.iter().enumerate() {
-        let amount = (total_amount * weight.weight_bps as i128) / scale;
+        let amount = match mul_div(total_amount, weight.weight_bps as i128, scale) {
+            Ok(v) => v,
+            Err(e) => panic_with_error!(&env, e),
+        };
         total_allocated += amount;
         if weight.weight_bps > max_weight {
             max_weight = weight.weight_bps;
@@ -687,6 +798,15 @@ fn contains_symbol(symbols: &Vec<Symbol>, target: &Symbol) -> bool {
         }
     }
     false
+}
+
+fn current_amount_for(allocations: &Vec<CurrentAllocation>, target: &Symbol) -> i128 {
+    for a in allocations.iter() {
+        if a.source_id == *target {
+            return a.amount;
+        }
+    }
+    0
 }
 
 fn lookup_weight(weights: &Vec<AllocationWeight>, target: &Symbol) -> u32 {

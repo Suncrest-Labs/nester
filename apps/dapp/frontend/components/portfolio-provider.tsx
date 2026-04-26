@@ -11,6 +11,7 @@ import {
 
 import { useWallet } from "@/components/wallet-provider";
 import { useNetwork } from "@/hooks/useNetwork";
+import { safeStorage } from "@/lib/storage";
 
 export type SupportedAsset = "USDC" | "XLM";
 
@@ -168,41 +169,23 @@ function PortfolioStore({
     const { currentNetwork } = useNetwork();
 
     const initialState = useMemo(() => {
-        if (!address || typeof window === "undefined") {
+        if (!address) {
             return {
                 balances: defaultBalances,
                 positions: [] as StoredPosition[],
                 transactions: [] as PortfolioTransaction[],
             };
         }
-
-        const raw = window.localStorage.getItem(storageKey(address));
-        if (!raw) {
-            return {
-                balances: defaultBalances,
-                positions: [] as StoredPosition[],
-                transactions: [] as PortfolioTransaction[],
-            };
-        }
-
-        try {
-            const parsed = JSON.parse(raw) as {
-                balances?: Record<string, number>;
-                positions?: StoredPosition[];
-                transactions?: PortfolioTransaction[];
-            };
-            return {
-                balances: parsed.balances ?? defaultBalances,
-                positions: parsed.positions ?? [],
-                transactions: parsed.transactions ?? [],
-            };
-        } catch {
-            return {
-                balances: defaultBalances,
-                positions: [] as StoredPosition[],
-                transactions: [] as PortfolioTransaction[],
-            };
-        }
+        const stored = safeStorage.get<{
+            balances?: Record<string, number>;
+            positions?: StoredPosition[];
+            transactions?: PortfolioTransaction[];
+        }>(storageKey(address), {});
+        return {
+            balances: stored.balances ?? defaultBalances,
+            positions: stored.positions ?? [],
+            transactions: stored.transactions ?? [],
+        };
     }, [address]);
 
     const [balances, setBalances] = useState<Record<string, number>>(
@@ -216,16 +199,29 @@ function PortfolioStore({
     );
 
     useEffect(() => {
-        if (!address || typeof window === "undefined") return;
-        window.localStorage.setItem(
-            storageKey(address),
-            JSON.stringify({
-                balances,
-                positions: storedPositions,
-                transactions,
-            })
-        );
+        if (!address) return;
+        safeStorage.set(storageKey(address), {
+            balances,
+            positions: storedPositions,
+            transactions,
+        });
     }, [address, balances, storedPositions, transactions]);
+
+    // Cross-tab sync: when another tab writes the same wallet's state, mirror
+    // it locally so dashboard/vaults pages don't show stale data.
+    useEffect(() => {
+        if (!address) return;
+        return safeStorage.subscribe<{
+            balances?: Record<string, number>;
+            positions?: StoredPosition[];
+            transactions?: PortfolioTransaction[];
+        }>(storageKey(address), (next) => {
+            if (!next) return;
+            if (next.balances) setBalances(next.balances);
+            if (next.positions) setStoredPositions(next.positions);
+            if (next.transactions) setTransactions(next.transactions);
+        });
+    }, [address]);
 
     // Sync real on-chain balances from Horizon whenever address or network changes
     useEffect(() => {

@@ -24,6 +24,11 @@ type Config struct {
 	rateLimit             RateLimitConfig
 	log                   LogConfig
 	allowedOrigins        []string
+	performance           PerformanceConfig
+}
+
+type PerformanceConfig struct {
+	snapshotInterval time.Duration
 }
 
 type ServerConfig struct {
@@ -129,6 +134,9 @@ func Load() (*Config, error) {
 			format: strings.ToLower(loader.stringDefault("LOG_FORMAT", defaultLogFormat(environment))),
 		},
 		allowedOrigins: loader.stringSliceDefault("ALLOWED_ORIGINS", nil),
+		performance: PerformanceConfig{
+			snapshotInterval: loader.durationDefault("PERFORMANCE_SNAPSHOT_INTERVAL", 1*time.Hour),
+		},
 	}
 
 	cfg.validate(&loader)
@@ -174,6 +182,14 @@ func (c Config) Log() LogConfig {
 
 func (c Config) Redis() RedisConfig {
 	return c.redis
+}
+
+func (c Config) Performance() PerformanceConfig {
+	return c.performance
+}
+
+func (p PerformanceConfig) SnapshotInterval() time.Duration {
+	return p.snapshotInterval
 }
 
 // AllowedOrigins returns the list of origins permitted to make cross-origin
@@ -262,6 +278,10 @@ func (c *Config) validate(loader *envLoader) {
 	}
 
 	validateAllowedOrigins(c.environment, c.allowedOrigins, loader)
+
+	if c.performance.snapshotInterval <= 0 {
+		loader.addError("PERFORMANCE_SNAPSHOT_INTERVAL must be greater than 0")
+	}
 }
 
 func validateAllowedOrigins(environment string, origins []string, loader *envLoader) {

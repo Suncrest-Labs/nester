@@ -106,6 +106,40 @@ func (r *VaultRepository) GetUserVaults(ctx context.Context, userID uuid.UUID) (
 	return vaults, nil
 }
 
+// ListActive returns every non-deleted vault whose status is `active`. Used
+// by the performance tracker so it can iterate live vaults each tick.
+func (r *VaultRepository) ListActive(ctx context.Context) ([]vault.Vault, error) {
+	const query = `
+		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, created_at, updated_at
+		FROM vaults
+		WHERE deleted_at IS NULL AND status = 'active'
+		ORDER BY created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	defer rows.Close()
+
+	out := make([]vault.Vault, 0)
+	for rows.Next() {
+		model, err := scanVault(rows)
+		if err != nil {
+			return nil, err
+		}
+		allocations, err := loadAllocations(ctx, r.db, model.ID)
+		if err != nil {
+			return nil, err
+		}
+		model.Allocations = allocations
+		out = append(out, model)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *VaultRepository) UpdateVaultBalances(ctx context.Context, id uuid.UUID, totalDeposited decimal.Decimal, currentBalance decimal.Decimal) error {
 	result, err := r.db.ExecContext(
 		ctx,
