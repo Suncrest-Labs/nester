@@ -50,6 +50,28 @@
     --touch-target: 44px;
 }
 
+/* Dark mode theme */
+.dark {
+    --background: 240 10% 10%;
+    --foreground: 0 0% 100%;
+    --card: 240 9% 18%;
+    --card-foreground: 0 0% 100%;
+    --primary: 255 60% 60%;
+    --primary-foreground: 240 10% 10%;
+    --secondary: 240 5.1% 25%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 240 5.1% 25%;
+    --muted-foreground: 240 3.8% 65%;
+    --accent: 240 5.1% 25%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 240 10% 10%;
+    --border: 240 5.1% 25%;
+    --input: 240 5.1% 25%;
+    --ring: 255 60% 60%;
+    --gradient-brand: linear-gradient(135deg, #B6509E 0%, #2EBAC6 100%);
+}
+
 * {
     border-color: hsl(var(--border));
 }

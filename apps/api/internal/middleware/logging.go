@@ -7,8 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"log/slog"
+
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 type statusRecorder struct {
@@ -33,6 +34,9 @@ func Logging(baseLogger *slog.Logger) func(http.Handler) http.Handler {
 			startedAt := time.Now()
 			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			request := r.WithContext(ctx)
+
+			// Add request ID to response header for client-side tracing
+			w.Header().Set("X-Request-ID", requestID)
 
 			requestLogger.Info("request started",
 				"method", r.Method,

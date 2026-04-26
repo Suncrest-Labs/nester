@@ -3,8 +3,8 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useWallet } from "@/components/wallet-provider";
-import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { ProtectedRoute } from "@/components/protected-route";
 import { motion } from "framer-motion";
 import {
     ArrowDownToLine,
@@ -46,17 +46,11 @@ function getVaultIcon(vaultName: string) {
 }
 
 export default function Dashboard() {
-    const { isConnected } = useWallet();
     const { positions, transactions, balances } = usePortfolio();
     const { prices: tokenPrices } = useTokenPrices();
     const { currentNetwork } = useNetwork();
-    const router = useRouter();
     const [selectedPosition, setSelectedPosition] = useState<PortfolioPosition | null>(null);
     const [chartPeriod, setChartPeriod] = useState<(typeof CHART_PERIODS)[number]>("1W");
-
-    useEffect(() => {
-        if (!isConnected) router.push("/");
-    }, [isConnected, router]);
 
     const { protocolBalanceUsd, totalYield, avgApy } = useMemo(() => {
         const vaultUsd = positions.reduce((sum, p) => sum + p.currentValue, 0);
@@ -76,10 +70,9 @@ export default function Dashboard() {
 
     const recentTransactions = transactions.slice(0, 5);
 
-    if (!isConnected) return null;
-
     return (
-        <AppShell>
+        <ProtectedRoute>
+            <AppShell>
             {/* ── Greeting + action buttons ── */}
             <motion.div
                 initial={{ opacity: 0, y: 12 }}
@@ -421,5 +414,7 @@ function WalletBalanceTable({
             </tbody>
         </table>
         </div>
+        </AppShell>
+        </ProtectedRoute>
     );
 }

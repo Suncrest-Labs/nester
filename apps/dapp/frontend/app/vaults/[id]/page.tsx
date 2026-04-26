@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { useWallet } from "@/components/wallet-provider";
+import { useParams } from "next/navigation";
+import { useRouter } from "next/navigation";
+import { ProtectedRoute } from "@/components/protected-route";
 import { AppShell } from "@/components/app-shell";
 import Link from "next/link";
 import Image from "next/image";
@@ -44,22 +45,27 @@ function InfoTooltip({ text }: { text: string }) {
 
 
 export default function VaultDetailPage() {
-    const { isConnected } = useWallet();
-    const router = useRouter();
     const { id } = useParams();
+    const router = useRouter();
     
     const { data: vaults = [], isLoading } = useVaults();
     const vault = vaults.find(v => v.id === id?.toString());
 
+    // If vault isn't found after loading, redirect to vaults list
     useEffect(() => {
-        if (!isConnected) router.push("/");
-        else if (!isLoading && !vault) router.replace("/vaults");
-    }, [isConnected, vault, router, isLoading]);
-
-    if (!isConnected || isLoading || !vault) return null;
+        if (!isLoading && !vault) {
+            router.replace("/vaults");
+        }
+    }, [vault, isLoading, router]);
 
     return (
-        <AppShell>
+        <ProtectedRoute
+            fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}
+        >
+            {isLoading || !vault ? (
+                <div className="flex items-center justify-center min-h-screen">Loading...</div>
+            ) : (
+            <AppShell>
                 {/* Back */}
                 <motion.div
                     initial={{ opacity: 0, x: -8 }}
@@ -179,6 +185,8 @@ export default function VaultDetailPage() {
                         </div>
                     </motion.div>
                 </div>
-        </AppShell>
+            </AppShell>
+            )}
+        </ProtectedRoute>
     );
 }

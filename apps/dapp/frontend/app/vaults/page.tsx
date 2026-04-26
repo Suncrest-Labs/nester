@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, Suspense, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { ProtectedRoute } from "@/components/protected-route";
 import Link from "next/link";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
@@ -358,9 +358,7 @@ function StatsBarWrapper({ vaults }: { vaults: VaultType[] }) {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function VaultsPage() {
-    const { isConnected } = useWallet();
     const { positions } = usePortfolio();
-    const router = useRouter();
     const [selectedVault, setSelectedVault] = useState<VaultType | null>(null);
     const [view, setView] = useState<"list" | "grid">("list");
     
@@ -369,14 +367,9 @@ export default function VaultsPage() {
     const MARKET_IDS = ["usdc", "xlm", "xlm-usdc", "defi500"];
     const marketPositions = positions.filter((p) => MARKET_IDS.includes(p.vaultId));
 
-    useEffect(() => {
-        if (!isConnected) router.push("/");
-    }, [isConnected, router]);
-
-    if (!isConnected) return null;
-
     return (
-        <AppShell>
+        <ProtectedRoute>
+            <AppShell>
                 {/* Header */}
                 <motion.div
                     initial={{ opacity: 0, y: -8 }}
@@ -455,5 +448,6 @@ export default function VaultsPage() {
                 vault={selectedVault}
             />
         </AppShell>
+        </ProtectedRoute>
     );
 }

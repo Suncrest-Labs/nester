@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { ProtectedRoute } from "@/components/protected-route";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     Unlock,
@@ -622,18 +622,10 @@ const FILTERS: { label: string; value: SavingsVaultType | "all" }[] = [
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function SavingsPage() {
-    const { isConnected } = useWallet();
     const { positions } = usePortfolio();
-    const router = useRouter();
     const [filter, setFilter] = useState<SavingsVaultType | "all">("all");
     const [selectedVault, setSelectedVault] = useState<SavingsVault | null>(null);
     const [showHowItWorks, setShowHowItWorks] = useState(false);
-
-    useEffect(() => {
-        if (!isConnected) router.push("/");
-    }, [isConnected, router]);
-
-    if (!isConnected) return null;
 
     const filtered =
         filter === "all"
@@ -641,7 +633,8 @@ export default function SavingsPage() {
             : SAVINGS_VAULTS.filter((v) => v.type === filter);
 
     return (
-        <AppShell>
+        <ProtectedRoute>
+            <AppShell>
 
                 {/* ── Page header ──────────────────────────────────────────── */}
                 <motion.div
@@ -767,5 +760,6 @@ export default function SavingsPage() {
 
             <DepositModal vault={selectedVault} onClose={() => setSelectedVault(null)} />
         </AppShell>
+        </ProtectedRoute>
     );
 }
