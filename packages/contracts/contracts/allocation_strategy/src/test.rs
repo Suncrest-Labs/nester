@@ -26,9 +26,7 @@ fn reg(
     );
 }
 
-fn setup_with_type(
-    vault_type: VaultType,
-) -> (Env, Address, Address, Address) {
+fn setup_with_type(vault_type: VaultType) -> (Env, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -42,8 +40,11 @@ fn setup_with_type(
     reg(&registry, &env, &admin, symbol_short!("blend"));
     reg(&registry, &env, &admin, symbol_short!("comp"));
 
-    AllocationStrategyContractClient::new(&env, &strategy_id)
-        .initialize_with_vault_type(&admin, &registry_id, &vault_type);
+    AllocationStrategyContractClient::new(&env, &strategy_id).initialize_with_vault_type(
+        &admin,
+        &registry_id,
+        &vault_type,
+    );
 
     (env, admin, registry_id, strategy_id)
 }
@@ -324,22 +325,22 @@ fn compute_allocation_preserves_weight_and_amount_invariants() {
 
     for total in [1_i128, 7_i128, 101_i128, 10_001_i128] {
         let weights = client.compute_allocation(
-            &total,
-        &vec![
-            &env,
+            // &total,
+            &vec![
+                &env,
                 SourceApy {
-                source_id: symbol_short!("aave"),
+                    source_id: symbol_short!("aave"),
                     apy_bps: 150,
-            },
+                },
                 SourceApy {
-                source_id: symbol_short!("blend"),
+                    source_id: symbol_short!("blend"),
                     apy_bps: 300,
-            },
+                },
                 SourceApy {
-                source_id: symbol_short!("comp"),
+                    source_id: symbol_short!("comp"),
                     apy_bps: 550,
-            },
-        ],
+                },
+            ],
         );
 
         assert_eq!(weight_sum(&weights), 10_000);
@@ -356,7 +357,7 @@ fn conservative_strategy_caps_individual_protocol_weight() {
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
 
     let weights = client.compute_allocation(
-        &10_000_i128,
+        // &10_000_i128,
         &vec![
             &env,
             SourceApy {
@@ -384,7 +385,7 @@ fn growth_strategy_allocates_more_to_higher_apy_sources() {
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
 
     let weights = client.compute_allocation(
-        &10_000_i128,
+        // &10_000_i128,
         &vec![
             &env,
             SourceApy {
@@ -402,8 +403,12 @@ fn growth_strategy_allocates_more_to_higher_apy_sources() {
         ],
     );
 
-    assert!(weight_for(&weights, symbol_short!("comp")) > weight_for(&weights, symbol_short!("blend")));
-    assert!(weight_for(&weights, symbol_short!("blend")) > weight_for(&weights, symbol_short!("aave")));
+    assert!(
+        weight_for(&weights, symbol_short!("comp")) > weight_for(&weights, symbol_short!("blend"))
+    );
+    assert!(
+        weight_for(&weights, symbol_short!("blend")) > weight_for(&weights, symbol_short!("aave"))
+    );
 }
 
 #[test]
@@ -412,7 +417,7 @@ fn defi500_strategy_distributes_evenly_across_registered_sources() {
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
 
     let weights = client.compute_allocation(
-        &10_000_i128,
+        // &10_000_i128,
         &vec![
             &env,
             SourceApy {
@@ -431,8 +436,16 @@ fn defi500_strategy_distributes_evenly_across_registered_sources() {
     );
 
     assert_eq!(weight_sum(&weights), 10_000);
-    assert!(weight_for(&weights, symbol_short!("aave")).abs_diff(weight_for(&weights, symbol_short!("blend"))) <= 1);
-    assert!(weight_for(&weights, symbol_short!("blend")).abs_diff(weight_for(&weights, symbol_short!("comp"))) <= 1);
+    assert!(
+        weight_for(&weights, symbol_short!("aave"))
+            .abs_diff(weight_for(&weights, symbol_short!("blend")))
+            <= 1
+    );
+    assert!(
+        weight_for(&weights, symbol_short!("blend"))
+            .abs_diff(weight_for(&weights, symbol_short!("comp")))
+            <= 1
+    );
 }
 
 #[test]
@@ -441,7 +454,7 @@ fn zero_apy_source_receives_zero_allocation_weight() {
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
 
     let weights = client.compute_allocation(
-        &10_000_i128,
+        // &10_000_i128,
         &vec![
             &env,
             SourceApy {
@@ -468,10 +481,14 @@ fn deactivated_and_unregistered_sources_receive_zero_weight() {
     let (env, admin, registry_id, strategy_id) = setup_with_type(VaultType::Growth);
     let registry = YieldRegistryContractClient::new(&env, &registry_id);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
-    registry.update_status(&admin, &symbol_short!("aave"), &RegistrySourceStatus::Paused);
+    registry.update_status(
+        &admin,
+        &symbol_short!("aave"),
+        &RegistrySourceStatus::Paused,
+    );
 
     let weights = client.compute_allocation(
-        &10_000_i128,
+        // &10_000_i128,
         &vec![
             &env,
             SourceApy {
@@ -488,7 +505,8 @@ fn deactivated_and_unregistered_sources_receive_zero_weight() {
             },
             SourceApy {
                 source_id: symbol_short!("comp"),
-                apy_bps: 100,            },
+                apy_bps: 100,
+            },
         ],
     );
 
@@ -717,4 +735,27 @@ fn suggest_weights_uses_apy_and_risk_scores() {
     assert_eq!(weight_for(&suggested, symbol_short!("aave")), 5_455);
     assert_eq!(weight_for(&suggested, symbol_short!("blend")), 1_515);
     assert_eq!(weight_for(&suggested, symbol_short!("comp")), 3_030);
+}
+
+// AllocationStrategy.set_allocations requires operator role — unauthorized callers are rejected.
+#[test]
+#[should_panic]
+fn test_set_allocations_unauthorized_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+    registry.initialize(&admin);
+
+    let contract_id = env.register_contract(None, AllocationStrategyContract);
+    let client = AllocationStrategyContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &registry_id);
+
+    let attacker = Address::generate(&env);
+    let apys = soroban_sdk::Vec::new(&env);
+
+    // attacker is not an operator — should panic
+    client.set_allocations(&attacker, &1000_i128, &apys);
 }

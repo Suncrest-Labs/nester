@@ -121,19 +121,26 @@ impl AllocationStrategyContract {
         vault_type: VaultType,
     ) {
         AccessControl::initialize(&env, &admin);
-        env.storage().instance().set(&DataKey::RegistryId, &registry_id);
-        env.storage().instance().set(&DataKey::VaultType, &vault_type);
-
-        let params = default_strategy_params(&vault_type);
         env.storage()
             .instance()
-            .set(&DataKey::RebalanceThresholdBps, &params.rebalance_threshold_bps);
+            .set(&DataKey::RegistryId, &registry_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::VaultType, &vault_type);
+
+        let params = default_strategy_params(&vault_type);
+        env.storage().instance().set(
+            &DataKey::RebalanceThresholdBps,
+            &params.rebalance_threshold_bps,
+        );
         env.storage()
             .instance()
             .set(&DataKey::MaxWeightBps, &params.max_weight_bps);
 
         let default_weights = build_default_weights(&env, &registry_id, &vault_type);
-        env.storage().instance().set(&DataKey::Weights, &default_weights);
+        env.storage()
+            .instance()
+            .set(&DataKey::Weights, &default_weights);
     }
 
     pub fn get_vault_type(env: Env) -> VaultType {
@@ -142,8 +149,16 @@ impl AllocationStrategyContract {
 
     pub fn get_strategy_params(env: Env) -> StrategyParams {
         StrategyParams {
-            rebalance_threshold_bps: env.storage().instance().get(&DataKey::RebalanceThresholdBps).unwrap(),
-            max_weight_bps: env.storage().instance().get(&DataKey::MaxWeightBps).unwrap(),
+            rebalance_threshold_bps: env
+                .storage()
+                .instance()
+                .get(&DataKey::RebalanceThresholdBps)
+                .unwrap(),
+            max_weight_bps: env
+                .storage()
+                .instance()
+                .get(&DataKey::MaxWeightBps)
+                .unwrap(),
         }
     }
 
@@ -166,7 +181,9 @@ impl AllocationStrategyContract {
         env.storage()
             .instance()
             .set(&DataKey::RebalanceThresholdBps, &rebalance_threshold_bps);
-        env.storage().instance().set(&DataKey::MaxWeightBps, &max_weight_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxWeightBps, &max_weight_bps);
     }
 
     pub fn set_weights(env: Env, caller: Address, weights: Vec<AllocationWeight>) {
@@ -227,11 +244,7 @@ impl AllocationStrategyContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
-    pub fn compute_allocation(
-        env: Env,
-        total_amount: i128,
-        apys: Vec<SourceApy>,
-    ) -> Vec<AllocationWeight> {
+    pub fn compute_allocation(env: Env, apys: Vec<SourceApy>) -> Vec<AllocationWeight> {
         let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
         let vault_type = Self::get_vault_type(env.clone());
         let params = Self::get_strategy_params(env.clone());
@@ -266,11 +279,30 @@ impl AllocationStrategyContract {
                 let mut weight = results.get(index).unwrap();
                 weight.weight_bps = computed.get(slot as u32).unwrap();
                 results.set(index, weight);
-            }}
+            }
+        }
 
+        results
+    }
+
+    pub fn set_allocations(env: Env, operator: Address, total_amount: i128, apys: Vec<SourceApy>) {
+        // verify the signature of caller
+        operator.require_auth();
+
+        if !AccessControl::has_role(&env, &operator, Role::Operator) {
+            panic!("Caller is not an authorized operator");
+        }
+
+        // perform computation
+        let results = Self::compute_allocation(env.clone(), apys);
+
+        // side checks
         env.storage().instance().set(&DataKey::Weights, &results);
         persist_allocations(&env, total_amount, &results);
-        results
+
+        // send event out
+        env.events()
+            .publish((Symbol::new(&env, "allocation_updated"),), results);
     }
 
     pub fn calculate_allocation(env: Env, total: i128) -> Vec<(Symbol, i128)> {
@@ -445,7 +477,11 @@ fn default_strategy_params(vault_type: &VaultType) -> StrategyParams {
     }
 }
 
-fn build_default_weights(env: &Env, registry_id: &Address, vault_type: &VaultType) -> Vec<AllocationWeight> {
+fn build_default_weights(
+    env: &Env,
+    registry_id: &Address,
+    vault_type: &VaultType,
+) -> Vec<AllocationWeight> {
     // Defensive: always convert to Vec<AllocationWeight> with correct types and length
     let active_sources: Vec<RegistrySource> = registry_get_active_sources(env, registry_id);
     let mut source_ids = Vec::new(env);
@@ -647,7 +683,9 @@ fn validate_weight_sum(env: &Env, weights: &Vec<AllocationWeight>) {
 
 fn persist_allocations(env: &Env, total_amount: i128, weights: &Vec<AllocationWeight>) {
     for (symbol, amount) in allocation_amounts(weights, total_amount) {
-        env.storage().instance().set(&DataKey::Allocation(symbol), &amount);
+        env.storage()
+            .instance()
+            .set(&DataKey::Allocation(symbol), &amount);
     }
 }
 
