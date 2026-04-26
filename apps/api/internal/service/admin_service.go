@@ -277,5 +277,6 @@ func (s *AdminService) checkEventIndexer(ctx context.Context) admindomain.Health
 		LastEventAt:   lastEventAt,
 		LagSeconds:    lag,
 	}
+
 }
 

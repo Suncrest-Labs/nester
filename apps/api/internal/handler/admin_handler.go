@@ -34,12 +34,30 @@ type adminService interface {
 	GetDetailedHealth(ctx context.Context) (admindomain.DetailedHealth, error)
 }
 
+// EventSyncer triggers a one-shot run of the on-chain event indexer for
+// recovery or back-fill purposes.  The no-op default is used when no indexer
+// is configured (e.g. in test environments).
+type EventSyncer interface {
+	SyncEvents(ctx context.Context) (processed int, err error)
+}
+
+type noopEventSyncer struct{}
+
+func (noopEventSyncer) SyncEvents(_ context.Context) (int, error) { return 0, nil }
+
 type AdminHandler struct {
-	service adminService
+	service     adminService
+	eventSyncer EventSyncer
 }
 
 func NewAdminHandler(svc adminService) *AdminHandler {
-	return &AdminHandler{service: svc}
+	return &AdminHandler{service: svc, eventSyncer: noopEventSyncer{}}
+}
+
+// SetEventSyncer wires a real EventSyncer.  Call this from main after the
+// indexer has been initialised so the admin handler can trigger manual syncs.
+func (h *AdminHandler) SetEventSyncer(es EventSyncer) {
+	h.eventSyncer = es
 }
 
 func (h *AdminHandler) Register(mux *http.ServeMux) {
@@ -51,6 +69,28 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/settlements", h.listSettlements)
 	mux.HandleFunc("GET /api/v1/admin/users", h.listUsers)
 	mux.HandleFunc("GET /api/v1/admin/health", h.getDetailedHealth)
+	mux.HandleFunc("POST /api/v1/admin/sync-events", h.syncEvents)
+}
+
+// syncEvents handles POST /api/v1/admin/sync-events
+//
+// Triggers a one-shot indexer run synchronously.  Useful for recovery after
+// an RPC outage or for back-filling events that were missed during downtime.
+func (h *AdminHandler) syncEvents(w http.ResponseWriter, r *http.Request) {
+	processed, err := h.eventSyncer.SyncEvents(r.Context())
+	if err != nil {
+		response.WriteJSON(w, http.StatusInternalServerError, response.Response{
+			Success: false,
+			Error: &response.ErrorBody{
+				Code:    "SYNC_FAILED",
+				Message: "event sync failed: " + err.Error(),
+			},
+		})
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(map[string]any{
+		"processed": processed,
+	}))
 }
 
 func (h *AdminHandler) getDashboard(w http.ResponseWriter, r *http.Request) {

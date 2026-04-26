@@ -2,6 +2,8 @@ package stellar
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -84,13 +86,35 @@ func TestEventPoller_PollEvents_InvalidBlockRange(t *testing.T) {
 }
 
 func TestEventPoller_PollEvents_Success(t *testing.T) {
-	client := &Client{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"jsonrpc":"2.0",
+			"id":"nester-event-poller",
+			"result":{
+				"events":[
+					{
+						"contractId":"CONTRACT123",
+						"ledger":99,
+						"txHash":"tx-1",
+						"topic":["deposit"],
+						"value":{"amount":"100.5"}
+					}
+				]
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := &Client{config: Config{RPCURL: server.URL}}
 	poller := NewEventPoller(client)
 
 	events, err := poller.PollEvents(context.Background(), "CONTRACT123", 0, 100)
 	assert.NoError(t, err)
 	assert.NotNil(t, events)
-	assert.Equal(t, 0, len(events))
+	assert.Equal(t, 1, len(events))
+	assert.Equal(t, "deposit", events[0].EventType)
+	assert.Equal(t, uint64(99), events[0].BlockNumber)
 }
 
 func TestFilterEvents_ByType(t *testing.T) {

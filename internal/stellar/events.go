@@ -1,9 +1,14 @@
 package stellar
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
+	"strings"
 	"time"
 )
 
@@ -21,6 +26,7 @@ type EventListener func(event *Event)
 // NewEventPoller creates a new event poller
 func NewEventPoller(client *Client) *EventPoller {
 	return &EventPoller{
+		client:    client,
 		listeners: make(map[string][]EventListener),
 		done:      make(chan struct{}),
 	}
@@ -77,23 +83,88 @@ func (ep *EventPoller) PollEvents(
 	if fromBlock > toBlock {
 		return nil, fmt.Errorf("fromBlock must be <= toBlock")
 	}
+	if ep.client == nil {
+		return nil, fmt.Errorf("stellar client is required")
+	}
+	if strings.TrimSpace(ep.client.config.RPCURL) == "" {
+		return nil, fmt.Errorf("stellar RPC URL is required")
+	}
 
-	// In production, this would call the Soroban RPC getEvents endpoint
-	// For now, returning empty slice as placeholder
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      "nester-event-poller",
+		"method":  "getEvents",
+		"params": map[string]any{
+			"startLedger": fromBlock,
+			"endLedger":   toBlock,
+			"filters": []map[string]any{
+				{
+					"type":        "contract",
+					"contractIds": []string{contractID},
+				},
+			},
+			"pagination": map[string]any{"limit": 200},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 
-	events := make([]Event, 0)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.client.config.RPCURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
 
-	// Soroban RPC call would look like:
-	// events, err := ep.client.rpcClient.GetEvents(ctx, GetEventsRequest{
-	//   ContractIDs: []string{contractID},
-	//   StartLedger: fromBlock,
-	//   EndLedger:   toBlock,
-	// })
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 
-	// Convert SDK events to domain events
-	// for _, sdkEvent := range events {
-	//   events = append(events, convertSDKEventToDomain(sdkEvent))
-	// }
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("getEvents failed with %d: %s", resp.StatusCode, string(payload))
+	}
+
+	var rpcResp struct {
+		Result struct {
+			Events []struct {
+				ContractID string         `json:"contractId"`
+				Ledger     uint64         `json:"ledger"`
+				TxHash     string         `json:"txHash"`
+				Topic      []interface{}  `json:"topic"`
+				Value      map[string]any `json:"value"`
+			} `json:"events"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&rpcResp); err != nil {
+		return nil, err
+	}
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("getEvents RPC error: %s", rpcResp.Error.Message)
+	}
+
+	events := make([]Event, 0, len(rpcResp.Result.Events))
+	for _, raw := range rpcResp.Result.Events {
+		eventType := ""
+		if len(raw.Topic) > 0 {
+			eventType = fmt.Sprintf("%v", raw.Topic[0])
+		}
+		events = append(events, Event{
+			ContractID:    raw.ContractID,
+			EventType:     eventType,
+			BlockNumber:   raw.Ledger,
+			TransactionID: raw.TxHash,
+			Data:          raw.Value,
+		})
+	}
 
 	return events, nil
 }

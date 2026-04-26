@@ -18,5 +18,6 @@ func diskUsage() string {
 	if total == 0 {
 		return "n/a"
 	}
-	return fmt.Sprintf("%.1f%%", (float64(used)/float64(total))*100)
+	usedPct := (float64(used) / float64(total)) * 100
+	return fmt.Sprintf("%.1f%%", usedPct)
 }
