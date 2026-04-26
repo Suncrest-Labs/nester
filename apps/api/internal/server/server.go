@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -40,12 +41,41 @@ func New(logger *slog.Logger, checker HealthChecker, allowedOrigins []string) (h
 	return handler, mux
 }
 
-// RunWithGracefulShutdown starts srv and blocks until ctx is cancelled, then
-// shuts down with the given timeout.  It returns any server or shutdown error.
+// RunWithGracefulShutdown starts srv via ListenAndServe and blocks until ctx
+// is cancelled, then shuts down with the given timeout.
 func RunWithGracefulShutdown(ctx context.Context, srv *http.Server, timeout time.Duration) error {
 	serverErr := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+	}()
+
+	select {
+	case err := <-serverErr:
+		return err
+	case <-ctx.Done():
+	}
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if err := srv.Shutdown(shutCtx); err != nil {
+		return err
+	}
+	return <-serverErr
+}
+
+// ServeWithGracefulShutdown serves on an existing listener and blocks until
+// ctx is cancelled, then shuts down with the given timeout. Use this instead
+// of RunWithGracefulShutdown when a pre-allocated listener is required (e.g.
+// for tests that need a random free port).
+func ServeWithGracefulShutdown(ctx context.Context, srv *http.Server, ln net.Listener, timeout time.Duration) error {
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 			return
 		}

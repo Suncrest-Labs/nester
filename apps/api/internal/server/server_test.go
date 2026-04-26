@@ -548,30 +548,36 @@ func TestGracefulShutdown_ExitsWithinConfiguredTimeout(t *testing.T) {
 
 	handler, _ := server.New(silentLogger(), noopChecker, defaultTestOrigins)
 	srv := &http.Server{Handler: handler}
-	go srv.Serve(ln) //nolint:errcheck
 
-	// Verify the server is up
+	timeout := 3 * time.Second
+	done := make(chan error, 1)
+	go func() {
+		done <- server.ServeWithGracefulShutdown(ctx, srv, ln, timeout)
+	}()
+
+	// Verify the server is up before triggering shutdown.
 	addr := fmt.Sprintf("http://%s/health", ln.Addr())
-	resp, err := http.Get(addr)
+	var resp *http.Response
+	for i := 0; i < 20; i++ {
+		resp, err = http.Get(addr)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("pre-shutdown request failed: %v", err)
 	}
 	resp.Body.Close()
 
-	// Cancel context to trigger shutdown
+	// Cancel context to trigger graceful shutdown.
 	cancel()
-
-	timeout := 3 * time.Second
-	done := make(chan error, 1)
-	go func() {
-		done <- server.RunWithGracefulShutdown(ctx, srv, timeout)
-	}()
 
 	select {
 	case err := <-done:
-		// RunWithGracefulShutdown may return ErrServerClosed or nil — both are fine.
+		// ServeWithGracefulShutdown may return ErrServerClosed or nil — both are fine.
 		if err != nil && err != http.ErrServerClosed {
-			t.Errorf("RunWithGracefulShutdown returned unexpected error: %v", err)
+			t.Errorf("ServeWithGracefulShutdown returned unexpected error: %v", err)
 		}
 	case <-time.After(timeout + 2*time.Second):
 		t.Fatal("server did not exit within configured timeout")

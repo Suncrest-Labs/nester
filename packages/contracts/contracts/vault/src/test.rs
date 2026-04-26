@@ -10,7 +10,7 @@ use soroban_sdk::{
 use nester_access_control::Role;
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
-use crate::{VaultContract, VaultContractClient, VaultStatus};
+use crate::{FeeConfig, VaultContract, VaultContractClient, VaultStatus};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -239,6 +239,22 @@ fn deposit_reverts_when_min_shares_out_is_not_met() {
 }
 
 #[test]
+fn second_deposit_after_fee_accrual_uses_gross_assets_denominator() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    mint(&token, &user_a, 2_000 * XLM);
+    mint(&token, &user_b, 2_000 * XLM);
+
+    vault.deposit(&user_a, &(1_000 * XLM), &0);
+    advance_time(&env, 365 * DAY);
+
+    // This deposit triggers fee accrual first; share minting must still use gross total assets.
+    let user_b_shares = vault.deposit(&user_b, &(1_000 * XLM), &0);
+    assert_eq!(user_b_shares, 1_000 * XLM);
+}
+
+#[test]
 #[should_panic]
 fn deposit_of_zero_is_rejected() {
     let (_env, _admin, _token, vault, _treasury) = setup();
@@ -359,6 +375,35 @@ fn withdrawal_charges_perf_fee_only_on_realized_user_yield() {
 
     // Gross assets = 2000, performance fee = 100, early fee = 2, net = 1898.
     assert_eq!(token::Client::new(&env, &token.address).balance(&user), 1_898 * XLM);
+}
+
+#[test]
+fn performance_fee_charges_only_realized_yield_not_principal() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    mint(&token, &user_a, 2_000 * XLM);
+    mint(&token, &user_b, 2_000 * XLM);
+
+    // Disable early withdrawal fee so this test isolates performance fee behavior.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.deposit(&user_a, &(1_000 * XLM), &0);
+    vault.report_yield(&admin, &(100 * XLM));
+
+    // User B enters after yield is already reflected in share price.
+    let user_b_shares = vault.deposit(&user_b, &(1_000 * XLM), &0);
+    assert_eq!(user_b_shares, 909_090_909);
+
+    // User B immediately exits: no yield earned post-entry, so performance fee must be zero.
+    vault.withdraw(&user_b, &user_b_shares, &0);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user_b),
+        1_999 * XLM
+    );
 }
 
 #[test]

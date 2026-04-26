@@ -629,6 +629,9 @@ impl VaultContract {
         token::Client::new(&env, &token_address).transfer(&user, &contract_address, &amount);
 
         let total_assets = get_total_assets(&env);
+        // Mint deposit shares against gross assets (pre-fee) so new depositors
+        // do not pay for uncollected accrued fees.
+        vault_token_client(&env).set_total_assets(&total_assets);
         let shares_to_mint = vault_token_client(&env).shares_for_deposit(&amount);
         if shares_to_mint < min_shares_out {
             panic_with_error!(&env, ContractError::SlippageExceeded);
@@ -636,6 +639,7 @@ impl VaultContract {
         let _ = vault_token_client(&env).mint_for_deposit(&user, &amount);
         let new_user_shares = get_shares(&env, &user);
         set_total_assets(&env, total_assets + amount);
+        sync_vault_token_total_assets(&env);
 
         let current_principal = get_user_principal(&env, &user);
         set_user_principal(&env, &user, current_principal + amount);
