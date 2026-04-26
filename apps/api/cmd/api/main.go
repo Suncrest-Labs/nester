@@ -99,11 +99,17 @@ func run() error {
 		challengeStore = service.NewInMemoryChallengeStore(cfg.Auth().ChallengeExpiry())
 		baseLogger.Info("challenge store: in-memory (single-instance only)")
 	}
+
 	authService := service.NewAuthService(challengeStore, userService, cfg.Auth())
 	authHandler := handler.NewAuthHandler(authService)
 
 	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL())
 	rateHandler := handler.NewRateHandler(oracleService)
+
+	paystackResolver := service.NewPaystackResolver(cfg.Bank().PaystackKey())
+	flutterwaveResolver := service.NewFlutterwaveResolver(cfg.Bank().FlutterwaveKey())
+	bankService := service.NewBankService(paystackResolver, flutterwaveResolver)
+	bankHandler := handler.NewBankHandler(bankService)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
@@ -115,19 +121,19 @@ func run() error {
 	adminHandler.Register(mux)
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
+	bankHandler.Register(mux)
 
 	authRules := []middleware.RouteRule{
 		{PathPrefix: "/health", Public: true},
 		{PathPrefix: "/healthz", Public: true},
 		{PathPrefix: "/readyz", Public: true},
 		{PathPrefix: "/api/v1/auth/", Public: true},
+		{PathPrefix: "/api/v1/banks/", Public: true},
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}
 	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
-	// Global rate limit applies to all requests per IP.
 	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
-	// Write rate limit is stricter and applies only to mutating methods (POST/PUT/PATCH/DELETE).
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 	// Wallet rate limit runs inside Authenticate so the caller's wallet address
 	// is in context. Unauthenticated requests produce an empty key and pass
