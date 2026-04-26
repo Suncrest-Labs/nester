@@ -124,7 +124,8 @@ export default function PortfolioPage() {
     const hide = (v: string) => hideBalances ? "••••••" : v;
     const fmtUsd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-    const recentTx = transactions.slice(0, 15);
+    const recentTx = transactions.filter((tx) => tx.status !== "Pending").slice(0, 15);
+    const pendingTx = transactions.filter((tx) => tx.status === "Pending");
 
     return (
         <AppShell>
@@ -321,6 +322,27 @@ export default function PortfolioPage() {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -8 }}
                     >
+                        {pendingTx.length > 0 && (
+                            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                                <p className="text-xs font-medium uppercase tracking-[0.16em] text-amber-700">
+                                    Pending
+                                </p>
+                                <div className="mt-3 space-y-1.5">
+                                    {pendingTx.map((tx) => (
+                                        <div
+                                            key={tx.id}
+                                            className="flex items-center justify-between gap-4 rounded-xl border border-amber-200 bg-white px-4 py-3"
+                                        >
+                                            <div>
+                                                <p className="text-sm text-black">{tx.type}</p>
+                                                <p className="text-[11px] text-black/30">{tx.vaultName}</p>
+                                            </div>
+                                            <span className="text-[11px] text-amber-600">Processing</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         {recentTx.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-black/8 bg-white">
                                 <p className="text-sm text-black/50">No activity yet</p>

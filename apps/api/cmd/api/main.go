@@ -57,6 +57,10 @@ func run() error {
 	vaultService := service.NewVaultService(vaultRepository)
 	vaultHandler := handler.NewVaultHandler(vaultService)
 
+	transactionRepository := postgres.NewTransactionRepository(db)
+	transactionService := service.NewTransactionService(transactionRepository, cfg.Stellar().HorizonURL())
+	transactionHandler := handler.NewTransactionHandler(transactionService)
+
 	settlementRepository := postgres.NewSettlementRepository(db)
 	settlementService := service.NewSettlementService(settlementRepository)
 	settlementHandler := handler.NewSettlementHandler(settlementService)
@@ -110,6 +114,7 @@ func run() error {
 	mux.HandleFunc("GET /healthz", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
 	mux.HandleFunc("GET /readyz", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
 	vaultHandler.Register(mux)
+	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
 	userHandler.Register(mux)
 	adminHandler.Register(mux)
