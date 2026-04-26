@@ -229,3 +229,11 @@ Follow existing patterns and conventions in the codebase. Write tests for new fu
 **Built by [Suncrest Labs](https://suncrestlabs.com)**
 
 *Nester is in active development. Features and specifications may change.*
+
+## 💰 Bounty Contribution
+
+- **Task:** feat(backend): add pagination, filtering, and sorting to all list endpoints
+- **Reward:** $1
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
