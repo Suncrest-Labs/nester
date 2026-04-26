@@ -88,7 +88,7 @@ func (c *ContractInvoker) InvokeVoidFunction(ctx context.Context, contractAddres
 			},
 		},
 		BaseFee:       txnbuild.MinBaseFee,
-		Preconditions: txnbuild.Preconditions{TimeBounds: txnbuild.NewInfiniteTimeout()},
+		Preconditions: txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(int64((5 * time.Minute).Seconds()))},
 	})
 	if err != nil {
 		return fmt.Errorf("build transaction: %w", err)
@@ -343,7 +343,7 @@ func (c *ContractInvoker) InvokeWithI128Pair(ctx context.Context, contractAddres
 			},
 		},
 		BaseFee:       txnbuild.MinBaseFee,
-		Preconditions: txnbuild.Preconditions{TimeBounds: txnbuild.NewInfiniteTimeout()},
+		Preconditions: txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(int64((5 * time.Minute).Seconds()))},
 	})
 	if err != nil {
 		return fmt.Errorf("build transaction: %w", err)

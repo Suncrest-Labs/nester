@@ -714,3 +714,113 @@ fn emergency_withdraw_queue_processed_on_deposit() {
         1_000 * XLM
     );
 }
+
+// ---------------------------------------------------------------------------
+// LiquidReserved tests — verifies collect_fees cannot over-draw committed funds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn collect_fees_capped_when_emergency_queue_commits_all_reserves() {
+    // Deposit, accrue fees, then queue an emergency withdrawal that commits
+    // all liquid reserves.  collect_fees must transfer nothing.
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    // Accrue a full year of management fee
+    advance_time(&env, 365 * DAY);
+    vault.pause(&admin);
+
+    // User queues an emergency withdrawal, which reserves their principal
+    vault.emergency_withdraw(&user);
+
+    // Now all liquid reserves are committed to the queue.
+    // collect_fees should transfer 0 — fees exist but available = 0.
+    let treasury_before = token::Client::new(&env, &token.address).balance(&_treasury);
+    vault.unpause(&admin);
+    vault.collect_fees(&admin);
+    let treasury_after = token::Client::new(&env, &token.address).balance(&_treasury);
+
+    assert_eq!(
+        treasury_after, treasury_before,
+        "collect_fees must not transfer when all reserves are committed to the queue"
+    );
+}
+
+#[test]
+fn collect_fees_transfers_only_unreserved_portion() {
+    // Two users deposit.  One queues an emergency withdrawal (reserving half
+    // the pool).  collect_fees should be capped to the unreserved half.
+    let (env, admin, token, vault, _treasury) = setup();
+    let user1 = Address::generate(&env);
+    let user2 = Address::generate(&env);
+    mint(&token, &user1, 500 * XLM);
+    mint(&token, &user2, 500 * XLM);
+
+    vault.deposit(&user1, &(500 * XLM), &0);
+    vault.deposit(&user2, &(500 * XLM), &0);
+
+    advance_time(&env, 365 * DAY);
+    vault.pause(&admin);
+
+    // user1's emergency withdrawal reserves ~500 XLM from the pool
+    vault.emergency_withdraw(&user1);
+
+    vault.unpause(&admin);
+
+    let treasury_before = token::Client::new(&env, &token.address).balance(&_treasury);
+    vault.collect_fees(&admin);
+    let treasury_after = token::Client::new(&env, &token.address).balance(&_treasury);
+
+    let fees_collected = treasury_after - treasury_before;
+
+    // The reserved portion (user1's principal, ~500 XLM) must not be touched.
+    // Fees collected must be strictly less than the total accrued fees.
+    let total_reserves = token::Client::new(&env, &token.address).balance(&vault.address);
+    assert!(
+        fees_collected < total_reserves,
+        "collect_fees must not exceed unreserved liquid reserves"
+    );
+}
+
+#[test]
+fn process_emergency_queue_decrements_liquid_reserved() {
+    // After a queued withdrawal is processed, LiquidReserved must decrease
+    // so that subsequent collect_fees calls can access those funds again.
+    let (env, admin, token, vault, _treasury) = setup();
+    let user1 = Address::generate(&env);
+    let user2 = Address::generate(&env);
+    mint(&token, &user1, 1_000 * XLM);
+    mint(&token, &user2, 2_000 * XLM);
+
+    vault.deposit(&user1, &(1_000 * XLM), &0);
+    advance_time(&env, 365 * DAY);
+    vault.pause(&admin);
+
+    vault.emergency_withdraw(&user1);
+    // user1 is now queued; reserved = ~1000 XLM
+
+    // user2 deposits, providing liquidity and processing the queue
+    vault.unpause(&admin);
+    vault.deposit(&user2, &(2_000 * XLM), &0);
+
+    // user1 should have received their principal
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user1),
+        1_000 * XLM,
+        "queued user should receive principal after queue is processed"
+    );
+
+    // After the queue is processed, collect_fees should succeed (reserved = 0)
+    advance_time(&env, 30 * DAY);
+    let treasury_before = token::Client::new(&env, &token.address).balance(&_treasury);
+    vault.collect_fees(&admin);
+    let treasury_after = token::Client::new(&env, &token.address).balance(&_treasury);
+
+    assert!(
+        treasury_after > treasury_before,
+        "collect_fees should transfer fees once LiquidReserved is decremented after queue processing"
+    );
+}
