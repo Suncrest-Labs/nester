@@ -10,7 +10,7 @@ use soroban_sdk::{
 use nester_access_control::Role;
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
-use crate::{VaultContract, VaultContractClient, VaultStatus};
+use crate::{CircuitBreakerConfig, VaultContract, VaultContractClient, VaultStatus};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -495,6 +495,29 @@ fn withdrawal_after_lock_period_has_no_early_fee() {
 
     assert_eq!(remaining, 0);
     assert_eq!(vault.get_total_deposits(), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn circuit_breaker_uses_rolling_window_across_boundary() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+    mint(&token, &user, deposit_amount);
+
+    vault.set_circuit_breaker_config(
+        &admin,
+        &CircuitBreakerConfig {
+            threshold_bps: 1000,
+            window_seconds: 60,
+        },
+    );
+
+    vault.deposit(&user, &deposit_amount);
+    vault.withdraw(&user, &(100 * XLM));
+
+    advance_time(&env, 60);
+    vault.withdraw(&user, &(100 * XLM));
 }
 
 // ---------------------------------------------------------------------------

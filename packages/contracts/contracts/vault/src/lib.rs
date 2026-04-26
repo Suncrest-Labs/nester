@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
-    IntoVal, Symbol,
+    IntoVal, Symbol, Vec,
 };
 mod vault_token {
     soroban_sdk::contractimport!(
@@ -39,8 +39,8 @@ pub struct CircuitBreakerConfig {
 
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct WithdrawalWindow {
-    pub last_update: u64,
+pub struct WithdrawalEntry {
+    pub timestamp: u64,
     pub sum: i128,
 }
 
@@ -151,7 +151,7 @@ enum DataKey {
     MaxDeposit,
     RebalanceThreshold,
     CircuitBreakerConfig,
-    WithdrawalWindow,
+    WithdrawalHistory,
     UserPrincipal(Address),
     EmergencyFeeBps,
     VaultLiquidReserves,
@@ -320,31 +320,27 @@ fn check_circuit_breaker(env: &Env, amount: i128) {
         .instance()
         .get(&DataKey::CircuitBreakerConfig)
         .expect("CB config missing");
-    let mut window: WithdrawalWindow = env
+    let now = env.ledger().timestamp();
+    let window_start = now.saturating_sub(config.window_seconds);
+    let history: Vec<WithdrawalEntry> = env
         .storage()
         .instance()
-        .get(&DataKey::WithdrawalWindow)
-        .unwrap_or(WithdrawalWindow {
-            last_update: env.ledger().timestamp(),
-            sum: 0,
-        });
+        .get(&DataKey::WithdrawalHistory)
+        .unwrap_or(Vec::new(env));
 
-    let now = env.ledger().timestamp();
-    if now >= window.last_update + config.window_seconds {
-        window.last_update = now;
-        window.sum = amount;
-    } else {
-        window.sum += amount;
+    let mut rolling_history: Vec<WithdrawalEntry> = Vec::new(env);
+    let mut window_sum = amount;
+    for entry in history.iter() {
+        if entry.timestamp >= window_start {
+            window_sum += entry.sum;
+            rolling_history.push_back(entry.clone());
+        }
     }
-
-    env.storage()
-        .instance()
-        .set(&DataKey::WithdrawalWindow, &window);
 
     let total_assets = get_total_assets(env);
     let threshold = total_assets * config.threshold_bps as i128 / 10000;
 
-    if threshold > 0 && window.sum > threshold {
+    if threshold > 0 && window_sum > threshold {
         env.storage()
             .instance()
             .set(&DataKey::Status, &VaultStatus::Paused);
@@ -355,11 +351,21 @@ fn check_circuit_breaker(env: &Env, amount: i128) {
             env.current_contract_address(),
             CircuitBreakerEventData {
                 withdrawal_amount: amount,
-                window_sum: window.sum,
+                window_sum,
                 threshold,
             },
         );
+        panic_with_error!(env, ContractError::CircuitBreakerTriggered);
     }
+
+    rolling_history.push_back(WithdrawalEntry {
+        timestamp: now,
+        sum: amount,
+    });
+
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalHistory, &rolling_history);
 }
 
 // ---------------------------------------------------------------------------
@@ -423,13 +429,10 @@ impl VaultContract {
                 window_seconds: 7200, // 2h
             },
         );
-        env.storage().instance().set(
-            &DataKey::WithdrawalWindow,
-            &WithdrawalWindow {
-                last_update: env.ledger().timestamp(),
-                sum: 0,
-            },
-        );
+        let history: Vec<WithdrawalEntry> = Vec::new(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalHistory, &history);
     }
 
     pub fn set_max_deposit(env: Env, caller: Address, amount: i128) {
