@@ -45,7 +45,7 @@ func (r *UserRepository) Create(ctx context.Context, model *user.User) error {
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*user.User, error) {
 	query := `
-		SELECT id, wallet_address, display_name, kyc_status, created_at, updated_at
+		SELECT id, wallet_address, display_name, kyc_status, tier, last_login_at, created_at, updated_at
 		FROM users
 		WHERE id = $1
 	`
@@ -54,7 +54,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*user.User,
 
 func (r *UserRepository) GetByWalletAddress(ctx context.Context, addr string) (*user.User, error) {
 	query := `
-		SELECT id, wallet_address, display_name, kyc_status, created_at, updated_at
+		SELECT id, wallet_address, display_name, kyc_status, tier, last_login_at, created_at, updated_at
 		FROM users
 		WHERE wallet_address = $1
 	`
@@ -71,6 +71,8 @@ func scanUser(row userScanner) (*user.User, error) {
 		walletAddress string
 		displayName   string
 		kycStatus     string
+		tier          string
+		lastLoginAt   sql.NullTime
 		createdAt     time.Time
 		updatedAt     time.Time
 	)
@@ -80,6 +82,8 @@ func scanUser(row userScanner) (*user.User, error) {
 		&walletAddress,
 		&displayName,
 		&kycStatus,
+		&tier,
+		&lastLoginAt,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -94,11 +98,19 @@ func scanUser(row userScanner) (*user.User, error) {
 		return nil, err // should not happen if UUID is well-formed in DB
 	}
 
+	var lastLoginAtPtr *time.Time
+	if lastLoginAt.Valid {
+		t := lastLoginAt.Time
+		lastLoginAtPtr = &t
+	}
+
 	return &user.User{
 		ID:            parsedID,
 		WalletAddress: walletAddress,
 		DisplayName:   displayName,
 		KYCStatus:     user.KYCStatus(kycStatus),
+		Tier:          tier,
+		LastLoginAt:   lastLoginAtPtr,
 		CreatedAt:     createdAt,
 		UpdatedAt:     updatedAt,
 	}, nil

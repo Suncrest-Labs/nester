@@ -1,0 +1,14 @@
+ALTER TABLE settlements DROP COLUMN IF EXISTS estimated_fee;
+ALTER TABLE settlements DROP COLUMN IF EXISTS notes;
+ALTER TABLE settlements DROP COLUMN IF EXISTS error_message;
+ALTER TABLE settlements DROP COLUMN IF EXISTS retry_count;
+
+ALTER TABLE allocations DROP COLUMN IF EXISTS status;
+ALTER TABLE allocations DROP COLUMN IF EXISTS updated_at;
+
+ALTER TABLE vaults DROP COLUMN IF EXISTS last_synced_at;
+ALTER TABLE vaults DROP COLUMN IF EXISTS fees_paid;
+ALTER TABLE vaults DROP COLUMN IF EXISTS yield_earned;
+
+ALTER TABLE users DROP COLUMN IF EXISTS last_login_at;
+ALTER TABLE users DROP COLUMN IF EXISTS tier;

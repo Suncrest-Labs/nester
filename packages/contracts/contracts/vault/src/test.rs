@@ -761,6 +761,49 @@ fn emergency_withdraw_queue_processed_on_deposit() {
 }
 
 // ---------------------------------------------------------------------------
+// New Queries Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_read_only_queries() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+    
+    assert_eq!(vault.total_shares(), deposit);
+    assert_eq!(vault.share_price(), 10_000_000); // 1.0 share price initialized
+
+    // Simulate yield
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(500 * XLM));
+
+    assert_eq!(vault.total_shares(), deposit);
+    assert_eq!(vault.share_price(), 15_000_000); // 1.5 share price
+    
+    // estimated fees
+    advance_time(&env, DAY);
+    let fees = vault.estimated_fees();
+    assert!(fees > 0);
+
+    // withdrawal preview
+    let preview = vault.withdrawal_fee_preview(&user, &deposit);
+    assert_eq!(preview.gross_asset_value, 1_500 * XLM);
+    assert!(preview.early_withdrawal_fee_deducted > 0);
+    assert!(preview.performance_fee_deducted > 0);
+    assert_eq!(preview.management_fee_deducted, 0);
+    assert!(preview.net_amount_received > 0);
+    assert!(preview.net_amount_received < preview.gross_asset_value);
+
+    // pending yield
+    // pending yield is contract balance minus liquid reserves
+    // Let's directly mint to contract to simulate un-reported yield
+    mint(&token, &vault.address, 200 * XLM);
+    assert_eq!(vault.pending_yield(), 200 * XLM);
+}
+
 // LiquidReserved tests — verifies collect_fees cannot over-draw committed funds
 // ---------------------------------------------------------------------------
 

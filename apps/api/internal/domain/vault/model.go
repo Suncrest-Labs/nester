@@ -44,6 +44,10 @@ type Vault struct {
 	CurrentBalance  decimal.Decimal `json:"current_balance"`
 	Currency        string          `json:"currency"`
 	Status          VaultStatus     `json:"status"`
+	YieldEarned     decimal.Decimal `json:"yield_earned"`
+	FeesPaid        decimal.Decimal `json:"fees_paid"`
+	LastSyncedAt    *time.Time      `json:"last_synced_at,omitempty"`
+	DeletedAt       *time.Time      `json:"deleted_at,omitempty"`
 	Allocations     []Allocation    `json:"allocations,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
@@ -55,18 +59,24 @@ type Allocation struct {
 	Protocol    string          `json:"protocol"`
 	Amount      decimal.Decimal `json:"amount"`
 	APY         decimal.Decimal `json:"apy"`
+	Status      string          `json:"status"`
 	AllocatedAt time.Time       `json:"allocated_at"`
+	UpdatedAt   *time.Time      `json:"updated_at,omitempty"`
 }
 
 // VaultTransaction represents a single deposit or withdrawal event recorded in
 // the vault_transactions table.
 type VaultTransaction struct {
-	ID        uuid.UUID       `json:"id"`
-	VaultID   uuid.UUID       `json:"vault_id"`
-	Type      string          `json:"type"` // "deposit" | "withdrawal"
-	Amount    decimal.Decimal `json:"amount"`
-	TxHash    string          `json:"tx_hash,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID                   uuid.UUID        `json:"id"`
+	VaultID              uuid.UUID        `json:"vault_id"`
+	UserID               *uuid.UUID       `json:"user_id,omitempty"`
+	Type                 string           `json:"type"` // "deposit" | "withdrawal"
+	Amount               decimal.Decimal  `json:"amount"`
+	TransactionHash      string           `json:"transaction_hash,omitempty"`
+	SharesMintedOrBurned *decimal.Decimal `json:"shares_minted_or_burned,omitempty"`
+	SharePriceAtTime     *decimal.Decimal `json:"share_price_at_time,omitempty"`
+	FeeCharged           *decimal.Decimal `json:"fee_charged,omitempty"`
+	CreatedAt            time.Time        `json:"created_at"`
 }
 
 type Repository interface {

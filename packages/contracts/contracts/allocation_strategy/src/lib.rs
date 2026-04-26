@@ -178,6 +178,9 @@ impl AllocationStrategyContract {
         let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
 
         for weight in weights.iter() {
+            if weight.weight_bps < 100 {
+                panic_with_error!(&env, ContractError::ConfigOutOfRange);
+            }
             if !registry_has_source(&env, &registry_id, &weight.source_id) {
                 panic_with_error!(&env, ContractError::StrategyNotFound);
             }

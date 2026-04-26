@@ -21,6 +21,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	"github.com/suncrestlabs/nester/apps/api/internal/ws"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
@@ -104,6 +105,19 @@ func run() error {
 
 	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL())
 	rateHandler := handler.NewRateHandler(oracleService)
+	
+	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (string, error) {
+		// Token validation should be performed here. 
+		// Return userID if successful, error otherwise.
+		if token == "" {
+			return "", fmt.Errorf("missing token")
+		}
+		return "user-id-from-token", nil // Placeholder for actual JWT validation
+	})
+	
+	wsCtx, wsCancel := context.WithCancel(context.Background())
+	defer wsCancel()
+	go wsHub.Run(wsCtx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(pgPool, cfg.Database().ConnectionTimeout()))
@@ -115,11 +129,14 @@ func run() error {
 	adminHandler.Register(mux)
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
+	
+	mux.HandleFunc("GET /ws", wsHub.ServeWs)
 
 	authRules := []middleware.RouteRule{
 		{PathPrefix: "/health", Public: true},
 		{PathPrefix: "/healthz", Public: true},
 		{PathPrefix: "/readyz", Public: true},
+		{PathPrefix: "/ws", Public: true},
 		{PathPrefix: "/api/v1/auth/", Public: true},
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
 		{PathPrefix: "/api/v1/", Public: false},

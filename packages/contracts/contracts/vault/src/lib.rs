@@ -20,6 +20,7 @@ const WITHDRAW: Symbol = symbol_short!("WITHDRAW");
 const PAUSE: Symbol = symbol_short!("PAUSE");
 const UNPAUSE: Symbol = symbol_short!("UNPAUSE");
 const CB_TRIGGER: Symbol = symbol_short!("CB_TRIG");
+const FEE_CONFIG_UPDATED: Symbol = symbol_short!("FEE_CFG");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -28,6 +29,13 @@ pub struct FeeConfig {
     pub management_fee_bps: u32,       // annual basis points (e.g., 50 = 0.5%)
     pub early_withdrawal_fee_bps: u32, // bps (e.g., 10 = 0.1%)
     pub treasury_address: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeConfigUpdatedEventData {
+    pub old_config: FeeConfig,
+    pub new_config: FeeConfig,
 }
 
 #[contracttype]
@@ -123,6 +131,16 @@ pub struct EmergencyPreview {
     pub estimated_return: i128,
     pub vault_liquid_reserves: i128,
     pub can_process: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct WithdrawalFeePreview {
+    pub gross_asset_value: i128,
+    pub management_fee_deducted: i128,
+    pub performance_fee_deducted: i128,
+    pub early_withdrawal_fee_deducted: i128,
+    pub net_amount_received: i128,
 }
 
 // ---------------------------------------------------------------------------
@@ -435,12 +453,18 @@ impl VaultContract {
     pub fn set_max_deposit(env: Env, caller: Address, amount: i128) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if amount <= 0 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
         env.storage().instance().set(&DataKey::MaxDeposit, &amount);
     }
 
     pub fn set_rebalance_threshold(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if bps < 100 || bps > 5000 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
         env.storage()
             .instance()
             .set(&DataKey::RebalanceThreshold, &bps);
@@ -449,6 +473,9 @@ impl VaultContract {
     pub fn set_circuit_breaker_config(env: Env, caller: Address, config: CircuitBreakerConfig) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if config.window_seconds == 0 || config.threshold_bps < 1000 || config.threshold_bps > 10000 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
         env.storage()
             .instance()
             .set(&DataKey::CircuitBreakerConfig, &config);
@@ -457,22 +484,53 @@ impl VaultContract {
     pub fn set_early_withdrawal_fee(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if bps > nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS {
+            panic_with_error!(&env, ContractError::FeeTooHigh);
+        }
         let mut config = get_fee_config(&env);
+        let old_config = config.clone();
         config.early_withdrawal_fee_bps = bps;
         env.storage().instance().set(&DataKey::FeeConfig, &config);
+        emit_event(
+            &env,
+            VAULT,
+            FEE_CONFIG_UPDATED,
+            caller.clone(),
+            FeeConfigUpdatedEventData {
+                old_config,
+                new_config: config,
+            },
+        );
     }
 
     pub fn set_fee_config(env: Env, caller: Address, config: FeeConfig) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
+        if config.management_fee_bps > nester_common::MAX_MANAGEMENT_FEE_BPS
+            || config.performance_fee_bps > nester_common::MAX_PERFORMANCE_FEE_BPS
+            || config.early_withdrawal_fee_bps > nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS
+        {
+            panic_with_error!(&env, ContractError::FeeTooHigh);
+        }
+        let old_config = get_fee_config(&env);
         env.storage().instance().set(&DataKey::FeeConfig, &config);
+        emit_event(
+            &env,
+            VAULT,
+            FEE_CONFIG_UPDATED,
+            caller.clone(),
+            FeeConfigUpdatedEventData {
+                old_config,
+                new_config: config,
+            },
+        );
     }
 
     pub fn set_emergency_fee(env: Env, admin: Address, fee_bps: u32) -> Result<(), ContractError> {
         admin.require_auth();
         AccessControl::require_role(&env, &admin, Role::Admin);
-        if fee_bps > 500 {
-            panic_with_error!(&env, ContractError::InvalidAmount); // Max 500 bps (5%)
+        if fee_bps > nester_common::MAX_EMERGENCY_FEE_BPS {
+            panic_with_error!(&env, ContractError::FeeTooHigh);
         }
         env.storage()
             .instance()
@@ -613,7 +671,7 @@ impl VaultContract {
             panic_with_error!(&env, ContractError::ExceedsLimit);
         }
 
-        if amount <= 0 {
+        if amount < nester_common::MIN_DEPOSIT_AMOUNT {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
         if min_shares_out < 0 {
@@ -983,6 +1041,101 @@ impl VaultContract {
         let total_assets = get_total_assets(&env);
         let accrued_fees = get_accrued_fees(&env);
         total_assets - accrued_fees
+    }
+
+    pub fn share_price(env: Env) -> i128 {
+        require_initialized(&env);
+        vault_token_client(&env).share_price()
+    }
+
+    pub fn total_shares(env: Env) -> i128 {
+        require_initialized(&env);
+        vault_token_client(&env).total_supply()
+    }
+
+    pub fn estimated_fees(env: Env) -> i128 {
+        require_initialized(&env);
+        let mut fees = get_accrued_fees(&env);
+        let last_accrual: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::LastFeeAccrual)
+            .unwrap_or(env.ledger().timestamp());
+        let now = env.ledger().timestamp();
+        let elapsed = now.saturating_sub(last_accrual);
+        if elapsed > 0 {
+            let config = get_fee_config(&env);
+            let total_assets = get_total_assets(&env);
+            fees += nester_common::fees::calculate_management_fee(
+                total_assets,
+                config.management_fee_bps,
+                elapsed,
+            );
+        }
+        fees
+    }
+
+    pub fn pending_yield(env: Env) -> i128 {
+        require_initialized(&env);
+        let token_address = self::VaultContract::get_token(env.clone());
+        let contract_balance = token::Client::new(&env, &token_address).balance(&env.current_contract_address());
+        let liquid_reserves = get_vault_liquid_reserves(&env);
+        
+        if contract_balance > liquid_reserves {
+            contract_balance - liquid_reserves
+        } else {
+            0
+        }
+    }
+
+    pub fn withdrawal_fee_preview(env: Env, user: Address, shares: i128) -> WithdrawalFeePreview {
+        require_initialized(&env);
+        let current_shares = get_shares(&env, &user);
+        let mut preview = WithdrawalFeePreview {
+            gross_asset_value: 0,
+            management_fee_deducted: 0,
+            performance_fee_deducted: 0,
+            early_withdrawal_fee_deducted: 0,
+            net_amount_received: 0,
+        };
+        if shares <= 0 || shares > current_shares {
+            return preview;
+        }
+
+        let assets_to_withdraw = vault_token_client(&env).amount_for_shares(&shares);
+        preview.gross_asset_value = assets_to_withdraw;
+
+        let current_principal = get_user_principal(&env, &user);
+        let principal_to_remove = current_principal * shares / current_shares;
+        
+        let config = get_fee_config(&env);
+        let yield_part = assets_to_withdraw - principal_to_remove;
+        if yield_part > 0 {
+            preview.performance_fee_deducted = nester_common::fees::calculate_performance_fee(
+                yield_part,
+                config.performance_fee_bps,
+            );
+        }
+
+        let deposit_time: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DepositTime(user.clone()))
+            .unwrap_or(0);
+        let min_lock: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinLockPeriod)
+            .unwrap_or(0);
+        if env.ledger().timestamp() < deposit_time + min_lock {
+            preview.early_withdrawal_fee_deducted = nester_common::fees::calculate_withdrawal_fee(
+                assets_to_withdraw,
+                config.early_withdrawal_fee_bps,
+            );
+        }
+
+        preview.net_amount_received = assets_to_withdraw - preview.performance_fee_deducted - preview.early_withdrawal_fee_deducted;
+        preview
     }
 
     pub fn get_status(env: Env) -> VaultStatus {

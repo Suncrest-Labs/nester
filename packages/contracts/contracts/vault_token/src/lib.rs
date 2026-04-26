@@ -222,6 +222,19 @@ impl VaultTokenContract {
         amount_for_shares_math(shares, get_total_supply(&env), get_total_assets(&env))
     }
 
+    /// Price per share. Uses 10,000,000 as the 1.0 unit denominator since decimals is 7.
+    pub fn share_price(env: Env) -> i128 {
+        let total_supply = get_total_supply(&env);
+        let total_assets = get_total_assets(&env);
+        amount_for_shares_math(10_000_000, total_supply, total_assets)
+    }
+
+    /// Calculates underlying asset value corresponding to the user's current token balance.
+    pub fn underlying_balance(env: Env, user: Address) -> i128 {
+        let balance = get_balance(&env, &user);
+        amount_for_shares_math(balance, get_total_supply(&env), get_total_assets(&env))
+    }
+
     // -----------------------------------------------------------------------
     // Vault-only operations
     // -----------------------------------------------------------------------

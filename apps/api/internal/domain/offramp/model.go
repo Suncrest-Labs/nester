@@ -66,6 +66,10 @@ type Settlement struct {
 	ExchangeRate decimal.Decimal  `json:"exchange_rate"`
 	Destination  Destination      `json:"destination"`
 	Status       SettlementStatus `json:"status"`
+	RetryCount   int              `json:"retry_count"`
+	ErrorMessage string           `json:"error_message,omitempty"`
+	Notes        string           `json:"notes,omitempty"`
+	EstimatedFee *decimal.Decimal `json:"estimated_fee,omitempty"`
 	CreatedAt    time.Time        `json:"created_at"`
 	CompletedAt  *time.Time       `json:"completed_at,omitempty"`
 }

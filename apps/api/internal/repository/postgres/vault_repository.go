@@ -26,8 +26,8 @@ func NewVaultRepository(db *sql.DB) *VaultRepository {
 func (r *VaultRepository) CreateVault(ctx context.Context, model vault.Vault) (vault.Vault, error) {
 	query := `
 		INSERT INTO vaults (
-			id, user_id, contract_address, total_deposited, current_balance, currency, status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING created_at, updated_at
 	`
 
@@ -41,6 +41,8 @@ func (r *VaultRepository) CreateVault(ctx context.Context, model vault.Vault) (v
 		model.CurrentBalance.String(),
 		model.Currency,
 		string(model.Status),
+		model.YieldEarned.String(),
+		model.FeesPaid.String(),
 	).Scan(&model.CreatedAt, &model.UpdatedAt); err != nil {
 		return vault.Vault{}, mapRepositoryError(err)
 	}
@@ -194,12 +196,13 @@ func (r *VaultRepository) ReplaceAllocations(ctx context.Context, vaultID uuid.U
 	for _, allocation := range allocations {
 		if _, err := tx.ExecContext(
 			ctx,
-			`INSERT INTO allocations (id, vault_id, protocol, amount, apy, allocated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+			`INSERT INTO allocations (id, vault_id, protocol, amount, apy, status, allocated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 			allocation.ID.String(),
 			vaultID.String(),
 			allocation.Protocol,
 			allocation.Amount.String(),
 			allocation.APY.String(),
+			allocation.Status,
 			allocation.AllocatedAt.UTC(),
 		); err != nil {
 			return mapRepositoryError(err)
@@ -317,7 +320,7 @@ func (r *VaultRepository) SoftDeleteVault(ctx context.Context, id uuid.UUID) err
 func (r *VaultRepository) ListDeposits(ctx context.Context, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
 	rows, err := r.db.QueryContext(
 		ctx,
-		`SELECT id, vault_id, type, amount, COALESCE(tx_hash, ''), created_at
+		`SELECT id, vault_id, user_id, type, amount, COALESCE(transaction_hash, ''), shares_minted_or_burned, share_price_at_time, fee_charged, created_at
 		 FROM vault_transactions
 		 WHERE vault_id = $1 AND type = 'deposit'
 		 ORDER BY created_at DESC`,
@@ -363,6 +366,10 @@ func scanVault(row scanner) (vault.Vault, error) {
 		contractAddress string
 		currency        string
 		status          string
+		yieldEarned     string
+		feesPaid        string
+		lastSyncedAt    sql.NullTime
+		deletedAt       sql.NullTime
 		createdAt       time.Time
 		updatedAt       time.Time
 	)
@@ -375,6 +382,10 @@ func scanVault(row scanner) (vault.Vault, error) {
 		&currentBalance,
 		&currency,
 		&status,
+		&yieldEarned,
+		&feesPaid,
+		&lastSyncedAt,
+		&deletedAt,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -404,6 +415,21 @@ func scanVault(row scanner) (vault.Vault, error) {
 		return vault.Vault{}, fmt.Errorf("parse current balance: %w", err)
 	}
 
+	parsedYield, _ := decimal.NewFromString(yieldEarned)
+	parsedFees, _ := decimal.NewFromString(feesPaid)
+
+	var lastSyncedAtPtr *time.Time
+	if lastSyncedAt.Valid {
+		t := lastSyncedAt.Time
+		lastSyncedAtPtr = &t
+	}
+
+	var deletedAtPtr *time.Time
+	if deletedAt.Valid {
+		t := deletedAt.Time
+		deletedAtPtr = &t
+	}
+
 	return vault.Vault{
 		ID:              parsedID,
 		UserID:          parsedUserID,
@@ -412,6 +438,10 @@ func scanVault(row scanner) (vault.Vault, error) {
 		CurrentBalance:  parsedBalance,
 		Currency:        currency,
 		Status:          vault.VaultStatus(status),
+		YieldEarned:     parsedYield,
+		FeesPaid:        parsedFees,
+		LastSyncedAt:    lastSyncedAtPtr,
+		DeletedAt:       deletedAtPtr,
 		CreatedAt:       createdAt,
 		UpdatedAt:       updatedAt,
 	}, nil
@@ -421,13 +451,17 @@ func scanVaultTransaction(row scanner) (vault.VaultTransaction, error) {
 	var (
 		id        string
 		vaultID   string
+		userID    sql.NullString
 		txType    string
 		amount    string
 		txHash    string
+		shares    sql.NullString
+		sharePrice sql.NullString
+		fee       sql.NullString
 		createdAt time.Time
 	)
 
-	if err := row.Scan(&id, &vaultID, &txType, &amount, &txHash, &createdAt); err != nil {
+	if err := row.Scan(&id, &vaultID, &userID, &txType, &amount, &txHash, &shares, &sharePrice, &fee, &createdAt); err != nil {
 		return vault.VaultTransaction{}, err
 	}
 
@@ -446,20 +480,48 @@ func scanVaultTransaction(row scanner) (vault.VaultTransaction, error) {
 		return vault.VaultTransaction{}, fmt.Errorf("parse transaction amount: %w", err)
 	}
 
+	var userIDPtr *uuid.UUID
+	if userID.Valid {
+		uid, _ := uuid.Parse(userID.String)
+		userIDPtr = &uid
+	}
+
+	var sharesPtr *decimal.Decimal
+	if shares.Valid {
+		d, _ := decimal.NewFromString(shares.String)
+		sharesPtr = &d
+	}
+
+	var sharePricePtr *decimal.Decimal
+	if sharePrice.Valid {
+		d, _ := decimal.NewFromString(sharePrice.String)
+		sharePricePtr = &d
+	}
+
+	var feePtr *decimal.Decimal
+	if fee.Valid {
+		d, _ := decimal.NewFromString(fee.String)
+		feePtr = &d
+	}
+
 	return vault.VaultTransaction{
-		ID:        parsedID,
-		VaultID:   parsedVaultID,
-		Type:      txType,
-		Amount:    parsedAmount,
-		TxHash:    txHash,
-		CreatedAt: createdAt,
+		ID:                   parsedID,
+		VaultID:              parsedVaultID,
+		UserID:               userIDPtr,
+		Type:                 txType,
+		Amount:               parsedAmount,
+		TransactionHash:      txHash,
+		SharesMintedOrBurned: sharesPtr,
+		SharePriceAtTime:     sharePricePtr,
+		FeeCharged:           feePtr,
+		CreatedAt:            createdAt,
 	}, nil
 }
 
 func loadAllocations(ctx context.Context, db queryer, vaultID uuid.UUID) ([]vault.Allocation, error) {
 	rows, err := db.QueryContext(
 		ctx,
-		`SELECT id, vault_id, protocol, amount, apy, allocated_at FROM allocations WHERE vault_id = $1 ORDER BY allocated_at DESC`,
+		`SELECT id, vault_id, protocol, amount, apy, status, allocated_at, updated_at FROM allocations WHERE vault_id = $1 ORDER BY allocated_at DESC`,
 		vaultID.String(),
 	)
 	if err != nil {
@@ -475,10 +537,12 @@ func loadAllocations(ctx context.Context, db queryer, vaultID uuid.UUID) ([]vaul
 			protocol    string
 			amount      string
 			apy         string
+			status      string
 			allocatedAt time.Time
+			updatedAt   sql.NullTime
 		)
 
-		if err := rows.Scan(&id, &parsedVault, &protocol, &amount, &apy, &allocatedAt); err != nil {
+		if err := rows.Scan(&id, &parsedVault, &protocol, &amount, &apy, &status, &allocatedAt, &updatedAt); err != nil {
 			return nil, err
 		}
 
@@ -502,13 +566,21 @@ func loadAllocations(ctx context.Context, db queryer, vaultID uuid.UUID) ([]vaul
 			return nil, fmt.Errorf("parse allocation apy: %w", err)
 		}
 
+		var updatedPtr *time.Time
+		if updatedAt.Valid {
+			t := updatedAt.Time
+			updatedPtr = &t
+		}
+
 		allocations = append(allocations, vault.Allocation{
 			ID:          allocationID,
 			VaultID:     vaultUUID,
 			Protocol:    protocol,
 			Amount:      parsedAmount,
 			APY:         parsedAPY,
+			Status:      status,
 			AllocatedAt: allocatedAt,
+			UpdatedAt:   updatedPtr,
 		})
 	}
 
