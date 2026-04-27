@@ -89,6 +89,15 @@ jobs:
         run: npm audit --audit-level=moderate
         continue-on-error: true
 
+  migration-lint:
+    name: Migration Sequence Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for duplicate migration numbers
+        run: bash scripts/check_migration_numbers.sh apps/api/migrations
+
   api:
     name: API (Go)
     runs-on: ubuntu-latest
