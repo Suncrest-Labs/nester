@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: apps/api/go.mod
           cache: true
@@ -111,7 +111,7 @@ jobs:
             echo "has_module=false" >> $GITHUB_OUTPUT
           fi
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         if: steps.check.outputs.has_module == 'true'
         with:
           go-version-file: go.mod
