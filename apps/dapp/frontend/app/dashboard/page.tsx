@@ -342,6 +342,7 @@ export default function Dashboard() {
             />
             <GuidedTour />
         </AppShell>
+        </ProtectedRoute>
     );
 }
 
@@ -416,7 +417,5 @@ function WalletBalanceTable({
             </tbody>
         </table>
         </div>
-        </AppShell>
-        </ProtectedRoute>
     );
 }
