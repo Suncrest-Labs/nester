@@ -433,6 +433,10 @@ func (l LogConfig) Format() string {
 	return l.format
 }
 
+func (i IntelligenceConfig) URL() string {
+	return i.url
+}
+
 func (a AuthConfig) Secret() string {
 	return a.secret
 }

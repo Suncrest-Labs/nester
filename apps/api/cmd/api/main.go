@@ -29,6 +29,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+	"github.com/suncrestlabs/nester/apps/api/internal/server"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	performancesvc "github.com/suncrestlabs/nester/apps/api/internal/service/performance"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
@@ -40,6 +41,9 @@ var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
 	}
@@ -276,7 +280,7 @@ func run() error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		err := server.ListenAndServe()
+		err := srv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 			return

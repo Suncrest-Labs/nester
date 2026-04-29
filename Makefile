@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check clippy build test test-short integration-test clean dev dev-down dev-reset dev-logs dev-db go-test go-test-short
+.PHONY: fmt fmt-check clippy build test test-short integration-test clean dev dev-down dev-reset dev-logs dev-db go-test go-test-short deploy-testnet deploy-all
 
 CARGO := cargo
 CONTRACTS_DIR := packages/contracts
@@ -18,6 +18,9 @@ build:
 
 test:
 	cd $(CONTRACTS_DIR) && $(CARGO) test --all
+
+test-short:
+	cd $(CONTRACTS_DIR) && $(CARGO) test --all --lib
 
 integration-test:
 	cd $(CONTRACTS_DIR) && $(CARGO) test --all --lib
@@ -47,3 +50,8 @@ dev-logs: ## Tail logs for all services
 
 dev-db: ## Open a psql shell in the dev database
 	docker compose exec postgres psql -U nester nester_dev
+
+deploy-testnet:
+	cd $(CONTRACTS_DIR) && bash scripts/deploy.sh
+
+deploy-all: build deploy-testnet

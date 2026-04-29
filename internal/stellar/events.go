@@ -18,6 +18,7 @@ type EventPoller struct {
 	listeners map[string][]EventListener
 	mu        sync.RWMutex
 	done      chan struct{}
+	httpClient *http.Client
 }
 
 // EventListener is a callback function for event notifications
@@ -29,6 +30,7 @@ func NewEventPoller(client *Client) *EventPoller {
 		client:    client,
 		listeners: make(map[string][]EventListener),
 		done:      make(chan struct{}),
+		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -76,12 +78,20 @@ func (ep *EventPoller) PollEvents(
 	fromBlock uint64,
 	toBlock uint64,
 ) ([]Event, error) {
-	if contractID == "" {
-		return nil, fmt.Errorf("contract ID is required")
+	if fromBlock > toBlock && toBlock != 0 {
+		return nil, fmt.Errorf("fromBlock must be <= toBlock")
 	}
 
-	if fromBlock > toBlock {
-		return nil, fmt.Errorf("fromBlock must be <= toBlock")
+	params := map[string]interface{}{
+		"startLedger": fromBlock,
+	}
+	if toBlock > 0 {
+		params["endLedger"] = toBlock
+	}
+	if contractID != "*" && contractID != "" {
+		params["filters"] = []map[string]interface{}{
+			{"contractIds": []string{contractID}},
+		}
 	}
 	if ep.client == nil {
 		return nil, fmt.Errorf("stellar client is required")
@@ -166,7 +176,7 @@ func (ep *EventPoller) PollEvents(
 		})
 	}
 
-	return events, nil
+	return domainEvents, nil
 }
 
 // WatchEvents continuously polls and dispatches events to subscribers

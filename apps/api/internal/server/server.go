@@ -4,19 +4,25 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
+	"github.com/suncrestlabs/nester/apps/api/internal/router"
+	"github.com/suncrestlabs/nester/apps/api/internal/service"
 )
 
-const defaultMaxBodyBytes int64 = 1 << 20 // 1 MiB
+const defaultMaxBodyBytes int64 = 64 * 1024 // 64 KB
+const maxURLLength = 2048
 
-// HealthChecker is a function that returns nil when the service is healthy.
-// Callers may supply a database ping, a no-op, or a stub for tests.
-type HealthChecker func(ctx context.Context) error
+// New assembles the full HTTP handler using the consolidated router.
+func New(logger *slog.Logger, vaultSvc *service.VaultService, settlementSvc *service.SettlementService, healthCheck http.HandlerFunc) http.Handler {
+	vh := handler.NewVaultHandler(vaultSvc)
+	sh := handler.NewSettlementHandler(settlementSvc)
 
 // New assembles the full HTTP handler: panic recovery → CORS → request-size
 // limit → structured logging → mux.  Routes are registered via the returned

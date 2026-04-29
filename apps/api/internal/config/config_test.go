@@ -37,6 +37,7 @@ func requiredEnv(t *testing.T) {
 	t.Setenv("STELLAR_RPC_URL", "https://rpc.example.com")
 	t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
 	t.Setenv("AUTH_JWT_SECRET", "this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes")
+	t.Setenv("INTELLIGENCE_URL", "https://intelligence.example.com")
 }
 
 func TestLoadFromDotEnv(t *testing.T) {
@@ -279,6 +280,7 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 		"STELLAR_RPC_URL=https://dotenv-rpc.example.com",
 		"STELLAR_HORIZON_URL=https://dotenv-horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 		"LOG_LEVEL=warn",
 	}, "\n"))
 	chdir(t, dir)
@@ -378,6 +380,7 @@ func TestLoadAllDefaults(t *testing.T) {
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -471,6 +474,7 @@ func TestLoadUnknownKeysIgnored(t *testing.T) {
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 		"UNKNOWN_KEY_ONE=some-value",
 		"ANOTHER_UNKNOWN=ignored",
 		"TOTALLY_MADE_UP=whatever",
@@ -501,6 +505,7 @@ func TestLoadEmptyEnvVarsTreatedAsUnset(t *testing.T) {
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
+		"INTELLIGENCE_URL=https://intelligence.example.com",
 	}, "\n"))
 	chdir(t, dir)
 

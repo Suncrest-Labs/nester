@@ -18,16 +18,20 @@ const (
 	StatusFiatDispatched   SettlementStatus = "fiat_dispatched"
 	StatusConfirmed        SettlementStatus = "confirmed"
 	StatusFailed           SettlementStatus = "failed"
+	StatusHeld             SettlementStatus = "held"
+	StatusBlocked          SettlementStatus = "blocked"
 )
 
 // validTransitions defines the allowed forward transitions in the settlement
 // state machine. Terminal states (confirmed, failed) have no outbound edges.
 var validTransitions = map[SettlementStatus][]SettlementStatus{
-	StatusInitiated:        {StatusLiquidityMatched, StatusFailed},
+	StatusInitiated:        {StatusLiquidityMatched, StatusFailed, StatusHeld, StatusBlocked},
 	StatusLiquidityMatched: {StatusFiatDispatched, StatusFailed},
 	StatusFiatDispatched:   {StatusConfirmed, StatusFailed},
+	StatusHeld:             {StatusLiquidityMatched, StatusFailed, StatusBlocked},
 	StatusConfirmed:        {},
 	StatusFailed:           {},
+	StatusBlocked:          {},
 }
 
 var (
