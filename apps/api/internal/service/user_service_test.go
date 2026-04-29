@@ -47,6 +47,10 @@ func (m *mockUserRepository) GetByWalletAddress(ctx context.Context, addr string
 	return nil, user.ErrUserNotFound
 }
 
+func (m *mockUserRepository) GetRoles(_ context.Context, _ uuid.UUID) ([]string, error) {
+	return []string{}, nil
+}
+
 func TestUserService_RegisterUser(t *testing.T) {
 	ctx := context.Background()
 	repo := newMockUserRepository()

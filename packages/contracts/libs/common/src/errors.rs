@@ -19,4 +19,8 @@ pub enum ContractError {
     TimelockNotFound = 14,
     TimelockInvalidDelay = 15,
     TimelockAlreadyExecuted = 16,
+    SlippageExceeded = 17,
+    FeeTooHigh = 18,
+    ConfigOutOfRange = 19,
+    ArithmeticOverflow = 20,
 }

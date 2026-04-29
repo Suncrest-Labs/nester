@@ -22,6 +22,7 @@ type Claims struct {
 	Subject       string   `json:"sub"`
 	WalletAddress string   `json:"wallet,omitempty"`
 	Scopes        []string `json:"scopes,omitempty"`
+	Roles         []string `json:"roles,omitempty"`
 	ExpiresAt     int64    `json:"exp,omitempty"`
 	IssuedAt      int64    `json:"iat,omitempty"`
 }

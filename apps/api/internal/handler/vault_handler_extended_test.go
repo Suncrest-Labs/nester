@@ -34,11 +34,11 @@ func TestVaultHandlerGetVaultReturns200WithAllocations(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	// Create vault
-	body := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"CA-GET-ALLOC-001","currency":"USDC"}`)
+	body := bytes.NewBufferString(`{"contract_address":"CA-GET-ALLOC-001","currency":"USDC"}`)
 	response, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -96,7 +96,7 @@ func TestVaultHandlerGetVaultReturns404WhenNotFound(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(uuid.New())(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	// Get non-existent vault
@@ -127,7 +127,7 @@ func TestVaultHandlerGetVaultReturns400ForInvalidID(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(uuid.New())(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	// Get vault with invalid ID
@@ -150,11 +150,11 @@ func TestVaultHandlerListUserVaultsReturns200WithAllocations(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	// Create first vault with allocations
-	body1 := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"CA-LIST-001","currency":"USDC"}`)
+	body1 := bytes.NewBufferString(`{"contract_address":"CA-LIST-001","currency":"USDC"}`)
 	response1, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body1)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -174,7 +174,7 @@ func TestVaultHandlerListUserVaultsReturns200WithAllocations(t *testing.T) {
 	}
 
 	// Create second vault with allocations
-	body2 := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"CA-LIST-002","currency":"USDC"}`)
+	body2 := bytes.NewBufferString(`{"contract_address":"CA-LIST-002","currency":"USDC"}`)
 	response2, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body2)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -233,10 +233,10 @@ func TestVaultHandlerCreateVaultReturns201OnSuccess(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
-	body := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"CA-CREATE-001","currency":"USDC"}`)
+	body := bytes.NewBufferString(`{"contract_address":"CA-CREATE-001","currency":"USDC"}`)
 	response, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -274,7 +274,7 @@ func TestVaultHandlerCreateVaultReturns422OnInvalidInput(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	tests := []struct {
@@ -284,27 +284,27 @@ func TestVaultHandlerCreateVaultReturns422OnInvalidInput(t *testing.T) {
 	}{
 		{
 			name:           "empty contract_address",
-			body:           `{"user_id":"` + userID.String() + `","contract_address":"","currency":"USDC"}`,
+			body:           `{"contract_address":"","currency":"USDC"}`,
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:           "invalid currency",
-			body:           `{"user_id":"` + userID.String() + `","contract_address":"CA-001","currency":"INVALID"}`,
+			body:           `{"contract_address":"CA-001","currency":"INVALID"}`,
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:           "currency too short",
-			body:           `{"user_id":"` + userID.String() + `","contract_address":"CA-001","currency":"US"}`,
+			body:           `{"contract_address":"CA-001","currency":"US"}`,
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:           "currency too long",
-			body:           `{"user_id":"` + userID.String() + `","contract_address":"CA-001","currency":"USDCX"}`,
+			body:           `{"contract_address":"CA-001","currency":"USDCX"}`,
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:           "currency with numbers",
-			body:           `{"user_id":"` + userID.String() + `","contract_address":"CA-001","currency":"US1C"}`,
+			body:           `{"contract_address":"CA-001","currency":"US1C"}`,
 			expectedStatus: http.StatusBadRequest,
 		},
 	}
@@ -332,12 +332,12 @@ func TestVaultHandlerCreateVaultReturns404ForNonExistentUser(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
-	defer server.Close()
-
 	// Try to create vault for non-existent user
 	nonExistentUserID := uuid.New()
-	body := bytes.NewBufferString(`{"user_id":"` + nonExistentUserID.String() + `","contract_address":"CA-001","currency":"USDC"}`)
+	server := httptest.NewServer(fakeAuthMiddleware(nonExistentUserID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
+	defer server.Close()
+
+	body := bytes.NewBufferString(`{"contract_address":"CA-001","currency":"USDC"}`)
 	response, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -356,7 +356,7 @@ func TestVaultHandlerListUserVaultsReturns400ForInvalidUserID(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(uuid.New())(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	// List vaults with invalid user ID
@@ -379,10 +379,10 @@ func TestVaultHandlerCreateVaultWithCustomStatus(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
-	body := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"CA-STATUS-001","currency":"USDC","status":"paused"}`)
+	body := bytes.NewBufferString(`{"contract_address":"CA-STATUS-001","currency":"USDC","status":"paused"}`)
 	response, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -408,10 +408,10 @@ func TestVaultHandlerCreateVaultNormalizesCurrency(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
-	body := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"CA-NORM-001","currency":"usdc"}`)
+	body := bytes.NewBufferString(`{"contract_address":"CA-NORM-001","currency":"usdc"}`)
 	response, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -437,10 +437,10 @@ func TestVaultHandlerCreateVaultTrimsWhitespace(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
-	body := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"  CA-TRIM-001  ","currency":"  USDC  "}`)
+	body := bytes.NewBufferString(`{"contract_address":"  CA-TRIM-001  ","currency":"  USDC  "}`)
 	response, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -469,11 +469,11 @@ func TestVaultHandler_GetAllocations_Returns200(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	// Create vault
-	body := bytes.NewBufferString(`{"user_id":"` + userID.String() + `","contract_address":"CA-ALLOC-GET-001","currency":"USDC"}`)
+	body := bytes.NewBufferString(`{"contract_address":"CA-ALLOC-GET-001","currency":"USDC"}`)
 	response, err := http.Post(server.URL+"/api/v1/vaults", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)
@@ -535,7 +535,7 @@ func TestVaultHandler_GetAllocations_NotFound(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(uuid.New())(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	// Get allocations for non-existent vault

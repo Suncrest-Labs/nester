@@ -13,10 +13,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 )
+
+// injectAuthUser wraps h with a middleware that injects u into the request
+// context, simulating what the production auth middleware does.
+func injectAuthUser(u auth.User, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(auth.NewContext(r.Context(), u)))
+	})
+}
 
 type settlementStubRepo struct {
 	data map[uuid.UUID]*offramp.Settlement
@@ -236,7 +245,8 @@ func TestSettlementHandler_PatchStatus200(t *testing.T) {
 	h := NewSettlementHandler(svc)
 	mux := http.NewServeMux()
 	h.Register(mux)
-	server := httptest.NewServer(mux)
+	// Inject the settlement owner as the authenticated caller.
+	server := httptest.NewServer(injectAuthUser(auth.User{ID: userID.String()}, mux))
 	defer server.Close()
 
 	body := bytes.NewBufferString(`{"status":"liquidity_matched"}`)
@@ -257,6 +267,80 @@ func TestSettlementHandler_PatchStatus200(t *testing.T) {
 	out := decodeAPIData[offramp.Settlement](t, resp.Body)
 	if out.Status != offramp.StatusLiquidityMatched {
 		t.Fatalf("want liquidity_matched, got %s", out.Status)
+	}
+}
+
+func TestSettlementHandler_PatchStatus403NonOwner(t *testing.T) {
+	ownerID := uuid.New()
+	vaultID := uuid.New()
+	svc := service.NewSettlementService(newSettlementStubRepo())
+	created, err := svc.InitiateSettlement(context.Background(), service.InitiateSettlementInput{
+		UserID:       ownerID,
+		VaultID:      vaultID,
+		Amount:       decimal.RequireFromString("10"),
+		Currency:     "USDC",
+		FiatCurrency: "NGN",
+		FiatAmount:   decimal.RequireFromString("100"),
+		ExchangeRate: decimal.RequireFromString("10"),
+		Destination: offramp.Destination{
+			Type:          "mobile_money",
+			Provider:      "mpesa",
+			AccountNumber: "0712345678",
+			AccountName:   "Jane",
+		},
+	})
+	if err != nil {
+		t.Fatalf("InitiateSettlement: %v", err)
+	}
+
+	h := NewSettlementHandler(svc)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	// Inject a different user — not the settlement owner.
+	attacker := auth.User{ID: uuid.New().String()}
+	server := httptest.NewServer(injectAuthUser(attacker, mux))
+	defer server.Close()
+
+	body := bytes.NewBufferString(`{"status":"liquidity_matched"}`)
+	req, err := http.NewRequest(http.MethodPatch, server.URL+"/api/v1/settlements/"+created.ID.String()+"/status", body)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for non-owner, got %d", resp.StatusCode)
+	}
+}
+
+func TestSettlementHandler_PatchStatus401NoAuth(t *testing.T) {
+	svc := service.NewSettlementService(newSettlementStubRepo())
+	h := NewSettlementHandler(svc)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	// No auth injection — handler must return 401.
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	body := bytes.NewBufferString(`{"status":"liquidity_matched"}`)
+	req, err := http.NewRequest(http.MethodPatch, server.URL+"/api/v1/settlements/"+uuid.New().String()+"/status", body)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401 when no auth context, got %d", resp.StatusCode)
 	}
 }
 

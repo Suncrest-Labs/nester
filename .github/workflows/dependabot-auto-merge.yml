@@ -1,0 +1,65 @@
+name: Dependabot Auto Merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot-auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide if PR is eligible for auto-merge
+        id: eligible
+        env:
+          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+        run: |
+          set -e
+          eligible=false
+
+          case "$ECOSYSTEM" in
+            npm|gomod|pip)
+              if [[ "$UPDATE_TYPE" == "version-update:semver-patch" ]]; then
+                eligible=true
+              fi
+              ;;
+            github_actions)
+              if [[ "$UPDATE_TYPE" == "version-update:semver-patch" || "$UPDATE_TYPE" == "version-update:semver-minor" ]]; then
+                trusted=true
+                IFS=',' read -ra names <<< "$DEPENDENCY_NAMES"
+                for raw in "${names[@]}"; do
+                  name="$(echo "$raw" | xargs)"
+                  case "$name" in
+                    actions/checkout|actions/setup-node|actions/setup-go|actions/setup-python|pnpm/action-setup)
+                      ;;
+                    *)
+                      trusted=false
+                      ;;
+                  esac
+                done
+                if [[ "$trusted" == "true" ]]; then
+                  eligible=true
+                fi
+              fi
+              ;;
+          esac
+
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+
+      - name: Enable auto-merge for eligible updates
+        if: steps.eligible.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash "${{ github.event.pull_request.html_url }}"

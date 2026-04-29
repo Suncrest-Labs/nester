@@ -28,11 +28,15 @@ func silentLogger() *slog.Logger {
 
 func noopChecker(_ context.Context) error { return nil }
 
+// defaultTestOrigins is the allowlist used by most tests. Tests that need a
+// different allowlist build their own server via server.New directly.
+var defaultTestOrigins = []string{"https://example.com"}
+
 // newTestServer returns a running httptest.Server backed by the full
 // middleware stack.  Callers must defer Close().
 func newTestServer(t *testing.T, extra func(*http.ServeMux)) *httptest.Server {
 	t.Helper()
-	handler, mux := server.New(silentLogger(), noopChecker)
+	handler, mux := server.New(silentLogger(), noopChecker, defaultTestOrigins)
 	if extra != nil {
 		extra(mux)
 	}
@@ -70,7 +74,7 @@ func TestHealthCheck_Returns200WithStatusOK(t *testing.T) {
 
 func TestHealthCheck_Returns503WhenCheckerFails(t *testing.T) {
 	checker := func(_ context.Context) error { return errors.New("db down") }
-	handler, _ := server.New(silentLogger(), checker)
+	handler, _ := server.New(silentLogger(), checker, defaultTestOrigins)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -152,7 +156,7 @@ func TestMiddleware_RequestIDIsPropagatedThroughContext(t *testing.T) {
 	var capturedBuf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&capturedBuf, nil))
 
-	handler, mux := server.New(log, noopChecker)
+	handler, mux := server.New(log, noopChecker, defaultTestOrigins)
 	mux.HandleFunc("GET /api/v1/echo", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -202,7 +206,7 @@ func TestPanicInHandler_Returns500NotCrash(t *testing.T) {
 func TestPanicInHandler_StackTraceIsLogged(t *testing.T) {
 	var logBuf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&logBuf, nil))
-	handler, mux := server.New(log, noopChecker)
+	handler, mux := server.New(log, noopChecker, defaultTestOrigins)
 	mux.HandleFunc("GET /api/v1/panic", func(_ http.ResponseWriter, _ *http.Request) {
 		panic("stack trace test")
 	})
@@ -257,7 +261,7 @@ func TestGracefulShutdown_InFlightRequestCompletes(t *testing.T) {
 	requestStarted := make(chan struct{})
 	requestCanFinish := make(chan struct{})
 
-	handler, mux := server.New(silentLogger(), noopChecker)
+	handler, mux := server.New(silentLogger(), noopChecker, defaultTestOrigins)
 	mux.HandleFunc("GET /api/v1/slow", func(w http.ResponseWriter, _ *http.Request) {
 		close(requestStarted) // signal: request is inside the handler
 		<-requestCanFinish    // wait until test unblocks us
@@ -329,7 +333,7 @@ func TestGracefulShutdown_NewConnectionsRejectedAfterShutdown(t *testing.T) {
 		t.Fatalf("net.Listen error = %v", err)
 	}
 
-	handler, _ := server.New(silentLogger(), noopChecker)
+	handler, _ := server.New(silentLogger(), noopChecker, defaultTestOrigins)
 	srv := &http.Server{Handler: handler}
 	go srv.Serve(ln) //nolint:errcheck
 
@@ -361,7 +365,7 @@ func TestGracefulShutdown_NewConnectionsRejectedAfterShutdown(t *testing.T) {
 // CORS headers
 // ---------------------------------------------------------------------------
 
-func TestCORS_HeadersPresentOnCrossOriginRequests(t *testing.T) {
+func TestCORS_AllowedOriginIsEchoedBack(t *testing.T) {
 	srv := newTestServer(t, nil)
 	defer srv.Close()
 
@@ -373,17 +377,57 @@ func TestCORS_HeadersPresentOnCrossOriginRequests(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	acao := resp.Header.Get("Access-Control-Allow-Origin")
-	if acao == "" {
-		t.Error("expected Access-Control-Allow-Origin header, got empty")
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://example.com" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, "https://example.com")
 	}
-	acam := resp.Header.Get("Access-Control-Allow-Methods")
-	if acam == "" {
-		t.Error("expected Access-Control-Allow-Methods header, got empty")
+	if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("Access-Control-Allow-Credentials = %q, want %q", got, "true")
+	}
+	if got := resp.Header.Get("Vary"); got != "Origin" {
+		t.Errorf("Vary = %q, want %q", got, "Origin")
 	}
 }
 
-func TestCORS_PreflightOptionsReturns204(t *testing.T) {
+func TestCORS_DisallowedOriginReceivesNoACAO(t *testing.T) {
+	srv := newTestServer(t, nil)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/health", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /health error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Access-Control-Allow-Origin should be unset for disallowed origin, got %q", got)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("Access-Control-Allow-Credentials should be unset for disallowed origin, got %q", got)
+	}
+	if got := resp.Header.Get("Vary"); got != "Origin" {
+		t.Errorf("Vary = %q, want %q", got, "Origin")
+	}
+}
+
+func TestCORS_SameOriginRequestEmitsNoACAO(t *testing.T) {
+	srv := newTestServer(t, nil)
+	defer srv.Close()
+
+	// No Origin header — same-origin browser requests or non-browser clients.
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Access-Control-Allow-Origin should be unset when Origin is absent, got %q", got)
+	}
+}
+
+func TestCORS_PreflightFromAllowedOriginReturns204WithHeaders(t *testing.T) {
 	srv := newTestServer(t, nil)
 	defer srv.Close()
 
@@ -397,6 +441,53 @@ func TestCORS_PreflightOptionsReturns204(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected 204 for preflight OPTIONS, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://example.com" {
+		t.Errorf("preflight Access-Control-Allow-Origin = %q, want %q", got, "https://example.com")
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Methods"); got == "" {
+		t.Error("preflight Access-Control-Allow-Methods should be set for allowed origin")
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Headers"); got == "" {
+		t.Error("preflight Access-Control-Allow-Headers should be set for allowed origin")
+	}
+}
+
+func TestCORS_PreflightFromDisallowedOriginReturns204WithoutACAO(t *testing.T) {
+	srv := newTestServer(t, nil)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodOptions, srv.URL+"/health", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS /health error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("expected 204 for preflight OPTIONS, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("preflight ACAO should be unset for disallowed origin, got %q", got)
+	}
+}
+
+func TestCORS_EmptyAllowlistBlocksAllOrigins(t *testing.T) {
+	handler, _ := server.New(silentLogger(), noopChecker, nil)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/health", nil)
+	req.Header.Set("Origin", "https://example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /health error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Access-Control-Allow-Origin should be unset with empty allowlist, got %q", got)
 	}
 }
 
@@ -416,7 +507,7 @@ func TestMiddleware_ExecutesInCorrectOrder(t *testing.T) {
 	var logBuf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
-	handler, mux := server.New(log, noopChecker)
+	handler, mux := server.New(log, noopChecker, defaultTestOrigins)
 	mux.HandleFunc("GET /api/v1/order-test", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -455,32 +546,38 @@ func TestGracefulShutdown_ExitsWithinConfiguredTimeout(t *testing.T) {
 		t.Fatalf("net.Listen error = %v", err)
 	}
 
-	handler, _ := server.New(silentLogger(), noopChecker)
+	handler, _ := server.New(silentLogger(), noopChecker, defaultTestOrigins)
 	srv := &http.Server{Handler: handler}
-	go srv.Serve(ln) //nolint:errcheck
 
-	// Verify the server is up
+	timeout := 3 * time.Second
+	done := make(chan error, 1)
+	go func() {
+		done <- server.ServeWithGracefulShutdown(ctx, srv, ln, timeout)
+	}()
+
+	// Verify the server is up before triggering shutdown.
 	addr := fmt.Sprintf("http://%s/health", ln.Addr())
-	resp, err := http.Get(addr)
+	var resp *http.Response
+	for i := 0; i < 20; i++ {
+		resp, err = http.Get(addr)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("pre-shutdown request failed: %v", err)
 	}
 	resp.Body.Close()
 
-	// Cancel context to trigger shutdown
+	// Cancel context to trigger graceful shutdown.
 	cancel()
-
-	timeout := 3 * time.Second
-	done := make(chan error, 1)
-	go func() {
-		done <- server.RunWithGracefulShutdown(ctx, srv, timeout)
-	}()
 
 	select {
 	case err := <-done:
-		// RunWithGracefulShutdown may return ErrServerClosed or nil — both are fine.
+		// ServeWithGracefulShutdown may return ErrServerClosed or nil — both are fine.
 		if err != nil && err != http.ErrServerClosed {
-			t.Errorf("RunWithGracefulShutdown returned unexpected error: %v", err)
+			t.Errorf("ServeWithGracefulShutdown returned unexpected error: %v", err)
 		}
 	case <-time.After(timeout + 2*time.Second):
 		t.Fatal("server did not exit within configured timeout")

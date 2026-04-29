@@ -1,0 +1,2 @@
+# Add known false positives here, one fingerprint per line.
+# Keep this file minimal and documented in PRs when entries are added.

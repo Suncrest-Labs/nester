@@ -57,13 +57,19 @@ func TestRecordDepositUpdatesBalancesAtomically(t *testing.T) {
 	repository := NewVaultRepository(db)
 	vaultID := uuid.New()
 
+	// RecordDeposit now runs inside a transaction and also inserts a ledger entry.
+	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE vaults
 		 SET total_deposited = total_deposited + $2::numeric,
 		     current_balance = current_balance + $2::numeric,
 		     updated_at = NOW()
-		 WHERE id = $1`)).
+		 WHERE id = $1 AND deleted_at IS NULL`)).
 		WithArgs(vaultID.String(), "25.5").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO vault_transactions (vault_id, type, amount) VALUES ($1, 'deposit', $2::numeric)`)).
+		WithArgs(vaultID.String(), "25.5").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	if err := repository.RecordDeposit(context.Background(), vaultID, decimal.RequireFromString("25.5")); err != nil {
 		t.Fatalf("RecordDeposit() error = %v", err)
@@ -85,7 +91,7 @@ func TestGetVaultLoadsAllocations(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, created_at, updated_at
 		FROM vaults
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 	`)).
 		WithArgs(vaultID.String()).
 		WillReturnRows(sqlmock.NewRows([]string{

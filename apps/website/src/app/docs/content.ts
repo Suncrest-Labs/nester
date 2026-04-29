@@ -346,9 +346,6 @@ pnpm install
 # DApp frontend (npm)
 cd apps/dapp/frontend && npm install && cd ../../..
 
-# DApp backend (npm — temporary until Go migration)
-cd apps/dapp/backend && npm install && cd ../../..
-
 # Intelligence (npm — temporary until Python migration)
 cd apps/intelligence && npm install && cd ../..
 \`\`\`
@@ -362,9 +359,6 @@ pnpm --filter @nester/website dev
 # DApp frontend — runs on localhost:3001
 cd apps/dapp/frontend && npm run dev
 
-# DApp backend — runs on localhost:8080
-cd apps/dapp/backend && npm run dev
-
 # Intelligence — runs on localhost:8081
 cd apps/intelligence && npm run dev
 \`\`\`
@@ -375,7 +369,6 @@ cd apps/intelligence && npm run dev
 # Must pass before pushing — CI runs these exact commands
 pnpm --filter @nester/website build && pnpm --filter @nester/website lint
 cd apps/dapp/frontend && npm run build && cd ../../..
-cd apps/dapp/backend && npm run build && npm run lint && cd ../../..
 cd apps/intelligence && npm run build && npm run lint && cd ../..
 \`\`\`
 
@@ -400,12 +393,6 @@ soroban contract deploy \\
 ## Environment Variables
 
 \`\`\`bash
-# apps/dapp/backend/.env
-DATABASE_URL=postgresql://user:pass@host:5432/nester
-STELLAR_RPC_URL=https://soroban-testnet.stellar.org
-STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
-PAYSTACK_SECRET_KEY=sk_test_xxx
-
 # apps/intelligence/.env
 ANTHROPIC_API_KEY=sk-ant-xxx
 DATABASE_URL=postgresql://user:pass@host:5432/nester
@@ -1957,19 +1944,6 @@ jobs:
       - run: npm install
       - run: npm run build
 
-  dapp-backend:
-    name: Dapp Backend
-    runs-on: ubuntu-latest
-    defaults:
-      run: { working-directory: apps/dapp/backend }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci
-      - run: npm run build
-      - run: npm run lint
-
   intelligence:
     name: Intelligence Service
     runs-on: ubuntu-latest
@@ -1995,10 +1969,7 @@ pnpm --filter @nester/website build && pnpm --filter @nester/website lint
 # 2. Dapp Frontend
 cd apps/dapp/frontend && npm run build && cd ../../..
 
-# 3. Dapp Backend
-cd apps/dapp/backend && npm run build && npm run lint && cd ../../..
-
-# 4. Intelligence
+# 3. Intelligence
 cd apps/intelligence && npm run build && npm run lint && cd ../..
 \`\`\`
 

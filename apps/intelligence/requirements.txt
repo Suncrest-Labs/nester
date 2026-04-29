@@ -4,3 +4,5 @@ httpx==0.28.1
 anthropic==0.42.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
+PyJWT==2.10.1
+slowapi==0.1.9

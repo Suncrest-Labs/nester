@@ -14,22 +14,41 @@ import (
 )
 
 type Config struct {
-	environment  string
-	server       ServerConfig
-	database     DatabaseConfig
-	stellar      StellarConfig
-	auth         AuthConfig
-	rateLimit    RateLimitConfig
-	log          LogConfig
-	intelligence IntelligenceConfig
+	environment           string
+	server                ServerConfig
+	database              DatabaseConfig
+	stellar               StellarConfig
+	redis                 RedisConfig
+	settlementProviderURL string
+	auth                  AuthConfig
+	rateLimit             RateLimitConfig
+	log                   LogConfig
+	allowedOrigins        []string
+	performance           PerformanceConfig
+	startup               StartupConfig
+}
+
+// StartupConfig governs one-shot work performed before the server begins
+// accepting traffic (migrations, dependency reachability checks).
+type StartupConfig struct {
+	enableAutoMigrate bool
+	migrationsDir     string
+	dependencyTimeout time.Duration
+}
+
+type PerformanceConfig struct {
+	snapshotInterval time.Duration
 }
 
 type ServerConfig struct {
-	host             string
-	port             int
-	readTimeout      time.Duration
-	writeTimeout     time.Duration
-	gracefulShutdown time.Duration
+	host              string
+	port              int
+	readTimeout       time.Duration
+	readHeaderTimeout time.Duration
+	writeTimeout      time.Duration
+	idleTimeout       time.Duration
+	gracefulShutdown  time.Duration
+	maxHeaderBytes    int
 }
 
 type DatabaseConfig struct {
@@ -42,12 +61,31 @@ type StellarConfig struct {
 	networkPassphrase string
 	rpcURL            string
 	horizonURL        string
-	sourceKey         string
+	operatorSecret    string
+}
+
+type AuthConfig struct {
+	secret          string
+	tokenExpiry     time.Duration
+	challengeExpiry time.Duration
+}
+
+type RateLimitConfig struct {
+	globalLimit  int
+	globalWindow time.Duration
+	writeLimit   int
+	writeWindow  time.Duration
+	walletLimit  int
+	walletWindow time.Duration
 }
 
 type LogConfig struct {
 	level  string
 	format string
+}
+
+type RedisConfig struct {
+	addr string
 }
 
 func Load() (*Config, error) {
@@ -69,11 +107,14 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		environment: environment,
 		server: ServerConfig{
-			host:             loader.stringDefault("SERVER_HOST", "0.0.0.0"),
-			port:             loader.intDefault("SERVER_PORT", 8080),
-			readTimeout:      loader.durationDefault("SERVER_READ_TIMEOUT", 15*time.Second),
-			writeTimeout:     loader.durationDefault("SERVER_WRITE_TIMEOUT", 15*time.Second),
-			gracefulShutdown: loader.durationDefault("SERVER_SHUTDOWN_TIMEOUT", 20*time.Second),
+			host:              loader.stringDefault("SERVER_HOST", "0.0.0.0"),
+			port:              loader.intDefault("SERVER_PORT", 8080),
+			readTimeout:       loader.durationDefault("SERVER_READ_TIMEOUT", 15*time.Second),
+			readHeaderTimeout: loader.durationDefault("SERVER_READ_HEADER_TIMEOUT", 10*time.Second),
+			writeTimeout:      loader.durationDefault("SERVER_WRITE_TIMEOUT", 15*time.Second),
+			idleTimeout:       loader.durationDefault("SERVER_IDLE_TIMEOUT", 60*time.Second),
+			gracefulShutdown:  loader.durationDefault("SERVER_SHUTDOWN_TIMEOUT", 20*time.Second),
+			maxHeaderBytes:    loader.intDefault("SERVER_MAX_HEADER_BYTES", 1<<20),
 		},
 		database: DatabaseConfig{
 			dsn:               loader.requiredString("DATABASE_DSN"),
@@ -84,14 +125,37 @@ func Load() (*Config, error) {
 			networkPassphrase: loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
 			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
 			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
-			sourceKey:         loader.stringDefault("STELLAR_SOURCE_KEY", "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), // Default for read-only
+			operatorSecret:    loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
+		},
+		redis: RedisConfig{
+			addr: loader.stringDefault("REDIS_ADDR", ""),
+		},
+		settlementProviderURL: loader.stringDefault("SETTLEMENT_PROVIDER_URL", ""),
+		auth: AuthConfig{
+			secret:          loader.requiredString("AUTH_JWT_SECRET"),
+			tokenExpiry:     loader.durationDefault("AUTH_TOKEN_EXPIRY", 24*time.Hour),
+			challengeExpiry: loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
+		},
+		rateLimit: RateLimitConfig{
+			globalLimit:  loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
+			globalWindow: loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
+			writeLimit:   loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
+			writeWindow:  loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
+			walletLimit:  loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
+			walletWindow: loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
 		},
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
 			format: strings.ToLower(loader.stringDefault("LOG_FORMAT", defaultLogFormat(environment))),
 		},
-		intelligence: IntelligenceConfig{
-			url: loader.requiredURL("INTELLIGENCE_URL"),
+		allowedOrigins: loader.stringSliceDefault("ALLOWED_ORIGINS", nil),
+		performance: PerformanceConfig{
+			snapshotInterval: loader.durationDefault("PERFORMANCE_SNAPSHOT_INTERVAL", 1*time.Hour),
+		},
+		startup: StartupConfig{
+			enableAutoMigrate: loader.boolDefault("ENABLE_AUTO_MIGRATE", false),
+			migrationsDir:     loader.stringDefault("MIGRATIONS_DIR", "./migrations"),
+			dependencyTimeout: loader.durationDefault("STARTUP_DEPENDENCY_TIMEOUT", 5*time.Second),
 		},
 	}
 
@@ -120,6 +184,10 @@ func (c Config) Stellar() StellarConfig {
 	return c.stellar
 }
 
+func (c Config) SettlementProviderURL() string {
+	return c.settlementProviderURL
+}
+
 func (c Config) Auth() AuthConfig {
 	return c.auth
 }
@@ -132,8 +200,44 @@ func (c Config) Log() LogConfig {
 	return c.log
 }
 
-func (c Config) Intelligence() IntelligenceConfig {
-	return c.intelligence
+func (c Config) Redis() RedisConfig {
+	return c.redis
+}
+
+func (c Config) Performance() PerformanceConfig {
+	return c.performance
+}
+
+func (c Config) Startup() StartupConfig {
+	return c.startup
+}
+
+func (s StartupConfig) EnableAutoMigrate() bool {
+	return s.enableAutoMigrate
+}
+
+func (s StartupConfig) MigrationsDir() string {
+	return s.migrationsDir
+}
+
+func (s StartupConfig) DependencyTimeout() time.Duration {
+	return s.dependencyTimeout
+}
+
+func (p PerformanceConfig) SnapshotInterval() time.Duration {
+	return p.snapshotInterval
+}
+
+// AllowedOrigins returns the list of origins permitted to make cross-origin
+// requests to the API. An empty slice disables cross-origin access.
+func (c Config) AllowedOrigins() []string {
+	out := make([]string, len(c.allowedOrigins))
+	copy(out, c.allowedOrigins)
+	return out
+}
+
+func (r RedisConfig) Addr() string {
+	return r.addr
 }
 
 func (c *Config) validate(loader *envLoader) {
@@ -149,12 +253,32 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("SERVER_READ_TIMEOUT must be greater than 0")
 	}
 
+	if c.server.readHeaderTimeout <= 0 {
+		loader.addError("SERVER_READ_HEADER_TIMEOUT must be greater than 0")
+	}
+
 	if c.server.writeTimeout <= 0 {
 		loader.addError("SERVER_WRITE_TIMEOUT must be greater than 0")
 	}
 
+	if c.server.idleTimeout <= 0 {
+		loader.addError("SERVER_IDLE_TIMEOUT must be greater than 0")
+	}
+
 	if c.server.gracefulShutdown <= 0 {
 		loader.addError("SERVER_SHUTDOWN_TIMEOUT must be greater than 0")
+	}
+
+	if c.server.maxHeaderBytes <= 0 {
+		loader.addError("SERVER_MAX_HEADER_BYTES must be greater than 0")
+	}
+
+	if c.startup.dependencyTimeout <= 0 {
+		loader.addError("STARTUP_DEPENDENCY_TIMEOUT must be greater than 0")
+	}
+
+	if strings.TrimSpace(c.startup.migrationsDir) == "" {
+		loader.addError("MIGRATIONS_DIR must not be empty")
 	}
 
 	if c.database.poolSize <= 0 {
@@ -193,12 +317,47 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("RATELIMIT_WRITE_WINDOW must be greater than 0")
 	}
 
+	if c.rateLimit.walletLimit <= 0 {
+		loader.addError("RATELIMIT_WALLET_LIMIT must be greater than 0")
+	}
+
+	if c.rateLimit.walletWindow <= 0 {
+		loader.addError("RATELIMIT_WALLET_WINDOW must be greater than 0")
+	}
+
 	if !isOneOf(c.log.level, "debug", "info", "warn", "error") {
 		loader.addError("LOG_LEVEL must be one of debug, info, warn, error")
 	}
 
 	if !isOneOf(c.log.format, "json", "text") {
 		loader.addError("LOG_FORMAT must be one of json, text")
+	}
+
+	validateAllowedOrigins(c.environment, c.allowedOrigins, loader)
+
+	if c.performance.snapshotInterval <= 0 {
+		loader.addError("PERFORMANCE_SNAPSHOT_INTERVAL must be greater than 0")
+	}
+}
+
+func validateAllowedOrigins(environment string, origins []string, loader *envLoader) {
+	if (environment == "production" || environment == "staging") && len(origins) == 0 {
+		loader.addError("ALLOWED_ORIGINS must list at least one origin in production or staging")
+	}
+
+	for _, origin := range origins {
+		if origin == "*" {
+			loader.addError("ALLOWED_ORIGINS must not contain wildcard \"*\"; list explicit origins instead")
+			continue
+		}
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			loader.addError(fmt.Sprintf("ALLOWED_ORIGINS entry %q is not a valid origin (expected scheme://host[:port])", origin))
+			continue
+		}
+		if parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			loader.addError(fmt.Sprintf("ALLOWED_ORIGINS entry %q must not contain a path, query, or fragment", origin))
+		}
 	}
 }
 
@@ -214,12 +373,24 @@ func (s ServerConfig) ReadTimeout() time.Duration {
 	return s.readTimeout
 }
 
+func (s ServerConfig) ReadHeaderTimeout() time.Duration {
+	return s.readHeaderTimeout
+}
+
 func (s ServerConfig) WriteTimeout() time.Duration {
 	return s.writeTimeout
 }
 
+func (s ServerConfig) IdleTimeout() time.Duration {
+	return s.idleTimeout
+}
+
 func (s ServerConfig) GracefulShutdown() time.Duration {
 	return s.gracefulShutdown
+}
+
+func (s ServerConfig) MaxHeaderBytes() int {
+	return s.maxHeaderBytes
 }
 
 func (s ServerConfig) Address() string {
@@ -250,8 +421,8 @@ func (s StellarConfig) HorizonURL() string {
 	return s.horizonURL
 }
 
-func (s StellarConfig) SourceKey() string {
-	return s.sourceKey
+func (s StellarConfig) OperatorSecret() string {
+	return s.operatorSecret
 }
 
 func (l LogConfig) Level() string {
@@ -292,6 +463,14 @@ func (r RateLimitConfig) WriteLimit() int {
 
 func (r RateLimitConfig) WriteWindow() time.Duration {
 	return r.writeWindow
+}
+
+func (r RateLimitConfig) WalletLimit() int {
+	return r.walletLimit
+}
+
+func (r RateLimitConfig) WalletWindow() time.Duration {
+	return r.walletWindow
 }
 
 type envLoader struct {
@@ -336,6 +515,34 @@ func (l *envLoader) intDefault(key string, fallback int) int {
 	value, err := strconv.Atoi(raw)
 	if err != nil {
 		l.addError(fmt.Sprintf("%s must be an integer, got %q", key, raw))
+		return fallback
+	}
+	return value
+}
+
+func (l *envLoader) stringSliceDefault(key string, fallback []string) []string {
+	raw, ok := l.lookup(key)
+	if !ok {
+		return fallback
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func (l *envLoader) boolDefault(key string, fallback bool) bool {
+	raw, ok := l.lookup(key)
+	if !ok {
+		return fallback
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		l.addError(fmt.Sprintf("%s must be a boolean (true/false), got %q", key, raw))
 		return fallback
 	}
 	return value

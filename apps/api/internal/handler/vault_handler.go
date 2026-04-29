@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
@@ -21,7 +22,6 @@ type VaultHandler struct {
 }
 
 type createVaultRequest struct {
-	UserID          string `json:"user_id"`
 	ContractAddress string `json:"contract_address"`
 	Currency        string `json:"currency"`
 	Status          string `json:"status,omitempty"`
@@ -45,9 +45,15 @@ func (h *VaultHandler) createVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := uuid.Parse(request.UserID)
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
+	userID, err := uuid.Parse(user.ID)
 	if err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("user_id must be a valid UUID"))
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "invalid token subject"))
 		return
 	}
 
@@ -90,6 +96,17 @@ func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
 	userID, err := uuid.Parse(r.PathValue("userId"))
 	if err != nil {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("user id must be a valid UUID"))
+		return
+	}
+
+	authUser, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
+	if authUser.ID != userID.String() {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
 		return
 	}
 

@@ -21,8 +21,9 @@ func baseEnv(t *testing.T) {
 		"STELLAR_NETWORK_PASSPHRASE", "STELLAR_RPC_URL", "STELLAR_HORIZON_URL",
 		"AUTH_JWT_SECRET", "AUTH_TOKEN_EXPIRY", "AUTH_CHALLENGE_EXPIRY",
 		"RATELIMIT_GLOBAL_LIMIT", "RATELIMIT_GLOBAL_WINDOW", "RATELIMIT_WRITE_LIMIT", "RATELIMIT_WRITE_WINDOW",
+		"RATELIMIT_WALLET_LIMIT", "RATELIMIT_WALLET_WINDOW",
 		"LOG_LEVEL", "LOG_FORMAT",
-		"INTELLIGENCE_URL",
+		"ALLOWED_ORIGINS",
 	} {
 		t.Setenv(key, "")
 	}
@@ -56,7 +57,7 @@ func TestLoadFromDotEnv(t *testing.T) {
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
-		"INTELLIGENCE_URL=https://intelligence.example.com",
+		"ALLOWED_ORIGINS=https://app.example.com",
 	}, "\n"))
 
 	chdir(t, dir)
@@ -174,7 +175,7 @@ func TestLoadEnvVarsTakePrecedenceOverDotEnv(t *testing.T) {
 	t.Setenv("STELLAR_NETWORK_PASSPHRASE", "From EnvVar")
 	t.Setenv("STELLAR_RPC_URL", "https://envvar-rpc.example.com")
 	t.Setenv("STELLAR_HORIZON_URL", "https://envvar-horizon.example.com")
-	t.Setenv("INTELLIGENCE_URL", "https://intelligence.example.com")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -218,7 +219,7 @@ func TestLoadConcurrentCalls(t *testing.T) {
 		"STELLAR_RPC_URL=https://rpc.example.com",
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
-		"INTELLIGENCE_URL=https://intelligence.example.com",
+		"ALLOWED_ORIGINS=https://app.example.com",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -268,6 +269,7 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("SERVER_PORT", "9091")
 	t.Setenv("DATABASE_DSN", "postgres://env:secret@localhost:5432/nester?sslmode=disable")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -402,6 +404,12 @@ func TestLoadAllDefaults(t *testing.T) {
 		{"database connection timeout", cfg.Database().ConnectionTimeout(), 5 * time.Second},
 		{"log level", cfg.Log().Level(), "info"},
 		{"log format", cfg.Log().Format(), "text"},
+		{"ratelimit global limit", cfg.RateLimit().GlobalLimit(), 100},
+		{"ratelimit global window", cfg.RateLimit().GlobalWindow(), 1 * time.Minute},
+		{"ratelimit write limit", cfg.RateLimit().WriteLimit(), 20},
+		{"ratelimit write window", cfg.RateLimit().WriteWindow(), 1 * time.Minute},
+		{"ratelimit wallet limit", cfg.RateLimit().WalletLimit(), 60},
+		{"ratelimit wallet window", cfg.RateLimit().WalletWindow(), 1 * time.Minute},
 	}
 
 	for _, tc := range cases {
@@ -437,6 +445,7 @@ func TestLoadProductionMode(t *testing.T) {
 	baseEnv(t)
 	requiredEnv(t)
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
 
 	chdir(t, t.TempDir())
 
@@ -689,6 +698,175 @@ func TestLoadMultipleValidationErrors(t *testing.T) {
 		if !strings.Contains(message, expected) {
 			t.Errorf("expected error to contain %q, got:\n%s", expected, message)
 		}
+	}
+}
+
+// TestLoadWalletRateLimitRejectsNonPositiveValues verifies validation.
+func TestLoadWalletRateLimitRejectsNonPositiveValues(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		val  string
+		want string
+	}{
+		{"zero limit", "RATELIMIT_WALLET_LIMIT", "0", "RATELIMIT_WALLET_LIMIT must be greater than 0"},
+		{"negative limit", "RATELIMIT_WALLET_LIMIT", "-1", "RATELIMIT_WALLET_LIMIT must be greater than 0"},
+		{"zero window", "RATELIMIT_WALLET_WINDOW", "0s", "RATELIMIT_WALLET_WINDOW must be greater than 0"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			t.Setenv(tc.key, tc.val)
+
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected Load() to fail for %s=%s", tc.key, tc.val)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error to contain %q, got %q", tc.want, err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadWalletRateLimitOverrides verifies env overrides are honoured.
+func TestLoadWalletRateLimitOverrides(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_WALLET_LIMIT", "30")
+	t.Setenv("RATELIMIT_WALLET_WINDOW", "15s")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.RateLimit().WalletLimit(); got != 30 {
+		t.Errorf("WalletLimit() = %d, want 30", got)
+	}
+	if got := cfg.RateLimit().WalletWindow(); got != 15*time.Second {
+		t.Errorf("WalletWindow() = %s, want 15s", got)
+	}
+}
+
+// TestLoadAllowedOriginsParsed verifies ALLOWED_ORIGINS is split on commas
+// with whitespace trimmed and empty entries dropped.
+func TestLoadAllowedOriginsParsed(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com, https://example.com ,,http://localhost:3000")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	got := cfg.AllowedOrigins()
+	want := []string{"https://app.example.com", "https://example.com", "http://localhost:3000"}
+	if len(got) != len(want) {
+		t.Fatalf("AllowedOrigins() = %v, want %v", got, want)
+	}
+	for i, v := range want {
+		if got[i] != v {
+			t.Errorf("AllowedOrigins()[%d] = %q, want %q", i, got[i], v)
+		}
+	}
+}
+
+// TestLoadAllowedOriginsRequiredInProduction verifies production requires
+// ALLOWED_ORIGINS to be populated.
+func TestLoadAllowedOriginsRequiredInProduction(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "production")
+
+	chdir(t, t.TempDir())
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load() to fail when ALLOWED_ORIGINS is empty in production")
+	}
+	if !strings.Contains(err.Error(), "ALLOWED_ORIGINS") {
+		t.Fatalf("expected error to mention ALLOWED_ORIGINS, got %q", err.Error())
+	}
+}
+
+// TestLoadAllowedOriginsRejectsWildcard verifies "*" is rejected explicitly.
+func TestLoadAllowedOriginsRejectsWildcard(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("ALLOWED_ORIGINS", "*")
+
+	chdir(t, t.TempDir())
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load() to fail when ALLOWED_ORIGINS contains a wildcard")
+	}
+	if !strings.Contains(err.Error(), "wildcard") {
+		t.Fatalf("expected wildcard error, got %q", err.Error())
+	}
+}
+
+// TestLoadAllowedOriginsRejectsMalformed verifies malformed origins are rejected.
+func TestLoadAllowedOriginsRejectsMalformed(t *testing.T) {
+	cases := []struct {
+		name   string
+		origin string
+	}{
+		{"missing scheme", "app.example.com"},
+		{"unsupported scheme", "ftp://example.com"},
+		{"has path", "https://example.com/api"},
+		{"has query", "https://example.com?foo=1"},
+		{"trailing slash", "https://example.com/"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("ALLOWED_ORIGINS", tc.origin)
+
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected Load() to fail for malformed origin %q", tc.origin)
+			}
+			if !strings.Contains(err.Error(), "ALLOWED_ORIGINS") {
+				t.Fatalf("expected error to mention ALLOWED_ORIGINS, got %q", err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadAllowedOriginsOptionalInDevelopment verifies development loads
+// successfully with no ALLOWED_ORIGINS set.
+func TestLoadAllowedOriginsOptionalInDevelopment(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.AllowedOrigins()) != 0 {
+		t.Fatalf("expected empty AllowedOrigins() in dev with no env, got %v", cfg.AllowedOrigins())
 	}
 }
 

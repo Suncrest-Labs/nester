@@ -18,8 +18,17 @@ const navLinks = [
     { name: "Docs", href: "/docs", newTab: true },
 ]
 
+const PROD_DAPP_URL = "https://nesterdapp.netlify.app"
+const LOCAL_DAPP_URL = process.env.NEXT_PUBLIC_DAPP_URL ?? "http://localhost:3001"
+
 export function Navbar() {
     const [isScrolled, setIsScrolled] = React.useState(false)
+    const [dappUrl, setDappUrl] = React.useState(PROD_DAPP_URL)
+
+    React.useEffect(() => {
+        const host = window.location.hostname
+        setDappUrl(host === "localhost" || host === "127.0.0.1" ? LOCAL_DAPP_URL : PROD_DAPP_URL)
+    }, [])
 
     React.useEffect(() => {
         const handleScroll = () => {
@@ -55,13 +64,13 @@ export function Navbar() {
                             </Link>
                         ))}
                     </div>
-                    <Link href="http://localhost:3001" target="_blank">
+                    <a href={dappUrl} target="_blank" rel="noopener noreferrer">
                         <Button
                             className="bg-[#0D0E1C] hover:bg-[#0D0E1C]/90 text-white rounded-full px-6 font-medium text-sm transition-all shadow-none"
                         >
                             Nester for Web
                         </Button>
-                    </Link>
+                    </a>
                 </div>
 
                 <Sheet>
@@ -87,11 +96,11 @@ export function Navbar() {
                                 ))}
                             </div>
                             <div className="mt-auto mb-8">
-                                <Link href="http://localhost:3001" target="_blank" className="w-full">
+                                <a href={dappUrl} target="_blank" rel="noopener noreferrer" className="w-full">
                                     <Button className="w-full bg-[#0D0E1C] hover:bg-[#0D0E1C]/90 text-white rounded-full">
                                         Nester for Web
                                     </Button>
-                                </Link>
+                                </a>
                             </div>
                         </div>
                     </SheetContent>

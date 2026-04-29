@@ -38,7 +38,10 @@ type InitiateSettlementInput struct {
 // UpdateStatusInput carries the target state for a status transition.
 type UpdateStatusInput struct {
 	SettlementID uuid.UUID
-	NewStatus    offramp.SettlementStatus
+	// CallerID is the authenticated user's UUID from the JWT. The service
+	// verifies it matches the settlement's UserID before applying the update.
+	CallerID  uuid.UUID
+	NewStatus offramp.SettlementStatus
 }
 
 // InitiateSettlement validates input, creates a settlement in the `initiated`
@@ -161,6 +164,10 @@ func (s *SettlementService) UpdateStatus(ctx context.Context, input UpdateStatus
 	current, err := s.repository.GetByID(ctx, input.SettlementID)
 	if err != nil {
 		return offramp.Settlement{}, err
+	}
+
+	if current.UserID != input.CallerID {
+		return offramp.Settlement{}, offramp.ErrForbidden
 	}
 
 	if !current.CanTransitionTo(input.NewStatus) {

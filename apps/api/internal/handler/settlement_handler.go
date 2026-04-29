@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
@@ -169,6 +170,17 @@ func (h *SettlementHandler) updateStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	caller, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+	callerID, err := uuid.Parse(caller.ID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "invalid caller identity"))
+		return
+	}
+
 	var req updateStatusRequest
 	if err := decodeJSON(r, &req); err != nil {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
@@ -177,6 +189,7 @@ func (h *SettlementHandler) updateStatus(w http.ResponseWriter, r *http.Request)
 
 	model, err := h.service.UpdateStatus(r.Context(), service.UpdateStatusInput{
 		SettlementID: id,
+		CallerID:     callerID,
 		NewStatus:    offramp.SettlementStatus(req.Status),
 	})
 	if err != nil {
@@ -191,6 +204,8 @@ func (h *SettlementHandler) updateStatus(w http.ResponseWriter, r *http.Request)
 
 func (h *SettlementHandler) writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, offramp.ErrForbidden):
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "you do not own this settlement"))
 	case errors.Is(err, offramp.ErrSettlementNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("settlement"))
 	case errors.Is(err, offramp.ErrUserNotFound):

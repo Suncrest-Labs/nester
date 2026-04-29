@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/stellar/go/keypair"
@@ -18,11 +17,6 @@ var (
 	ErrSignatureInvalid = errors.New("signature is invalid")
 	ErrWalletInvalid    = errors.New("wallet address is invalid")
 )
-
-type challengeData struct {
-	Challenge string
-	ExpiresAt time.Time
-}
 
 type AuthService interface {
 	GenerateChallenge(ctx context.Context, walletAddress string) (string, error)
@@ -36,51 +30,46 @@ type AuthConfig interface {
 }
 
 type authService struct {
-	mu          sync.RWMutex
-	challenges  map[string]challengeData
+	store       ChallengeStore
 	userService *UserService
 	config      AuthConfig
 }
 
-func NewAuthService(userService *UserService, cfg AuthConfig) AuthService {
+func NewAuthService(store ChallengeStore, userService *UserService, cfg AuthConfig) AuthService {
 	return &authService{
-		challenges:  make(map[string]challengeData),
+		store:       store,
 		userService: userService,
 		config:      cfg,
 	}
 }
 
 func (s *authService) GenerateChallenge(ctx context.Context, walletAddress string) (string, error) {
-	// Validate wallet format first
 	if _, err := keypair.ParseAddress(walletAddress); err != nil {
 		return "", ErrWalletInvalid
 	}
 
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	challenge := hex.EncodeToString(bytes)
+	challenge := hex.EncodeToString(b)
 
-	s.mu.Lock()
-	s.challenges[walletAddress] = challengeData{
-		Challenge: challenge,
-		ExpiresAt: time.Now().Add(s.config.ChallengeExpiry()),
+	if err := s.store.Set(ctx, walletAddress, challenge); err != nil {
+		return "", err
 	}
-	s.mu.Unlock()
-
 	return challenge, nil
 }
 
 func (s *authService) VerifyAndIssue(ctx context.Context, walletAddress, signature string, challenge string) (string, error) {
-	s.mu.Lock()
-	data, ok := s.challenges[walletAddress]
-	if ok {
-		delete(s.challenges, walletAddress) // One-time use challenge
+	stored, err := s.store.GetAndDelete(ctx, walletAddress)
+	if err != nil {
+		if errors.Is(err, ErrChallengeNotFound) {
+			return "", ErrChallengeExpired
+		}
+		return "", err
 	}
-	s.mu.Unlock()
 
-	if !ok || time.Now().After(data.ExpiresAt) || data.Challenge != challenge {
+	if stored != challenge {
 		return "", ErrChallengeExpired
 	}
 
@@ -98,15 +87,17 @@ func (s *authService) VerifyAndIssue(ctx context.Context, walletAddress, signatu
 		return "", ErrSignatureInvalid
 	}
 
-	// Try to get user, if not found, register them
 	user, err := s.userService.GetUserByWallet(ctx, walletAddress)
 	if err != nil {
-		// Register a new user if one doesn't exist
-		// displayName defaults to first 8 chars of wallet
 		user, err = s.userService.RegisterUser(ctx, walletAddress, walletAddress[:8])
 		if err != nil {
 			return "", err
 		}
+	}
+
+	roles, err := s.userService.GetUserRoles(ctx, user.ID)
+	if err != nil {
+		return "", err
 	}
 
 	claims := auth.Claims{
@@ -114,12 +105,8 @@ func (s *authService) VerifyAndIssue(ctx context.Context, walletAddress, signatu
 		WalletAddress: walletAddress,
 		IssuedAt:      time.Now().Unix(),
 		ExpiresAt:     time.Now().Add(s.config.TokenExpiry()).Unix(),
+		Roles:         roles,
 	}
 
-	token, err := auth.MakeJWT(claims, s.config.Secret())
-	if err != nil {
-		return "", err
-	}
-
-	return token, nil
+	return auth.MakeJWT(claims, s.config.Secret())
 }

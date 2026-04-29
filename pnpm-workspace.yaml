@@ -1,5 +1,4 @@
 packages:
   - 'apps/*'
   - 'apps/dapp/frontend'
-  - 'apps/dapp/backend'
   - 'packages/*'

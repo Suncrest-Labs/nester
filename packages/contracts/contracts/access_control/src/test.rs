@@ -179,7 +179,7 @@ fn stranger_cannot_grant_role() {
 }
 
 #[test]
-fn regranting_existing_role_is_idempotent() {
+fn granting_existing_role_is_idempotent() {
     let (env, admin, operator, cid) = setup();
     invoke(&env, &cid, || {
         AccessControl::grant_role(&env, &admin, &operator, Role::Operator)
@@ -218,6 +218,21 @@ fn admin_can_revoke_operator_role() {
     assert!(!read(&env, &cid, || AccessControl::has_role(
         &env,
         &operator,
+        Role::Operator
+    )));
+}
+
+#[test]
+fn revoking_absent_role_is_idempotent() {
+    let (env, admin, other, cid) = setup();
+
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &admin, &other, Role::Operator)
+    });
+
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &other,
         Role::Operator
     )));
 }
@@ -284,7 +299,7 @@ fn require_role_passes_for_authorised_account() {
 
 #[test]
 #[should_panic]
-fn require_role_panics_when_account_lacks_role() {
+fn require_role_panics_when_role_is_absent() {
     let (env, _, other, cid) = setup();
     read(&env, &cid, || {
         AccessControl::require_role(&env, &other, Role::Admin)

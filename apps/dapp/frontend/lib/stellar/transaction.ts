@@ -1,35 +1,34 @@
 import {
   Contract,
-  Networks,
   rpc as SorobanRpc,
   Transaction,
   TransactionBuilder,
   BASE_FEE,
   nativeToScVal,
   Address,
-  xdr,
 } from "@stellar/stellar-sdk";
+
+import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const HORIZON_RPC_URL =
-  process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ??
-  "https://soroban-testnet.stellar.org";
-
-const NETWORK_PASSPHRASE =
-  process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet"
-    ? Networks.PUBLIC
-    : Networks.TESTNET;
-
-const STELLAR_EXPLORER_BASE =
-  process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet"
-    ? "https://stellar.expert/explorer/public/tx"
-    : "https://stellar.expert/explorer/testnet/tx";
+const getCurrentNetwork = () => {
+  if (typeof window !== "undefined") {
+    const savedNetwork = localStorage.getItem("nester_network_id");
+    if (savedNetwork && (savedNetwork === "testnet" || savedNetwork === "mainnet")) {
+      return NETWORKS[savedNetwork];
+    }
+  }
+  return DEFAULT_NETWORK;
+};
 
 // These are set via environment variables so the contracts can be swapped
 // without code changes when moving from testnet to mainnet.
 export const VAULT_CONTRACT_ID =
   process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID ?? "";
+
+export const VAULT_XLM_CONTRACT_ID =
+  process.env.NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID ?? "";
 
 export const USDC_CONTRACT_ID =
   process.env.NEXT_PUBLIC_USDC_CONTRACT_ID ?? "";
@@ -41,16 +40,13 @@ export interface DepositParams {
   walletAddress: string;
   /** Vault contract ID on Soroban. */
   contractId: string;
-  /** USDC token contract ID. */
-  tokenAddress: string;
-  /** Amount in USDC (human-readable, e.g. 100.50). Converted to stroops internally. */
+  /** Amount in USDC/XLM (human-readable, e.g. 100.50). Converted to stroops internally. */
   amount: number;
 }
 
 export interface WithdrawParams {
   walletAddress: string;
   contractId: string;
-  tokenAddress: string;
   /** Number of nVault shares to burn. */
   shares: number;
 }
@@ -105,8 +101,17 @@ export class TransactionTimeoutError extends Error {
 
 // ── Soroban RPC client ────────────────────────────────────────────────────────
 
-function getServer(): SorobanRpc.Server {
-  return new SorobanRpc.Server(HORIZON_RPC_URL, { allowHttp: true });
+function getServer(rpcUrl: string): SorobanRpc.Server {
+  const isProd = process.env.NODE_ENV === "production";
+
+  if (isProd && !rpcUrl.startsWith("https://")) {
+    throw new Error(
+      `Production Soroban RPC URL must use HTTPS. Got: ${rpcUrl}. ` +
+        `Set NEXT_PUBLIC_STELLAR_RPC_URL to a valid https:// endpoint.`
+    );
+  }
+
+  return new SorobanRpc.Server(rpcUrl, { allowHttp: !isProd });
 }
 
 // ── Transaction builders ──────────────────────────────────────────────────────
@@ -114,15 +119,16 @@ function getServer(): SorobanRpc.Server {
 /**
  * Build a Soroban `deposit` contract invocation transaction.
  *
- * The vault contract's `deposit(from, token, amount)` function is called.
- * Amount is converted from human-readable USDC to stroops (7 decimal places).
+ * The vault contract's `deposit(user, amount)` function is called.
+ * Amount is converted from human-readable value to stroops (7 decimal places).
  */
 export async function buildDepositTransaction(
   params: DepositParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, tokenAddress, amount } = params;
+  const { walletAddress, contractId, amount } = params;
+  const network = getCurrentNetwork();
 
-  const server = getServer();
+  const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
 
   const amountStroops = BigInt(Math.round(amount * 10_000_000));
@@ -131,13 +137,12 @@ export async function buildDepositTransaction(
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: network.networkPassphrase,
   })
     .addOperation(
       contract.call(
         "deposit",
         new Address(walletAddress).toScVal(),
-        new Address(tokenAddress).toScVal(),
         nativeToScVal(amountStroops, { type: "i128" })
       )
     )
@@ -161,14 +166,15 @@ export async function buildDepositTransaction(
 /**
  * Build a Soroban `withdraw` contract invocation transaction.
  *
- * The vault contract's `withdraw(from, token, shares)` function is called.
+ * The vault contract's `withdraw(from, shares)` function is called.
  */
 export async function buildWithdrawTransaction(
   params: WithdrawParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, tokenAddress, shares } = params;
+  const { walletAddress, contractId, shares } = params;
+  const network = getCurrentNetwork();
 
-  const server = getServer();
+  const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
 
   const sharesStroops = BigInt(Math.round(shares * 10_000_000));
@@ -177,13 +183,12 @@ export async function buildWithdrawTransaction(
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: network.networkPassphrase,
   })
     .addOperation(
       contract.call(
         "withdraw",
         new Address(walletAddress).toScVal(),
-        new Address(tokenAddress).toScVal(),
         nativeToScVal(sharesStroops, { type: "i128" })
       )
     )
@@ -203,34 +208,33 @@ export async function buildWithdrawTransaction(
   return { xdr: assembled.toXDR(), transaction: assembled };
 }
 
-// ── Freighter signing ─────────────────────────────────────────────────────────
+// ── Wallet signing ────────────────────────────────────────────────────────────
 
 /**
- * Request the user to sign a transaction via Freighter (or any injected
- * Stellar wallet). Returns the signed XDR string.
+ * Request the user to sign a transaction via stellar-wallets-kit.
+ * Returns the signed XDR string.
  *
- * @throws {UserRejectedError} if the user dismisses the Freighter popup.
+ * @throws {UserRejectedError} if the user dismisses the wallet popup.
  */
 export async function signTransaction(txXdr: string): Promise<string> {
-  // Access Freighter via the global injected by the browser extension.
-  // @creit.tech/stellar-wallets-kit exposes the same interface.
-  const freighter = (window as typeof window & { freighter?: {
-    signTransaction: (xdr: string, opts: { networkPassphrase: string }) => Promise<{ signedTxXdr: string; error?: string }>
-  } }).freighter;
+  const { StellarWalletsKit } = await import("@creit.tech/stellar-wallets-kit");
 
-  if (!freighter) {
+  const walletModule = StellarWalletsKit.selectedModule;
+  if (!walletModule) {
     throw new Error(
-      "No Stellar wallet detected. Please install Freighter (freighter.app) and try again."
+      "No Stellar wallet connected. Please connect a wallet and try again."
     );
   }
 
-  const result = await freighter.signTransaction(txXdr, {
-    networkPassphrase: NETWORK_PASSPHRASE,
-  });
+  const network = getCurrentNetwork();
 
-  // Freighter signals user rejection via a specific error message string
-  if (result.error) {
-    const msg = result.error.toLowerCase();
+  let result: { signedTxXdr: string };
+  try {
+    result = await walletModule.signTransaction(txXdr, {
+      networkPassphrase: network.networkPassphrase,
+    });
+  } catch (err) {
+    const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
     if (
       msg.includes("user declined") ||
       msg.includes("user rejected") ||
@@ -239,7 +243,7 @@ export async function signTransaction(txXdr: string): Promise<string> {
     ) {
       throw new UserRejectedError();
     }
-    throw new Error(result.error);
+    throw err;
   }
 
   return result.signedTxXdr;
@@ -260,10 +264,11 @@ const MAX_POLL_ATTEMPTS = 15; // 30 seconds total
 export async function submitTransaction(
   signedXdr: string
 ): Promise<TransactionReceipt> {
-  const server = getServer();
+  const network = getCurrentNetwork();
+  const server = getServer(network.rpcUrl);
 
   // Re-parse from signed XDR so we have a Transaction object to submit
-  const tx = new Transaction(signedXdr, NETWORK_PASSPHRASE);
+  const tx = new Transaction(signedXdr, network.networkPassphrase);
   const sendResult = await server.sendTransaction(tx);
 
   if (sendResult.status === "ERROR") {
@@ -283,7 +288,7 @@ export async function submitTransaction(
     if (getResult.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
       return {
         txHash,
-        explorerUrl: `${STELLAR_EXPLORER_BASE}/${txHash}`,
+        explorerUrl: `${network.explorerUrl}/tx/${txHash}`,
         ledger: getResult.ledger,
       };
     }
@@ -298,6 +303,48 @@ export async function submitTransaction(
   }
 
   throw new TransactionTimeoutError();
+}
+
+// ── High-level vault flows ───────────────────────────────────────────────────
+
+function isRealContractId(id: string): boolean {
+  return /^C[A-Z0-9]{55}$/.test(id);
+}
+
+export async function executeVaultDeposit(params: {
+  walletAddress: string;
+  vaultId: string;
+  contractId: string;
+  asset: "USDC" | "XLM";
+  amount: number;
+}): Promise<TransactionReceipt> {
+  const { walletAddress, contractId, amount } = params;
+
+  if (!isRealContractId(contractId)) {
+    throw new Error("Vault is not yet live. Deposits are currently disabled.");
+  }
+
+  const { xdr } = await buildDepositTransaction({ walletAddress, contractId, amount });
+  const signedXdr = await signTransaction(xdr);
+  return submitTransaction(signedXdr);
+}
+
+export async function executeVaultWithdraw(params: {
+  walletAddress: string;
+  vaultId: string;
+  contractId: string;
+  asset: "USDC" | "XLM";
+  shares: number;
+}): Promise<TransactionReceipt> {
+  const { walletAddress, contractId, shares } = params;
+
+  if (!isRealContractId(contractId)) {
+    throw new Error("Vault is not yet live. Withdrawals are currently disabled.");
+  }
+
+  const { xdr } = await buildWithdrawTransaction({ walletAddress, contractId, shares });
+  const signedXdr = await signTransaction(xdr);
+  return submitTransaction(signedXdr);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

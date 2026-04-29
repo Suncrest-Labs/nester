@@ -666,6 +666,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nester-contract"
+version = "0.1.0"
+dependencies = [
+ "nester-access-control",
+ "nester-common",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "nester-integration-tests"
 version = "0.1.0"
 dependencies = [
@@ -687,10 +696,6 @@ dependencies = [
  "nester-test-utils",
  "soroban-sdk",
 ]
-
-[[package]]
-name = "nester-snapshots"
-version = "0.1.0"
 
 [[package]]
 name = "nester-test-utils"
@@ -1361,7 +1366,6 @@ version = "0.1.0"
 dependencies = [
  "nester-access-control",
  "nester-common",
- "nester-test-utils",
  "soroban-sdk",
 ]
 
@@ -1385,6 +1389,7 @@ dependencies = [
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",
+ "vault-token-contract",
 ]
 
 [[package]]

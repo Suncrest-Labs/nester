@@ -22,6 +22,7 @@ var defaultRules = []RouteRule{
 	{PathPrefix: "/health", Public: true},
 	{Method: http.MethodGet, PathPrefix: "/api/v1/vaults", Public: true},
 	{Method: http.MethodPost, PathPrefix: "/api/v1/deposit", Scope: "deposit"},
+	{PathPrefix: "/api/v1/admin/", Role: "admin"},
 }
 
 // authHandler wraps ok200 with Authenticate using defaultRules and testSecret.
@@ -277,5 +278,41 @@ func TestAuthErrorResponseIsJSON(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, `"success":false`) {
 		t.Errorf("body = %q, want success:false envelope", body)
+	}
+}
+
+func TestAuthAdminRouteRequiresAdminRole(t *testing.T) {
+	token := makeToken(t, auth.Claims{
+		Subject:   "user-non-admin",
+		Roles:     []string{"operator"},
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/dashboard", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	authHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got %d, want 403 for non-admin role on admin route", rec.Code)
+	}
+}
+
+func TestAuthAdminRouteAllowsAdminRole(t *testing.T) {
+	token := makeToken(t, auth.Claims{
+		Subject:   "user-admin",
+		Roles:     []string{"admin"},
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/dashboard", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	authHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200 for admin role on admin route", rec.Code)
 	}
 }

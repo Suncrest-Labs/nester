@@ -48,11 +48,4 @@ clean:
 	@echo "✓ Clean complete"
 
 deploy-testnet:
-	@echo "Deploying to Stellar testnet..."
-	@echo "Note: Requires stellar-cli and proper network configuration"
-	@for contract in contracts/*/; do \
-		if [ -f "$$contract/Cargo.toml" ]; then \
-			echo "Deploying $$contract..."; \
-		fi \
-	done
-	@echo "✓ Deployment complete"
+	@bash scripts/deploy-testnet.sh

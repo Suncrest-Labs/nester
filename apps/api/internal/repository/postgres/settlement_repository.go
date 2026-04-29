@@ -30,8 +30,8 @@ func (r *SettlementRepository) Create(ctx context.Context, model offramp.Settlem
 			amount, currency, fiat_currency, fiat_amount, exchange_rate,
 			destination_type, destination_provider,
 			destination_account_number, destination_account_name, destination_bank_code,
-			status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			status, retry_count, error_message, notes
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		RETURNING created_at
 	`
 
@@ -52,6 +52,9 @@ func (r *SettlementRepository) Create(ctx context.Context, model offramp.Settlem
 		model.Destination.AccountName,
 		model.Destination.BankCode,
 		string(model.Status),
+		model.RetryCount,
+		model.ErrorMessage,
+		model.Notes,
 	).Scan(&model.CreatedAt); err != nil {
 		return offramp.Settlement{}, mapSettlementError(err)
 	}
@@ -65,7 +68,7 @@ func (r *SettlementRepository) GetByID(ctx context.Context, id uuid.UUID) (offra
 		       amount, currency, fiat_currency, fiat_amount, exchange_rate,
 		       destination_type, destination_provider,
 		       destination_account_number, destination_account_name, destination_bank_code,
-		       status, created_at, completed_at
+		       status, retry_count, error_message, notes, estimated_fee, created_at, completed_at
 		FROM settlements
 		WHERE id = $1
 	`
@@ -95,7 +98,7 @@ func (r *SettlementRepository) GetByUserID(
 			       amount, currency, fiat_currency, fiat_amount, exchange_rate,
 			       destination_type, destination_provider,
 			       destination_account_number, destination_account_name, destination_bank_code,
-			       status, created_at, completed_at
+			       status, retry_count, error_message, notes, estimated_fee, created_at, completed_at
 			FROM settlements
 			WHERE user_id = $1
 			ORDER BY created_at DESC
@@ -107,7 +110,7 @@ func (r *SettlementRepository) GetByUserID(
 			       amount, currency, fiat_currency, fiat_amount, exchange_rate,
 			       destination_type, destination_provider,
 			       destination_account_number, destination_account_name, destination_bank_code,
-			       status, created_at, completed_at
+			       status, retry_count, error_message, notes, estimated_fee, created_at, completed_at
 			FROM settlements
 			WHERE user_id = $1 AND status = $2
 			ORDER BY created_at DESC
@@ -181,6 +184,10 @@ func scanSettlement(row scanner) (offramp.Settlement, error) {
 		destAcctName  string
 		destBankCode  string
 		status        string
+		retryCount    int
+		errorMessage  sql.NullString
+		notes         sql.NullString
+		estimatedFee  sql.NullString
 		createdAt     time.Time
 		completedAt   sql.NullTime
 	)
@@ -189,7 +196,7 @@ func scanSettlement(row scanner) (offramp.Settlement, error) {
 		&id, &userID, &vaultID,
 		&amount, &currency, &fiatCurrency, &fiatAmount, &exchangeRate,
 		&destType, &destProvider, &destAcctNum, &destAcctName, &destBankCode,
-		&status, &createdAt, &completedAt,
+		&status, &retryCount, &errorMessage, &notes, &estimatedFee, &createdAt, &completedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return offramp.Settlement{}, offramp.ErrSettlementNotFound
@@ -233,6 +240,14 @@ func scanSettlement(row scanner) (offramp.Settlement, error) {
 		completedAtPtr = &t
 	}
 
+	var estFeePtr *decimal.Decimal
+	if estimatedFee.Valid {
+		d, err := decimal.NewFromString(estimatedFee.String)
+		if err == nil {
+			estFeePtr = &d
+		}
+	}
+
 	return offramp.Settlement{
 		ID:           parsedID,
 		UserID:       parsedUserID,
@@ -249,9 +264,13 @@ func scanSettlement(row scanner) (offramp.Settlement, error) {
 			AccountName:   destAcctName,
 			BankCode:      destBankCode,
 		},
-		Status:      offramp.SettlementStatus(status),
-		CreatedAt:   createdAt,
-		CompletedAt: completedAtPtr,
+		Status:       offramp.SettlementStatus(status),
+		RetryCount:   retryCount,
+		ErrorMessage: errorMessage.String,
+		Notes:        notes.String,
+		EstimatedFee: estFeePtr,
+		CreatedAt:    createdAt,
+		CompletedAt:  completedAtPtr,
 	}, nil
 }
 

@@ -67,19 +67,26 @@ impl NesterHarness {
         let token_admin = Address::generate(&env);
 
         // Register contracts (allocates an on-chain address for each).
-        let vault_id    = env.register_contract(None, VaultContract);
+        let vault_id = env.register_contract(None, VaultContract);
         let treasury_id = env.register_contract(None, TreasuryContract);
-        let token_id    = env.register_contract(None, VaultTokenContract);
+        let token_id = env.register_contract(None, VaultTokenContract);
         let registry_id = env.register_contract(None, YieldRegistryContract);
         let strategy_id = env.register_contract(None, AllocationStrategyContract);
 
         // Register a Stellar asset contract to act as the deposit token (e.g. USDC).
-        let deposit_token_id = env.register_stellar_asset_contract_v2(token_admin).address();
+        let deposit_token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
 
         // Initialise in dependency order.
         TreasuryContractClient::new(&env, &treasury_id).initialize(&admin, &vault_id);
 
-        VaultContractClient::new(&env, &vault_id).initialize(&admin, &deposit_token_id, &treasury_id);
+        VaultContractClient::new(&env, &vault_id).initialize(
+            &admin,
+            &deposit_token_id,
+            &token_id,
+            &treasury_id,
+        );
 
         VaultTokenContractClient::new(&env, &token_id).initialize(
             &vault_id,
@@ -92,8 +99,7 @@ impl NesterHarness {
 
         // Strategy needs the registry address so it can validate sources via
         // cross-contract calls in `set_weights`.
-        AllocationStrategyContractClient::new(&env, &strategy_id)
-            .initialize(&admin, &registry_id);
+        AllocationStrategyContractClient::new(&env, &strategy_id).initialize(&admin, &registry_id);
 
         NesterHarness {
             env,

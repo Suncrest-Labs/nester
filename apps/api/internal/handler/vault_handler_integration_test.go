@@ -39,13 +39,13 @@ func TestVaultHandlerIntegrationCreateGetListAndErrors(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 	defer server.Close()
 
 	response, err := http.Post(
 		server.URL+"/api/v1/vaults",
 		"application/json",
-		bytes.NewBufferString(`{"user_id":"`+userID.String()+`","contract_address":"CA-H-001","currency":"USDC"}`),
+		bytes.NewBufferString(`{"contract_address":"CA-H-001","currency":"USDC"}`),
 	)
 	if err != nil {
 		t.Fatalf("POST /api/v1/vaults error = %v", err)

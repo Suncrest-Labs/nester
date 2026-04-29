@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
+	"strings"
 	"time"
 )
 
@@ -91,54 +93,86 @@ func (ep *EventPoller) PollEvents(
 			{"contractIds": []string{contractID}},
 		}
 	}
+	if ep.client == nil {
+		return nil, fmt.Errorf("stellar client is required")
+	}
+	if strings.TrimSpace(ep.client.config.RPCURL) == "" {
+		return nil, fmt.Errorf("stellar RPC URL is required")
+	}
 
-	requestBody, err := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
-		"id":      time.Now().UnixNano(),
+		"id":      "nester-event-poller",
 		"method":  "getEvents",
-		"params":  params,
+		"params": map[string]any{
+			"startLedger": fromBlock,
+			"endLedger":   toBlock,
+			"filters": []map[string]any{
+				{
+					"type":        "contract",
+					"contractIds": []string{contractID},
+				},
+			},
+			"pagination": map[string]any{"limit": 200},
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := ep.httpClient.Post(ep.client.config.RPCURL, "application/json", bytes.NewBuffer(requestBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.client.config.RPCURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("getEvents failed with %d: %s", resp.StatusCode, string(payload))
+	}
+
 	var rpcResp struct {
 		Result struct {
 			Events []struct {
-				ID            string                 `json:"id"`
-				ContractID    string                 `json:"contractId"`
-				Type          string                 `json:"type"`
-				Ledger        uint64                 `json:"ledger"`
-				LedgerClosedAt string                `json:"ledgerClosedAt"`
-				TransactionHash string               `json:"transactionHash"`
-				Value         map[string]interface{} `json:"value"`
+				ContractID string         `json:"contractId"`
+				Ledger     uint64         `json:"ledger"`
+				TxHash     string         `json:"txHash"`
+				Topic      []interface{}  `json:"topic"`
+				Value      map[string]any `json:"value"`
 			} `json:"events"`
 		} `json:"result"`
-		Error interface{} `json:"error"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&rpcResp); err != nil {
 		return nil, err
 	}
-
 	if rpcResp.Error != nil {
-		return nil, fmt.Errorf("RPC error: %v", rpcResp.Error)
+		return nil, fmt.Errorf("getEvents RPC error: %s", rpcResp.Error.Message)
 	}
 
-	domainEvents := make([]Event, 0, len(rpcResp.Result.Events))
-	for _, e := range rpcResp.Result.Events {
-		domainEvents = append(domainEvents, Event{
-			ContractID:    e.ContractID,
-			EventType:     e.Type,
-			BlockNumber:   e.Ledger,
-			TransactionID: e.TransactionHash,
-			Data:          e.Value,
+	events := make([]Event, 0, len(rpcResp.Result.Events))
+	for _, raw := range rpcResp.Result.Events {
+		eventType := ""
+		if len(raw.Topic) > 0 {
+			eventType = fmt.Sprintf("%v", raw.Topic[0])
+		}
+		events = append(events, Event{
+			ContractID:    raw.ContractID,
+			EventType:     eventType,
+			BlockNumber:   raw.Ledger,
+			TransactionID: raw.TxHash,
+			Data:          raw.Value,
 		})
 	}
 

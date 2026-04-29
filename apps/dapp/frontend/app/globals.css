@@ -22,8 +22,9 @@
     --color-brand-cyan: #2EBAC6;
     --color-brand-dark: #0D0E1C;
     --font-sans: var(--font-inter), system-ui, sans-serif;
-    --font-heading: var(--font-space-grotesk), system-ui, sans-serif;
-    --font-display: var(--font-cormorant), Georgia, serif;
+    --font-heading: var(--font-inter), system-ui, sans-serif;
+    --font-display: var(--font-inter), system-ui, sans-serif;
+    --font-mono: var(--font-inter), system-ui, sans-serif;
     --radius: 0.75rem;
 }
 
@@ -47,6 +48,28 @@
     --ring: 255 60% 60%;
     --gradient-brand: linear-gradient(135deg, #B6509E 0%, #2EBAC6 100%);
     --touch-target: 44px;
+}
+
+/* Dark mode theme */
+.dark {
+    --background: 240 10% 10%;
+    --foreground: 0 0% 100%;
+    --card: 240 9% 18%;
+    --card-foreground: 0 0% 100%;
+    --primary: 255 60% 60%;
+    --primary-foreground: 240 10% 10%;
+    --secondary: 240 5.1% 25%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 240 5.1% 25%;
+    --muted-foreground: 240 3.8% 65%;
+    --accent: 240 5.1% 25%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 240 10% 10%;
+    --border: 240 5.1% 25%;
+    --input: 240 5.1% 25%;
+    --ring: 255 60% 60%;
+    --gradient-brand: linear-gradient(135deg, #B6509E 0%, #2EBAC6 100%);
 }
 
 * {
@@ -171,6 +194,11 @@ body {
 .mobile-content-pad {
     padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
 }
+@media (min-width: 768px) {
+    .mobile-content-pad {
+        padding-bottom: 0 !important;
+    }
+}
 
 .tab-label {
     font-size: 10px;
@@ -180,4 +208,49 @@ body {
 
 html.menu-open {
     overflow: hidden;
+}
+
+/* Custom dashed border — larger, bolder dashes with wider spacing */
+.dash-border {
+    border: none;
+    background-image:
+        repeating-linear-gradient(0deg, transparent, transparent 8px, rgba(0,0,0,0.13) 8px, rgba(0,0,0,0.13) 20px),
+        repeating-linear-gradient(90deg, transparent, transparent 8px, rgba(0,0,0,0.13) 8px, rgba(0,0,0,0.13) 20px),
+        repeating-linear-gradient(180deg, transparent, transparent 8px, rgba(0,0,0,0.13) 8px, rgba(0,0,0,0.13) 20px),
+        repeating-linear-gradient(270deg, transparent, transparent 8px, rgba(0,0,0,0.13) 8px, rgba(0,0,0,0.13) 20px);
+    background-size: 1.5px 100%, 100% 1.5px, 1.5px 100%, 100% 1.5px;
+    background-position: 0 0, 0 0, 100% 0, 0 100%;
+    background-repeat: no-repeat;
+}
+
+/* Accessibility: Focus styles */
+:focus-visible {
+    outline: 3px solid #4f46e5;
+    outline-offset: 2px;
+}
+
+/* Accessibility: Skip link */
+.skip-link {
+    position: absolute;
+    top: -40px;
+    left: 0;
+    z-index: 9999;
+    background-color: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    padding: 8px 16px;
+    font-weight: bold;
+    border-radius: 0 0 8px 0;
+    transition: top 0.2s;
+}
+
+.skip-link:focus {
+    top: 0;
+}
+
+/* Accessibility: Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation: none !important;
+        transition: none !important;
+    }
 }

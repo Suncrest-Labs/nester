@@ -1,0 +1,90 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: nester_dev
+      POSTGRES_USER: nester
+      POSTGRES_PASSWORD: nester_dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/seed.sql:/docker-entrypoint-initdb.d/seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nester"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    environment:
+      APP_ENV: development
+      DATABASE_DSN: postgres://nester:nester_dev_password@postgres:5432/nester_dev?sslmode=disable
+      REDIS_ADDR: redis:6379
+      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      STELLAR_RPC_URL: https://soroban-testnet.stellar.org
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      LOG_LEVEL: info
+      LOG_FORMAT: text
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/app
+      - go_mod_cache:/go/pkg/mod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./apps/dapp/frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3001"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      NEXT_PUBLIC_WS_URL: ws://localhost:8080/ws
+      NEXT_PUBLIC_NETWORK: testnet
+    volumes:
+      - ./apps/dapp/frontend:/app
+      - /app/node_modules
+      - /app/.next
+
+  intelligence:
+    build:
+      context: ./apps/intelligence
+    ports:
+      - "8000:8000"
+    environment:
+      INTELLIGENCE_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-sk-placeholder}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  go_mod_cache:

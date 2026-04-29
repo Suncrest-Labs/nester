@@ -61,7 +61,8 @@ export function AnimatedBalance({
 
         // Determine direction for color flash
         if (highlightChange) {
-            setFlash(to > from ? "increase" : "decrease");
+            const timer = setTimeout(() => { setFlash(to > from ? "increase" : "decrease"); }, 0);
+            return () => clearTimeout(timer);
         }
 
         // Cancel any running animation
@@ -97,7 +98,7 @@ export function AnimatedBalance({
                 cancelAnimationFrame(rafRef.current);
             }
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+         
     }, [value, duration, highlightChange]);
 
     const flashClass =

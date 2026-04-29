@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 )
 
 // ok200 is a trivial handler used throughout the middleware tests.
@@ -195,6 +197,89 @@ func TestWalletRateLimiterPassesThroughWhenNoKey(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("request %d without wallet header: got %d, want 200", i+1, rec.Code)
+		}
+	}
+}
+
+// --- Composition with Authenticate: wallet is extracted from JWT claims ---
+
+// TestWalletRateLimiterStackedOnAuthenticateLimitsByWalletInClaims verifies
+// the production wiring: Authenticate populates the wallet into context, the
+// wallet limiter reads it out, and two wallets get independent buckets even
+// when they share a connection and no X-Wallet header is set.
+func TestWalletRateLimiterStackedOnAuthenticateLimitsByWalletInClaims(t *testing.T) {
+	const limit = 1
+
+	extractWallet := func(r *http.Request) string {
+		u, ok := auth.GetUserFromContext(r.Context())
+		if !ok {
+			return ""
+		}
+		return u.WalletAddress
+	}
+
+	rules := []RouteRule{{PathPrefix: "/api/v1/"}}
+	chain := Authenticate(testSecret, rules)(
+		WalletRateLimiter(limit, time.Second, extractWallet)(ok200),
+	)
+
+	mint := func(wallet string) string {
+		return makeToken(t, auth.Claims{
+			Subject:       "user-" + wallet,
+			WalletAddress: wallet,
+			ExpiresAt:     time.Now().Add(time.Hour).Unix(),
+		})
+	}
+
+	send := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+		req.RemoteAddr = "10.0.0.1:12345" // same IP for every request
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		chain.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	tokA := mint("wallet-A")
+	tokB := mint("wallet-B")
+
+	// wallet-A: one allowed, next 429.
+	if got := send(tokA); got != http.StatusOK {
+		t.Fatalf("wallet-A first request: got %d, want 200", got)
+	}
+	if got := send(tokA); got != http.StatusTooManyRequests {
+		t.Fatalf("wallet-A second request: got %d, want 429", got)
+	}
+
+	// wallet-B shares the IP but must have its own bucket.
+	if got := send(tokB); got != http.StatusOK {
+		t.Fatalf("wallet-B first request: got %d, want 200 (bucket is per-wallet, not per-IP)", got)
+	}
+}
+
+// TestWalletRateLimiterStackedOnAuthenticateIgnoresRequestsWithoutUser verifies
+// that requests which skip Authenticate (e.g. public routes) produce no key
+// and are passed through by the wallet limiter.
+func TestWalletRateLimiterStackedOnAuthenticateIgnoresRequestsWithoutUser(t *testing.T) {
+	const limit = 1
+
+	extractWallet := func(r *http.Request) string {
+		u, ok := auth.GetUserFromContext(r.Context())
+		if !ok {
+			return ""
+		}
+		return u.WalletAddress
+	}
+
+	// No Authenticate in this chain — context never carries a User.
+	chain := WalletRateLimiter(limit, time.Second, extractWallet)(ok200)
+
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		chain.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d without user in context: got %d, want 200", i+1, rec.Code)
 		}
 	}
 }

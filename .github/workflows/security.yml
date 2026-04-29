@@ -1,0 +1,221 @@
+name: Security
+
+on:
+  pull_request:
+    branches: ["*"]
+  push:
+    branches: ["*"]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  secret-scan:
+    name: Secret Detection (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect \
+            --source /repo \
+            --gitleaks-ignore-path /repo/.gitleaksignore \
+            --redact \
+            --verbose \
+            --exit-code 1
+
+  audit-npm:
+    name: Dependency Audit (npm)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory:
+          - apps/dapp/frontend
+          - apps/website
+          - apps/dapp/backend
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Warn on moderate vulnerabilities
+        run: npm audit --audit-level=moderate || true
+
+      - name: Fail on high and critical vulnerabilities
+        run: npm audit --audit-level=high
+
+  audit-go:
+    name: Dependency Audit (Go)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - apps/api
+          - services/api
+          - .
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  audit-rust:
+    name: Dependency Audit (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit
+        run: cargo audit
+
+  audit-python:
+    name: Dependency Audit (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/intelligence
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Generate vulnerability report
+        run: pip-audit -r requirements.txt --format json --output pip-audit-report.json || true
+
+      - name: Warn on moderate vulnerabilities
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = Path("pip-audit-report.json")
+          if not report.exists():
+              print("No pip-audit report generated")
+              raise SystemExit(0)
+
+            findings = json.loads(report.read_text() or "[]")
+            dependencies = findings.get("dependencies", []) if isinstance(findings, dict) else findings
+
+            moderate = 0
+            unknown = 0
+            for dep in dependencies:
+              for vuln in dep.get("vulns", []):
+                severity = str(vuln.get("severity", "")).lower()
+                cvss = vuln.get("cvss")
+                if severity in {"moderate", "medium"}:
+                  moderate += 1
+                elif isinstance(cvss, (int, float)) and 4.0 <= cvss < 7.0:
+                  moderate += 1
+                elif not severity and cvss is None:
+                  unknown += 1
+
+            if moderate:
+              print(f"::warning::{moderate} moderate Python vulnerabilities detected")
+            if unknown:
+              print(f"::warning::{unknown} Python vulnerabilities detected with unknown severity")
+            if not moderate and not unknown:
+              print("No moderate Python vulnerabilities detected")
+          PY
+
+      - name: Fail on high and critical vulnerabilities
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = Path("pip-audit-report.json")
+          if not report.exists():
+              print("pip-audit report missing")
+              raise SystemExit(1)
+
+            findings = json.loads(report.read_text() or "[]")
+            dependencies = findings.get("dependencies", []) if isinstance(findings, dict) else findings
+            vulns = []
+
+            for dep in dependencies:
+              for vuln in dep.get("vulns", []):
+                severity = str(vuln.get("severity", "")).lower()
+                cvss = vuln.get("cvss")
+                if severity in {"high", "critical"}:
+                  vulns.append(vuln)
+                  continue
+                if isinstance(cvss, (int, float)) and cvss >= 7.0:
+                  vulns.append(vuln)
+
+          if vulns:
+              print(f"Found {len(vulns)} high/critical Python vulnerabilities")
+              raise SystemExit(1)
+
+          print("No high/critical Python vulnerabilities detected")
+          PY
+
+  codeql:
+    name: Static Analysis (CodeQL)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["go", "javascript-typescript", "python"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3

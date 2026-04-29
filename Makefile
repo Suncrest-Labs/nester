@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check clippy build test integration-test clean deploy-testnet deploy-all
+.PHONY: fmt fmt-check clippy build test test-short integration-test clean dev dev-down dev-reset dev-logs dev-db go-test go-test-short deploy-testnet deploy-all
 
 CARGO := cargo
 CONTRACTS_DIR := packages/contracts
@@ -19,11 +19,37 @@ build:
 test:
 	cd $(CONTRACTS_DIR) && $(CARGO) test --all
 
+test-short:
+	cd $(CONTRACTS_DIR) && $(CARGO) test --all --lib
+
 integration-test:
 	cd $(CONTRACTS_DIR) && $(CARGO) test --all --lib
 
+go-test:
+	cd apps/api && go test -race -timeout 120s ./...
+
+go-test-short:
+	cd apps/api && go test -race -short -timeout 60s ./...
+
 clean:
 	cd $(CONTRACTS_DIR) && $(CARGO) clean
+
+# Docker Compose — local development
+
+dev: ## Start all services with Docker Compose
+	docker compose up --build
+
+dev-down: ## Stop all services
+	docker compose down
+
+dev-reset: ## Reset database volumes and restart
+	docker compose down -v && docker compose up --build
+
+dev-logs: ## Tail logs for all services
+	docker compose logs -f
+
+dev-db: ## Open a psql shell in the dev database
+	docker compose exec postgres psql -U nester nester_dev
 
 deploy-testnet:
 	cd $(CONTRACTS_DIR) && bash scripts/deploy.sh

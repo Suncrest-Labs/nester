@@ -38,3 +38,7 @@ func (s *UserService) GetUser(ctx context.Context, id uuid.UUID) (*user.User, er
 func (s *UserService) GetUserByWallet(ctx context.Context, address string) (*user.User, error) {
 	return s.repo.GetByWalletAddress(ctx, address)
 }
+
+func (s *UserService) GetUserRoles(ctx context.Context, id uuid.UUID) ([]string, error) {
+	return s.repo.GetRoles(ctx, id)
+}

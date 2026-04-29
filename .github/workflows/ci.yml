@@ -29,6 +29,7 @@ jobs:
       - name: Lint website
         run: pnpm --filter @nester/website lint
 
+
   intelligence:
     name: Intelligence (Python)
     runs-on: ubuntu-latest
@@ -56,6 +57,7 @@ jobs:
       - name: Test
         run: pytest
 
+
   dapp-frontend:
     name: Dapp Frontend (Next.js)
     runs-on: ubuntu-latest
@@ -75,29 +77,6 @@ jobs:
       - name: Build
         run: npm run build
 
-  dapp-backend:
-    name: Dapp Backend (Node.js)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/dapp/backend
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: apps/dapp/backend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Lint
-        run: npm run lint
 
   api:
     name: API (Go)
@@ -114,7 +93,8 @@ jobs:
           cache: true
 
       - name: Test
-        run: go test ./...
+        run: go test -race -timeout 120s -count=1 ./...
+
 
   internal-stellar:
     name: Internal (Go)
@@ -182,5 +162,9 @@ jobs:
       - name: Build allocation_strategy WASM
         run: cargo build --release --target wasm32-unknown-unknown -p allocation-strategy-contract
 
+      - name: Build vault_token WASM
+        run: cargo build --release --target wasm32-unknown-unknown -p vault-token-contract
+
       - name: Test contracts
         run: cargo test --lib
+

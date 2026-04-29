@@ -233,6 +233,7 @@ func TestGetUserSettlements_FilterByStatus(t *testing.T) {
 	// Advance s1 to liquidity_matched
 	svc.UpdateStatus(context.Background(), service.UpdateStatusInput{
 		SettlementID: s1.ID,
+		CallerID:     in.UserID,
 		NewStatus:    offramp.StatusLiquidityMatched,
 	})
 
@@ -276,6 +277,7 @@ func TestUpdateStatus_FullLifecycleToConfirmed(t *testing.T) {
 	for _, next := range transitions {
 		updated, err := svc.UpdateStatus(ctx, service.UpdateStatusInput{
 			SettlementID: s.ID,
+			CallerID:     s.UserID,
 			NewStatus:    next,
 		})
 		if err != nil {
@@ -300,6 +302,7 @@ func TestUpdateStatus_FullLifecycleToFailed(t *testing.T) {
 
 	updated, err := svc.UpdateStatus(ctx, service.UpdateStatusInput{
 		SettlementID: s.ID,
+		CallerID:     s.UserID,
 		NewStatus:    offramp.StatusFailed,
 	})
 	if err != nil {
@@ -318,10 +321,11 @@ func TestUpdateStatus_FailedAfterLiquidityMatched(t *testing.T) {
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
-	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, NewStatus: offramp.StatusLiquidityMatched})
+	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, CallerID: s.UserID, NewStatus: offramp.StatusLiquidityMatched})
 
 	updated, err := svc.UpdateStatus(ctx, service.UpdateStatusInput{
 		SettlementID: s.ID,
+		CallerID:     s.UserID,
 		NewStatus:    offramp.StatusFailed,
 	})
 	if err != nil {
@@ -341,6 +345,7 @@ func TestUpdateStatus_InvalidTransitionRejected(t *testing.T) {
 	// initiated → fiat_dispatched is not a valid transition
 	_, err := svc.UpdateStatus(ctx, service.UpdateStatusInput{
 		SettlementID: s.ID,
+		CallerID:     s.UserID,
 		NewStatus:    offramp.StatusFiatDispatched,
 	})
 	if !errors.Is(err, offramp.ErrInvalidTransition) {
@@ -353,12 +358,13 @@ func TestUpdateStatus_CannotLeaveConfirmed(t *testing.T) {
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
-	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, NewStatus: offramp.StatusLiquidityMatched})
-	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, NewStatus: offramp.StatusFiatDispatched})
-	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, NewStatus: offramp.StatusConfirmed})
+	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, CallerID: s.UserID, NewStatus: offramp.StatusLiquidityMatched})
+	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, CallerID: s.UserID, NewStatus: offramp.StatusFiatDispatched})
+	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, CallerID: s.UserID, NewStatus: offramp.StatusConfirmed})
 
 	_, err := svc.UpdateStatus(ctx, service.UpdateStatusInput{
 		SettlementID: s.ID,
+		CallerID:     s.UserID,
 		NewStatus:    offramp.StatusInitiated,
 	})
 	if !errors.Is(err, offramp.ErrInvalidTransition) {
@@ -371,13 +377,31 @@ func TestUpdateStatus_CannotLeaveFailed(t *testing.T) {
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
-	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, NewStatus: offramp.StatusFailed})
+	svc.UpdateStatus(ctx, service.UpdateStatusInput{SettlementID: s.ID, CallerID: s.UserID, NewStatus: offramp.StatusFailed})
 
 	_, err := svc.UpdateStatus(ctx, service.UpdateStatusInput{
 		SettlementID: s.ID,
+		CallerID:     s.UserID,
 		NewStatus:    offramp.StatusInitiated,
 	})
 	if !errors.Is(err, offramp.ErrInvalidTransition) {
 		t.Errorf("expected ErrInvalidTransition from terminal state, got %v", err)
+	}
+}
+
+func TestUpdateStatus_ForbiddenForNonOwner(t *testing.T) {
+	svc := service.NewSettlementService(newStubRepo())
+	ctx := context.Background()
+
+	s, _ := svc.InitiateSettlement(ctx, validInput())
+	attacker := uuid.New() // different from s.UserID
+
+	_, err := svc.UpdateStatus(ctx, service.UpdateStatusInput{
+		SettlementID: s.ID,
+		CallerID:     attacker,
+		NewStatus:    offramp.StatusLiquidityMatched,
+	})
+	if !errors.Is(err, offramp.ErrForbidden) {
+		t.Errorf("expected ErrForbidden for non-owner, got %v", err)
 	}
 }

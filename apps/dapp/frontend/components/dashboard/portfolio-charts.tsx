@@ -74,7 +74,7 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
             <div className="rounded-2xl border border-border bg-white p-6 shadow-sm flex flex-col items-center justify-between min-h-[400px]">
                 <div className="w-full flex items-center justify-between mb-2">
                    <h3 className="font-heading text-lg font-light text-foreground text-left">Allocation</h3>
-                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">By Vault</span>
+                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-medium">By Vault</span>
                 </div>
                 
                 <div className="h-64 w-full relative">
@@ -94,8 +94,8 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
                                 ))}
                             </Pie>
                             <Tooltip 
-                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', fontSize: '11px' }}
-                                formatter={(value: any) => formatValue(Number(value) / exchangeRate)}
+                                contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 4px 12px rgba(0,0,0,0.08)", fontSize: "11px" }}
+                                formatter={(value) => formatValue(Number(value) / exchangeRate)}
                             />
                         </PieChart>
                     </ResponsiveContainer>
@@ -123,7 +123,7 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
                     <div className="flex flex-col">
                         <h3 className="font-heading text-lg font-light text-foreground">Yield Performance</h3>
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">Portfolio Growth vs Holding</p>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-medium">Portfolio Growth vs Holding</p>
                     </div>
                     
                     <div className="inline-flex p-1 rounded-xl bg-secondary/30 border border-border/50">
@@ -132,7 +132,7 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
                                 key={t}
                                 onClick={() => setTimeframe(t)}
                                 className={cn(
-                                    "px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                                    "px-3 py-1 rounded-lg text-[10px] font-medium uppercase tracking-wider transition-all",
                                     timeframe === t 
                                         ? "bg-white text-primary shadow-sm border border-border/50" 
                                         : "text-muted-foreground hover:text-foreground"
@@ -173,7 +173,7 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
                                 labelStyle={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '4px' }}
                                 itemStyle={{ fontSize: '11px' }}
                                 contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
-                                formatter={(value: any) => formatValue(Number(value) / exchangeRate)}
+                                formatter={(value) => formatValue(Number(value) / exchangeRate)}
                             />
                             <Legend 
                                 verticalAlign="top" 

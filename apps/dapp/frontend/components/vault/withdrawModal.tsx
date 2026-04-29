@@ -20,17 +20,15 @@ import {
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
 import {
-  buildWithdrawTransaction,
-  signTransaction,
-  submitTransaction,
-  VAULT_CONTRACT_ID,
-  USDC_CONTRACT_ID,
+  executeVaultWithdraw,
   UserRejectedError,
   TransactionFailedError,
   TransactionTimeoutError,
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
+
+import { useVaults } from "@/hooks/useVaults";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -143,7 +141,9 @@ interface WithdrawModalProps {
  */
 export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const { address } = useWallet();
-  const { getWithdrawalQuote, recordWithdrawal } = usePortfolio();
+  const { getWithdrawalQuote, recordWithdrawal, refreshBalances } = usePortfolio();
+  const { data: vaults = [] } = useVaults();
+  const vault = position ? vaults.find((v) => v.id === position.vaultId) : null;
 
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
@@ -162,7 +162,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     if (!position) return null;
     if (amount <= 0) return "Amount must be greater than 0.";
     if (amount > position.currentValue)
-      return `Maximum withdrawal is ${formatCurrency(position.currentValue)} USDC.`;
+      return `Maximum withdrawal is ${formatCurrency(position.currentValue)} ${position.asset ?? "USDC"}.`;
     return null;
   }, [amount, position]);
 
@@ -188,22 +188,14 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     setErrorMsg("");
 
     try {
-      // Step 1 — Build
       setState("building");
-      const { xdr } = await buildWithdrawTransaction({
+      const txReceipt = await executeVaultWithdraw({
         walletAddress: address,
-        contractId: VAULT_CONTRACT_ID || `mock_${position.vaultId}`,
-        tokenAddress: USDC_CONTRACT_ID || "mock_usdc",
+        vaultId: position.vaultId,
+        contractId: vault?.contractAddress || "",
+        asset: position.asset?.toUpperCase() === "XLM" ? "XLM" : "USDC",
         shares: quote.sharesBurned,
       });
-
-      // Step 2 — Sign
-      setState("signing");
-      const signedXdr = await signTransaction(xdr);
-
-      // Step 3 — Submit
-      setState("submitting");
-      const txReceipt = await submitTransaction(signedXdr);
 
       const result = recordWithdrawal({
         positionId: position.id,
@@ -219,6 +211,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
         netAmount: result.netAmount,
       });
       setState("success");
+      refreshBalances();
     } catch (err) {
       setErrorMsg(humanizeError(err));
       setState("error");
@@ -303,7 +296,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                   />
                   <div className="flex items-center gap-2">
                     <span className="rounded-full bg-secondary px-3 py-2 text-sm font-medium text-foreground">
-                      USDC
+                      {position.asset ?? "USDC"}
                     </span>
                     <button
                       onClick={() => setAmountInput(position.currentValue.toFixed(2))}
@@ -325,9 +318,9 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
               {/* Quote preview */}
               <div className="mt-4 space-y-2.5 rounded-2xl border border-border bg-secondary/20 p-4 text-sm">
                 {[
-                  { label: "Gross proceeds", value: `${formatCurrency(quote?.grossAmount ?? 0)} USDC` },
-                  { label: "Early exit penalty", value: `${formatCurrency(quote ? quote.grossAmount - quote.netAmount : 0)} USDC` },
-                  { label: "Net to wallet", value: `${formatCurrency(quote?.netAmount ?? 0)} USDC`, highlight: true },
+                  { label: "Gross proceeds", value: `${formatCurrency(quote?.grossAmount ?? 0)} ${position.asset ?? "USDC"}` },
+                  { label: "Early exit penalty", value: `${formatCurrency(quote ? quote.grossAmount - quote.netAmount : 0)} ${position.asset ?? "USDC"}` },
+                  { label: "Net to wallet", value: `${formatCurrency(quote?.netAmount ?? 0)} ${position.asset ?? "USDC"}`, highlight: true },
                   { label: "Shares burned", value: formatCurrency(quote?.sharesBurned ?? 0) },
                 ].map(({ label, value, highlight }) => (
                   <div key={label} className="flex items-center justify-between">
@@ -405,11 +398,11 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                     <p className="text-sm font-medium">Withdrawal confirmed</p>
                   </div>
                   <p className="mt-2 text-sm text-emerald-800/80">
-                    {formatCurrency(receipt.netAmount)} USDC is on its way to your wallet.
+                    {formatCurrency(receipt.netAmount)} {position.asset ?? "USDC"} is on its way to your wallet.
                   </p>
                   {receipt.penaltyAmount > 0 && (
                     <p className="mt-1 text-xs text-emerald-800/60">
-                      Penalty applied: {formatCurrency(receipt.penaltyAmount)} USDC
+                      Penalty applied: {formatCurrency(receipt.penaltyAmount)} {position.asset ?? "USDC"}
                     </p>
                   )}
                   <p className="mt-1 font-mono text-[11px] text-emerald-800/60">

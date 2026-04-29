@@ -2,7 +2,10 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env, String,
+};
 
 use crate::{VaultTokenContract, VaultTokenContractClient};
 
@@ -10,7 +13,7 @@ use crate::{VaultTokenContract, VaultTokenContractClient};
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn setup(env: &Env) -> (VaultTokenContractClient, Address, Address) {
+fn setup(env: &Env) -> (VaultTokenContractClient<'_>, Address, Address) {
     env.mock_all_auths();
     let vault = Address::generate(env);
     let token_id = env.register_contract(None, VaultTokenContract);
@@ -388,7 +391,7 @@ fn burn_reduces_supply() {
 
     assert_eq!(client.balance(&user), 3_000);
     assert_eq!(client.total_supply(), 3_000);
-    // Note: SEP-41 burn does NOT update total_assets; that's vault logic
+    assert_eq!(client.total_assets(), 3_000);
 }
 
 #[test]
@@ -406,6 +409,7 @@ fn burn_from_uses_allowance() {
 
     assert_eq!(client.balance(&user), 4_000);
     assert_eq!(client.total_supply(), 4_000);
+    assert_eq!(client.total_assets(), 4_000);
     assert_eq!(client.allowance(&user, &spender), 2_000);
 }
 

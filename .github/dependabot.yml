@@ -1,0 +1,139 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/apps/dapp/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated"]
+    reviewers: ["0xDeon"]
+    groups:
+      eslint:
+        patterns: ["eslint*", "@typescript-eslint/*"]
+      patch-updates:
+        update-types: ["patch"]
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "npm"
+    directory: "/apps/website"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated"]
+    reviewers: ["0xDeon"]
+    groups:
+      eslint:
+        patterns: ["eslint*", "@typescript-eslint/*"]
+      patch-updates:
+        update-types: ["patch"]
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "npm"
+    directory: "/apps/dapp/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated"]
+    reviewers: ["0xDeon"]
+    groups:
+      eslint:
+        patterns: ["eslint*", "@typescript-eslint/*"]
+      patch-updates:
+        update-types: ["patch"]
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "gomod"
+    directory: "/apps/api"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated"]
+    reviewers: ["0xDeon"]
+    groups:
+      go-all:
+        patterns: ["*"]
+
+  - package-ecosystem: "gomod"
+    directory: "/services/api"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated"]
+    reviewers: ["0xDeon"]
+    groups:
+      go-all:
+        patterns: ["*"]
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated"]
+    reviewers: ["0xDeon"]
+    groups:
+      go-all:
+        patterns: ["*"]
+
+  - package-ecosystem: "cargo"
+    directory: "/packages/contracts"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated", "smart-contracts"]
+    reviewers: ["0xDeon"]
+
+  - package-ecosystem: "pip"
+    directory: "/apps/intelligence"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated"]
+    reviewers: ["0xDeon"]
+    groups:
+      patch-updates:
+        update-types: ["patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "automated"]
+    reviewers: ["0xDeon"]
+    groups:
+      trusted-actions:
+        patterns:
+          - "actions/checkout"
+          - "actions/setup-node"
+          - "actions/setup-go"
+          - "actions/setup-python"
+          - "pnpm/action-setup"
+        update-types: ["minor", "patch"]

@@ -19,6 +19,9 @@ type RouteRule struct {
 	// Scope is the JWT scope required to access a non-public route.
 	// An empty string means any authenticated caller may access the route.
 	Scope string
+	// Role is the JWT role required to access a non-public route.
+	// An empty string means any authenticated caller may access the route.
+	Role string
 }
 
 // Authenticate returns middleware that validates Bearer JWT tokens signed with
@@ -52,11 +55,17 @@ func Authenticate(secret string, rules []RouteRule) func(http.Handler) http.Hand
 				ID:            claims.Subject,
 				WalletAddress: claims.WalletAddress,
 				Scopes:        claims.Scopes,
+				Roles:         claims.Roles,
 			}
 
 			// Scope check for routes that require a specific permission.
 			if rule != nil && rule.Scope != "" && !user.HasScope(rule.Scope) {
 				writeMiddlewareError(w, http.StatusForbidden, "insufficient scope")
+				return
+			}
+			// Role check for routes that require a specific role.
+			if rule != nil && rule.Role != "" && !user.HasRole(rule.Role) {
+				writeMiddlewareError(w, http.StatusForbidden, "insufficient role")
 				return
 			}
 

@@ -10,12 +10,23 @@ type User struct {
 	ID            string
 	WalletAddress string
 	Scopes        []string
+	Roles         []string
 }
 
 // HasScope reports whether the user holds the given scope.
 func (u User) HasScope(scope string) bool {
 	for _, s := range u.Scopes {
 		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// HasRole reports whether the user holds the given role.
+func (u User) HasRole(role string) bool {
+	for _, r := range u.Roles {
+		if r == role {
 			return true
 		}
 	}

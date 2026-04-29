@@ -15,6 +15,7 @@ import {
     type AppNotification,
     type NotificationDraft,
 } from "@/lib/notifications";
+import { safeStorage } from "@/lib/storage";
 
 interface ToastItem {
     id: string;
@@ -34,6 +35,7 @@ interface NotificationsState {
     ) => void;
     markAsRead: (id: string) => void;
     markAllAsRead: () => void;
+    clearAll: () => void;
     dismissToast: (id: string) => void;
 }
 
@@ -44,10 +46,13 @@ const NotificationsContext = createContext<NotificationsState>({
     addNotification: () => {},
     markAsRead: () => {},
     markAllAsRead: () => {},
+    clearAll: () => {},
     dismissToast: () => {},
 });
 
 const NOTIFICATIONS_STORAGE_KEY = "nester.notifications.v1";
+const MAX_NOTIFICATIONS = 100;
+const NOTIFICATION_TTL_DAYS = 30;
 
 function buildId(prefix: string) {
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -56,62 +61,75 @@ function buildId(prefix: string) {
     return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 }
 
+function isValidNotification(item: unknown): item is AppNotification {
+    if (!item || typeof item !== "object") return false;
+    const n = item as Record<string, unknown>;
+    return (
+        typeof n.id === "string" &&
+        typeof n.type === "string" &&
+        typeof n.title === "string" &&
+        typeof n.message === "string" &&
+        typeof n.timestamp === "string" &&
+        typeof n.read === "boolean"
+    );
+}
+
+/**
+ * Apply retention policy: drop entries older than NOTIFICATION_TTL_DAYS, then
+ * clip to MAX_NOTIFICATIONS keeping the newest. Pure function, safe to call
+ * from anywhere — also used at app startup, after every add, and after
+ * cross-tab sync to keep storage bounded.
+ */
+function applyRetention(items: AppNotification[]): AppNotification[] {
+    const cutoff = Date.now() - NOTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000;
+    const fresh = items.filter((n) => {
+        const t = Date.parse(n.timestamp);
+        return Number.isFinite(t) ? t >= cutoff : true;
+    });
+    if (fresh.length <= MAX_NOTIFICATIONS) return fresh;
+    // Newest first — sort by timestamp desc, take MAX_NOTIFICATIONS.
+    return [...fresh]
+        .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+        .slice(0, MAX_NOTIFICATIONS);
+}
+
 export function NotificationsProvider({ children }: { children: ReactNode }) {
-      // v1: Notifications are client-side only and persisted across page reloads via localStorage.
     const [notifications, setNotifications] =
         useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
     const [toasts, setToasts] = useState<ToastItem[]>([]);
     const timerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+    // Load from storage and apply retention on mount.
     useEffect(() => {
-        if (typeof window === "undefined") {
-            return;
-        }
-
-        const raw = window.localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
-        if (!raw) {
-            return;
-        }
-
-        try {
-            const parsed = JSON.parse(raw) as AppNotification[];
-            if (!Array.isArray(parsed)) {
-                return;
-            }
-
-            const valid = parsed.filter((item) => {
-                if (!item || typeof item !== "object") {
-                    return false;
-                }
-
-                return (
-                    typeof item.id === "string" &&
-                    typeof item.type === "string" &&
-                    typeof item.title === "string" &&
-                    typeof item.message === "string" &&
-                    typeof item.timestamp === "string" &&
-                    typeof item.read === "boolean"
-                );
-            });
-
-            if (valid.length > 0) {
-                setNotifications(valid);
-            }
-        } catch {
-            window.localStorage.removeItem(NOTIFICATIONS_STORAGE_KEY);
+        const parsed = safeStorage.get<unknown>(NOTIFICATIONS_STORAGE_KEY, null);
+        if (!Array.isArray(parsed)) return;
+        const valid = parsed.filter(isValidNotification);
+        if (valid.length === 0) return;
+        const pruned = applyRetention(valid);
+        setNotifications(pruned);
+        // If retention dropped anything, persist the trimmed list now so other
+        // tabs see the cleaned state immediately.
+        if (pruned.length !== valid.length) {
+            safeStorage.set(NOTIFICATIONS_STORAGE_KEY, pruned);
         }
     }, []);
 
+    // Persist on every change.
     useEffect(() => {
-        if (typeof window === "undefined") {
-            return;
-        }
-
-        window.localStorage.setItem(
-            NOTIFICATIONS_STORAGE_KEY,
-            JSON.stringify(notifications)
-        );
+        safeStorage.set(NOTIFICATIONS_STORAGE_KEY, notifications);
     }, [notifications]);
+
+    // Cross-tab sync — adopt the other tab's view (after revalidating).
+    useEffect(() => {
+        return safeStorage.subscribe<unknown>(
+            NOTIFICATIONS_STORAGE_KEY,
+            (next) => {
+                if (!Array.isArray(next)) return;
+                const valid = next.filter(isValidNotification);
+                setNotifications(applyRetention(valid));
+            }
+        );
+    }, []);
 
     const dismissToast = useCallback((id: string) => {
         setToasts((prev) => prev.filter((toast) => toast.id !== id));
@@ -132,7 +150,11 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
                 ...notification,
             };
 
-            setNotifications((prev) => [newNotification, ...prev]);
+            // Apply retention here so a long-running session doesn't grow past
+            // the cap even if storage write succeeds.
+            setNotifications((prev) =>
+                applyRetention([newNotification, ...prev])
+            );
 
             if (!options?.showToast) {
                 return;
@@ -174,6 +196,11 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         );
     }, []);
 
+    const clearAll = useCallback(() => {
+        setNotifications([]);
+        safeStorage.set(NOTIFICATIONS_STORAGE_KEY, []);
+    }, []);
+
     useEffect(() => {
         return () => {
             Object.values(timerRef.current).forEach((timer) => clearTimeout(timer));
@@ -194,6 +221,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
             addNotification,
             markAsRead,
             markAllAsRead,
+            clearAll,
             dismissToast,
         }),
         [
@@ -203,6 +231,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
             addNotification,
             markAsRead,
             markAllAsRead,
+            clearAll,
             dismissToast,
         ]
     );

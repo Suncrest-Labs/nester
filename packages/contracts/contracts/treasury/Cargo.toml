@@ -15,4 +15,4 @@ nester-access-control = { path = "../access_control" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-nester-test-utils = { path = "../../libs/test_utils" }
+
