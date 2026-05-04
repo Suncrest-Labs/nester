@@ -22,7 +22,7 @@
     "react": "19.0.0",
     "react-markdown": "^10.1.0",
     "react-dom": "19.0.0",
-    "react-hook-form": "^7.72.0",
+    "react-hook-form": "^7.75.0",
     "remark-gfm": "^4.0.1",
     "recharts": "^3.8.1",
     "tailwind-merge": "^2.6.0",
