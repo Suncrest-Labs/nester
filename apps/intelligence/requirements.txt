@@ -3,7 +3,7 @@ uvicorn==0.34.0
 httpx==0.28.1
 anthropic==0.42.0
 pydantic==2.10.4
-pydantic-settings==2.7.1
+pydantic-settings==2.14.1
 PyJWT==2.12.0
 slowapi==0.1.9
 redis>=5.0.0
