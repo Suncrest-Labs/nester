@@ -26,7 +26,7 @@
     "remark-gfm": "^4.0.1",
     "recharts": "^3.8.1",
     "tailwind-merge": "^2.6.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "overrides": {
     "defu": ">=6.1.5"
