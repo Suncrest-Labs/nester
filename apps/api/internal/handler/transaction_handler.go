@@ -2,11 +2,15 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
@@ -24,6 +28,7 @@ func NewTransactionHandler(service *service.TransactionService) *TransactionHand
 func (h *TransactionHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/transactions", h.createTransaction)
 	mux.HandleFunc("GET /api/v1/transactions/{hash}", h.getTransactionByHash)
+	mux.HandleFunc("GET /api/v1/activity", h.listActivity)
 }
 
 type createTransactionRequest struct {
@@ -106,4 +111,86 @@ func (h *TransactionHandler) writeDomainError(w http.ResponseWriter, r *http.Req
 		logpkg.FromContext(r.Context()).Error("transaction handler failed", "error", err.Error())
 		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
 	}
+}
+
+func (h *TransactionHandler) listActivity(w http.ResponseWriter, r *http.Request) {
+	// Auth guard — require a valid JWT.
+	authUser, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
+	q := r.URL.Query()
+
+	// userId must match the authenticated user (prevent cross-user data access).
+	userID := strings.TrimSpace(q.Get("userId"))
+	if userID == "" {
+		userID = authUser.ID
+	}
+	if userID != authUser.ID {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		return
+	}
+
+	filter := transaction.ListFilter{
+		UserID: userID,
+		Cursor: q.Get("cursor"),
+	}
+
+	// Parse limit.
+	if lStr := q.Get("limit"); lStr != "" {
+		var l int
+		if _, err := fmt.Sscanf(lStr, "%d", &l); err == nil {
+			filter.Limit = l
+		}
+	}
+
+	// Parse type (comma-separated).
+	if typeStr := q.Get("type"); typeStr != "" {
+		for _, t := range strings.Split(typeStr, ",") {
+			filter.Types = append(filter.Types, transaction.TransactionType(strings.TrimSpace(t)))
+		}
+	}
+
+	// Parse status.
+	if statusStr := q.Get("status"); statusStr != "" {
+		filter.Status = transaction.TransactionStatus(strings.TrimSpace(statusStr))
+	}
+
+	// Parse from/to date range.
+	if fromStr := q.Get("from"); fromStr != "" {
+		t, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("from must be a valid RFC3339 date"))
+			return
+		}
+		filter.From = &t
+	}
+	if toStr := q.Get("to"); toStr != "" {
+		t, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("to must be a valid RFC3339 date"))
+			return
+		}
+		filter.To = &t
+	}
+
+	// Parse vaultId.
+	if vaultIDStr := q.Get("vaultId"); vaultIDStr != "" {
+		filter.VaultID = strings.TrimSpace(vaultIDStr)
+	}
+
+	// Parse search.
+	if searchStr := q.Get("search"); searchStr != "" {
+		filter.Search = strings.TrimSpace(searchStr)
+	}
+
+	page, err := h.service.ListActivity(r.Context(), filter)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(page))
 }

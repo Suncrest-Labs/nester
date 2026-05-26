@@ -148,9 +148,18 @@ func (s *TransactionService) lookupHorizonTransaction(ctx context.Context, hash 
 
 func isSupportedTransactionType(value transaction.TransactionType) bool {
 	switch value {
-	case transaction.TypeDeposit, transaction.TypeWithdrawal, transaction.TypeSettlement:
+	case transaction.TypeDeposit, transaction.TypeWithdrawal, transaction.TypeSettlement,
+		transaction.TypeRebalance, transaction.TypeYieldEarned:
 		return true
 	default:
 		return false
 	}
+}
+
+// ListActivity returns a cursor-paginated page of transactions for a user.
+func (s *TransactionService) ListActivity(ctx context.Context, filter transaction.ListFilter) (transaction.Page[transaction.Transaction], error) {
+	if strings.TrimSpace(filter.UserID) == "" {
+		return transaction.Page[transaction.Transaction]{}, transaction.ErrInvalidTransaction
+	}
+	return s.repository.ListByUserID(ctx, filter)
 }

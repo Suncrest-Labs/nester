@@ -192,7 +192,7 @@ function PortfolioStore({
             return {
                 balances: parsed.balances ?? defaultBalances,
                 positions: parsed.positions ?? [],
-                transactions: (parsed.transactions ?? []).filter((t) => t.isOnChain === true),
+                transactions: parsed.transactions ?? [],
             };
         } catch {
             return {

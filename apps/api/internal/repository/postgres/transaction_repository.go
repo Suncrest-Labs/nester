@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -193,3 +194,251 @@ func mapTransactionError(err error) error {
 
 	return err
 }
+
+// decodeCursor decodes a base64 cursor into (createdAt, id).
+func decodeCursor(cursor string) (time.Time, string, error) {
+	if cursor == "" {
+		return time.Time{}, "", nil
+	}
+	b, err := base64.URLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("invalid cursor")
+	}
+	parts := strings.SplitN(string(b), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, "", fmt.Errorf("invalid cursor format")
+	}
+	t, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("invalid cursor timestamp")
+	}
+	return t, parts[1], nil
+}
+
+// encodeCursor encodes (createdAt, id) into a base64 cursor string.
+func encodeCursor(createdAt time.Time, id string) string {
+	raw := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id
+	return base64.URLEncoding.EncodeToString([]byte(raw))
+}
+
+// ListByUserID returns a cursor-paginated list of transactions for a user,
+// joining through the vaults table to resolve ownership.
+func (r *TransactionRepository) ListByUserID(ctx context.Context, filter transaction.ListFilter) (transaction.Page[transaction.Transaction], error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+
+	// Decode cursor (gives us createdAt + id boundary for keyset pagination).
+	var cursorTime time.Time
+	var cursorID string
+	if filter.Cursor != "" {
+		var err error
+		cursorTime, cursorID, err = decodeCursor(filter.Cursor)
+		if err != nil {
+			return transaction.Page[transaction.Transaction]{}, err
+		}
+	}
+
+	// --- Count query (total matching rows, ignoring cursor) ---
+	countArgs := []any{filter.UserID}
+	countClauses := []string{"v.user_id = $1"}
+	argIdx := 2
+
+	if len(filter.Types) > 0 {
+		placeholders := make([]string, len(filter.Types))
+		for i, t := range filter.Types {
+			placeholders[i] = fmt.Sprintf("$%d", argIdx)
+			countArgs = append(countArgs, string(t))
+			argIdx++
+		}
+		countClauses = append(countClauses, "t.type IN ("+strings.Join(placeholders, ",")+")")
+	}
+	if filter.Status != "" {
+		countClauses = append(countClauses, fmt.Sprintf("t.status = $%d", argIdx))
+		countArgs = append(countArgs, string(filter.Status))
+		argIdx++
+	}
+	if filter.From != nil {
+		countClauses = append(countClauses, fmt.Sprintf("t.created_at >= $%d", argIdx))
+		countArgs = append(countArgs, *filter.From)
+		argIdx++
+	}
+	if filter.To != nil {
+		countClauses = append(countClauses, fmt.Sprintf("t.created_at <= $%d", argIdx))
+		countArgs = append(countArgs, *filter.To)
+		argIdx++
+	}
+	if filter.VaultID != "" {
+		if vaultUUID, err := uuid.Parse(filter.VaultID); err == nil {
+			countClauses = append(countClauses, fmt.Sprintf("t.vault_id = $%d", argIdx))
+			countArgs = append(countArgs, vaultUUID)
+			argIdx++
+		}
+	}
+	if filter.Search != "" {
+		countClauses = append(countClauses, fmt.Sprintf("(t.tx_hash ILIKE $%d OR t.amount::text ILIKE $%d)", argIdx, argIdx))
+		countArgs = append(countArgs, "%"+filter.Search+"%")
+		argIdx++
+	}
+
+	countQuery := `SELECT COUNT(*) FROM transactions t
+		JOIN vaults v ON t.vault_id = v.id
+		WHERE ` + strings.Join(countClauses, " AND ")
+
+	var total int
+	if err := r.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return transaction.Page[transaction.Transaction]{}, err
+	}
+
+	// --- Sum query for summary stats (Deposit, Withdrawal, Yield Earned completed totals) ---
+	sumArgs := []any{filter.UserID}
+	sumClauses := []string{"v.user_id = $1", "t.status = 'completed'"}
+	sumArgIdx := 2
+
+	if filter.From != nil {
+		sumClauses = append(sumClauses, fmt.Sprintf("t.created_at >= $%d", sumArgIdx))
+		sumArgs = append(sumArgs, *filter.From)
+		sumArgIdx++
+	}
+	if filter.To != nil {
+		sumClauses = append(sumClauses, fmt.Sprintf("t.created_at <= $%d", sumArgIdx))
+		sumArgs = append(sumArgs, *filter.To)
+		sumArgIdx++
+	}
+	if filter.VaultID != "" {
+		if vaultUUID, err := uuid.Parse(filter.VaultID); err == nil {
+			sumClauses = append(sumClauses, fmt.Sprintf("t.vault_id = $%d", sumArgIdx))
+			sumArgs = append(sumArgs, vaultUUID)
+			sumArgIdx++
+		}
+	}
+	if filter.Search != "" {
+		sumClauses = append(sumClauses, fmt.Sprintf("(t.tx_hash ILIKE $%d OR t.amount::text ILIKE $%d)", sumArgIdx, sumArgIdx))
+		sumArgs = append(sumArgs, "%"+filter.Search+"%")
+		sumArgIdx++
+	}
+
+	sumQuery := `SELECT t.type, COALESCE(SUM(t.amount), 0) FROM transactions t
+		JOIN vaults v ON t.vault_id = v.id
+		WHERE ` + strings.Join(sumClauses, " AND ") + `
+		GROUP BY t.type`
+
+	var totalDeposited decimal.Decimal
+	var totalWithdrawn decimal.Decimal
+	var totalYield decimal.Decimal
+
+	sumRows, err := r.db.QueryContext(ctx, sumQuery, sumArgs...)
+	if err == nil {
+		defer sumRows.Close()
+		for sumRows.Next() {
+			var tType string
+			var sum decimal.Decimal
+			if err := sumRows.Scan(&tType, &sum); err == nil {
+				switch transaction.TransactionType(tType) {
+				case transaction.TypeDeposit:
+					totalDeposited = sum
+				case transaction.TypeWithdrawal:
+					totalWithdrawn = sum
+				case transaction.TypeYieldEarned:
+					totalYield = sum
+				}
+			}
+		}
+	}
+
+	// --- Data query (keyset pagination) ---
+	dataArgs := []any{filter.UserID}
+	dataClauses := []string{"v.user_id = $1"}
+	argIdx = 2
+
+	if len(filter.Types) > 0 {
+		placeholders := make([]string, len(filter.Types))
+		for i, tp := range filter.Types {
+			placeholders[i] = fmt.Sprintf("$%d", argIdx)
+			dataArgs = append(dataArgs, string(tp))
+			argIdx++
+		}
+		dataClauses = append(dataClauses, "t.type IN ("+strings.Join(placeholders, ",")+")")
+	}
+	if filter.Status != "" {
+		dataClauses = append(dataClauses, fmt.Sprintf("t.status = $%d", argIdx))
+		dataArgs = append(dataArgs, string(filter.Status))
+		argIdx++
+	}
+	if filter.From != nil {
+		dataClauses = append(dataClauses, fmt.Sprintf("t.created_at >= $%d", argIdx))
+		dataArgs = append(dataArgs, *filter.From)
+		argIdx++
+	}
+	if filter.To != nil {
+		dataClauses = append(dataClauses, fmt.Sprintf("t.created_at <= $%d", argIdx))
+		dataArgs = append(dataArgs, *filter.To)
+		argIdx++
+	}
+	if filter.VaultID != "" {
+		if vaultUUID, err := uuid.Parse(filter.VaultID); err == nil {
+			dataClauses = append(dataClauses, fmt.Sprintf("t.vault_id = $%d", argIdx))
+			dataArgs = append(dataArgs, vaultUUID)
+			argIdx++
+		}
+	}
+	if filter.Search != "" {
+		dataClauses = append(dataClauses, fmt.Sprintf("(t.tx_hash ILIKE $%d OR t.amount::text ILIKE $%d)", argIdx, argIdx))
+		dataArgs = append(dataArgs, "%"+filter.Search+"%")
+		argIdx++
+	}
+	if !cursorTime.IsZero() && cursorID != "" {
+		dataClauses = append(dataClauses, fmt.Sprintf("(t.created_at, t.id) < ($%d, $%d)", argIdx, argIdx+1))
+		dataArgs = append(dataArgs, cursorTime, cursorID)
+		argIdx += 2
+	}
+
+	// fetch limit+1 to detect next page
+	dataArgs = append(dataArgs, limit+1)
+	limitPlaceholder := fmt.Sprintf("$%d", argIdx)
+
+	dataQuery := `
+		SELECT t.id, t.vault_id, t.type, t.amount, t.currency, t.tx_hash,
+		       t.status, t.error_reason, t.created_at, t.updated_at, t.confirmed_at
+		FROM transactions t
+		JOIN vaults v ON t.vault_id = v.id
+		WHERE ` + strings.Join(dataClauses, " AND ") + `
+		ORDER BY t.created_at DESC, t.id DESC
+		LIMIT ` + limitPlaceholder
+
+	rows, err := r.db.QueryContext(ctx, dataQuery, dataArgs...)
+	if err != nil {
+		return transaction.Page[transaction.Transaction]{}, err
+	}
+	defer rows.Close()
+
+	var items []transaction.Transaction
+	for rows.Next() {
+		m, err := scanTransaction(rows)
+		if err != nil {
+			return transaction.Page[transaction.Transaction]{}, err
+		}
+		items = append(items, m)
+	}
+	if err := rows.Err(); err != nil {
+		return transaction.Page[transaction.Transaction]{}, err
+	}
+
+	var nextCursor string
+	if len(items) > limit {
+		items = items[:limit] // trim the extra row
+		last := items[len(items)-1]
+		nextCursor = encodeCursor(last.CreatedAt, last.ID.String())
+	}
+
+	return transaction.Page[transaction.Transaction]{
+		Items:          items,
+		NextCursor:     nextCursor,
+		Total:          total,
+		TotalDeposited: totalDeposited,
+		TotalWithdrawn: totalWithdrawn,
+		TotalYield:     totalYield,
+	}, nil
+}
+
