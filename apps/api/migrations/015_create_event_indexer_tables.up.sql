@@ -4,9 +4,7 @@ CREATE TABLE IF NOT EXISTS event_indexer_state (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-INSERT INTO event_indexer_state (id, last_indexed_ledger)
-VALUES (1, 0)
-ON CONFLICT (id) DO NOTHING;
+-- Cursor seeded at runtime from Stellar ledger tip; never insert 0 here.
 
 CREATE TABLE IF NOT EXISTS processed_chain_events (
     event_id TEXT PRIMARY KEY,
