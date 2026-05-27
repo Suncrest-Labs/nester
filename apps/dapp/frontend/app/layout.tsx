@@ -3,6 +3,7 @@ import Script from "next/script";
 import { Inter } from "next/font/google";
 import { PortfolioProvider } from "@/components/portfolio-provider";
 import { WalletProvider } from "@/components/wallet-provider";
+import { AuthProvider } from "@/components/auth-provider";
 import { NotificationsProvider } from "@/components/notifications-provider";
 import { NotificationsToaster } from "@/components/notifications-toaster";
 import { WebSocketProvider } from "@/components/websocket-provider";
@@ -69,20 +70,22 @@ export default function RootLayout({
                         <NetworkProvider>
                             <SettingsProvider>
                                 <WalletProvider>
-                                    <NotificationsProvider>
-                                        <OfflineBanner />
-                                        <NetworkBanner />
-                                        <PortfolioProvider>
-                                            <WebSocketProvider>
-                                                <OnboardingProvider>
-                                                    {children}
-                                                    <NotificationsToaster />
-                                                    <ConsentGatedPrometheus />
-                                                    <CookieConsentBanner />
-                                                </OnboardingProvider>
-                                            </WebSocketProvider>
-                                        </PortfolioProvider>
-                                    </NotificationsProvider>
+                                    <AuthProvider>
+                                        <NotificationsProvider>
+                                            <OfflineBanner />
+                                            <NetworkBanner />
+                                            <PortfolioProvider>
+                                                <WebSocketProvider>
+                                                    <OnboardingProvider>
+                                                        {children}
+                                                        <NotificationsToaster />
+                                                        <ConsentGatedPrometheus />
+                                                        <CookieConsentBanner />
+                                                    </OnboardingProvider>
+                                                </WebSocketProvider>
+                                            </PortfolioProvider>
+                                        </NotificationsProvider>
+                                    </AuthProvider>
                                 </WalletProvider>
                             </SettingsProvider>
                         </NetworkProvider>
