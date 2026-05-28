@@ -21,6 +21,7 @@ const PAUSE: Symbol = symbol_short!("PAUSE");
 const UNPAUSE: Symbol = symbol_short!("UNPAUSE");
 const CB_TRIGGER: Symbol = symbol_short!("CB_TRIG");
 const REBALANCE: Symbol = symbol_short!("REBAL");
+const HARVEST: Symbol = symbol_short!("HARVEST");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
 const DEFAULT_REBALANCE_COOLDOWN: u64 = 3600;
 const FEE_CONFIG_UPDATED: Symbol = symbol_short!("FEE_CFG");
@@ -146,6 +147,25 @@ pub struct WithdrawalFeePreview {
     pub net_amount_received: i128,
 }
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct HarvestResult {
+    pub gross_yield: i128,
+    pub performance_fee: i128,
+    pub net_yield: i128,
+    pub compounded: bool,
+    pub new_share_balance: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VaultHarvestResult {
+    pub total_gross_yield: i128,
+    pub total_performance_fee: i128,
+    pub total_net_yield: i128,
+    pub users_harvested: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
@@ -183,6 +203,8 @@ enum DataKey {
     AllocatedSources,
     LastRebalanceAt,
     RebalanceCooldown,
+    LastHarvestAt(Address),
+    HarvestedUsers,
 }
 
 #[contracttype]
@@ -429,6 +451,39 @@ fn current_allocations_vec(env: &Env) -> Vec<CurrentAllocationView> {
         });
     }
     out
+}
+
+fn get_last_harvest_at(env: &Env, user: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::LastHarvestAt(user.clone()))
+        .unwrap_or(0)
+}
+
+fn set_last_harvest_at(env: &Env, user: &Address, ts: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::LastHarvestAt(user.clone()), &ts);
+}
+
+fn get_harvested_users(env: &Env) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::HarvestedUsers)
+        .unwrap_or(Vec::new(env))
+}
+
+fn register_harvested_user(env: &Env, user: &Address) {
+    let mut users = get_harvested_users(env);
+    for existing in users.iter() {
+        if existing == *user {
+            return;
+        }
+    }
+    users.push_back(user.clone());
+    env.storage()
+        .instance()
+        .set(&DataKey::HarvestedUsers, &users);
 }
 
 fn check_circuit_breaker(env: &Env, amount: i128) {
@@ -1309,6 +1364,195 @@ impl VaultContract {
             );
 
             Ok(return_amount)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Harvest
+    // -----------------------------------------------------------------------
+
+    /// Claim accrued yield for `user`, deduct performance fee, send fee to
+    /// treasury, and compound the remainder by minting new shares.
+    ///
+    /// Zero-yield harvest is a no-op (returns a zeroed result, not an error).
+    /// Impairment (negative yield) skips the performance fee entirely.
+    pub fn harvest(env: Env, user: Address) -> HarvestResult {
+        require_initialized(&env);
+        require_active(&env);
+        user.require_auth();
+        accrue_management_fee(&env);
+
+        let shares = get_shares(&env, &user);
+        if shares == 0 {
+            return HarvestResult {
+                gross_yield: 0,
+                performance_fee: 0,
+                net_yield: 0,
+                compounded: false,
+                new_share_balance: 0,
+            };
+        }
+
+        let gross_assets = vault_token_client(&env).amount_for_shares(&shares);
+        let principal = get_user_principal(&env, &user);
+        let gross_yield = gross_assets - principal;
+
+        // Zero or negative yield — no-op (no fee on impairment).
+        if gross_yield <= 0 {
+            set_last_harvest_at(&env, &user, env.ledger().timestamp());
+            register_harvested_user(&env, &user);
+            return HarvestResult {
+                gross_yield,
+                performance_fee: 0,
+                net_yield: 0,
+                compounded: false,
+                new_share_balance: shares,
+            };
+        }
+
+        let config = get_fee_config(&env);
+        let performance_fee = nester_common::fees::calculate_performance_fee(
+            gross_yield,
+            config.performance_fee_bps,
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e));
+
+        let net_yield = gross_yield - performance_fee;
+
+        // Send performance fee to treasury.
+        if performance_fee > 0 {
+            let token_address = Self::get_token(env.clone());
+            token::Client::new(&env, &token_address).transfer(
+                &env.current_contract_address(),
+                &config.treasury_address,
+                &performance_fee,
+            );
+            env.invoke_contract::<()>(
+                &config.treasury_address,
+                &Symbol::new(&env, "receive_fees"),
+                (performance_fee,).into_val(&env),
+            );
+
+            // Reduce total assets by the fee paid out.
+            let total_assets = get_total_assets(&env);
+            let new_total = total_assets.saturating_sub(performance_fee);
+            set_total_assets(&env, new_total);
+            let reserves = get_vault_liquid_reserves(&env);
+            set_vault_liquid_reserves(&env, reserves.saturating_sub(performance_fee));
+        }
+
+        // Compound net yield: update user principal to current gross assets
+        // minus the fee paid (i.e. principal now reflects the compounded value).
+        let new_principal = principal + net_yield;
+        set_user_principal(&env, &user, new_principal);
+
+        sync_vault_token_total_assets(&env);
+
+        let new_share_balance = get_shares(&env, &user);
+        set_last_harvest_at(&env, &user, env.ledger().timestamp());
+        register_harvested_user(&env, &user);
+
+        emit_event(
+            &env,
+            VAULT,
+            HARVEST,
+            user.clone(),
+            HarvestResult {
+                gross_yield,
+                performance_fee,
+                net_yield,
+                compounded: true,
+                new_share_balance,
+            },
+        );
+
+        HarvestResult {
+            gross_yield,
+            performance_fee,
+            net_yield,
+            compounded: true,
+            new_share_balance,
+        }
+    }
+
+    /// Admin function: harvest all known user positions in one call.
+    ///
+    /// Iterates every address that has ever called `harvest` (or been
+    /// registered via deposit) and applies the same per-user harvest logic.
+    pub fn harvest_vault(env: Env, admin: Address) -> VaultHarvestResult {
+        require_initialized(&env);
+        require_active(&env);
+        admin.require_auth();
+        AccessControl::require_role(&env, &admin, Role::Admin);
+        accrue_management_fee(&env);
+
+        let users = get_harvested_users(&env);
+        let mut total_gross: i128 = 0;
+        let mut total_fee: i128 = 0;
+        let mut total_net: i128 = 0;
+        let mut users_harvested: u32 = 0;
+
+        let config = get_fee_config(&env);
+
+        for user in users.iter() {
+            let shares = get_shares(&env, &user);
+            if shares == 0 {
+                continue;
+            }
+
+            let gross_assets = vault_token_client(&env).amount_for_shares(&shares);
+            let principal = get_user_principal(&env, &user);
+            let gross_yield = gross_assets - principal;
+
+            if gross_yield <= 0 {
+                set_last_harvest_at(&env, &user, env.ledger().timestamp());
+                users_harvested += 1;
+                continue;
+            }
+
+            let performance_fee = nester_common::fees::calculate_performance_fee(
+                gross_yield,
+                config.performance_fee_bps,
+            )
+            .unwrap_or(0);
+
+            let net_yield = gross_yield - performance_fee;
+
+            if performance_fee > 0 {
+                let token_address = Self::get_token(env.clone());
+                token::Client::new(&env, &token_address).transfer(
+                    &env.current_contract_address(),
+                    &config.treasury_address,
+                    &performance_fee,
+                );
+                env.invoke_contract::<()>(
+                    &config.treasury_address,
+                    &Symbol::new(&env, "receive_fees"),
+                    (performance_fee,).into_val(&env),
+                );
+
+                let total_assets = get_total_assets(&env);
+                set_total_assets(&env, total_assets.saturating_sub(performance_fee));
+                let reserves = get_vault_liquid_reserves(&env);
+                set_vault_liquid_reserves(&env, reserves.saturating_sub(performance_fee));
+            }
+
+            set_user_principal(&env, &user, principal + net_yield);
+            set_last_harvest_at(&env, &user, env.ledger().timestamp());
+
+            total_gross = total_gross.saturating_add(gross_yield);
+            total_fee = total_fee.saturating_add(performance_fee);
+            total_net = total_net.saturating_add(net_yield);
+            users_harvested += 1;
+        }
+
+        sync_vault_token_total_assets(&env);
+
+        VaultHarvestResult {
+            total_gross_yield: total_gross,
+            total_performance_fee: total_fee,
+            total_net_yield: total_net,
+            users_harvested,
         }
     }
 

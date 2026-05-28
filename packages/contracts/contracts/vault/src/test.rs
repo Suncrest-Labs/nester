@@ -1017,3 +1017,185 @@ fn process_emergency_queue_decrements_liquid_reserved() {
         "collect_fees should transfer fees once LiquidReserved is decremented after queue processing"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Harvest Tests (#518)
+// ---------------------------------------------------------------------------
+
+/// Helper: deposit, report yield, and mint backing tokens to the vault so
+/// the transfer in harvest() can succeed.
+fn setup_with_yield(
+    token: &token::StellarAssetClient<'static>,
+    vault: &VaultContractClient<'static>,
+    admin: &Address,
+    user: &Address,
+    deposit: i128,
+    yield_amount: i128,
+) {
+    mint(token, user, deposit);
+    vault.deposit(user, &deposit, &0);
+    vault.grant_role(admin, admin, &Role::Manager);
+    if yield_amount > 0 {
+        vault.report_yield(admin, &yield_amount);
+        // Back the reported yield with real tokens so the vault can pay fees.
+        mint(token, &vault.address, yield_amount);
+    }
+}
+
+#[test]
+fn harvest_happy_path_compounds_net_yield_and_sends_fee_to_treasury() {
+    let (env, admin, token, vault, treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    let yield_amount = 100 * XLM; // 10% yield
+
+    // Disable management fee so gross_yield == yield_amount exactly.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.management_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    setup_with_yield(&token, &vault, &admin, &user, deposit, yield_amount);
+
+    // Advance past lock period so no early-withdrawal fee on subsequent withdraw.
+    advance_time(&env, DAY);
+
+    let result = vault.harvest(&user);
+
+    // gross_yield = 100 XLM, performance_fee = 10% of 100 = 10 XLM
+    assert_eq!(result.gross_yield, yield_amount);
+    assert_eq!(result.performance_fee, 10 * XLM);
+    assert_eq!(result.net_yield, 90 * XLM);
+    assert!(result.compounded);
+    assert_eq!(result.new_share_balance, vault.get_shares(&user));
+
+    // Treasury received the performance fee.
+    let treasury_balance = token::Client::new(&env, &token.address).balance(&treasury);
+    assert_eq!(treasury_balance, 10 * XLM);
+}
+
+#[test]
+fn harvest_zero_yield_is_noop() {
+    let (env, admin, token, vault, treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+    vault.grant_role(&admin, &admin, &Role::Manager);
+
+    // No yield reported — gross_yield == 0.
+    let result = vault.harvest(&user);
+
+    assert_eq!(result.gross_yield, 0);
+    assert_eq!(result.performance_fee, 0);
+    assert_eq!(result.net_yield, 0);
+    assert!(!result.compounded);
+
+    // Treasury untouched.
+    let treasury_balance = token::Client::new(&env, &token.address).balance(&treasury);
+    assert_eq!(treasury_balance, 0);
+}
+
+#[test]
+fn harvest_impairment_no_performance_fee() {
+    // When share value < principal (impairment), gross_yield is negative.
+    // No performance fee should be charged.
+    let (env, admin, token, vault, treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+    vault.grant_role(&admin, &admin, &Role::Manager);
+
+    // Simulate a loss: report negative yield (total_assets decreases).
+    vault.report_yield(&admin, &(-100 * XLM));
+
+    let result = vault.harvest(&user);
+
+    assert!(result.gross_yield < 0, "expected negative yield (impairment)");
+    assert_eq!(result.performance_fee, 0, "no fee on impairment");
+    assert_eq!(result.net_yield, 0);
+    assert!(!result.compounded);
+
+    let treasury_balance = token::Client::new(&env, &token.address).balance(&treasury);
+    assert_eq!(treasury_balance, 0);
+}
+
+#[test]
+fn harvest_fee_verification_correct_bps() {
+    // Verify fee math: 1000 bps = 10% of gross_yield.
+    let (env, admin, token, vault, treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 2_000 * XLM;
+    let yield_amount = 500 * XLM;
+
+    // Disable management fee so gross_yield == yield_amount exactly.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.management_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    setup_with_yield(&token, &vault, &admin, &user, deposit, yield_amount);
+    advance_time(&env, DAY);
+
+    let result = vault.harvest(&user);
+
+    // performance_fee_bps = 1000 (10%)
+    let expected_fee = yield_amount / 10;
+    assert_eq!(result.performance_fee, expected_fee);
+    assert_eq!(result.net_yield, yield_amount - expected_fee);
+
+    let treasury_balance = token::Client::new(&env, &token.address).balance(&treasury);
+    assert_eq!(treasury_balance, expected_fee);
+}
+
+#[test]
+fn harvest_vault_harvests_all_registered_users() {
+    let (env, admin, token, vault, treasury) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    let deposit = 1_000 * XLM;
+    let yield_amount = 200 * XLM; // 20% yield shared across both
+
+    mint(&token, &alice, deposit);
+    mint(&token, &bob, deposit);
+    vault.deposit(&alice, &deposit, &0);
+    vault.deposit(&bob, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &yield_amount);
+    // Back yield with real tokens.
+    mint(&token, &vault.address, yield_amount);
+
+    // Register both users by having them harvest once individually.
+    vault.harvest(&alice);
+    vault.harvest(&bob);
+
+    // Report more yield and back it.
+    vault.report_yield(&admin, &(200 * XLM));
+    mint(&token, &vault.address, 200 * XLM);
+
+    let result = vault.harvest_vault(&admin);
+
+    assert!(result.users_harvested >= 2);
+    assert!(result.total_gross_yield > 0);
+    assert!(result.total_performance_fee > 0);
+    assert_eq!(
+        result.total_net_yield,
+        result.total_gross_yield - result.total_performance_fee
+    );
+
+    // Treasury received fees from harvest_vault.
+    let treasury_balance = token::Client::new(&env, &token.address).balance(&treasury);
+    assert!(treasury_balance > 0);
+}
+
+#[test]
+#[should_panic]
+fn harvest_vault_requires_admin_role() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+    mint(&token, &outsider, 100 * XLM);
+    vault.harvest_vault(&outsider);
+}
