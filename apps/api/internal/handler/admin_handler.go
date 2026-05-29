@@ -24,7 +24,7 @@ const (
 )
 
 type adminService interface {
-	GetDashboard(ctx context.Context) (service.DashboardResponse, error)
+	GetDashboard(ctx context.Context) (admindomain.VaultHealthDashboard, error)
 	ListVaults(ctx context.Context, filter admindomain.VaultListFilter) ([]admindomain.VaultSummary, int, error)
 	GetVaultDetail(ctx context.Context, id uuid.UUID) (admindomain.VaultDetail, error)
 	PauseVault(ctx context.Context, id uuid.UUID) (admindomain.VaultDetail, error)

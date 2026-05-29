@@ -48,12 +48,51 @@ type DashboardSettlementMetrics struct {
 	Volume24h    decimal.Decimal `json:"volume_24h"`
 }
 
-type DashboardMetrics struct {
-	TotalTVL               decimal.Decimal             `json:"total_tvl"`
-	TotalUsers             int64                       `json:"total_users"`
-	ActiveVaults           int64                       `json:"active_vaults"`
-	TotalYieldDistributed  decimal.Decimal             `json:"total_yield_distributed"`
-	Settlements            DashboardSettlementMetrics  `json:"settlements"`
+type VaultAlert struct {
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+type SystemAlert struct {
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+type VaultHealthEntry struct {
+	ID                  uuid.UUID    `json:"id"`
+	Name                string       `json:"name"`
+	TVLUSDC             string       `json:"tvl_usdc"`
+	APY7d               string       `json:"apy_7d"`
+	Depositors          int64        `json:"depositors"`
+	PendingTransactions int64        `json:"pending_transactions"`
+	LastRebalanceAt     *string      `json:"last_rebalance_at,omitempty"`
+	Status              string       `json:"status"`
+	Alerts              []VaultAlert `json:"alerts"`
+}
+
+type VaultHealthDashboard struct {
+	TotalTVLUSDC    string             `json:"total_tvl_usdc"`
+	TotalDepositors int64              `json:"total_depositors"`
+	Vaults          []VaultHealthEntry `json:"vaults"`
+	SystemAlerts    []SystemAlert      `json:"system_alerts"`
+}
+
+type VaultHealthRow struct {
+	ID                  uuid.UUID
+	Name                string
+	TVL                 decimal.Decimal
+	APY7d               *decimal.Decimal
+	APY7d24hAgo         *decimal.Decimal
+	Depositors          int64
+	PendingTransactions int64
+	LastRebalanceAt     *time.Time
+	Status              vault.VaultStatus
+}
+
+type VaultHealthDashboardData struct {
+	TotalTVL        decimal.Decimal
+	TotalDepositors int64
+	Vaults          []VaultHealthRow
 }
 
 type VaultSummary struct {
@@ -117,7 +156,7 @@ type DashboardSystemHealth struct {
 
 // Repository is the persistence/read model contract required by admin APIs.
 type Repository interface {
-	GetDashboardMetrics(ctx context.Context) (DashboardMetrics, error)
+	GetVaultHealthDashboard(ctx context.Context) (VaultHealthDashboardData, error)
 	ListVaults(ctx context.Context, filter VaultListFilter) ([]VaultSummary, int, error)
 	GetVaultDetail(ctx context.Context, id uuid.UUID) (VaultDetail, error)
 	UpdateVaultStatus(ctx context.Context, id uuid.UUID, status vault.VaultStatus) (VaultDetail, error)

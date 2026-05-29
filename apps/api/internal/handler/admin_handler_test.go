@@ -23,7 +23,7 @@ import (
 )
 
 type adminHandlerStubService struct {
-	dashboard   service.DashboardResponse
+	dashboard   admindomain.VaultHealthDashboard
 	vaults      map[uuid.UUID]admindomain.VaultDetail
 	settlements []admindomain.SettlementSummary
 	users       []admindomain.UserSummary
@@ -53,24 +53,22 @@ func newAdminHandlerStubService(vaultID uuid.UUID) *adminHandlerStubService {
 	}
 
 	return &adminHandlerStubService{
-		dashboard: service.DashboardResponse{
-			TotalTVL:              "2450000.00",
-			TotalUsers:            342,
-			ActiveVaults:          518,
-			TotalYieldDistributed: "45230.12",
-			Settlements: admindomain.DashboardSettlementMetrics{
-				Total:        1205,
-				Pending:      12,
-				Completed24h: 45,
-				Failed24h:    2,
-				Volume24h:    decimal.RequireFromString("125000.00"),
+		dashboard: admindomain.VaultHealthDashboard{
+			TotalTVLUSDC:    "5234891.00",
+			TotalDepositors: 892,
+			Vaults: []admindomain.VaultHealthEntry{
+				{
+					ID:                  vaultID,
+					Name:                "Conservative",
+					TVLUSDC:             "1234000.00",
+					APY7d:               "8.24",
+					Depositors:          234,
+					PendingTransactions: 3,
+					Status:              "healthy",
+					Alerts:              []admindomain.VaultAlert{},
+				},
 			},
-			SystemHealth: admindomain.DashboardSystemHealth{
-				Database:           "healthy",
-				StellarRPC:         "healthy",
-				SettlementProvider: "healthy",
-				LastEventIndexed:   now.Format(time.RFC3339),
-			},
+			SystemAlerts: []admindomain.SystemAlert{},
 		},
 		vaults: map[uuid.UUID]admindomain.VaultDetail{vaultID: detail},
 		settlements: []admindomain.SettlementSummary{
@@ -114,7 +112,7 @@ func newAdminHandlerStubService(vaultID uuid.UUID) *adminHandlerStubService {
 	}
 }
 
-func (s *adminHandlerStubService) GetDashboard(context.Context) (service.DashboardResponse, error) {
+func (s *adminHandlerStubService) GetDashboard(context.Context) (admindomain.VaultHealthDashboard, error) {
 	return s.dashboard, nil
 }
 
@@ -166,6 +164,80 @@ func (s *adminHandlerStubService) ListUsers(context.Context, admindomain.UserLis
 
 func (s *adminHandlerStubService) GetDetailedHealth(context.Context) (admindomain.DetailedHealth, error) {
 	return s.health, nil
+}
+
+func TestAdminHandlerGetDashboard(t *testing.T) {
+	vaultID := uuid.New()
+	svc := newAdminHandlerStubService(vaultID)
+	h := NewAdminHandler(svc)
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/v1/admin/dashboard")
+	if err != nil {
+		t.Fatalf("GET /admin/dashboard error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	dashboard := decodeAPIData[admindomain.VaultHealthDashboard](t, resp.Body)
+	if dashboard.TotalTVLUSDC != "5234891.00" {
+		t.Fatalf("total_tvl_usdc = %q, want 5234891.00", dashboard.TotalTVLUSDC)
+	}
+	if dashboard.TotalDepositors != 892 {
+		t.Fatalf("total_depositors = %d, want 892", dashboard.TotalDepositors)
+	}
+	if len(dashboard.Vaults) != 1 {
+		t.Fatalf("vault count = %d, want 1", len(dashboard.Vaults))
+	}
+	if dashboard.Vaults[0].PendingTransactions != 3 {
+		t.Fatalf("pending_transactions = %d, want 3", dashboard.Vaults[0].PendingTransactions)
+	}
+}
+
+func TestAdminHandlerAuthDashboardRequiresAdmin(t *testing.T) {
+	vaultID := uuid.New()
+	h := NewAdminHandler(newAdminHandlerStubService(vaultID))
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	rules := []middleware.RouteRule{
+		{PathPrefix: "/api/v1/admin/", Role: "admin"},
+	}
+	protected := middleware.Authenticate("admin-test-secret", rules)(mux)
+	server := httptest.NewServer(protected)
+	defer server.Close()
+
+	nonAdminToken := makeAdminToken(t, "admin-test-secret", []string{"operator"})
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/dashboard", nil)
+	req.Header.Set("Authorization", "Bearer "+nonAdminToken)
+	nonAdminResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET dashboard as non-admin failed: %v", err)
+	}
+	defer nonAdminResp.Body.Close()
+	if nonAdminResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin status = %d, want 403", nonAdminResp.StatusCode)
+	}
+
+	adminToken := makeAdminToken(t, "admin-test-secret", []string{"admin"})
+	adminReq, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/dashboard", nil)
+	adminReq.Header.Set("Authorization", "Bearer "+adminToken)
+	adminResp, err := http.DefaultClient.Do(adminReq)
+	if err != nil {
+		t.Fatalf("GET dashboard as admin failed: %v", err)
+	}
+	defer adminResp.Body.Close()
+	if adminResp.StatusCode != http.StatusOK {
+		t.Fatalf("admin status = %d, want 200", adminResp.StatusCode)
+	}
 }
 
 func TestAdminHandlerListPauseVerifyFlow(t *testing.T) {
@@ -326,8 +398,8 @@ func makeAdminToken(t *testing.T, secret string, roles []string) string {
 
 type adminErrStub struct{}
 
-func (adminErrStub) GetDashboard(context.Context) (service.DashboardResponse, error) {
-	return service.DashboardResponse{}, errors.New("boom")
+func (adminErrStub) GetDashboard(context.Context) (admindomain.VaultHealthDashboard, error) {
+	return admindomain.VaultHealthDashboard{}, errors.New("boom")
 }
 func (adminErrStub) ListVaults(context.Context, admindomain.VaultListFilter) ([]admindomain.VaultSummary, int, error) {
 	return nil, 0, service.ErrInvalidAdminInput
