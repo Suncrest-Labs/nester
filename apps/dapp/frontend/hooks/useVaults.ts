@@ -28,7 +28,7 @@ export function useVaults(userId: string | null): UseVaultsResult {
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetch = useCallback(async () => {
+  const fetchVaults = useCallback(async () => {
     if (!userId) return;
     setIsLoading(true);
     setError(null);
@@ -61,12 +61,17 @@ export function useVaults(userId: string | null): UseVaultsResult {
   }, [userId]);
 
   useEffect(() => {
-    fetch();
-    timerRef.current = setInterval(fetch, POLL_INTERVAL);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (!userId) return;
+    fetchVaults();
+    timerRef.current = setInterval(fetchVaults, POLL_INTERVAL);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [fetch]);
+  }, [userId, fetchVaults]);
 
-  return { vaults, isLoading, error, refresh: fetch };
+  return { vaults, isLoading, error, refresh: fetchVaults };
 }

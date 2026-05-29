@@ -141,14 +141,21 @@ function PortfolioChart({
     const H = 120;
     const pad = 10;
 
+    // Handle single-point case
+    const isSinglePoint = history.length === 1;
     const pts = history.map((p, i) => {
-        const x = (i / (history.length - 1)) * (W - pad * 2) + pad;
+        const x = isSinglePoint ? pad : (i / (history.length - 1)) * (W - pad * 2) + pad;
         const y = H - pad - ((p.value - minV) / range) * (H - pad * 2);
-        return `${x},${y}`;
+        return { x, y };
     });
 
-    const linePath = `M${pts.join(" L")}`;
-    const areaPath = `M${pts[0]} L${pts.join(" L")} L${W - pad},${H} L${pad},${H}Z`;
+    // For single point, render a horizontal line; otherwise use normal path
+    const pathPoints = isSinglePoint
+        ? [`${pad},${pts[0].y}`, `${W - pad},${pts[0].y}`]
+        : pts.map(({ x, y }) => `${x},${y}`);
+
+    const linePath = `M${pathPoints.join(" L")}`;
+    const areaPath = `M${pathPoints[0]} L${pathPoints.join(" L")} L${W - pad},${H} L${pad},${H}Z`;
 
     return (
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full" preserveAspectRatio="none">
@@ -317,7 +324,6 @@ function ActivityFeed({
     settlements: ReturnType<typeof useSettlements>["settlements"];
     isLoading: boolean;
 }) {
-    const { currentNetwork } = useNetwork();
 
     if (isLoading) {
         return (
@@ -484,10 +490,15 @@ export default function Dashboard() {
     // Aggregate portfolio metrics from live vaults
     const { totalBalanceUsd, totalYield, avgApy } = useMemo(() => {
         if (vaults.length === 0) return { totalBalanceUsd: 0, totalYield: 0, avgApy: 0 };
-        const totalBalanceUsd = vaults.reduce(
-            (s, v) => s + (parseFloat(v.current_balance) || 0),
-            0
-        );
+        
+        // Convert each vault balance to USD using token prices
+        const totalBalanceUsd = vaults.reduce((s, v) => {
+            const balance = parseFloat(v.current_balance) || 0;
+            const currency = v.currency.toUpperCase();
+            const price = tokenPrices[currency] ?? 0;
+            return s + (balance * price);
+        }, 0);
+        
         const totalYield = vaults.reduce(
             (s, v) => s + (parseFloat(v.yield_earned) || 0),
             0
@@ -497,7 +508,7 @@ export default function Dashboard() {
             .filter((a) => a > 0);
         const avgApy = apys.length ? apys.reduce((a, b) => a + b, 0) / apys.length : 0;
         return { totalBalanceUsd, totalYield, avgApy };
-    }, [vaults]);
+    }, [vaults, tokenPrices]);
 
     const vaultIds = useMemo(() => vaults.map((v) => v.id), [vaults]);
 

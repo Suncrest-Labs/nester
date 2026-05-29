@@ -5,7 +5,7 @@
  * Merges snapshots from all user vaults into a single time-series.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { api, ApiError } from "@/lib/api/client";
 
 export interface ChartPoint {
@@ -24,6 +24,11 @@ export function useVaultHistory(
 ): UseVaultHistoryResult {
   const [history, setHistory] = useState<ChartPoint[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  const stableVaultIds = useMemo(
+    () => JSON.stringify([...vaultIds].sort()),
+    [vaultIds]
+  );
 
   const fetch = useCallback(async () => {
     if (vaultIds.length === 0) {
@@ -60,7 +65,7 @@ export function useVaultHistory(
     } finally {
       setIsLoading(false);
     }
-  }, [vaultIds.join(","), period]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stableVaultIds, period]);
 
   useEffect(() => {
     fetch();

@@ -14,8 +14,9 @@ const nextConfig: NextConfig = {
   async rewrites() {
     const intelligenceUrl =
       process.env.INTELLIGENCE_SERVICE_URL ?? "http://localhost:8000";
-    const apiUrl =
-      process.env.NEXT_PUBLIC_API_URL?.replace(/\/api\/v1$/, "") ?? "http://localhost:8080";
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL
+      ? process.env.NEXT_PUBLIC_API_URL.replace(/\/api\/v1\/?$/, "")
+      : "http://localhost:8080";
     return [
       // Go backend — all /api/v1/* calls
       {

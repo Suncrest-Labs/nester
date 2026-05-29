@@ -11,8 +11,18 @@ import config from "@/lib/config";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1";
+function getApiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  // Use relative URL for browser (to leverage Next.js rewrites)
+  // Use absolute URL for server-side
+  return typeof window === "undefined"
+    ? "http://localhost:8080/api/v1"
+    : "/api/v1";
+}
+
+const API_BASE = getApiBase();
 
 export function getStoredToken(): string {
   if (typeof window === "undefined") return "";
@@ -77,13 +87,42 @@ async function apiFetch<T>(
     headers,
   });
 
-  const json = (await res.json()) as ApiEnvelope<T>;
+  // Handle non-JSON or empty responses
+  const body = await res.text();
+  let json: ApiEnvelope<T> | null = null;
 
-  if (!json.success) {
+  if (body.trim()) {
+    try {
+      json = JSON.parse(body) as {
+        success: boolean;
+        data?: T;
+        error?: { code: string; message: string };
+      };
+    } catch {
+      if (!res.ok) {
+        throw new ApiError(
+          res.status,
+          "INVALID_RESPONSE",
+          `API returned a non-JSON response`
+        );
+      }
+    }
+  }
+
+  if (!res.ok) {
     throw new ApiError(
       res.status,
-      json.error?.code ?? "UNKNOWN",
-      json.error?.message ?? `API error ${res.status}`
+      json?.error?.code ?? "UNKNOWN",
+      json?.error?.message ??
+        `API error ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`
+    );
+  }
+
+  if (!json?.success) {
+    throw new ApiError(
+      res.status,
+      json?.error?.code ?? "UNKNOWN",
+      json?.error?.message ?? `API error ${res.status}`
     );
   }
 
