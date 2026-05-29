@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,6 +68,195 @@ type RecordWithdrawalInput struct {
 	VaultID uuid.UUID
 	Amount  decimal.Decimal
 	TxHash  string
+}
+
+// ── Share price ──────────────────────────────────────────────────────────────
+
+// SharePriceResult holds the current share-price data for a vault.
+type SharePriceResult struct {
+	VaultID        uuid.UUID       `json:"vault_id"`
+	SharesPerUSDC  decimal.Decimal `json:"shares_per_usdc"`
+	USDCPerShare   decimal.Decimal `json:"usdc_per_share"`
+	TotalShares    decimal.Decimal `json:"total_shares"`
+	TotalAssetsUSDC decimal.Decimal `json:"total_assets_usdc"`
+	AsOfLedger     int64           `json:"as_of_ledger"`
+}
+
+type sharePriceCacheEntry struct {
+	result    SharePriceResult
+	expiresAt time.Time
+}
+
+const sharePriceTTL = 30 * time.Second
+
+// SharePriceService computes and caches vault share prices.
+type SharePriceService struct {
+	repository vault.Repository
+	mu         sync.Mutex
+	cache      map[uuid.UUID]sharePriceCacheEntry
+}
+
+func NewSharePriceService(repository vault.Repository) *SharePriceService {
+	return &SharePriceService{
+		repository: repository,
+		cache:      make(map[uuid.UUID]sharePriceCacheEntry),
+	}
+}
+
+// GetSharePrice returns the cached share price for vaultID, refreshing if stale.
+func (s *SharePriceService) GetSharePrice(ctx context.Context, vaultID uuid.UUID) (SharePriceResult, error) {
+	s.mu.Lock()
+	if e, ok := s.cache[vaultID]; ok && time.Now().Before(e.expiresAt) {
+		s.mu.Unlock()
+		return e.result, nil
+	}
+	s.mu.Unlock()
+
+	v, err := s.repository.GetVault(ctx, vaultID)
+	if err != nil {
+		return SharePriceResult{}, err
+	}
+
+	result := computeSharePrice(v)
+
+	s.mu.Lock()
+	s.cache[vaultID] = sharePriceCacheEntry{result: result, expiresAt: time.Now().Add(sharePriceTTL)}
+	s.mu.Unlock()
+
+	return result, nil
+}
+
+// InvalidateSharePrice evicts the cached entry for vaultID (call on deposit/withdraw).
+func (s *SharePriceService) InvalidateSharePrice(vaultID uuid.UUID) {
+	s.mu.Lock()
+	delete(s.cache, vaultID)
+	s.mu.Unlock()
+}
+
+// computeSharePrice derives share price from vault DB state.
+// Shares are minted 1:1 at deposit (total_deposited == total_shares at issuance).
+// Share price = current_balance / total_deposited; grows as yield accrues.
+func computeSharePrice(v vault.Vault) SharePriceResult {
+	six := decimal.NewFromInt(1_000_000)
+	totalShares := v.TotalDeposited
+	totalAssets := v.CurrentBalance
+
+	var usdcPerShare, sharesPerUSDC decimal.Decimal
+	if totalShares.IsZero() {
+		usdcPerShare = decimal.NewFromInt(1)
+		sharesPerUSDC = decimal.NewFromInt(1)
+	} else {
+		usdcPerShare = totalAssets.Div(totalShares).RoundBank(6)
+		if !usdcPerShare.IsZero() {
+			sharesPerUSDC = decimal.NewFromInt(1).Div(usdcPerShare).RoundBank(6)
+		} else {
+			sharesPerUSDC = decimal.NewFromInt(1)
+		}
+	}
+
+	_ = six // precision anchor — RoundBank(6) already applied above
+
+	return SharePriceResult{
+		VaultID:         v.ID,
+		SharesPerUSDC:   sharesPerUSDC,
+		USDCPerShare:    usdcPerShare,
+		TotalShares:     totalShares,
+		TotalAssetsUSDC: totalAssets,
+		AsOfLedger:      0, // populated by on-chain reader when available
+	}
+}
+
+// ── Share price ──────────────────────────────────────────────────────────────
+
+// SharePriceResult holds the current share-price data for a vault.
+type SharePriceResult struct {
+	VaultID         uuid.UUID       `json:"vault_id"`
+	SharesPerUSDC   decimal.Decimal `json:"shares_per_usdc"`
+	USDCPerShare    decimal.Decimal `json:"usdc_per_share"`
+	TotalShares     decimal.Decimal `json:"total_shares"`
+	TotalAssetsUSDC decimal.Decimal `json:"total_assets_usdc"`
+	AsOfLedger      int64           `json:"as_of_ledger"`
+}
+
+type sharePriceCacheEntry struct {
+	result    SharePriceResult
+	expiresAt time.Time
+}
+
+const sharePriceTTL = 30 * time.Second
+
+// SharePriceService computes and caches vault share prices.
+type SharePriceService struct {
+	repository vault.Repository
+	mu         sync.Mutex
+	cache      map[uuid.UUID]sharePriceCacheEntry
+}
+
+func NewSharePriceService(repository vault.Repository) *SharePriceService {
+	return &SharePriceService{
+		repository: repository,
+		cache:      make(map[uuid.UUID]sharePriceCacheEntry),
+	}
+}
+
+// GetSharePrice returns the cached share price for vaultID, refreshing if stale.
+func (s *SharePriceService) GetSharePrice(ctx context.Context, vaultID uuid.UUID) (SharePriceResult, error) {
+	s.mu.Lock()
+	if e, ok := s.cache[vaultID]; ok && time.Now().Before(e.expiresAt) {
+		s.mu.Unlock()
+		return e.result, nil
+	}
+	s.mu.Unlock()
+
+	v, err := s.repository.GetVault(ctx, vaultID)
+	if err != nil {
+		return SharePriceResult{}, err
+	}
+
+	result := computeSharePrice(v)
+
+	s.mu.Lock()
+	s.cache[vaultID] = sharePriceCacheEntry{result: result, expiresAt: time.Now().Add(sharePriceTTL)}
+	s.mu.Unlock()
+
+	return result, nil
+}
+
+// InvalidateSharePrice evicts the cached entry for vaultID (call on deposit/withdraw).
+func (s *SharePriceService) InvalidateSharePrice(vaultID uuid.UUID) {
+	s.mu.Lock()
+	delete(s.cache, vaultID)
+	s.mu.Unlock()
+}
+
+// computeSharePrice derives share price from vault DB state.
+// Shares are minted 1:1 at deposit (total_deposited == total_shares at issuance).
+// Share price = current_balance / total_deposited; grows as yield accrues.
+func computeSharePrice(v vault.Vault) SharePriceResult {
+	totalShares := v.TotalDeposited
+	totalAssets := v.CurrentBalance
+
+	var usdcPerShare, sharesPerUSDC decimal.Decimal
+	if totalShares.IsZero() {
+		usdcPerShare = decimal.NewFromInt(1)
+		sharesPerUSDC = decimal.NewFromInt(1)
+	} else {
+		usdcPerShare = totalAssets.Div(totalShares).RoundBank(6)
+		if !usdcPerShare.IsZero() {
+			sharesPerUSDC = decimal.NewFromInt(1).Div(usdcPerShare).RoundBank(6)
+		} else {
+			sharesPerUSDC = decimal.NewFromInt(1)
+		}
+	}
+
+	return SharePriceResult{
+		VaultID:         v.ID,
+		SharesPerUSDC:   sharesPerUSDC,
+		USDCPerShare:    usdcPerShare,
+		TotalShares:     totalShares,
+		TotalAssetsUSDC: totalAssets,
+		AsOfLedger:      0,
+	}
 }
 
 // ── Constructor ──────────────────────────────────────────────────────────────

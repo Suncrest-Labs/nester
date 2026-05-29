@@ -95,7 +95,8 @@ func run() error {
 
 	vaultRepository := postgres.NewVaultRepository(db)
 	vaultService := service.NewVaultService(vaultRepository)
-	vaultHandler := handler.NewVaultHandler(vaultService)
+	sharePriceService := service.NewSharePriceService(vaultRepository)
+	vaultHandler := handler.NewVaultHandler(vaultService, sharePriceService)
 
 	transactionRepository := postgres.NewTransactionRepository(db)
 	transactionService := service.NewTransactionService(transactionRepository, cfg.Stellar().HorizonURL())

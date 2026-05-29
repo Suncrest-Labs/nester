@@ -43,7 +43,7 @@ func TestVaultHandlerGetVaultReturns200WithAllocations(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -105,7 +105,7 @@ func TestVaultHandlerGetVaultReturns200WithAllocations(t *testing.T) {
 func TestVaultHandlerGetVaultReturns404WhenNotFound(t *testing.T) {
 	repository := newHandlerRepository(uuid.New())
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -136,7 +136,7 @@ func TestVaultHandlerGetVaultReturns404WhenNotFound(t *testing.T) {
 func TestVaultHandlerGetVaultReturns400ForInvalidID(t *testing.T) {
 	repository := newHandlerRepository(uuid.New())
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -159,7 +159,7 @@ func TestVaultHandlerListUserVaultsReturns200WithAllocations(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -242,7 +242,7 @@ func TestVaultHandlerCreateVaultReturns201OnSuccess(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -283,7 +283,7 @@ func TestVaultHandlerCreateVaultReturns422OnInvalidInput(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -341,7 +341,7 @@ func TestVaultHandlerCreateVaultReturns422OnInvalidInput(t *testing.T) {
 func TestVaultHandlerCreateVaultReturns404ForNonExistentUser(t *testing.T) {
 	repository := newHandlerRepository(uuid.New()) // Only this user exists
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -365,7 +365,7 @@ func TestVaultHandlerCreateVaultReturns404ForNonExistentUser(t *testing.T) {
 func TestVaultHandlerListUserVaultsReturns400ForInvalidUserID(t *testing.T) {
 	repository := newHandlerRepository(uuid.New())
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -388,7 +388,7 @@ func TestVaultHandlerCreateVaultWithCustomStatus(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -417,7 +417,7 @@ func TestVaultHandlerCreateVaultNormalizesCurrency(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -446,7 +446,7 @@ func TestVaultHandlerCreateVaultTrimsWhitespace(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -478,7 +478,7 @@ func TestVaultHandler_GetAllocations_Returns200(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -544,7 +544,7 @@ func TestVaultHandler_GetAllocations_Returns200(t *testing.T) {
 func TestVaultHandler_GetAllocations_NotFound(t *testing.T) {
 	repository := newHandlerRepository(uuid.New())
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 

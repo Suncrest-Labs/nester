@@ -35,7 +35,7 @@ func TestVaultHandlerIntegrationCreateGetListAndErrors(t *testing.T) {
 
 	repository := postgres.NewVaultRepository(db)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 

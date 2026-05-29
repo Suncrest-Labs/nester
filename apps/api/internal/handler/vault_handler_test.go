@@ -53,7 +53,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 	repository := newHandlerRepository(userID, otherUserID)
 	vaultService := service.NewVaultService(repository)
 
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -129,7 +129,7 @@ func TestVaultHandlerCreateGetAndList(t *testing.T) {
 
 func TestVaultHandlerNotFoundAndInvalidUser(t *testing.T) {
 	repository := newHandlerRepository(uuid.New())
-	handler := NewVaultHandler(service.NewVaultService(repository))
+	handler := NewVaultHandler(service.NewVaultService(repository), nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 

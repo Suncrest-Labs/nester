@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
@@ -19,7 +20,8 @@ import (
 const maxRequestBodyBytes int64 = 1 << 20
 
 type VaultHandler struct {
-	service *service.VaultService
+	service      *service.VaultService
+	sharePriceSvc *service.SharePriceService
 }
 
 type createVaultRequest struct {
@@ -28,14 +30,16 @@ type createVaultRequest struct {
 	Status          string `json:"status,omitempty"`
 }
 
-func NewVaultHandler(service *service.VaultService) *VaultHandler {
-	return &VaultHandler{service: service}
+func NewVaultHandler(svc *service.VaultService, sharePriceSvc *service.SharePriceService) *VaultHandler {
+	return &VaultHandler{service: svc, sharePriceSvc: sharePriceSvc}
 }
 
 func (h *VaultHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/vaults", h.createVault)
 	mux.HandleFunc("GET /api/v1/vaults/{id}", h.getVault)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/allocations", h.getAllocations)
+	mux.HandleFunc("GET /api/v1/vaults/{id}/share-price", h.getSharePrice)
+	mux.HandleFunc("GET /api/v1/vaults/{id}/convert", h.convert)
 	mux.HandleFunc("GET /api/v1/vaults", h.listUserVaults)
 }
 
@@ -155,6 +159,88 @@ func (h *VaultHandler) getAllocations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(v.Allocations))
+}
+
+func (h *VaultHandler) getSharePrice(w http.ResponseWriter, r *http.Request) {
+	if h.sharePriceSvc == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "UNAVAILABLE", "share price service not configured"))
+		return
+	}
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	result, err := h.sharePriceSvc.GetSharePrice(r.Context(), vaultID)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(result))
+}
+
+type convertResponse struct {
+	VaultID      uuid.UUID       `json:"vault_id"`
+	InputShares  *decimal.Decimal `json:"input_shares,omitempty"`
+	InputUSDC    *decimal.Decimal `json:"input_usdc,omitempty"`
+	OutputUSDC   *decimal.Decimal `json:"output_usdc,omitempty"`
+	OutputShares *decimal.Decimal `json:"output_shares,omitempty"`
+	USDCPerShare decimal.Decimal  `json:"usdc_per_share"`
+}
+
+func (h *VaultHandler) convert(w http.ResponseWriter, r *http.Request) {
+	if h.sharePriceSvc == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "UNAVAILABLE", "share price service not configured"))
+		return
+	}
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	sharesParam := r.URL.Query().Get("shares")
+	usdcParam := r.URL.Query().Get("usdc")
+
+	if (sharesParam == "") == (usdcParam == "") {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("provide exactly one of: shares or usdc"))
+		return
+	}
+
+	price, err := h.sharePriceSvc.GetSharePrice(r.Context(), vaultID)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	resp := convertResponse{VaultID: vaultID, USDCPerShare: price.USDCPerShare}
+
+	if sharesParam != "" {
+		shares, ok := decimal.NewFromString(sharesParam)
+		if ok != nil || shares.IsNegative() {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("shares must be a non-negative number"))
+			return
+		}
+		usdc := shares.Mul(price.USDCPerShare).RoundBank(6)
+		resp.InputShares = &shares
+		resp.OutputUSDC = &usdc
+	} else {
+		usdc, ok := decimal.NewFromString(usdcParam)
+		if ok != nil || usdc.IsNegative() {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("usdc must be a non-negative number"))
+			return
+		}
+		var out decimal.Decimal
+		if !price.USDCPerShare.IsZero() {
+			out = usdc.Div(price.USDCPerShare).RoundBank(6)
+		}
+		resp.InputUSDC = &usdc
+		resp.OutputShares = &out
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(resp))
 }
 
 func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
