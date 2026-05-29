@@ -278,6 +278,34 @@ func (r *handlerRepository) UpdateVault(_ context.Context, id uuid.UUID, contrac
 	return nil
 }
 
+func (r *handlerRepository) RecordHarvest(_ context.Context, input vault.HarvestRecordInput) error {
+	model, ok := r.vaults[input.VaultID]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	if input.Compounded {
+		model.TotalDeposited = model.TotalDeposited.Add(input.NetYield)
+		model.CurrentBalance = model.CurrentBalance.Add(input.NetYield)
+	} else {
+		model.CurrentBalance = model.CurrentBalance.Sub(input.NetYield)
+	}
+	model.YieldEarned = model.YieldEarned.Sub(input.NetYield.Add(input.PerformanceFee))
+	if model.YieldEarned.IsNegative() {
+		model.YieldEarned = decimal.Zero
+	}
+	model.FeesPaid = model.FeesPaid.Add(input.PerformanceFee)
+	model.UpdatedAt = time.Now().UTC()
+	r.vaults[input.VaultID] = cloneHandlerVault(model)
+	r.transactions = append(r.transactions, vault.VaultTransaction{
+		ID:        uuid.New(),
+		VaultID:   input.VaultID,
+		Type:      "harvest",
+		Amount:    input.NetYield,
+		CreatedAt: time.Now().UTC(),
+	})
+	return nil
+}
+
 func (r *handlerRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
 	model, ok := r.vaults[id]
 	if !ok {

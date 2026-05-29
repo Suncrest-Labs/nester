@@ -411,6 +411,128 @@ func (c *ContractInvoker) InvokeWithI128Pair(ctx context.Context, contractAddres
 	return c.waitForTx(ctx, hash)
 }
 
+// InvokeWithAddressAndBool calls a contract function with signature
+// (user: Address, compound: bool). Returns the submitted transaction hash.
+func (c *ContractInvoker) InvokeWithAddressAndBool(
+	ctx context.Context,
+	contractAddress, functionName, userAddress string,
+	compound bool,
+) (string, error) {
+	contractScAddr, err := contractAddressToXDR(contractAddress)
+	if err != nil {
+		return "", err
+	}
+
+	userScAddr, err := accountAddressToXDR(userAddress)
+	if err != nil {
+		return "", err
+	}
+
+	boolVal := compound
+	hostFn := xdr.HostFunction{
+		Type: xdr.HostFunctionTypeHostFunctionTypeInvokeContract,
+		InvokeContract: &xdr.InvokeContractArgs{
+			ContractAddress: contractScAddr,
+			FunctionName:    xdr.ScSymbol(functionName),
+			Args: []xdr.ScVal{
+				{Type: xdr.ScValTypeScvAddress, Address: &userScAddr},
+				{Type: xdr.ScValTypeScvBool, B: &boolVal},
+			},
+		},
+	}
+
+	hash, err := c.invokeHostFunction(ctx, hostFn)
+	if err != nil {
+		return "", err
+	}
+	return hash, nil
+}
+
+func (c *ContractInvoker) invokeHostFunction(ctx context.Context, hostFn xdr.HostFunction) (string, error) {
+	seq, err := c.getSequenceNumber(ctx)
+	if err != nil {
+		return "", fmt.Errorf("get sequence number: %w", err)
+	}
+
+	sourceAccount := txnbuild.NewSimpleAccount(c.kp.Address(), seq)
+
+	tx, err := txnbuild.NewTransaction(txnbuild.TransactionParams{
+		SourceAccount:        &sourceAccount,
+		IncrementSequenceNum: true,
+		Operations: []txnbuild.Operation{
+			&txnbuild.InvokeHostFunction{
+				HostFunction: hostFn,
+			},
+		},
+		BaseFee:       txnbuild.MinBaseFee,
+		Preconditions: txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(int64((5 * time.Minute).Seconds()))},
+	})
+	if err != nil {
+		return "", fmt.Errorf("build transaction: %w", err)
+	}
+
+	txB64, err := tx.Base64()
+	if err != nil {
+		return "", fmt.Errorf("encode transaction: %w", err)
+	}
+
+	simResult, err := c.simulate(ctx, txB64)
+	if err != nil {
+		return "", err
+	}
+
+	var sorobanData xdr.SorobanTransactionData
+	if err := xdr.SafeUnmarshalBase64(simResult.TransactionData, &sorobanData); err != nil {
+		return "", fmt.Errorf("decode soroban data: %w", err)
+	}
+
+	envelope := tx.ToXDR()
+	envelope.V1.Tx.Ext = xdr.TransactionExt{
+		V:           1,
+		SorobanData: &sorobanData,
+	}
+	minFee, err := strconv.ParseInt(simResult.MinResourceFee, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("parse simulation min resource fee %q: %w", simResult.MinResourceFee, err)
+	}
+	envelope.V1.Tx.Fee = xdr.Uint32(txnbuild.MinBaseFee + minFee)
+
+	envB64, err := xdr.MarshalBase64(envelope)
+	if err != nil {
+		return "", fmt.Errorf("encode patched envelope: %w", err)
+	}
+
+	generic, err := txnbuild.TransactionFromXDR(envB64)
+	if err != nil {
+		return "", fmt.Errorf("parse patched tx: %w", err)
+	}
+
+	inner, ok := generic.Transaction()
+	if !ok {
+		return "", errors.New("expected a transaction, got fee-bump")
+	}
+
+	signed, err := inner.Sign(c.networkPassphrase, c.kp)
+	if err != nil {
+		return "", fmt.Errorf("sign transaction: %w", err)
+	}
+
+	signedB64, err := signed.Base64()
+	if err != nil {
+		return "", fmt.Errorf("encode signed transaction: %w", err)
+	}
+
+	hash, err := c.send(ctx, signedB64)
+	if err != nil {
+		return "", err
+	}
+
+	if err := c.waitForTx(ctx, hash); err != nil {
+		return hash, err
+	}
+	return hash, nil
+}
+
 func int64ToI128ScVal(n int64) xdr.ScVal {
 	hi := xdr.Int64(0)
 	lo := xdr.Uint64(uint64(n)) // #nosec G115 -- two's complement i128 encoding; hi is set to -1 for negatives

@@ -388,6 +388,89 @@ func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, am
 	return tx.Commit()
 }
 
+// RecordHarvest applies post-harvest balance updates and writes a ledger entry.
+func (r *VaultRepository) RecordHarvest(ctx context.Context, input vault.HarvestRecordInput) error {
+	if input.NetYield.Cmp(decimal.Zero) < 0 || input.PerformanceFee.Cmp(decimal.Zero) < 0 {
+		return vault.ErrInvalidAmount
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if input.Compounded {
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE vaults
+			 SET total_deposited = total_deposited + $2::numeric,
+			     current_balance = current_balance + $2::numeric,
+			     yield_earned = GREATEST(yield_earned - ($2::numeric + $3::numeric), 0),
+			     fees_paid = fees_paid + $3::numeric,
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`,
+			input.VaultID.String(),
+			input.NetYield.String(),
+			input.PerformanceFee.String(),
+		)
+		if err != nil {
+			return mapRepositoryError(err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			return vault.ErrVaultNotFound
+		}
+	} else {
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE vaults
+			 SET current_balance = current_balance - $2::numeric,
+			     yield_earned = GREATEST(yield_earned - ($2::numeric + $3::numeric), 0),
+			     fees_paid = fees_paid + $3::numeric,
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`,
+			input.VaultID.String(),
+			input.NetYield.String(),
+			input.PerformanceFee.String(),
+		)
+		if err != nil {
+			return mapRepositoryError(err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			return vault.ErrVaultNotFound
+		}
+	}
+
+	var sharesArg any
+	if input.NewSharesMinted != nil {
+		sharesArg = input.NewSharesMinted.String()
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash, shares_minted_or_burned, fee_charged
+		) VALUES ($1, $2, 'harvest', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric)`,
+		input.VaultID.String(),
+		input.UserID.String(),
+		input.NetYield.String(),
+		input.TransactionHash,
+		sharesArg,
+		input.PerformanceFee.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	return tx.Commit()
+}
+
 // SoftDeleteVault stamps deleted_at so reads exclude this vault going forward.
 func (r *VaultRepository) SoftDeleteVault(ctx context.Context, id uuid.UUID) error {
 	result, err := r.db.ExecContext(

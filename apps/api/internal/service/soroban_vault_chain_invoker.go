@@ -43,3 +43,12 @@ func (s *SorobanVaultChainInvoker) DepositToVault(ctx context.Context, contractA
 func (s *SorobanVaultChainInvoker) WithdrawFromVault(ctx context.Context, contractAddress string, sharesStroops int64) error {
 	return s.invoker.InvokeWithI128Pair(ctx, contractAddress, "withdraw", sharesStroops, 0)
 }
+
+// HarvestVault invokes vault.harvest(user, compound) for the given Stellar account.
+func (s *SorobanVaultChainInvoker) HarvestVault(
+	ctx context.Context,
+	contractAddress, userAddress string,
+	compound bool,
+) (string, error) {
+	return s.invoker.InvokeWithAddressAndBool(ctx, contractAddress, "harvest", userAddress, compound)
+}

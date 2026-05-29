@@ -59,11 +59,12 @@ type DatabaseConfig struct {
 }
 
 type StellarConfig struct {
-	networkPassphrase string
-	rpcURL            string
-	horizonURL        string
-	operatorSecret    string
-	stellarUSDCIssuer string
+	networkPassphrase      string
+	rpcURL                 string
+	horizonURL             string
+	operatorSecret         string
+	stellarUSDCIssuer      string
+	harvestDefaultCompound bool
 }
 
 type AuthConfig struct {
@@ -129,11 +130,12 @@ func Load() (*Config, error) {
 			connectionTimeout: loader.durationDefault("DATABASE_CONNECTION_TIMEOUT", 5*time.Second),
 		},
 		stellar: StellarConfig{
-			networkPassphrase: loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
-			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
-			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
-			operatorSecret:    loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
-			stellarUSDCIssuer: loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+			networkPassphrase:      loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
+			rpcURL:                 loader.requiredURL("STELLAR_RPC_URL"),
+			horizonURL:             loader.requiredURL("STELLAR_HORIZON_URL"),
+			operatorSecret:         loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
+			stellarUSDCIssuer:      loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+			harvestDefaultCompound: loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
 		},
 		redis: RedisConfig{
 			addr: loader.stringDefault("REDIS_ADDR", ""),
@@ -451,6 +453,10 @@ func (s StellarConfig) HorizonURL() string {
 
 func (s StellarConfig) OperatorSecret() string {
 	return s.operatorSecret
+}
+
+func (s StellarConfig) HarvestDefaultCompound() bool {
+	return s.harvestDefaultCompound
 }
 
 func (l LogConfig) Level() string {

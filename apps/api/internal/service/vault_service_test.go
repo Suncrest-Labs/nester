@@ -242,6 +242,30 @@ func (r *memoryVaultRepository) UpdateVault(_ context.Context, id uuid.UUID, con
 	return nil
 }
 
+func (r *memoryVaultRepository) RecordHarvest(_ context.Context, input vault.HarvestRecordInput) error {
+	model, ok := r.vaults[input.VaultID]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	if input.Compounded {
+		model.TotalDeposited = model.TotalDeposited.Add(input.NetYield)
+		model.CurrentBalance = model.CurrentBalance.Add(input.NetYield)
+	} else {
+		model.CurrentBalance = model.CurrentBalance.Sub(input.NetYield)
+	}
+	model.FeesPaid = model.FeesPaid.Add(input.PerformanceFee)
+	model.UpdatedAt = time.Now().UTC()
+	r.vaults[input.VaultID] = cloneVault(model)
+	r.transactions = append(r.transactions, vault.VaultTransaction{
+		ID:        uuid.New(),
+		VaultID:   input.VaultID,
+		Type:      "harvest",
+		Amount:    input.NetYield,
+		CreatedAt: time.Now().UTC(),
+	})
+	return nil
+}
+
 func (r *memoryVaultRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
 	model, ok := r.vaults[id]
 	if !ok {
