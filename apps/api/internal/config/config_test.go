@@ -24,6 +24,7 @@ func baseEnv(t *testing.T) {
 		"RATELIMIT_WALLET_LIMIT", "RATELIMIT_WALLET_WINDOW",
 		"LOG_LEVEL", "LOG_FORMAT",
 		"ALLOWED_ORIGINS",
+		"RUN_MIGRATIONS", "MIGRATIONS_DIR", "STARTUP_DEPENDENCY_TIMEOUT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -897,6 +898,76 @@ func TestLoadAllowedOriginsOptionalInDevelopment(t *testing.T) {
 	if len(cfg.AllowedOrigins()) != 0 {
 		t.Fatalf("expected empty AllowedOrigins() in dev with no env, got %v", cfg.AllowedOrigins())
 	}
+}
+
+// TestLoadRunMigrationsFlag verifies RUN_MIGRATIONS controls startup auto-migrate.
+func TestLoadRunMigrationsFlag(t *testing.T) {
+	cases := []struct {
+		name       string
+		envValue   string
+		wantEnable bool
+	}{
+		{"default false when unset", "", false},
+		{"true when enabled", "true", true},
+		{"false when explicitly disabled", "false", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			if tc.envValue != "" {
+				t.Setenv("RUN_MIGRATIONS", tc.envValue)
+			}
+
+			chdir(t, t.TempDir())
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got := cfg.Startup().EnableAutoMigrate(); got != tc.wantEnable {
+				t.Fatalf("EnableAutoMigrate() = %v, want %v", got, tc.wantEnable)
+			}
+		})
+	}
+}
+
+// TestLoadMigrationsDir verifies MIGRATIONS_DIR defaults and can be overridden.
+func TestLoadMigrationsDir(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "development")
+
+		chdir(t, t.TempDir())
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if got := cfg.Startup().MigrationsDir(); got != "./migrations" {
+			t.Fatalf("MigrationsDir() = %q, want ./migrations", got)
+		}
+	})
+
+	t.Run("override", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "development")
+		t.Setenv("MIGRATIONS_DIR", "/custom/migrations")
+
+		chdir(t, t.TempDir())
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if got := cfg.Startup().MigrationsDir(); got != "/custom/migrations" {
+			t.Fatalf("MigrationsDir() = %q, want /custom/migrations", got)
+		}
+	})
 }
 
 func chdir(t *testing.T, dir string) {

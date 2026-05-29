@@ -221,12 +221,10 @@
   This will confuse any migration runner that applies files in lexicographic order. Rename one of
   them and renumber consistently. Needs care — check if the runner is order-sensitive before touching.
 
-- [ ] **No migration runner is wired into the Go API startup.**
-  `scripts/seed.sql` is used as a workaround (it runs via Docker's `initdb`). This means:
-  - New migrations added after the initial seed are NOT applied automatically in the dev environment.
-  - Developers must run `make dev-reset` (wipes data) to pick up new schema changes.
-  Long-term: wire `golang-migrate` or equivalent into the API startup behind a flag
-  (`RUN_MIGRATIONS=true`) so `make dev` applies incremental migrations without data loss.
+- [x] **No migration runner is wired into the Go API startup.**
+  Resolved: `golang-migrate` runs on API startup when `RUN_MIGRATIONS=true` (set in
+  `docker-compose.yml` for local dev). Pending migrations apply incrementally on `make dev`
+  without requiring `make dev-reset`. See `apps/api/migrations/README.md`.
 
 ---
 
