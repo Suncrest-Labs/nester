@@ -442,12 +442,22 @@ func TestVaultRepositoryIntegrationRecordDeposit(t *testing.T) {
 	}
 
 	// Record deposits
-	err = repository.RecordDeposit(ctx, created.ID, decimal.RequireFromString("100.50"))
+	err = repository.RecordDeposit(ctx, created.ID, vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               decimal.RequireFromString("100.50"),
+		SharesMintedOrBurned: decimal.RequireFromString("100.50"),
+		SharePriceAtTime:     decimal.NewFromInt(1),
+	})
 	if err != nil {
 		t.Fatalf("RecordDeposit() error = %v", err)
 	}
 
-	err = repository.RecordDeposit(ctx, created.ID, decimal.RequireFromString("50.25"))
+	err = repository.RecordDeposit(ctx, created.ID, vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               decimal.RequireFromString("50.25"),
+		SharesMintedOrBurned: decimal.RequireFromString("50.25"),
+		SharePriceAtTime:     decimal.NewFromInt(1),
+	})
 	if err != nil {
 		t.Fatalf("RecordDeposit() error = %v", err)
 	}

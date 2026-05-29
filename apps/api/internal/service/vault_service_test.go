@@ -110,6 +110,69 @@ func TestVaultServiceRejectsExcessiveDecimalScale(t *testing.T) {
 	}
 }
 
+func TestVaultServiceGetMyPositionWithYield(t *testing.T) {
+	userID := uuid.New()
+	repository := newMemoryVaultRepository(userID)
+	service := NewVaultService(repository)
+
+	created, err := service.CreateVault(context.Background(), CreateVaultInput{
+		UserID:          userID,
+		ContractAddress: "CA123",
+		Currency:        "USDC",
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	if _, err := service.RecordDeposit(context.Background(), RecordDepositInput{
+		VaultID: created.ID,
+		UserID:  userID,
+		Amount:  decimal.RequireFromString("1000"),
+	}); err != nil {
+		t.Fatalf("RecordDeposit() error = %v", err)
+	}
+
+	if err := repository.UpdateVaultBalances(context.Background(), created.ID,
+		decimal.RequireFromString("1000"),
+		decimal.RequireFromString("1050"),
+	); err != nil {
+		t.Fatalf("UpdateVaultBalances() error = %v", err)
+	}
+
+	position, err := service.GetMyPosition(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("GetMyPosition() error = %v", err)
+	}
+
+	if position.UnrealizedPnLUSDC != "+50.000000" {
+		t.Fatalf("expected pnl +50, got %s", position.UnrealizedPnLUSDC)
+	}
+}
+
+func TestVaultServiceGetMyPositionEmpty(t *testing.T) {
+	userID := uuid.New()
+	repository := newMemoryVaultRepository(userID)
+	service := NewVaultService(repository)
+
+	created, err := service.CreateVault(context.Background(), CreateVaultInput{
+		UserID:          userID,
+		ContractAddress: "CA123",
+		Currency:        "USDC",
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	position, err := service.GetMyPosition(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("GetMyPosition() error = %v", err)
+	}
+
+	if position.SharesHeld != "0.000000" {
+		t.Fatalf("expected zero shares, got %s", position.SharesHeld)
+	}
+}
+
 type memoryVaultRepository struct {
 	users        map[uuid.UUID]struct{}
 	vaults       map[uuid.UUID]vault.Vault
@@ -195,25 +258,31 @@ func (r *memoryVaultRepository) UpdateVaultBalances(_ context.Context, id uuid.U
 	return nil
 }
 
-func (r *memoryVaultRepository) RecordDeposit(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
+func (r *memoryVaultRepository) RecordDeposit(_ context.Context, id uuid.UUID, record vault.TransactionRecord) error {
 	model, ok := r.vaults[id]
 	if !ok {
 		return vault.ErrVaultNotFound
 	}
-	if amount.Cmp(decimal.Zero) <= 0 {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
 
-	model.TotalDeposited = model.TotalDeposited.Add(amount)
-	model.CurrentBalance = model.CurrentBalance.Add(amount)
+	model.TotalDeposited = model.TotalDeposited.Add(record.Amount)
+	model.CurrentBalance = model.CurrentBalance.Add(record.Amount)
 	model.UpdatedAt = time.Now().UTC()
 	r.vaults[id] = cloneVault(model)
+
+	userID := record.UserID
 	r.transactions = append(r.transactions, vault.VaultTransaction{
-		ID:        uuid.New(),
-		VaultID:   id,
-		Type:      "deposit",
-		Amount:    amount,
-		CreatedAt: time.Now().UTC(),
+		ID:                   uuid.New(),
+		VaultID:              id,
+		UserID:               &userID,
+		Type:                 "deposit",
+		Amount:               record.Amount,
+		TransactionHash:      record.TransactionHash,
+		SharesMintedOrBurned: &record.SharesMintedOrBurned,
+		SharePriceAtTime:     &record.SharePriceAtTime,
+		CreatedAt:            time.Now().UTC(),
 	})
 	return nil
 }
@@ -242,24 +311,30 @@ func (r *memoryVaultRepository) UpdateVault(_ context.Context, id uuid.UUID, con
 	return nil
 }
 
-func (r *memoryVaultRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
+func (r *memoryVaultRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, record vault.TransactionRecord) error {
 	model, ok := r.vaults[id]
 	if !ok {
 		return vault.ErrVaultNotFound
 	}
-	if amount.Cmp(decimal.Zero) <= 0 {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
 
-	model.CurrentBalance = model.CurrentBalance.Sub(amount)
+	model.CurrentBalance = model.CurrentBalance.Sub(record.Amount)
 	model.UpdatedAt = time.Now().UTC()
 	r.vaults[id] = cloneVault(model)
+
+	userID := record.UserID
 	r.transactions = append(r.transactions, vault.VaultTransaction{
-		ID:        uuid.New(),
-		VaultID:   id,
-		Type:      "withdrawal",
-		Amount:    amount,
-		CreatedAt: time.Now().UTC(),
+		ID:                   uuid.New(),
+		VaultID:              id,
+		UserID:               &userID,
+		Type:                 "withdrawal",
+		Amount:               record.Amount,
+		TransactionHash:      record.TransactionHash,
+		SharesMintedOrBurned: &record.SharesMintedOrBurned,
+		SharePriceAtTime:     &record.SharePriceAtTime,
+		CreatedAt:            time.Now().UTC(),
 	})
 	return nil
 }
@@ -300,6 +375,16 @@ func (r *memoryVaultRepository) ListVaults(_ context.Context, filter vault.ListF
 		out = out[:filter.Limit]
 	}
 	return out, total, nil
+}
+
+func (r *memoryVaultRepository) ListUserVaultTransactions(_ context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
+	result := make([]vault.VaultTransaction, 0)
+	for _, txn := range r.transactions {
+		if txn.VaultID == vaultID && txn.UserID != nil && *txn.UserID == userID {
+			result = append(result, txn)
+		}
+	}
+	return result, nil
 }
 
 func cloneVault(model vault.Vault) vault.Vault {

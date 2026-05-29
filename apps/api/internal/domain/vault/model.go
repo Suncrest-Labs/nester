@@ -84,13 +84,14 @@ type Repository interface {
 	GetVault(ctx context.Context, id uuid.UUID) (Vault, error)
 	ListUserVaults(ctx context.Context, userID uuid.UUID, filter UserListFilter) ([]Vault, int, error)
 	ListVaults(ctx context.Context, filter ListFilter) ([]Vault, int, error)
-	RecordDeposit(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error
+	RecordDeposit(ctx context.Context, vaultID uuid.UUID, record TransactionRecord) error
 	UpdateVaultBalances(ctx context.Context, id uuid.UUID, totalDeposited decimal.Decimal, currentBalance decimal.Decimal) error
 	ReplaceAllocations(ctx context.Context, vaultID uuid.UUID, allocations []Allocation) error
 	UpdateVault(ctx context.Context, id uuid.UUID, contractAddress string, status VaultStatus) error
-	RecordWithdrawal(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error
+	RecordWithdrawal(ctx context.Context, vaultID uuid.UUID, record TransactionRecord) error
 	SoftDeleteVault(ctx context.Context, id uuid.UUID) error
 	ListDeposits(ctx context.Context, vaultID uuid.UUID) ([]VaultTransaction, error)
+	ListUserVaultTransactions(ctx context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]VaultTransaction, error)
 }
 
 // CanTransitionTo reports whether moving from the receiver status to next is a

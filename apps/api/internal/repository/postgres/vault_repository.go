@@ -226,8 +226,8 @@ func (r *VaultRepository) UpdateVaultBalances(ctx context.Context, id uuid.UUID,
 	return nil
 }
 
-func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
-	if amount.Cmp(decimal.Zero) <= 0 {
+func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, record vault.TransactionRecord) error {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
 
@@ -245,7 +245,7 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, amoun
 		     updated_at = NOW()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id.String(),
-		amount.String(),
+		record.Amount.String(),
 	)
 	if err != nil {
 		return mapRepositoryError(err)
@@ -261,9 +261,17 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, amoun
 
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO vault_transactions (vault_id, type, amount) VALUES ($1, 'deposit', $2::numeric)`,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'deposit', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
 		id.String(),
-		amount.String(),
+		record.UserID.String(),
+		record.Amount.String(),
+		record.TransactionHash,
+		record.SharesMintedOrBurned.String(),
+		record.SharePriceAtTime.String(),
+		record.FeeCharged.String(),
 	); err != nil {
 		return mapRepositoryError(err)
 	}
@@ -344,8 +352,8 @@ func (r *VaultRepository) UpdateVault(ctx context.Context, id uuid.UUID, contrac
 
 // RecordWithdrawal decrements current_balance atomically and writes a ledger
 // entry. It does NOT touch total_deposited (deposits are never reversed).
-func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
-	if amount.Cmp(decimal.Zero) <= 0 {
+func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, record vault.TransactionRecord) error {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
 
@@ -362,7 +370,7 @@ func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, am
 		     updated_at = NOW()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id.String(),
-		amount.String(),
+		record.Amount.String(),
 	)
 	if err != nil {
 		return mapRepositoryError(err)
@@ -378,9 +386,17 @@ func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, am
 
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO vault_transactions (vault_id, type, amount) VALUES ($1, 'withdrawal', $2::numeric)`,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'withdrawal', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
 		id.String(),
-		amount.String(),
+		record.UserID.String(),
+		record.Amount.String(),
+		record.TransactionHash,
+		record.SharesMintedOrBurned.String(),
+		record.SharePriceAtTime.String(),
+		record.FeeCharged.String(),
 	); err != nil {
 		return mapRepositoryError(err)
 	}
@@ -420,6 +436,38 @@ func (r *VaultRepository) ListDeposits(ctx context.Context, vaultID uuid.UUID) (
 		 WHERE vault_id = $1 AND type = 'deposit'
 		 ORDER BY created_at DESC`,
 		vaultID.String(),
+	)
+	if err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	defer rows.Close()
+
+	txns := make([]vault.VaultTransaction, 0)
+	for rows.Next() {
+		txn, err := scanVaultTransaction(rows)
+		if err != nil {
+			return nil, err
+		}
+		txns = append(txns, txn)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return txns, nil
+}
+
+// ListUserVaultTransactions returns all deposit and withdrawal rows for a user in a vault.
+func (r *VaultRepository) ListUserVaultTransactions(ctx context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, vault_id, user_id, type, amount, COALESCE(transaction_hash, ''), shares_minted_or_burned, share_price_at_time, fee_charged, created_at
+		 FROM vault_transactions
+		 WHERE vault_id = $1 AND user_id = $2
+		 ORDER BY created_at ASC`,
+		vaultID.String(),
+		userID.String(),
 	)
 	if err != nil {
 		return nil, mapRepositoryError(err)

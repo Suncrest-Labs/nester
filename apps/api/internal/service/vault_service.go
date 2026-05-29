@@ -43,8 +43,10 @@ type CreateVaultInput struct {
 
 type RecordDepositInput struct {
 	VaultID uuid.UUID
+	UserID  uuid.UUID
 	Amount  decimal.Decimal
 	TxHash  string
+	Fee     decimal.Decimal
 }
 
 type UpdateAllocationsInput struct {
@@ -65,8 +67,10 @@ type CloseVaultInput struct {
 
 type RecordWithdrawalInput struct {
 	VaultID uuid.UUID
+	UserID  uuid.UUID
 	Amount  decimal.Decimal
 	TxHash  string
+	Fee     decimal.Decimal
 }
 
 // ── Constructor ──────────────────────────────────────────────────────────────
@@ -162,18 +166,35 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 		return vault.Vault{}, vault.ErrInvalidPrecision
 	}
 
+	existing, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return vault.Vault{}, err
+	}
+
+	userID := input.UserID
+	if userID == uuid.Nil {
+		userID = existing.UserID
+	}
+
+	sharePrice := vault.ComputeSharePrice(existing)
+	shares := input.Amount.Div(sharePrice).Round(6)
+
 	if s.depositInvoker != nil {
-		existing, err := s.repository.GetVault(ctx, input.VaultID)
-		if err != nil {
-			return vault.Vault{}, err
-		}
 		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
 		if err := s.depositInvoker.DepositToVault(ctx, existing.ContractAddress, stroops); err != nil {
 			return vault.Vault{}, fmt.Errorf("on-chain deposit failed: %w", err)
 		}
 	}
 
-	if err := s.repository.RecordDeposit(ctx, input.VaultID, input.Amount); err != nil {
+	record := vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               input.Amount,
+		TransactionHash:      input.TxHash,
+		SharesMintedOrBurned: shares,
+		SharePriceAtTime:     sharePrice,
+		FeeCharged:           input.Fee,
+	}
+	if err := s.repository.RecordDeposit(ctx, input.VaultID, record); err != nil {
 		return vault.Vault{}, err
 	}
 
@@ -361,6 +382,14 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 		return vault.Vault{}, vault.ErrInsufficientBalance
 	}
 
+	userID := input.UserID
+	if userID == uuid.Nil {
+		userID = existing.UserID
+	}
+
+	sharePrice := vault.ComputeSharePrice(existing)
+	shares := input.Amount.Div(sharePrice).Round(6)
+
 	if s.depositInvoker != nil {
 		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
 		if err := s.depositInvoker.WithdrawFromVault(ctx, existing.ContractAddress, stroops); err != nil {
@@ -368,7 +397,15 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 		}
 	}
 
-	if err := s.repository.RecordWithdrawal(ctx, input.VaultID, input.Amount); err != nil {
+	record := vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               input.Amount,
+		TransactionHash:      input.TxHash,
+		SharesMintedOrBurned: shares,
+		SharePriceAtTime:     sharePrice,
+		FeeCharged:           input.Fee,
+	}
+	if err := s.repository.RecordWithdrawal(ctx, input.VaultID, record); err != nil {
 		return vault.Vault{}, err
 	}
 
@@ -431,6 +468,25 @@ func (s *VaultService) ListDeposits(ctx context.Context, vaultID uuid.UUID) ([]v
 	}
 
 	return s.repository.ListDeposits(ctx, vaultID)
+}
+
+// GetMyPosition returns the authenticated user's aggregated position in a vault.
+func (s *VaultService) GetMyPosition(ctx context.Context, userID uuid.UUID, vaultID uuid.UUID) (vault.UserVaultPosition, error) {
+	if userID == uuid.Nil || vaultID == uuid.Nil {
+		return vault.UserVaultPosition{}, vault.ErrInvalidVault
+	}
+
+	v, err := s.repository.GetVault(ctx, vaultID)
+	if err != nil {
+		return vault.UserVaultPosition{}, err
+	}
+
+	txns, err := s.repository.ListUserVaultTransactions(ctx, userID, vaultID)
+	if err != nil {
+		return vault.UserVaultPosition{}, err
+	}
+
+	return vault.BuildUserVaultPosition(v, userID, txns), nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
