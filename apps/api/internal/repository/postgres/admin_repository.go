@@ -24,6 +24,65 @@ func NewAdminRepository(db *sql.DB) *AdminRepository {
 	return &AdminRepository{db: db}
 }
 
+func (r *AdminRepository) GetUserByWalletAddress(ctx context.Context, walletAddress string) (*user.User, error) {
+	const query = `
+		SELECT id, wallet_address, display_name, kyc_status, tier, last_login_at, created_at, updated_at
+		FROM users WHERE wallet_address = $1
+	`
+	return scanUser(r.db.QueryRowContext(ctx, query, walletAddress))
+}
+
+func (r *AdminRepository) GrantAdminRole(ctx context.Context, userID uuid.UUID, grantedBy uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'admin', $2) ON CONFLICT DO NOTHING`,
+		userID, grantedBy,
+	)
+	return err
+}
+
+func (r *AdminRepository) RevokeAdminRole(ctx context.Context, userID uuid.UUID) error {
+	// Prevent removing the last admin.
+	var adminCount int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM user_roles WHERE role = 'admin'`,
+	).Scan(&adminCount); err != nil {
+		return err
+	}
+	if adminCount <= 1 {
+		return fmt.Errorf("cannot revoke the last admin")
+	}
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM user_roles WHERE user_id = $1 AND role = 'admin'`,
+		userID,
+	)
+	return err
+}
+
+func (r *AdminRepository) ListAdminUsers(ctx context.Context) ([]user.User, error) {
+	const query = `
+		SELECT u.id, u.wallet_address, u.display_name, u.kyc_status, u.tier, u.last_login_at, u.created_at, u.updated_at
+		FROM users u
+		JOIN user_roles r ON r.user_id = u.id
+		WHERE r.role = 'admin'
+		ORDER BY u.created_at
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []user.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
 func (r *AdminRepository) DatabaseHealth(ctx context.Context) (int64, error) {
 	start := time.Now()
 	var one int

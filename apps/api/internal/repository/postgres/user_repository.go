@@ -119,7 +119,7 @@ func scanUser(row userScanner) (*user.User, error) {
 func (r *UserRepository) GetRoles(ctx context.Context, id uuid.UUID) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role`,
-		id.String(),
+		id,
 	)
 	if err != nil {
 		return nil, err
