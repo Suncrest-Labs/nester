@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "contracts/access_control",
   "contracts/allocation_strategy",
+  "contracts/lp_aggregator",
   "contracts/nester",
   "contracts/timelock",
   "contracts/treasury",
