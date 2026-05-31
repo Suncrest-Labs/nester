@@ -17,6 +17,25 @@ pub enum Error {
     PathTooShort = 3,
 }
 
+impl From<Error> for soroban_sdk::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::SlippageExceeded => soroban_sdk::Error::from((
+                soroban_sdk::xdr::ScErrorType::Contract,
+                soroban_sdk::xdr::ScErrorCode::InvalidAction,
+            )),
+            Error::MaxHopsExceeded => soroban_sdk::Error::from((
+                soroban_sdk::xdr::ScErrorType::Contract,
+                soroban_sdk::xdr::ScErrorCode::InvalidAction,
+            )),
+            Error::PathTooShort => soroban_sdk::Error::from((
+                soroban_sdk::xdr::ScErrorType::Contract,
+                soroban_sdk::xdr::ScErrorCode::InvalidAction,
+            )),
+        }
+    }
+}
+
 #[contract]
 pub struct LpAggregator;
 
