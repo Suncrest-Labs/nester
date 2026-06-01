@@ -56,6 +56,7 @@ func TestRecordDepositUpdatesBalancesAtomically(t *testing.T) {
 
 	repository := NewVaultRepository(db)
 	vaultID := uuid.New()
+	userID := uuid.New()
 
 	// RecordDeposit now runs inside a transaction and also inserts a ledger entry.
 	mock.ExpectBegin()
@@ -66,12 +67,21 @@ func TestRecordDepositUpdatesBalancesAtomically(t *testing.T) {
 		 WHERE id = $1 AND deleted_at IS NULL`)).
 		WithArgs(vaultID.String(), "25.5").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO vault_transactions (vault_id, type, amount) VALUES ($1, 'deposit', $2::numeric)`)).
-		WithArgs(vaultID.String(), "25.5").
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'deposit', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`)).
+		WithArgs(vaultID.String(), userID.String(), "25.5", "", "25.5", "1", "0").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	if err := repository.RecordDeposit(context.Background(), vaultID, decimal.RequireFromString("25.5")); err != nil {
+	record := vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               decimal.RequireFromString("25.5"),
+		SharesMintedOrBurned: decimal.RequireFromString("25.5"),
+		SharePriceAtTime:     decimal.NewFromInt(1),
+	}
+	if err := repository.RecordDeposit(context.Background(), vaultID, record); err != nil {
 		t.Fatalf("RecordDeposit() error = %v", err)
 	}
 }

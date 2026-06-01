@@ -2,6 +2,9 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useStellarFeeEstimate } from "@/hooks/useStellarFeeEstimate";
+import { NetworkFeeDisplay } from "@/components/stellar/NetworkFeeEstimate";
+import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { motion, AnimatePresence } from "framer-motion";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -162,7 +165,23 @@ export function DepositModal({
     const amountInput = watch("amount");
     const amount = Number(amountInput) || 0;
     const [showLargeWarning, setShowLargeWarning] = useState(false);
-    
+    const { prices: tokenPrices } = useTokenPrices();
+
+    const depositFeeParams = useMemo(() => {
+        if (!vault || !address || amount <= 0) return null;
+        const contractId =
+            selectedAsset === "XLM"
+                ? vault.contractXlmAddress || vault.contractAddress
+                : vault.contractAddress;
+        return { walletAddress: address, contractId, amount };
+    }, [vault, address, amount, selectedAsset]);
+
+    const { estimate: depositFee, loading: depositFeeLoading } = useStellarFeeEstimate(
+        "deposit",
+        depositFeeParams,
+        open && state === "input" && amount > 0
+    );
+
     const canSubmit = !!vault && !!address && isValid && amount > 0;
     const estimatedYield = vault ? amount * vault.apy : 0;
     const sharesReceived = amount;
@@ -360,6 +379,13 @@ export function DepositModal({
                                     )}
                                 />
                             </div>
+
+                            <NetworkFeeDisplay
+                                estimate={depositFee}
+                                loading={depositFeeLoading}
+                                amount={amount}
+                                xlmUsdPrice={tokenPrices.XLM}
+                            />
 
                             <div className="mt-6 space-y-3 rounded-2xl border border-border bg-secondary/30 p-4">
                                 <div className="flex items-center justify-between text-sm">
@@ -594,6 +620,7 @@ export function WithdrawModal({
     const [showLargeWarning, setShowLargeWarning] = useState(false);
     const [state, setState] = useState<ActionState>("input");
     const [error, setError] = useState("");
+    const { prices: tokenPrices } = useTokenPrices();
     const [receipt, setReceipt] = useState<{
         txHash: string;
         explorerUrl: string;
@@ -605,6 +632,27 @@ export function WithdrawModal({
     const quote = useMemo(
         () => (position ? getWithdrawalQuote(position.id, amount) : null),
         [amount, getWithdrawalQuote, position]
+    );
+
+    const withdrawFeeParams = useMemo(() => {
+        if (!position || !address || amount <= 0 || !quote) return null;
+        const vaultDef = getVaultById(position.vaultId);
+        const contractId =
+            position.asset === "XLM"
+                ? vaultDef?.contractXlmAddress || vaultDef?.contractAddress || ""
+                : vaultDef?.contractAddress || "";
+        if (!contractId) return null;
+        return {
+            walletAddress: address,
+            contractId,
+            shares: quote.sharesBurned,
+        };
+    }, [position, address, amount, quote]);
+
+    const { estimate: withdrawFee, loading: withdrawFeeLoading } = useStellarFeeEstimate(
+        "withdraw",
+        withdrawFeeParams,
+        open && state === "input" && amount > 0
     );
 
     const canSubmit =
@@ -794,6 +842,13 @@ export function WithdrawModal({
                             )}
                         />
                     </div>
+
+                    <NetworkFeeDisplay
+                        estimate={withdrawFee}
+                        loading={withdrawFeeLoading}
+                        amount={amount}
+                        xlmUsdPrice={tokenPrices.XLM}
+                    />
 
                     {/* Breakdown */}
                     <div className="space-y-2.5 rounded-2xl border border-border bg-white p-4 text-sm">

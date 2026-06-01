@@ -18,12 +18,13 @@ func baseEnv(t *testing.T) {
 		"SERVER_HOST", "SERVER_PORT",
 		"SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_SHUTDOWN_TIMEOUT",
 		"DATABASE_DSN", "DATABASE_POOL_SIZE", "DATABASE_CONNECTION_TIMEOUT",
-		"STELLAR_NETWORK_PASSPHRASE", "STELLAR_RPC_URL", "STELLAR_HORIZON_URL",
+		"STELLAR_NETWORK_PASSPHRASE", "STELLAR_RPC_URL", "STELLAR_HORIZON_URL", "STELLAR_USDC_ISSUER",
 		"AUTH_JWT_SECRET", "AUTH_TOKEN_EXPIRY", "AUTH_CHALLENGE_EXPIRY",
 		"RATELIMIT_GLOBAL_LIMIT", "RATELIMIT_GLOBAL_WINDOW", "RATELIMIT_WRITE_LIMIT", "RATELIMIT_WRITE_WINDOW",
 		"RATELIMIT_WALLET_LIMIT", "RATELIMIT_WALLET_WINDOW",
 		"LOG_LEVEL", "LOG_FORMAT",
 		"ALLOWED_ORIGINS",
+		"RUN_MIGRATIONS", "MIGRATIONS_DIR", "STARTUP_DEPENDENCY_TIMEOUT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -57,6 +58,7 @@ func TestLoadFromDotEnv(t *testing.T) {
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
 		"ALLOWED_ORIGINS=https://app.example.com",
+		"PAYSTACK_SECRET_KEY=sk_test_dummy",
 	}, "\n"))
 
 	chdir(t, dir)
@@ -164,6 +166,40 @@ func TestLoadFromEnvVars(t *testing.T) {
 	}
 }
 
+func TestLoadStellarUSDCIssuerDefault(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	const expected = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+	if cfg.Stellar().USDCIssuer() != expected {
+		t.Fatalf("expected default USDC issuer %q, got %q", expected, cfg.Stellar().USDCIssuer())
+	}
+}
+
+func TestLoadStellarUSDCIssuerFromEnv(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("STELLAR_USDC_ISSUER", "GTESTUSDCISSUERADDRESSEXAMPLE12345")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Stellar().USDCIssuer() != "GTESTUSDCISSUERADDRESSEXAMPLE12345" {
+		t.Fatalf("expected USDC issuer from env, got %q", cfg.Stellar().USDCIssuer())
+	}
+}
+
 // TestLoadEnvVarsTakePrecedenceOverDotEnv verifies that environment variables
 // override values defined in .env files.
 func TestLoadEnvVarsTakePrecedenceOverDotEnv(t *testing.T) {
@@ -175,6 +211,7 @@ func TestLoadEnvVarsTakePrecedenceOverDotEnv(t *testing.T) {
 	t.Setenv("STELLAR_RPC_URL", "https://envvar-rpc.example.com")
 	t.Setenv("STELLAR_HORIZON_URL", "https://envvar-horizon.example.com")
 	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -219,6 +256,7 @@ func TestLoadConcurrentCalls(t *testing.T) {
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
 		"ALLOWED_ORIGINS=https://app.example.com",
+		"PAYSTACK_SECRET_KEY=sk_test_dummy",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -269,6 +307,7 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 	t.Setenv("SERVER_PORT", "9091")
 	t.Setenv("DATABASE_DSN", "postgres://env:secret@localhost:5432/nester?sslmode=disable")
 	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -443,6 +482,7 @@ func TestLoadProductionMode(t *testing.T) {
 	requiredEnv(t)
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
 
 	chdir(t, t.TempDir())
 
@@ -847,6 +887,96 @@ func TestLoadAllowedOriginsRejectsMalformed(t *testing.T) {
 	}
 }
 
+// TestLoadPaymentProviderKeysValidation verifies that production/staging requires
+// at least one payment provider key, while development does not.
+func TestLoadPaymentProviderKeysValidation(t *testing.T) {
+	t.Run("production fails when both keys are empty", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+
+		chdir(t, t.TempDir())
+
+		_, err := Load()
+		if err == nil {
+			t.Fatal("expected Load() to fail when both provider keys are empty in production")
+		}
+		if !strings.Contains(err.Error(), "PAYSTACK_SECRET_KEY") {
+			t.Fatalf("expected error to mention PAYSTACK_SECRET_KEY, got %q", err.Error())
+		}
+	})
+
+	t.Run("staging fails when both keys are empty", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "staging")
+		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+
+		chdir(t, t.TempDir())
+
+		_, err := Load()
+		if err == nil {
+			t.Fatal("expected Load() to fail when both provider keys are empty in staging")
+		}
+		if !strings.Contains(err.Error(), "PAYSTACK_SECRET_KEY") {
+			t.Fatalf("expected error to mention PAYSTACK_SECRET_KEY, got %q", err.Error())
+		}
+	})
+
+	t.Run("production succeeds with paystack key set", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+		t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
+
+		chdir(t, t.TempDir())
+
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+	})
+
+	t.Run("production succeeds with flutterwave key set", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+		t.Setenv("FLUTTERWAVE_SECRET_KEY", "FLWSECK_TEST-dummy")
+
+		chdir(t, t.TempDir())
+
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+	})
+
+	t.Run("development succeeds without any provider key", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "development")
+
+		chdir(t, t.TempDir())
+
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() error = %v (dev should not require provider keys)", err)
+		}
+	})
+
+	t.Run("test env succeeds without any provider key", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "test")
+
+		chdir(t, t.TempDir())
+
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() error = %v (test env should not require provider keys)", err)
+		}
+	})
+}
+
 // TestLoadAllowedOriginsOptionalInDevelopment verifies development loads
 // successfully with no ALLOWED_ORIGINS set.
 func TestLoadAllowedOriginsOptionalInDevelopment(t *testing.T) {
@@ -863,6 +993,76 @@ func TestLoadAllowedOriginsOptionalInDevelopment(t *testing.T) {
 	if len(cfg.AllowedOrigins()) != 0 {
 		t.Fatalf("expected empty AllowedOrigins() in dev with no env, got %v", cfg.AllowedOrigins())
 	}
+}
+
+// TestLoadRunMigrationsFlag verifies RUN_MIGRATIONS controls startup auto-migrate.
+func TestLoadRunMigrationsFlag(t *testing.T) {
+	cases := []struct {
+		name       string
+		envValue   string
+		wantEnable bool
+	}{
+		{"default false when unset", "", false},
+		{"true when enabled", "true", true},
+		{"false when explicitly disabled", "false", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			if tc.envValue != "" {
+				t.Setenv("RUN_MIGRATIONS", tc.envValue)
+			}
+
+			chdir(t, t.TempDir())
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got := cfg.Startup().EnableAutoMigrate(); got != tc.wantEnable {
+				t.Fatalf("EnableAutoMigrate() = %v, want %v", got, tc.wantEnable)
+			}
+		})
+	}
+}
+
+// TestLoadMigrationsDir verifies MIGRATIONS_DIR defaults and can be overridden.
+func TestLoadMigrationsDir(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "development")
+
+		chdir(t, t.TempDir())
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if got := cfg.Startup().MigrationsDir(); got != "./migrations" {
+			t.Fatalf("MigrationsDir() = %q, want ./migrations", got)
+		}
+	})
+
+	t.Run("override", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("APP_ENV", "development")
+		t.Setenv("MIGRATIONS_DIR", "/custom/migrations")
+
+		chdir(t, t.TempDir())
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if got := cfg.Startup().MigrationsDir(); got != "/custom/migrations" {
+			t.Fatalf("MigrationsDir() = %q, want /custom/migrations", got)
+		}
+	})
 }
 
 func chdir(t *testing.T, dir string) {

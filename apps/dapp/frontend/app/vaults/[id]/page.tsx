@@ -16,6 +16,7 @@ import { UserPosition } from "@/components/vaults/user-position";
 import { DepositModal } from "@/components/vault/depositModal";
 import { useBlendApy } from "@/hooks/useBlendApy";
 import { cn } from "@/lib/utils";
+import { RiskGauge } from "@/components/vaults/risk-gauge";
 
 const MARKET_LABELS: Record<MarketType, string> = {
     single: "Single Token Market",
@@ -213,112 +214,122 @@ export default function VaultDetailPage() {
                         </div>
                     </motion.div>
 
-                    {/* Right: Info + actions */}
-                    <motion.div
-                        initial={{ opacity: 0, y: 16 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0.2 }}
-                        className="space-y-4 lg:col-span-2"
-                    >
-                        {/* Supported assets */}
-                        <div className="rounded-2xl border border-black/8 bg-white p-5">
-                            <p className="mb-3 text-xs text-black/35 uppercase tracking-widest">Supported Assets</p>
-                            <div className="flex gap-2 flex-wrap">
-                                {vault.supportedAssets
-                                    .filter((a) => ["USDC", "XLM"].includes(a))
-                                    .map((asset) => (
-                                        <div key={asset} className="flex items-center gap-1.5 rounded-full border border-black/8 px-3 py-1.5">
-                                            <Image
-                                                src={`/${asset.toLowerCase()}.png`}
-                                                alt={asset}
-                                                width={16}
-                                                height={16}
-                                                className="rounded-full"
-                                            />
-                                            <span className="text-xs text-black/60">{asset}</span>
-                                        </div>
-                                    ))}
-                            </div>
-                        </div>
+                     {/* Right: Info + actions */}
+                     <motion.div
+                         initial={{ opacity: 0, y: 16 }}
+                         animate={{ opacity: 1, y: 0 }}
+                         transition={{ duration: 0.4, delay: 0.2 }}
+                         className="space-y-4 lg:col-span-2"
+                     >
+                         {/* Supported assets */}
+                         <div className="rounded-2xl border border-black/8 bg-white p-5">
+                             <p className="mb-3 text-xs text-black/35 uppercase tracking-widest">Supported Assets</p>
+                             <div className="flex gap-2 flex-wrap">
+                                 {vault.supportedAssets
+                                     .filter((a) => ["USDC", "XLM"].includes(a))
+                                     .map((asset) => (
+                                         <div key={asset} className="flex items-center gap-1.5 rounded-full border border-black/8 px-3 py-1.5">
+                                             <Image
+                                                 src={`/${asset.toLowerCase()}.png`}
+                                                 alt={asset}
+                                                 width={16}
+                                                 height={16}
+                                                 className="rounded-full"
+                                             />
+                                             <span className="text-xs text-black/60">{asset}</span>
+                                         </div>
+                                     ))}
+                             </div>
+                         </div>
 
-                        {/* Market info */}
-                        <div className="rounded-2xl border border-black/8 bg-white p-5 space-y-3">
-                            <p className="text-xs text-black/35 uppercase tracking-widest">Market Info</p>
-                            <div className="flex justify-between text-xs">
-                                <span className="text-black/40">Market type</span>
-                                <span className="text-black">{MARKET_LABELS[vault.marketType]}</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                                <span className="text-black/40">TVL</span>
-                                <span className="font-mono text-black">{formatTvl(vault.tvl)}</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                                <span className="text-black/40">Utilization</span>
-                                <span className="font-mono text-black">{vault.utilization}%</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                                <span className="text-black/40">Withdrawal</span>
-                                <span className="text-black">{vault.maturityTerms}</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                                <span className="text-black/40">Early exit penalty</span>
-                                <span className="text-black">{vault.earlyWithdrawalPenalty}</span>
-                            </div>
-                        </div>
+                         {/* Market info */}
+                         <div className="rounded-2xl border border-black/8 bg-white p-5 space-y-3">
+                             <p className="text-xs text-black/35 uppercase tracking-widest">Market Info</p>
+                             <div className="flex justify-between text-xs">
+                                 <span className="text-black/40">Market type</span>
+                                 <span className="text-black">{MARKET_LABELS[vault.marketType]}</span>
+                             </div>
+                             <div className="flex justify-between text-xs">
+                                 <span className="text-black/40">TVL</span>
+                                 <span className="font-mono text-black">{formatTvl(vault.tvl)}</span>
+                             </div>
+                             <div className="flex justify-between text-xs">
+                                 <span className="text-black/40">Utilization</span>
+                                 <span className="font-mono text-black">{vault.utilization}%</span>
+                             </div>
+                             <div className="flex justify-between text-xs">
+                                 <span className="text-black/40">Withdrawal</span>
+                                 <span className="text-black">{vault.maturityTerms}</span>
+                             </div>
+                             <div className="flex justify-between text-xs">
+                                 <span className="text-black/40">Early exit penalty</span>
+                                 <span className="text-black">{vault.earlyWithdrawalPenalty}</span>
+                             </div>
+                         </div>
 
-                        {/* Strategies */}
-                        {vault.strategies.length > 0 && (
-                            <div className="rounded-2xl border border-black/8 bg-white p-5">
-                                <p className="mb-3 text-xs text-black/35 uppercase tracking-widest">Available Strategies</p>
-                                <div className="space-y-2">
-                                    {vault.strategies.map((strat) => (
-                                        <div key={strat.id} className="rounded-xl border border-black/6 px-4 py-3">
-                                            <div className="flex items-center justify-between">
-                                                <span className="text-sm text-black">{strat.name}</span>
-                                                <div className="flex items-center gap-2">
-                                                    <span className={cn(
-                                                        "rounded-full px-2 py-0.5 text-[10px] font-medium",
-                                                        strat.risk === "low" ? "bg-emerald-50 text-emerald-600" :
-                                                        strat.risk === "medium" ? "bg-amber-50 text-amber-600" :
-                                                        "bg-red-50 text-red-500"
-                                                    )}>
-                                                        {strat.risk}
-                                                    </span>
-                                                    <span className="font-mono text-sm text-black">{strat.apy}%</span>
-                                                </div>
-                                            </div>
-                                            <p className="mt-1 text-[11px] text-black/40 leading-relaxed">{strat.description}</p>
-                                            <div className="mt-2 flex gap-3 text-[11px] text-black/35">
-                                                <span>Lock: {strat.lockDays ? `${strat.lockDays}d` : "None"}</span>
-                                                {strat.penaltyPct > 0 && <span>Penalty: {strat.penaltyPct}%</span>}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                         {/* Strategies */}
+                         {vault.strategies.length > 0 && (
+                             <div className="rounded-2xl border border-black/8 bg-white p-5">
+                                 <p className="mb-3 text-xs text-black/35 uppercase tracking-widest">Available Strategies</p>
+                                 <div className="space-y-2">
+                                     {vault.strategies.map((strat) => (
+                                         <div key={strat.id} className="rounded-xl border border-black/6 px-4 py-3">
+                                             <div className="flex items-center justify-between">
+                                                 <span className="text-sm text-black">{strat.name}</span>
+                                                 <div className="flex items-center gap-2">
+                                                     <span className={cn(
+                                                         "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                                                         strat.risk === "low" ? "bg-emerald-50 text-emerald-600" :
+                                                         strat.risk === "medium" ? "bg-amber-50 text-amber-600" :
+                                                         "bg-red-50 text-red-500"
+                                                     )}>
+                                                         {strat.risk}
+                                                     </span>
+                                                     <span className="font-mono text-sm text-black">{strat.apy}%</span>
+                                                 </div>
+                                             </div>
+                                             <p className="mt-1 text-[11px] text-black/40 leading-relaxed">{strat.description}</p>
+                                             <div className="mt-2 flex gap-3 text-[11px] text-black/35">
+                                                 <span>Lock: {strat.lockDays ? `${strat.lockDays}d` : "None"}</span>
+                                                 {strat.penaltyPct > 0 && <span>Penalty: {strat.penaltyPct}%</span>}
+                                             </div>
+                                         </div>
+                                     ))}
+                                 </div>
+                             </div>
+                         )}
 
-                        {/* User position */}
-                        <UserPosition />
+                         {/* User position */}
+                         <UserPosition />
 
-                        {/* Supply CTA */}
-                        <div className="rounded-2xl border border-black/8 bg-white p-5">
-                            {vault.contractAddress ? (
-                                <button
-                                    onClick={() => setDepositOpen(true)}
-                                    className="w-full rounded-xl bg-black py-3.5 text-sm text-white transition-opacity hover:opacity-85"
-                                >
-                                    Supply to {vault.name}
-                                </button>
-                            ) : (
-                                <div className="w-full rounded-xl border border-black/8 bg-black/3 py-3.5 text-center text-sm text-black/35">
-                                    Coming Soon — not yet deployed on testnet
-                                </div>
-                            )}
-                        </div>
-                    </motion.div>
-                </div>
-        </AppShell>
+                         {/* Supply CTA */}
+                         <div className="rounded-2xl border border-black/8 bg-white p-5">
+                             {vault.contractAddress ? (
+                                 <button
+                                     onClick={() => setDepositOpen(true)}
+                                     className="w-full rounded-xl bg-black py-3.5 text-sm text-white transition-opacity hover:opacity-85"
+                                 >
+                                     Supply to {vault.name}
+                                 </button>
+                             ) : (
+                                 <div className="w-full rounded-xl border border-black/8 bg-black/3 py-3.5 text-center text-sm text-black/35">
+                                     Coming Soon — not yet deployed on testnet
+                                 </div>
+                             )}
+                         </div>
+                     </motion.div>
+                 </div>
+
+                 {/* Risk Section */}
+                 <motion.div
+                     initial={{ opacity: 0, y: 16 }}
+                     animate={{ opacity: 1, y: 0 }}
+                     transition={{ duration: 0.4, delay: 0.25 }}
+                     className="mt-8"
+                 >
+                     <RiskGauge vaultId={id as string} />
+                 </motion.div>
+             </AppShell>
 
         <DepositModal
             open={depositOpen}

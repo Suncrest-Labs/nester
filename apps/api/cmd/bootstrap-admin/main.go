@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
@@ -34,6 +35,9 @@ func run() error {
 		flag.Usage()
 		return fmt.Errorf("--wallet is required")
 	}
+	if !strings.HasPrefix(*wallet, "G") || len(*wallet) != 56 {
+		return fmt.Errorf("invalid Stellar address format: must start with 'G' and be 56 characters")
+	}
 
 	_ = godotenv.Load()
 	if *dsn == "" {
@@ -45,7 +49,10 @@ func run() error {
 
 	db, err := sql.Open("pgx", *dsn)
 	if err != nil {
-		return fmt.Errorf("open db: %w", err)
+		return fmt.Errorf("invalid database DSN: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("cannot reach database: %w", err)
 	}
 	defer db.Close()
 

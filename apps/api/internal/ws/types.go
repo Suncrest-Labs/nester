@@ -13,6 +13,7 @@ const (
 	EventDepositConfirmed     EventType = "deposit_confirmed"
 	EventWithdrawalConfirmed  EventType = "withdrawal_confirmed"
 	EventYieldAccrued         EventType = "yield_accrued"
+	EventHarvestCompleted     EventType = "harvest_completed"
 	EventVaultPaused          EventType = "vault_paused"
 	EventVaultUnpaused        EventType = "vault_unpaused"
 

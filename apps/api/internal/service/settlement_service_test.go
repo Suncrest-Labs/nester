@@ -38,18 +38,33 @@ func (r *stubRepo) GetByID(_ context.Context, id uuid.UUID) (offramp.Settlement,
 	return *s, nil
 }
 
-func (r *stubRepo) GetByUserID(_ context.Context, userID uuid.UUID, filter offramp.SettlementStatus) ([]offramp.Settlement, error) {
+func (r *stubRepo) ListByUserID(_ context.Context, userID uuid.UUID, filter offramp.UserListFilter) ([]offramp.Settlement, int, string, error) {
 	var out []offramp.Settlement
 	for _, s := range r.data {
 		if s.UserID != userID {
 			continue
 		}
-		if filter != "" && s.Status != filter {
+		if filter.Status != "" && string(s.Status) != filter.Status {
 			continue
 		}
 		out = append(out, *s)
 	}
-	return out, nil
+	total := len(out)
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PerPage < 1 {
+		filter.PerPage = 20
+	}
+	start := (filter.Page - 1) * filter.PerPage
+	if start >= total {
+		return []offramp.Settlement{}, total, "", nil
+	}
+	end := start + filter.PerPage
+	if end > total {
+		end = total
+	}
+	return out[start:end], total, "", nil
 }
 
 func (r *stubRepo) UpdateStatus(_ context.Context, id uuid.UUID, status offramp.SettlementStatus, completedAt *time.Time) error {
@@ -214,12 +229,12 @@ func TestGetUserSettlements_ReturnsAllForUser(t *testing.T) {
 	svc.InitiateSettlement(context.Background(), in)
 	svc.InitiateSettlement(context.Background(), in)
 
-	list, err := svc.GetUserSettlements(context.Background(), in.UserID, "")
+	list, total, _, err := svc.ListUserSettlements(context.Background(), in.UserID, offramp.UserListFilter{Page: 1, PerPage: 20})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(list) != 2 {
-		t.Errorf("want 2 settlements, got %d", len(list))
+	if len(list) != 2 || total != 2 {
+		t.Errorf("want 2 settlements (total 2), got %d (total %d)", len(list), total)
 	}
 }
 
@@ -240,12 +255,12 @@ func TestGetUserSettlements_FilterByStatus(t *testing.T) {
 	// s2 stays in initiated
 	svc.InitiateSettlement(context.Background(), in)
 
-	initiated, _ := svc.GetUserSettlements(context.Background(), in.UserID, "initiated")
+	initiated, _, _, _ := svc.ListUserSettlements(context.Background(), in.UserID, offramp.UserListFilter{Page: 1, PerPage: 20, Status: "initiated"})
 	if len(initiated) != 1 {
 		t.Errorf("want 1 initiated, got %d", len(initiated))
 	}
 
-	matched, _ := svc.GetUserSettlements(context.Background(), in.UserID, "liquidity_matched")
+	matched, _, _, _ := svc.ListUserSettlements(context.Background(), in.UserID, offramp.UserListFilter{Page: 1, PerPage: 20, Status: "liquidity_matched"})
 	if len(matched) != 1 {
 		t.Errorf("want 1 liquidity_matched, got %d", len(matched))
 	}
@@ -254,7 +269,7 @@ func TestGetUserSettlements_FilterByStatus(t *testing.T) {
 func TestGetUserSettlements_InvalidStatusReturnsError(t *testing.T) {
 	svc := service.NewSettlementService(newStubRepo())
 
-	_, err := svc.GetUserSettlements(context.Background(), uuid.New(), "nonsense")
+	_, _, _, err := svc.ListUserSettlements(context.Background(), uuid.New(), offramp.UserListFilter{Status: "nonsense"})
 	if !errors.Is(err, offramp.ErrInvalidStatus) {
 		t.Errorf("expected ErrInvalidStatus, got %v", err)
 	}
@@ -389,7 +404,7 @@ func TestUpdateStatus_CannotLeaveFailed(t *testing.T) {
 	}
 }
 
-func TestUpdateStatus_ForbiddenForNonOwner(t *testing.T) {
+func TestUpdateStatus_NotFoundForNonOwner(t *testing.T) {
 	svc := service.NewSettlementService(newStubRepo())
 	ctx := context.Background()
 
@@ -401,7 +416,7 @@ func TestUpdateStatus_ForbiddenForNonOwner(t *testing.T) {
 		CallerID:     attacker,
 		NewStatus:    offramp.StatusLiquidityMatched,
 	})
-	if !errors.Is(err, offramp.ErrForbidden) {
-		t.Errorf("expected ErrForbidden for non-owner, got %v", err)
+	if !errors.Is(err, offramp.ErrSettlementNotFound) {
+		t.Errorf("expected ErrSettlementNotFound for non-owner, got %v", err)
 	}
 }

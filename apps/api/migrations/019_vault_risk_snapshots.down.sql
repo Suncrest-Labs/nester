@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS vault_risk_snapshots;

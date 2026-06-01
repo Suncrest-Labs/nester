@@ -5,97 +5,199 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
 var (
-	ErrInvalidAdminInput = errors.New("invalid admin input")
+	ErrInvalidAdminInput    = errors.New("invalid admin input")
+	ErrRebalanceInFlight    = errors.New("rebalance already in flight for this vault")
+	ErrChainNotConfigured   = errors.New("on-chain operator not configured")
+	ErrRebalanceNotEligible = errors.New("vault is not eligible for rebalance")
+)
+
+const rebalanceEstimatedCompletionMS = int64(5000)
+
+const (
+	dashboardCacheTTL   = 2 * time.Minute
+	apyDropAlertThreshold = 0.20
 )
 
 type VaultChainInvoker interface {
 	PauseVault(ctx context.Context, contractAddress string) error
 	UnpauseVault(ctx context.Context, contractAddress string) error
+	RebalanceVault(ctx context.Context, contractAddress string) (txHash string, err error)
+	SimulateRebalanceVault(ctx context.Context, contractAddress string) error
+	SetAllocationWeights(ctx context.Context, strategyContractAddress string, weights []AllocationWeightEntry) error
+}
+
+// AllocationWeightEntry is a protocol weight expressed in basis points.
+type AllocationWeightEntry struct {
+	Protocol  string
+	WeightBps uint32
 }
 
 // NoopVaultChainInvoker is the default invoker used when no on-chain
 // integration is configured in-process.
 type NoopVaultChainInvoker struct{}
 
-func (NoopVaultChainInvoker) PauseVault(_ context.Context, _ string) error   { return nil }
+func (NoopVaultChainInvoker) PauseVault(_ context.Context, _ string) error { return nil }
 func (NoopVaultChainInvoker) UnpauseVault(_ context.Context, _ string) error { return nil }
-
-type AdminService struct {
-	repository             admindomain.Repository
-	chainInvoker           VaultChainInvoker
-	httpClient             *http.Client
-	stellarHorizonURL      string
-	settlementProviderURL  string
-	startedAt              time.Time
+func (NoopVaultChainInvoker) RebalanceVault(_ context.Context, _ string) (string, error) {
+	return "", ErrChainNotConfigured
+}
+func (NoopVaultChainInvoker) SimulateRebalanceVault(_ context.Context, _ string) error {
+	return ErrChainNotConfigured
+}
+func (NoopVaultChainInvoker) SetAllocationWeights(_ context.Context, _ string, _ []AllocationWeightEntry) error {
+	return nil
 }
 
-type DashboardResponse struct {
-	TotalTVL              string                              `json:"total_tvl"`
-	TotalUsers            int64                               `json:"total_users"`
-	ActiveVaults          int64                               `json:"active_vaults"`
-	TotalYieldDistributed string                              `json:"total_yield_distributed"`
-	Settlements           admindomain.DashboardSettlementMetrics `json:"settlements"`
-	SystemHealth          admindomain.DashboardSystemHealth   `json:"system_health"`
+type AdminService struct {
+	repository                admindomain.Repository
+	vaultRepository           vault.Repository
+	chainInvoker              VaultChainInvoker
+	httpClient                *http.Client
+	stellarHorizonURL         string
+	settlementProviderURL     string
+	allocationStrategyAddress string
+	minAllocationWeight       decimal.Decimal
+	startedAt                 time.Time
+
+	dashboardCache   *admindomain.VaultHealthDashboard
+	dashboardCacheAt time.Time
+	dashboardCacheMu sync.RWMutex
 }
 
 func NewAdminService(
 	repository admindomain.Repository,
+	vaultRepository vault.Repository,
 	chainInvoker VaultChainInvoker,
 	stellarHorizonURL string,
 	settlementProviderURL string,
+	allocationStrategyAddress string,
+	minAllocationWeightPercent int,
 ) *AdminService {
 	if chainInvoker == nil {
 		chainInvoker = NoopVaultChainInvoker{}
 	}
 
 	return &AdminService{
-		repository:            repository,
-		chainInvoker:          chainInvoker,
-		httpClient:            &http.Client{Timeout: 5 * time.Second},
-		stellarHorizonURL:     stellarHorizonURL,
-		settlementProviderURL: settlementProviderURL,
-		startedAt:             time.Now().UTC(),
+		repository:                repository,
+		vaultRepository:           vaultRepository,
+		chainInvoker:              chainInvoker,
+		httpClient:                &http.Client{Timeout: 5 * time.Second},
+		stellarHorizonURL:         stellarHorizonURL,
+		settlementProviderURL:     settlementProviderURL,
+		allocationStrategyAddress: allocationStrategyAddress,
+		minAllocationWeight:       decimal.NewFromInt(int64(minAllocationWeightPercent)),
+		startedAt:                 time.Now().UTC(),
 	}
 }
 
-func (s *AdminService) GetDashboard(ctx context.Context) (DashboardResponse, error) {
-	metrics, err := s.repository.GetDashboardMetrics(ctx)
+func (s *AdminService) GetDashboard(ctx context.Context) (admindomain.VaultHealthDashboard, error) {
+	s.dashboardCacheMu.RLock()
+	if s.dashboardCache != nil && time.Since(s.dashboardCacheAt) < dashboardCacheTTL {
+		cached := *s.dashboardCache
+		s.dashboardCacheMu.RUnlock()
+		return cached, nil
+	}
+	s.dashboardCacheMu.RUnlock()
+
+	data, err := s.repository.GetVaultHealthDashboard(ctx)
 	if err != nil {
-		return DashboardResponse{}, err
+		return admindomain.VaultHealthDashboard{}, err
 	}
 
-	health, err := s.GetDetailedHealth(ctx)
-	if err != nil {
-		return DashboardResponse{}, err
+	result := buildVaultHealthDashboard(data)
+
+	s.dashboardCacheMu.Lock()
+	s.dashboardCache = &result
+	s.dashboardCacheAt = time.Now().UTC()
+	s.dashboardCacheMu.Unlock()
+
+	return result, nil
+}
+
+func buildVaultHealthDashboard(data admindomain.VaultHealthDashboardData) admindomain.VaultHealthDashboard {
+	vaults := make([]admindomain.VaultHealthEntry, 0, len(data.Vaults))
+	systemAlerts := make([]admindomain.SystemAlert, 0)
+
+	for _, row := range data.Vaults {
+		entry := admindomain.VaultHealthEntry{
+			ID:                  row.ID,
+			Name:                row.Name,
+			TVLUSDC:             row.TVL.StringFixed(2),
+			APY7d:               formatAPY(row.APY7d),
+			Depositors:          row.Depositors,
+			PendingTransactions: row.PendingTransactions,
+			Status:              mapVaultHealthStatus(row.Status),
+			Alerts:              []admindomain.VaultAlert{},
+		}
+
+		if row.LastRebalanceAt != nil {
+			formatted := row.LastRebalanceAt.UTC().Format(time.RFC3339)
+			entry.LastRebalanceAt = &formatted
+		}
+
+		if alert := apyDropAlert(row.Name, row.APY7d, row.APY7d24hAgo); alert != nil {
+			systemAlerts = append(systemAlerts, *alert)
+		}
+
+		vaults = append(vaults, entry)
 	}
 
-	lastEvent := ""
-	if health.EventIndexer.LastEventAt != nil {
-		lastEvent = health.EventIndexer.LastEventAt.UTC().Format(time.RFC3339)
+	return admindomain.VaultHealthDashboard{
+		TotalTVLUSDC:    data.TotalTVL.StringFixed(2),
+		TotalDepositors: data.TotalDepositors,
+		Vaults:          vaults,
+		SystemAlerts:    systemAlerts,
+	}
+}
+
+func formatAPY(apy *decimal.Decimal) string {
+	if apy == nil {
+		return "0.00"
+	}
+	return apy.StringFixed(2)
+}
+
+func mapVaultHealthStatus(status vault.VaultStatus) string {
+	switch status {
+	case vault.StatusActive:
+		return "healthy"
+	case vault.StatusPaused:
+		return "paused"
+	default:
+		return string(status)
+	}
+}
+
+func apyDropAlert(name string, current, previous *decimal.Decimal) *admindomain.SystemAlert {
+	if current == nil || previous == nil || previous.IsZero() {
+		return nil
 	}
 
-	return DashboardResponse{
-		TotalTVL:              metrics.TotalTVL.StringFixed(2),
-		TotalUsers:            metrics.TotalUsers,
-		ActiveVaults:          metrics.ActiveVaults,
-		TotalYieldDistributed: metrics.TotalYieldDistributed.StringFixed(2),
-		Settlements:           metrics.Settlements,
-		SystemHealth: admindomain.DashboardSystemHealth{
-			Database:           health.Database.Status,
-			StellarRPC:         health.StellarRPC.Status,
-			SettlementProvider: health.SettlementProvider.Status,
-			LastEventIndexed:   lastEvent,
-		},
-	}, nil
+	drop := previous.Sub(*current).Div(*previous)
+	if drop.LessThanOrEqual(decimal.NewFromFloat(apyDropAlertThreshold)) {
+		return nil
+	}
+
+	pctDrop := drop.Mul(decimal.NewFromInt(100)).Round(0)
+	return &admindomain.SystemAlert{
+		Severity: "warning",
+		Message: fmt.Sprintf(
+			"%s vault APY dropped %s%% in 24h",
+			name,
+			pctDrop.StringFixed(0),
+		),
+	}
 }
 
 func (s *AdminService) ListVaults(
@@ -158,6 +260,13 @@ func (s *AdminService) ListUsers(
 	filter admindomain.UserListFilter,
 ) ([]admindomain.UserSummary, int, error) {
 	return s.repository.ListUsers(ctx, filter)
+}
+
+func (s *AdminService) ListVaultRebalances(ctx context.Context, vaultID uuid.UUID) ([]admindomain.VaultRebalanceRecord, error) {
+	if vaultID == uuid.Nil {
+		return nil, ErrInvalidAdminInput
+	}
+	return s.repository.ListVaultRebalances(ctx, vaultID)
 }
 
 func (s *AdminService) GetDetailedHealth(ctx context.Context) (admindomain.DetailedHealth, error) {
@@ -279,4 +388,3 @@ func (s *AdminService) checkEventIndexer(ctx context.Context) admindomain.Health
 	}
 
 }
-

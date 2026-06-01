@@ -1,29 +1,28 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
-	dbpkg "github.com/suncrestlabs/nester/apps/api/internal/db"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	"github.com/golang-migrate/migrate/v4"
+	migratedb "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
@@ -31,6 +30,8 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	performancesvc "github.com/suncrestlabs/nester/apps/api/internal/service/performance"
+	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
+	"github.com/suncrestlabs/nester/apps/api/internal/services"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
@@ -69,9 +70,23 @@ func run() error {
 
 	if cfg.Startup().EnableAutoMigrate() {
 		baseLogger.Info("running database migrations", "dir", cfg.Startup().MigrationsDir())
-		if err := dbpkg.MigrateUp(db, cfg.Startup().MigrationsDir()); err != nil {
-			return fmt.Errorf("auto-migrate: %w", err)
+		
+		driver, err := migratedb.WithInstance(db, &migratedb.Config{})
+		if err != nil {
+			return fmt.Errorf("auto-migrate: init driver: %w", err)
 		}
+		
+		m, err := migrate.NewWithDatabaseInstance(
+			"file://"+cfg.Startup().MigrationsDir(),
+			"postgres", driver)
+		if err != nil {
+			return fmt.Errorf("auto-migrate: new migrate instance: %w", err)
+		}
+		
+		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+			return fmt.Errorf("auto-migrate: up: %w", err)
+		}
+
 		baseLogger.Info("database migrations complete")
 	} else {
 		baseLogger.Info("auto-migrate disabled; skipping migrations")
@@ -81,21 +96,32 @@ func run() error {
 		return err
 	}
 
+	systemStateRepository := postgres.NewSystemStateRepository(db)
+
 	vaultRepository := postgres.NewVaultRepository(db)
 	vaultService := service.NewVaultService(vaultRepository)
+	vaultService.SetHarvestDefaultCompound(cfg.Stellar().HarvestDefaultCompound())
 	vaultHandler := handler.NewVaultHandler(vaultService)
+
+	portfolioService := service.NewPortfolioService(vaultRepository)
+	portfolioHandler := handler.NewPortfolioHandler(portfolioService)
 
 	transactionRepository := postgres.NewTransactionRepository(db)
 	transactionService := service.NewTransactionService(transactionRepository, cfg.Stellar().HorizonURL())
+	// Balance is moved only after a deposit/withdrawal is confirmed on-chain
+	// (issue #496); the vault repository applies it idempotently by tx hash.
+	transactionService.SetBalanceApplier(vaultRepository)
 	transactionHandler := handler.NewTransactionHandler(transactionService)
-
-	settlementRepository := postgres.NewSettlementRepository(db)
-	settlementService := service.NewSettlementService(settlementRepository)
-	settlementHandler := handler.NewSettlementHandler(settlementService)
 
 	userRepository := postgres.NewUserRepository(db)
 	userService := service.NewUserService(userRepository)
 	userHandler := handler.NewUserHandler(userService)
+	userVaultsSvc := service.NewUserVaultsService(vaultRepository)
+	userHandler.SetUserVaultsService(userVaultsSvc)
+
+	settlementRepository := postgres.NewSettlementRepository(db)
+	settlementService := service.NewSettlementService(settlementRepository)
+	settlementHandler := handler.NewSettlementHandler(settlementService, userService)
 
 	adminRepository := postgres.NewAdminRepository(db)
 
@@ -106,6 +132,7 @@ func run() error {
 			cfg.Stellar().HorizonURL(),
 			cfg.Stellar().NetworkPassphrase(),
 			secret,
+			cfg.Stellar().WithdrawalSlippageBps(),
 		)
 		if err != nil {
 			return fmt.Errorf("init chain invoker: %w", err)
@@ -116,15 +143,19 @@ func run() error {
 
 	adminService := service.NewAdminService(
 		adminRepository,
+		vaultRepository,
 		chainInvoker,
 		cfg.Stellar().HorizonURL(),
 		cfg.SettlementProviderURL(),
+		cfg.Stellar().AllocationStrategyAddress(),
+		cfg.Allocation().MinWeightPercent(),
 	)
-	adminHandler := handler.NewAdminHandler(adminService)
-	adminHandler.SetEventSyncer(&mainEventSyncer{
-		db:     db,
-		rpcURL: cfg.Stellar().RPCURL(),
-		logger: baseLogger,
+	adminHandler := handler.NewAdminHandler(adminService, userService)
+	adminHandler.SetEventSyncer(&stellarpkg.EventSyncer{
+		DB:      db,
+		SysRepo: systemStateRepository,
+		RPCURL:  cfg.Stellar().RPCURL(),
+		Logger:  baseLogger,
 	})
 
 	var challengeStore service.ChallengeStore
@@ -140,7 +171,7 @@ func run() error {
 	authService := service.NewAuthService(challengeStore, userService, cfg.Auth())
 	authHandler := handler.NewAuthHandler(authService)
 
-	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL())
+	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL(), cfg.Stellar().USDCIssuer())
 	rateHandler := handler.NewRateHandler(oracleService)
 
 	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (string, error) {
@@ -157,15 +188,23 @@ func run() error {
 	wsCtx, wsCancel := context.WithCancel(context.Background())
 	defer wsCancel()
 	go wsHub.Run(wsCtx)
+	vaultHandler.SetWSHub(wsHub)
 
 	performanceRepository := postgres.NewPerformanceRepository(db)
-	performanceService := performancesvc.NewService(performanceRepository)
+	vaultRepository = postgres.NewVaultRepository(db)
+	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
+
+	contractReader := stellarpkg.NewContractReader(
+		cfg.Stellar().RPCURL(),
+		cfg.Stellar().NetworkPassphrase(),
+		"",
+	)
 
 	tracker := performancesvc.NewTracker(
 		performanceRepository,
 		vaultRepository,
-		nil, // BalanceProvider: wire to a Stellar adapter once the on-chain reader is exposed.
+		contractReader,
 		cfg.Performance().SnapshotInterval(),
 	)
 	trackerCtx, cancelTracker := context.WithCancel(context.Background())
@@ -175,6 +214,75 @@ func run() error {
 			baseLogger.Error("performance tracker stopped", "error", err.Error())
 		}
 	}()
+
+	tvlRepository := postgres.NewTVLRepository(db)
+	tvlService := tvlsvc.NewService(tvlRepository, vaultRepository)
+	tvlHandler := handler.NewTVLHandler(tvlService)
+
+	tvlTracker := tvlsvc.NewTracker(
+		tvlRepository,
+		vaultRepository,
+		contractReader,
+		cfg.TVL().RefreshInterval(),
+	).WithLogger(baseLogger.WithGroup("tvl-tracker"))
+	tvlCtx, cancelTVL := context.WithCancel(context.Background())
+	defer cancelTVL()
+	go func() {
+		if err := tvlTracker.Run(tvlCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("tvl tracker stopped", "error", err.Error())
+		}
+	}()
+
+	apyRefresher := performancesvc.NewAPYRefresher(
+		performancesvc.APYRefresherConfig{
+			Interval:              cfg.APYRefresh().RefreshInterval(),
+			BroadcastThresholdBPS: cfg.APYRefresh().BroadcastThresholdBPS(),
+			RegistryAddress:       cfg.Stellar().YieldRegistryContract(),
+		},
+		performanceRepository,
+		vaultRepository,
+		&performancesvc.RegistryReader{
+			Reader:  contractReader,
+			Address: cfg.Stellar().YieldRegistryContract(),
+		},
+		func(vaultID uuid.UUID, previousBPS, currentBPS uint32) {
+			wsHub.BroadcastEvent(ws.Event{
+				Channel: "vaults:global",
+				Type:    ws.EventYieldAccrued,
+				Data: map[string]any{
+					"vault_id":     vaultID.String(),
+					"previous_bps": previousBPS,
+					"current_bps":  currentBPS,
+				},
+			})
+		},
+	).WithLogger(baseLogger.WithGroup("apy-refresher"))
+	apyCtx, cancelAPY := context.WithCancel(context.Background())
+	defer cancelAPY()
+	go func() {
+		if err := apyRefresher.Run(apyCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("apy refresher stopped", "error", err.Error())
+		}
+	}()
+
+	// Background reconciliation of pending transactions: polls Horizon so a
+	// transaction's status is confirmed even when the client never calls
+	// GET /api/v1/transactions/{hash}. Broadcasts a WebSocket event on change.
+	txPoller := service.NewTransactionPoller(
+		service.TransactionPollerConfig{
+			Enabled:  cfg.TransactionPoller().Enabled(),
+			Interval: cfg.TransactionPoller().Interval(),
+			MinAge:   cfg.TransactionPoller().MinAge(),
+		},
+		transactionService,
+		func(_ context.Context, tx transaction.Transaction) {
+			wsHub.BroadcastEvent(transactionStatusEvent(tx))
+		},
+		baseLogger.WithGroup("tx-poller"),
+	)
+	pollerCtx, cancelPoller := context.WithCancel(context.Background())
+	defer cancelPoller()
+	go txPoller.Run(pollerCtx)
 
 	var ready atomic.Bool
 	ready.Store(true)
@@ -202,6 +310,7 @@ func run() error {
 		buildVersion: version,
 	}))
 	vaultHandler.Register(mux)
+	portfolioHandler.Register(mux)
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
 	userHandler.Register(mux)
@@ -209,6 +318,62 @@ func run() error {
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
 	performanceHandler.Register(mux)
+	tvlHandler.Register(mux)
+	analyticsHandler := handler.NewAnalyticsHandler(performanceService)
+	analyticsHandler.Register(mux)
+	
+	// Risk service
+	riskService := services.NewRiskService(vaultRepository)
+	riskHandler := handler.NewRiskHandler(riskService)
+	riskHandler.Register(mux)
+
+	// Vault analytics (APY volatility, Sharpe, Sortino, drawdown, win rate)
+	vaultAnalyticsSvc := service.NewVaultAnalyticsService(performanceRepository)
+	vaultAnalyticsHandler := handler.NewVaultAnalyticsHandler(vaultAnalyticsSvc)
+	vaultAnalyticsHandler.Register(mux)
+
+	// Yield opportunities (DeFiLlama Stellar pools)
+	yieldSvc := service.NewYieldService("")
+	yieldHandler := handler.NewYieldHandler(yieldSvc)
+	yieldHandler.Register(mux)
+
+	// User watchlist
+	watchlistSvc := service.NewWatchlistService(db)
+	watchlistHandler := handler.NewWatchlistHandler(watchlistSvc)
+	watchlistHandler.Register(mux)
+
+	// Savings goals
+	savingsGoalRepo := postgres.NewSavingsGoalRepository(db)
+	savingsGoalSvc := service.NewSavingsGoalService(savingsGoalRepo)
+	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc)
+	savingsGoalHandler.Register(mux)
+
+	// User vault rebalance (suggestions + execution)
+	vaultRebalanceSvc := service.NewVaultRebalanceService(vaultRepository, adminService)
+	vaultHandler.SetRebalanceService(vaultRebalanceSvc)
+
+	// Intelligence proxy (forwards to Python service)
+	intelURL := cfg.Intelligence().ServiceURL()
+	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
+	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
+		BaseURL: intelURL,
+		APIKey:  cfg.Auth().ServiceAPIKey(),
+		Timeout: cfg.Intelligence().Timeout(),
+	})
+	intelligenceHandler := handler.NewIntelligenceHandler(intelProxy, prometheusClient)
+	intelligenceHandler.Register(mux)
+
+	intelRelay := service.NewRelayHandler(http.DefaultClient, service.RelayConfig{
+		BaseURL: intelURL,
+		APIKey:  cfg.Auth().ServiceAPIKey(),
+		Timeout: cfg.Intelligence().Timeout(),
+	})
+	intelligenceRelayHandler := handler.NewIntelligenceRelayHandler(intelRelay)
+	intelligenceRelayHandler.Register(mux)
+
+	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
+	performanceSnapshotsHandler.Register(mux)
+
 	bankHandler.Register(mux)
 
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
@@ -223,7 +388,7 @@ func run() error {
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}
-	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
+	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules)
 	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 	walletLimiter := middleware.WalletRateLimiter(
@@ -272,7 +437,7 @@ func run() error {
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	startEventIndexer(shutdownCtx, baseLogger, db, cfg.Stellar().RPCURL())
+	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, cfg.Stellar().RPCURL())
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -311,6 +476,27 @@ func run() error {
 		"uptime", time.Since(startedAt).String(),
 	)
 	return nil
+}
+
+// transactionStatusEvent maps a reconciled transaction to the WebSocket event
+// the dApp listens for on the "vaults:global" channel. Confirmed deposits and
+// withdrawals get their dedicated event type; everything else (failures, other
+// types) uses the generic status_changed event.
+func transactionStatusEvent(tx transaction.Transaction) ws.Event {
+	eventType := ws.EventStatusChanged
+	if tx.Status == transaction.StatusCompleted {
+		switch tx.Type {
+		case transaction.TypeDeposit:
+			eventType = ws.EventDepositConfirmed
+		case transaction.TypeWithdrawal:
+			eventType = ws.EventWithdrawalConfirmed
+		}
+	}
+	return ws.Event{
+		Channel: "vaults:global",
+		Type:    eventType,
+		Data:    tx,
+	}
 }
 
 func walletKeyFromContext(r *http.Request) string {
@@ -485,420 +671,3 @@ func pingStellarDependencies(logger *slog.Logger, cfg *config.Config) error {
 	return nil
 }
 
-func startEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, rpcURL string) {
-	if strings.TrimSpace(rpcURL) == "" {
-		logger.Warn("event indexer disabled: STELLAR_RPC_URL is empty")
-		return
-	}
-	if err := ensureIndexerTables(ctx, db); err != nil {
-		logger.Error("event indexer disabled: failed to initialize tables", "error", err)
-		return
-	}
-
-	go func() {
-		client := &http.Client{Timeout: 8 * time.Second}
-		ticker := time.NewTicker(6 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				startLedger, err := getLastIndexedLedger(ctx, db)
-				if err != nil {
-					logger.Error("event indexer failed to load cursor", "error", err)
-					continue
-				}
-
-				contractIDs, err := loadVaultContractIDs(ctx, db)
-				if err != nil {
-					logger.Error("event indexer failed to load vault contracts", "error", err)
-					continue
-				}
-				if len(contractIDs) == 0 {
-					continue
-				}
-
-				events, latestLedger, err := fetchSorobanEvents(ctx, client, rpcURL, contractIDs, startLedger)
-				if err != nil {
-					logger.Error("event indexer fetch failed", "error", err)
-					continue
-				}
-
-				for _, event := range events {
-					processed, err := applyIndexedEvent(ctx, db, event)
-					if err != nil {
-						logger.Error("event indexer failed to apply event", "event_id", event.ID, "contract_id", event.ContractID, "event_type", event.EventType, "error", err)
-						continue
-					}
-					if !processed {
-						logger.Debug("event indexer skipped duplicate event", "event_id", event.ID)
-					}
-				}
-
-				if err := setLastIndexedLedger(ctx, db, latestLedger); err != nil {
-					logger.Error("event indexer failed to persist cursor", "ledger", latestLedger, "error", err)
-				}
-			}
-		}
-	}()
-}
-
-func loadVaultContractIDs(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(
-		ctx,
-		`SELECT DISTINCT contract_address FROM vaults WHERE deleted_at IS NULL AND contract_address <> ''`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	contractIDs := make([]string, 0)
-	for rows.Next() {
-		var contractID string
-		if err := rows.Scan(&contractID); err != nil {
-			return nil, err
-		}
-		contractIDs = append(contractIDs, contractID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return contractIDs, nil
-}
-
-type indexedEvent struct {
-	ID         string
-	ContractID string
-	EventType  string
-	Ledger     uint64
-	Data       map[string]any
-}
-
-func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (bool, error) {
-	if strings.TrimSpace(event.ID) == "" {
-		return false, fmt.Errorf("event id is required")
-	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	inserted, err := markEventProcessed(ctx, tx, event)
-	if err != nil {
-		return false, err
-	}
-	if !inserted {
-		return false, tx.Commit()
-	}
-
-	switch strings.ToLower(strings.TrimSpace(event.EventType)) {
-	case "pause":
-		_, err := tx.ExecContext(
-			ctx,
-			`UPDATE vaults SET status = 'paused', updated_at = NOW() WHERE contract_address = $1 AND deleted_at IS NULL`,
-			event.ContractID,
-		)
-		if err != nil {
-			return false, err
-		}
-	case "unpause":
-		_, err := tx.ExecContext(
-			ctx,
-			`UPDATE vaults SET status = 'active', updated_at = NOW() WHERE contract_address = $1 AND deleted_at IS NULL`,
-			event.ContractID,
-		)
-		if err != nil {
-			return false, err
-		}
-	case "deposit":
-		amount, ok := extractEventAmount(event)
-		if !ok {
-			return false, fmt.Errorf("deposit event missing parseable amount")
-		}
-		_, err := tx.ExecContext(
-			ctx,
-			`UPDATE vaults
-			 SET total_deposited = total_deposited + $1::numeric,
-			     current_balance = current_balance + $1::numeric,
-			     updated_at = NOW()
-			 WHERE contract_address = $2 AND deleted_at IS NULL`,
-			amount.String(),
-			event.ContractID,
-		)
-		if err != nil {
-			return false, err
-		}
-	case "withdraw", "withdrawal":
-		amount, ok := extractEventAmount(event)
-		if !ok {
-			return false, fmt.Errorf("withdraw event missing parseable amount")
-		}
-		_, err := tx.ExecContext(
-			ctx,
-			`UPDATE vaults
-			 SET current_balance = current_balance - $1::numeric,
-			     updated_at = NOW()
-			 WHERE contract_address = $2 AND deleted_at IS NULL`,
-			amount.String(),
-			event.ContractID,
-		)
-		if err != nil {
-			return false, err
-		}
-	default:
-		// Keep cursor continuity even for unsupported events.
-	}
-
-	return true, tx.Commit()
-}
-
-func extractEventAmount(event indexedEvent) (decimal.Decimal, bool) {
-	if event.Data == nil {
-		return decimal.Zero, false
-	}
-
-	for _, key := range []string{"amount", "value"} {
-		raw, ok := event.Data[key]
-		if !ok {
-			continue
-		}
-
-		switch v := raw.(type) {
-		case string:
-			value, err := decimal.NewFromString(strings.TrimSpace(v))
-			if err != nil {
-				return decimal.Zero, false
-			}
-			return value, true
-		case json.Number:
-			value, err := decimal.NewFromString(v.String())
-			if err != nil {
-				return decimal.Zero, false
-			}
-			return value, true
-		case int:
-			return decimal.NewFromInt(int64(v)), true
-		case int64:
-			return decimal.NewFromInt(v), true
-		case float64:
-			value, err := decimal.NewFromString(fmt.Sprintf("%v", v))
-			if err != nil {
-				return decimal.Zero, false
-			}
-			return value, true
-		}
-	}
-
-	return decimal.Zero, false
-}
-
-func fetchSorobanEvents(
-	ctx context.Context,
-	client *http.Client,
-	rpcURL string,
-	contractIDs []string,
-	startLedger uint64,
-) ([]indexedEvent, uint64, error) {
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      "nester-indexer",
-		"method":  "getEvents",
-		"params": map[string]any{
-			"startLedger": startLedger,
-			"filters": []map[string]any{
-				{
-					"type":        "contract",
-					"contractIds": contractIDs,
-				},
-			},
-			"pagination": map[string]any{"limit": 200},
-		},
-	})
-	if err != nil {
-		return nil, 0, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, 0, fmt.Errorf("rpc returned %d: %s", resp.StatusCode, string(payload))
-	}
-
-	var rpcResp struct {
-		Result struct {
-			LatestLedger uint64 `json:"latestLedger"`
-			Events       []struct {
-				ID         string         `json:"id"`
-				ContractID string         `json:"contractId"`
-				Ledger     uint64         `json:"ledger"`
-				Topic      []interface{}  `json:"topic"`
-				Value      map[string]any `json:"value"`
-			} `json:"events"`
-		} `json:"result"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-
-	decoder := json.NewDecoder(resp.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(&rpcResp); err != nil {
-		return nil, 0, err
-	}
-	if rpcResp.Error != nil {
-		return nil, 0, fmt.Errorf("rpc error: %s", rpcResp.Error.Message)
-	}
-
-	events := make([]indexedEvent, 0, len(rpcResp.Result.Events))
-	for _, raw := range rpcResp.Result.Events {
-		eventType := ""
-		if len(raw.Topic) > 0 {
-			if topic, ok := raw.Topic[0].(string); ok {
-				eventType = topic
-			}
-		}
-		if eventType == "" {
-			continue
-		}
-		events = append(events, indexedEvent{
-			ID:         raw.ID,
-			ContractID: raw.ContractID,
-			EventType:  eventType,
-			Ledger:     raw.Ledger,
-			Data:       raw.Value,
-		})
-	}
-
-	return events, rpcResp.Result.LatestLedger, nil
-}
-
-func ensureIndexerTables(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS event_indexer_state (
-    id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    last_indexed_ledger BIGINT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`); err != nil {
-		return err
-	}
-
-	if _, err := db.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS processed_chain_events (
-    event_id TEXT PRIMARY KEY,
-    contract_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    ledger BIGINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`); err != nil {
-		return err
-	}
-
-	_, err := db.ExecContext(ctx, `
-INSERT INTO event_indexer_state (id, last_indexed_ledger)
-VALUES (1, 0)
-ON CONFLICT (id) DO NOTHING`)
-	return err
-}
-
-func getLastIndexedLedger(ctx context.Context, db *sql.DB) (uint64, error) {
-	var ledger uint64
-	err := db.QueryRowContext(ctx, `SELECT last_indexed_ledger FROM event_indexer_state WHERE id = 1`).Scan(&ledger)
-	if err != nil {
-		return 0, err
-	}
-	return ledger, nil
-}
-
-func setLastIndexedLedger(ctx context.Context, db *sql.DB, ledger uint64) error {
-	_, err := db.ExecContext(ctx, `
-UPDATE event_indexer_state
-SET last_indexed_ledger = GREATEST(last_indexed_ledger, $1::bigint),
-    updated_at = NOW()
-WHERE id = 1`, ledger)
-	return err
-}
-
-func markEventProcessed(ctx context.Context, tx *sql.Tx, event indexedEvent) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
-INSERT INTO processed_chain_events (event_id, contract_id, event_type, ledger)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (event_id) DO NOTHING`,
-		event.ID,
-		event.ContractID,
-		event.EventType,
-		event.Ledger,
-	)
-	if err != nil {
-		return false, err
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return rowsAffected == 1, nil
-}
-
-type mainEventSyncer struct {
-	db     *sql.DB
-	rpcURL string
-	logger *slog.Logger
-}
-
-func (s *mainEventSyncer) SyncEvents(ctx context.Context) (int, error) {
-	if err := ensureIndexerTables(ctx, s.db); err != nil {
-		return 0, fmt.Errorf("indexer tables: %w", err)
-	}
-
-	startLedger, err := getLastIndexedLedger(ctx, s.db)
-	if err != nil {
-		return 0, fmt.Errorf("load cursor: %w", err)
-	}
-
-	contractIDs, err := loadVaultContractIDs(ctx, s.db)
-	if err != nil {
-		return 0, fmt.Errorf("load contracts: %w", err)
-	}
-	if len(contractIDs) == 0 {
-		return 0, nil
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	events, latestLedger, err := fetchSorobanEvents(ctx, client, s.rpcURL, contractIDs, startLedger)
-	if err != nil {
-		return 0, fmt.Errorf("fetch events: %w", err)
-	}
-
-	processed := 0
-	for _, event := range events {
-		ok, err := applyIndexedEvent(ctx, s.db, event)
-		if err != nil {
-			s.logger.Error("admin sync: failed to apply event", "event_id", event.ID, "error", err)
-			continue
-		}
-		if ok {
-			processed++
-		}
-	}
-
-	if err := setLastIndexedLedger(ctx, s.db, latestLedger); err != nil {
-		s.logger.Error("admin sync: failed to persist cursor", "ledger", latestLedger, "error", err)
-	}
-
-	return processed, nil
-}

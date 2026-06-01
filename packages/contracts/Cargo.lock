@@ -689,15 +689,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nester-rent-escrow"
-version = "0.1.0"
-dependencies = [
- "nester-common",
- "nester-test-utils",
- "soroban-sdk",
-]
-
-[[package]]
 name = "nester-test-utils"
 version = "0.1.0"
 dependencies = [

@@ -574,6 +574,119 @@ fn execute_one_second_past_expiry_fails() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #510: explicit expiry-boundary and state-machine coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_execute_at_exact_unlock_timestamp() {
+    let (env, admin, cid) = setup();
+    env.ledger().set_timestamp(5_000);
+    let payload = make_payload(&env);
+
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP"), payload.clone())
+    });
+
+    let unlock_at = 5_000 + DEFAULT_DELAY;
+    env.ledger().set_timestamp(unlock_at);
+
+    let returned = invoke(&env, &cid, || Timelock::execute(&env, &admin, id));
+    assert_eq!(returned, payload);
+
+    let op = invoke(&env, &cid, || Timelock::get_operation(&env, id));
+    assert_eq!(op.status, TimelockStatus::Executed);
+}
+
+#[test]
+#[should_panic]
+fn test_execute_before_unlock_fails() {
+    let (env, admin, cid) = setup();
+    env.ledger().set_timestamp(2_000);
+    let payload = make_payload(&env);
+
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
+    });
+
+    let unlock_at = 2_000 + DEFAULT_DELAY;
+    env.ledger().set_timestamp(unlock_at - 1);
+
+    invoke(&env, &cid, || Timelock::execute(&env, &admin, id));
+}
+
+#[test]
+#[should_panic]
+fn test_execute_after_expiry_fails() {
+    let (env, admin, cid) = setup();
+    env.ledger().set_timestamp(3_000);
+    let payload = make_payload(&env);
+
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
+    });
+
+    let expiry_at = 3_000 + DEFAULT_DELAY + EXPIRY_WINDOW;
+    env.ledger().set_timestamp(expiry_at + 1);
+
+    invoke(&env, &cid, || Timelock::execute(&env, &admin, id));
+}
+
+#[test]
+fn test_cancel_pending_operation() {
+    let (env, admin, cid) = setup();
+    env.ledger().set_timestamp(4_000);
+    let payload = make_payload(&env);
+
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
+    });
+
+    // Cancel while still locked — valid transition scheduled → cancelled.
+    invoke(&env, &cid, || Timelock::cancel(&env, &admin, id));
+
+    let op = invoke(&env, &cid, || Timelock::get_operation(&env, id));
+    assert_eq!(op.status, TimelockStatus::Cancelled);
+}
+
+#[test]
+#[should_panic]
+fn test_cancel_executed_operation_fails() {
+    let (env, admin, cid) = setup();
+    let payload = make_payload(&env);
+
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
+    });
+
+    advance_time(&env, DEFAULT_DELAY);
+    invoke(&env, &cid, || Timelock::execute(&env, &admin, id));
+
+    invoke(&env, &cid, || Timelock::cancel(&env, &admin, id));
+}
+
+/// Operation IDs are auto-assigned and monotonic — a second propose never
+/// overwrites an existing pending operation.
+#[test]
+fn test_schedule_duplicate_operation_id() {
+    let (env, admin, cid) = setup();
+    let payload = make_payload(&env);
+
+    let id_a = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP_A"), payload.clone())
+    });
+    let id_b = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP_B"), payload)
+    });
+
+    assert_ne!(id_a, id_b);
+
+    let op_a = invoke(&env, &cid, || Timelock::get_operation(&env, id_a));
+    let op_b = invoke(&env, &cid, || Timelock::get_operation(&env, id_b));
+    assert_eq!(op_a.status, TimelockStatus::Pending);
+    assert_eq!(op_b.status, TimelockStatus::Pending);
+}
+
+// ---------------------------------------------------------------------------
 // Multiple operations in flight
 // ---------------------------------------------------------------------------
 

@@ -159,7 +159,7 @@ func Load() (*Config, error) {
 			snapshotInterval: loader.durationDefault("PERFORMANCE_SNAPSHOT_INTERVAL", 1*time.Hour),
 		},
 		startup: StartupConfig{
-			enableAutoMigrate: loader.boolDefault("ENABLE_AUTO_MIGRATE", false),
+			enableAutoMigrate: loader.boolDefault("RUN_MIGRATIONS", false),
 			migrationsDir:     loader.stringDefault("MIGRATIONS_DIR", "./migrations"),
 			dependencyTimeout: loader.durationDefault("STARTUP_DEPENDENCY_TIMEOUT", 5*time.Second),
 		},

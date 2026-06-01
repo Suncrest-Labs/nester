@@ -54,6 +54,22 @@ func (m *mockAuthUserRepository) GetRoles(ctx context.Context, id uuid.UUID) ([]
 	return []string{}, nil
 }
 
+func (m *mockAuthUserRepository) SaveKYCDocument(_ context.Context, _ *user.KYCDocument) error {
+	return nil
+}
+
+func (m *mockAuthUserRepository) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, error) {
+	return nil, user.ErrUserNotFound
+}
+
+func (m *mockAuthUserRepository) UpdateKYCStatus(_ context.Context, _ uuid.UUID, _ user.KYCStatus, _ *string, _ *time.Time) error {
+	return nil
+}
+
+func (m *mockAuthUserRepository) UpdateProfile(_ context.Context, _ uuid.UUID, _ user.ProfilePatch) (*user.User, error) {
+	return nil, errors.New("not implemented")
+}
+
 func newMockRepo() *mockAuthUserRepository {
 	return &mockAuthUserRepository{
 		users: make(map[string]*user.User),

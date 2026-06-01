@@ -1,7 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-  "contracts/*",
+  "contracts/access_control",
+  "contracts/allocation_strategy",
+  "contracts/nester",
+  "contracts/timelock",
+  "contracts/treasury",
+  "contracts/vault",
+  "contracts/vault_token",
+  "contracts/yield_registry",
   "libs/common",
   "libs/test_utils",
   "tests/integration",

@@ -417,6 +417,57 @@ fn performance_fee_charges_only_realized_yield_not_principal() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Impairment regression test (issue #451 / PR #275)
+//
+// The original performance-fee issue explicitly required:
+//   "User deposits at rate 1.0, rate halves (impairment) → zero performance fee."
+//
+// The withdraw path skips the performance fee whenever `yield_part =
+// assets_to_withdraw - principal` is not strictly positive. This test proves
+// that zero-performance-fee invariant holds after a loss halves the share
+// price, so an impaired position is never charged a fee on a gain it never had.
+// ---------------------------------------------------------------------------
+#[test]
+fn impairment_charges_zero_performance_fee() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Disable the early-withdrawal fee so the assertion isolates performance-fee
+    // behaviour and the withdrawn amount is unambiguous.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    // Deposit at the initial share price of 1.0.
+    vault.deposit(&user, &deposit, &0);
+    assert_eq!(vault.share_price(), 10_000_000, "deposit should occur at rate 1.0");
+
+    // Impairment: report a loss that halves the share price (1.0 -> 0.5).
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(-(500 * XLM)));
+    assert_eq!(vault.share_price(), 5_000_000, "rate should halve after impairment");
+
+    // The preview must show no performance fee owed on an impaired position.
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert_eq!(
+        preview.performance_fee_deducted, 0,
+        "no performance fee may be charged when the position has lost value"
+    );
+
+    // The actual withdrawal returns the impaired value (500 XLM) with no fees
+    // siphoned off: 1000 shares now worth 0.5 each.
+    vault.withdraw(&user, &shares, &0);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user),
+        500 * XLM,
+        "user receives the full impaired value with zero performance fee"
+    );
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #17)")]
 fn withdraw_reverts_when_min_assets_out_is_not_met() {
@@ -426,6 +477,73 @@ fn withdraw_reverts_when_min_assets_out_is_not_met() {
 
     vault.deposit(&user, &(1_000 * XLM), &0);
     vault.withdraw(&user, &(500 * XLM), &(500 * XLM + STROOP));
+}
+
+// Regression for #448: `withdrawal_fee_preview().net_amount_received` is the
+// post-fee amount actually transferred, so a caller can use it directly as
+// `min_assets_out` for a fee-bearing withdrawal without tripping slippage.
+//
+// No time is advanced, so no management fee accrues (elapsed = 0) and the
+// preview models every fee the withdrawal applies exactly: the reported yield
+// triggers a performance fee, and remaining inside the MinLockPeriod triggers
+// the early-withdrawal fee.
+#[test]
+fn withdrawal_fee_preview_net_is_slippage_safe_as_min_assets_out() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(500 * XLM));
+    // Back the reported yield with real tokens so the vault can pay it out
+    // (report_yield only updates share-price accounting).
+    mint(&token, &vault.address, 500 * XLM);
+
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert!(
+        preview.performance_fee_deducted > 0,
+        "expected a performance fee on realized yield"
+    );
+    assert!(
+        preview.early_withdrawal_fee_deducted > 0,
+        "expected an early-withdrawal fee inside the lock period"
+    );
+    assert!(preview.net_amount_received < preview.gross_asset_value);
+
+    let before = token::Client::new(&env, &token.address).balance(&user);
+
+    // Using the NET preview as the slippage floor must succeed.
+    vault.withdraw(&user, &shares, &preview.net_amount_received);
+
+    let after = token::Client::new(&env, &token.address).balance(&user);
+    // The user receives exactly the previewed net amount — the preview is an
+    // exact (not merely conservative) floor.
+    assert_eq!(after - before, preview.net_amount_received);
+}
+
+// Regression for #448: the GROSS preview (`preview_withdraw` /
+// `gross_asset_value`) must NOT be used as `min_assets_out` — on a fee-bearing
+// withdrawal the transfer is below gross, so it reverts with SlippageExceeded
+// (#17). This is exactly the failure mode the issue describes.
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn gross_preview_as_min_assets_out_trips_slippage_on_fee_bearing_withdrawal() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(500 * XLM));
+
+    let shares = vault.get_shares(&user);
+    let gross = vault.preview_withdraw(&shares);
+    // gross > net (fees apply) => SlippageExceeded.
+    vault.withdraw(&user, &shares, &gross);
 }
 
 #[test]
@@ -949,4 +1067,40 @@ fn process_emergency_queue_decrements_liquid_reserved() {
         treasury_after > treasury_before,
         "collect_fees should transfer fees once LiquidReserved is decremented after queue processing"
     );
+}
+
+/// Regression test for the zero-performance-fee-on-impairment invariant (#451).
+///
+/// When a vault is impaired (`yield_part < 0`), `withdraw` must NOT charge a
+/// performance fee. The fee guard is `if yield_part > 0` in `lib.rs`; a future
+/// refactor could silently drop it and start charging fees on losses. This test
+/// locks the behaviour in: with the early-withdrawal fee disabled, an impaired
+/// withdrawal returns the full impaired value with no fee skimmed off.
+#[test]
+fn withdrawal_charges_no_perf_fee_on_impairment() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Isolate performance-fee behaviour by disabling the early-withdrawal fee.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.deposit(&user, &deposit, &0);
+
+    // Simulate a 20% impairment: total assets drop from 1000 to 800.
+    vault.report_yield(&admin, &(-(200 * XLM)));
+
+    let shares = vault.get_shares(&user);
+    vault.withdraw(&user, &shares, &0);
+
+    // yield_part = 800 - 1000 = -200 (< 0) => no performance fee. The user
+    // recovers the full impaired 800 XLM, not 780 after a wrongful 10% fee.
+    // Soroban arithmetic is deterministic integer math (no FP rounding), so
+    // an exact equality is the right contract — per-review feedback.
+    let balance = token::Client::new(&env, &token.address).balance(&user);
+    assert_eq!(balance, 800 * XLM, "impairment must not charge a performance fee");
 }

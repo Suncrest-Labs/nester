@@ -1,0 +1,40 @@
+name: Smart Contract Audit
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "packages/contracts/**"
+      - "scripts/contract-audit.sh"
+      - ".github/workflows/contract-audit.yml"
+  pull_request:
+    paths:
+      - "packages/contracts/**"
+      - "scripts/contract-audit.sh"
+      - ".github/workflows/contract-audit.yml"
+  workflow_dispatch:
+
+jobs:
+  x402-audit:
+    name: x402 Heuristic Contract Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make audit script executable
+        run: chmod +x scripts/contract-audit.sh
+
+      - name: Run pre-deploy contract audit
+        env:
+          X402_PAYMENT_PROOF: ${{ secrets.X402_PAYMENT_PROOF }}
+          CONTRACT_AUDIT_ADDRESSES: ${{ vars.CONTRACT_AUDIT_ADDRESSES }}
+          CONTRACT_AUDIT_API_URL: ${{ vars.CONTRACT_AUDIT_API_URL }}
+        run: ./scripts/contract-audit.sh
+
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-audit-reports
+          path: audit-report-*.json
+          if-no-files-found: ignore

@@ -48,33 +48,26 @@ type Transaction struct {
 	ConfirmedAt *time.Time        `json:"confirmed_at,omitempty"`
 }
 
-// ListFilter holds optional query parameters for listing transactions.
+// ListFilter drives paginated, filtered transaction listing for a user.
 type ListFilter struct {
-	UserID  string
-	Types   []TransactionType
-	Status  TransactionStatus
-	From    *time.Time
-	To      *time.Time
-	Cursor  string // opaque base64-encoded "createdAt:id"
-	Limit   int    // default 25, max 100
-	VaultID string
-	Search  string
-}
-
-// Page is a generic cursor-based paginated response.
-type Page[T any] struct {
-	Items          []T             `json:"items"`
-	NextCursor     string          `json:"next_cursor,omitempty"`
-	PrevCursor     string          `json:"prev_cursor,omitempty"`
-	Total          int             `json:"total"`
-	TotalDeposited decimal.Decimal `json:"total_deposited"`
-	TotalWithdrawn decimal.Decimal `json:"total_withdrawn"`
-	TotalYield     decimal.Decimal `json:"total_yield_earned"`
+	UserID  uuid.UUID
+	VaultID uuid.UUID // zero value means all vaults
+	Type    string    // "deposit" | "withdrawal" | "" for all
+	Status  string    // "pending" | "completed" | "failed" | "" for all
+	Limit   int
+	Offset  int
 }
 
 type Repository interface {
 	Upsert(ctx context.Context, model Transaction) (Transaction, error)
 	GetByHash(ctx context.Context, hash string) (Transaction, error)
 	UpdateStatus(ctx context.Context, hash string, status TransactionStatus, confirmedAt *time.Time, errorReason string) (Transaction, error)
-	ListByUserID(ctx context.Context, filter ListFilter) (Page[Transaction], error)
+	// ListPendingOlderThan returns every transaction still in StatusPending
+	// whose created_at is at or before cutoff. The background poller uses it
+	// to find transactions that have had time to settle on-chain but were
+	// never reconciled (e.g. the client never polled GET /transactions/{hash}).
+	ListPendingOlderThan(ctx context.Context, cutoff time.Time) ([]Transaction, error)
+	// ListUserTransactions returns paginated transactions scoped to the user,
+	// with optional filtering by vault, type, and status.
+	ListUserTransactions(ctx context.Context, filter ListFilter) ([]Transaction, int, error)
 }

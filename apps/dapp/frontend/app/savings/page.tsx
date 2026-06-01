@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -270,7 +270,10 @@ function DepositModal({
     const [errorMsg, setErrorMsg] = useState("");
     const [txHash, setTxHash] = useState("");
 
-    useEffect(() => {
+    // Reset states if vault becomes null
+    const [prevVaultId, setPrevVaultId] = useState(vault?.id);
+    if (vault?.id !== prevVaultId) {
+        setPrevVaultId(vault?.id);
         if (!vault) {
             setAmount("");
             setGoalName("");
@@ -278,7 +281,21 @@ function DepositModal({
         } else {
             setSelectedAsset(vault.supportedAssets[0] ?? "USDC");
         }
-    }, [vault]);
+    }
+
+    // Instead of using Date.now() in render, use a ref or state
+    const [now] = useState(() => Date.now());
+    
+    const maturityDate = useMemo(() => {
+        if (!vault) return null;
+        return vault.lockDays
+            ? new Date(now + vault.lockDays * 86400000).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+              })
+            : null;
+    }, [vault, now]);
 
     if (!vault) return null;
 
@@ -286,13 +303,6 @@ function DepositModal({
     const available = balances[selectedAsset] ?? 0;
     const parsedAmount = parseFloat(amount) || 0;
     const projectedYield = parsedAmount * vault.apy * ((vault.lockDays ?? 365) / 365);
-    const maturityDate = vault.lockDays
-        ? new Date(Date.now() + vault.lockDays * 86400000).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-          })
-        : null;
     const overBalance = parsedAmount > available;
     const canSubmit = parsedAmount > 0 && !overBalance;
 

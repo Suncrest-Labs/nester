@@ -52,10 +52,12 @@ export function Navbar() {
         return () => document.documentElement.classList.remove("menu-open");
     }, [mobileOpen]);
 
-    // Close mobile menu on route change
-    useEffect(() => {
-        setMobileOpen(false);
-    }, [pathname]);
+    // Use prev path state to detect changes instead of effect
+    const [prevPath, setPrevPath] = useState(pathname);
+    if (pathname !== prevPath) {
+        setPrevPath(pathname);
+        if (mobileOpen) setMobileOpen(false);
+    }
 
     const copyAddress = (e: React.MouseEvent) => {
         e.stopPropagation();

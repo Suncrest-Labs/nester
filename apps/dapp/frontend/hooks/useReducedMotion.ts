@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 
 export function useReducedMotion() {
-  const [reduced, setReduced] = useState(false);
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  });
 
   useEffect(() => {
-    // Check if window is defined (for SSR)
     if (typeof window === 'undefined') return;
     
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-    setReduced(media.matches);
 
     const listener = () => setReduced(media.matches);
     media.addEventListener('change', listener);

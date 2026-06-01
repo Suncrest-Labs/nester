@@ -10,7 +10,8 @@ use soroban_sdk::{
 use nester_access_control::Role;
 
 use crate::{
-    ProtocolType, SourceStatus, YieldRegistryContract, YieldRegistryContractClient, MAX_APY_HISTORY,
+    ProtocolType, SourceStatus, YieldRegistryContract, YieldRegistryContractClient,
+    DEFAULT_APY_DEVIATION_THRESHOLD_BPS, MAX_APY_HISTORY,
 };
 
 // ---------------------------------------------------------------------------
@@ -347,6 +348,207 @@ fn has_source_returns_false_for_unregistered() {
     let env = Env::default();
     let (client, _) = setup(&env);
     assert!(!client.has_source(&Symbol::new(&env, "ghost")));
+}
+
+// ---------------------------------------------------------------------------
+// APY deviation guard (issue #509)
+//
+// The guard rejects a single APY update whose ABSOLUTE change (in bps) from the
+// last stored APY exceeds the configured threshold (default
+// DEFAULT_APY_DEVIATION_THRESHOLD_BPS = 5000). Boundary is INCLUSIVE: a change
+// exactly equal to the threshold is accepted; only a strictly larger change is
+// rejected. The first update (no prior non-zero APY) is always accepted.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_apy_update_within_threshold_succeeds() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+
+    // First update establishes a non-zero baseline (bypasses the guard).
+    client.update_apy(&admin, &aave_id(&env), &1_000);
+    // +1000 bps is well within the default 5000-bps threshold.
+    client.update_apy(&admin, &aave_id(&env), &2_000);
+
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        2_000
+    );
+}
+
+#[test]
+fn test_apy_update_exceeds_threshold_rejected() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+
+    client.update_apy(&admin, &aave_id(&env), &1_000);
+
+    // +6000 bps exceeds the 5000-bps threshold and must be rejected.
+    assert!(client
+        .try_update_apy(&admin, &aave_id(&env), &7_000)
+        .is_err());
+
+    // The rejected update must not have mutated stored state.
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        1_000
+    );
+}
+
+#[test]
+fn test_first_apy_update_always_accepted() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+
+    // No previous (non-zero) APY to compare against, so even a jump far beyond
+    // the threshold is accepted on the first update.
+    let first = DEFAULT_APY_DEVIATION_THRESHOLD_BPS + 4_000; // 9000 bps
+    client.update_apy(&admin, &aave_id(&env), &first);
+
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        first
+    );
+}
+
+#[test]
+fn test_admin_can_override_deviation_guard() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+
+    client.update_apy(&admin, &aave_id(&env), &1_000);
+
+    // Sanity: the guarded path rejects this jump (dev 7000 > 5000).
+    assert!(client
+        .try_update_apy(&admin, &aave_id(&env), &8_000)
+        .is_err());
+
+    // The admin emergency override bypasses the guard.
+    client.update_apy_override(&admin, &aave_id(&env), &8_000);
+
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        8_000
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_operator_cannot_override_deviation_guard() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let operator = Address::generate(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    client.update_apy(&admin, &aave_id(&env), &1_000);
+
+    // Operators may update within the threshold but must NOT be able to
+    // override it — the override is gated on the Admin role.
+    client.update_apy_override(&operator, &aave_id(&env), &8_000);
+}
+
+#[test]
+fn test_apy_update_at_exact_threshold_boundary() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+
+    client.update_apy(&admin, &aave_id(&env), &1_000);
+
+    // One bps PAST the threshold (dev 5001) is rejected — leaves state at 1000.
+    assert!(client
+        .try_update_apy(&admin, &aave_id(&env), &6_001)
+        .is_err());
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        1_000
+    );
+
+    // EXACTLY at the threshold (dev 5000) is accepted — boundary is inclusive.
+    client.update_apy(&admin, &aave_id(&env), &6_000);
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        6_000
+    );
+}
+
+#[test]
+fn test_threshold_is_configurable_from_storage() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+
+    // Default is seeded at initialize.
+    assert_eq!(
+        client.get_apy_deviation_threshold(),
+        DEFAULT_APY_DEVIATION_THRESHOLD_BPS
+    );
+
+    client.update_apy(&admin, &aave_id(&env), &1_000);
+
+    // Tighten the threshold to 1000 bps.
+    client.set_apy_deviation_threshold(&admin, &1_000);
+    assert_eq!(client.get_apy_deviation_threshold(), 1_000);
+
+    // A +1500 jump passed under the default 5000 but now exceeds the new 1000.
+    assert!(client
+        .try_update_apy(&admin, &aave_id(&env), &2_500)
+        .is_err());
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        1_000
+    );
+
+    // Within the new threshold still works.
+    client.update_apy(&admin, &aave_id(&env), &1_800);
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        1_800
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_non_admin_cannot_set_threshold() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let operator = Address::generate(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    client.set_apy_deviation_threshold(&operator, &1_000);
+}
+
+#[test]
+#[should_panic]
+fn test_set_threshold_above_max_apy_rejected() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    register_default(&client, &env, &admin, &aave_id(&env));
+
+    // Threshold cannot exceed the absolute APY ceiling (MAX_APY_BPS = 10000).
+    client.set_apy_deviation_threshold(&admin, &10_001);
 }
 
 #[test]

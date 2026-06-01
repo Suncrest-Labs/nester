@@ -12,24 +12,44 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
-// VaultDepositInvoker handles on-chain deposit and withdrawal operations.
+// VaultDepositInvoker handles on-chain deposit, withdrawal, and harvest operations.
 // Implementations invoke the Soroban vault contract; the noop is used when
 // no operator secret is configured.
 type VaultDepositInvoker interface {
 	DepositToVault(ctx context.Context, contractAddress string, amountStroops int64) error
-	WithdrawFromVault(ctx context.Context, contractAddress string, sharesStroops int64) error
+	WithdrawFromVault(ctx context.Context, contractAddress string, sharesStroops int64, slippageBps int) error
+	HarvestVault(ctx context.Context, contractAddress, userAddress string, compound bool) (string, error)
 }
 
 // NoopVaultDepositInvoker satisfies VaultDepositInvoker without making any
 // on-chain calls. Used when chain integration is not configured.
 type NoopVaultDepositInvoker struct{}
 
-func (NoopVaultDepositInvoker) DepositToVault(_ context.Context, _ string, _ int64) error    { return nil }
-func (NoopVaultDepositInvoker) WithdrawFromVault(_ context.Context, _ string, _ int64) error { return nil }
+func (NoopVaultDepositInvoker) DepositToVault(_ context.Context, _ string, _ int64) error { return nil }
+func (NoopVaultDepositInvoker) WithdrawFromVault(_ context.Context, _ string, _ int64, _ int) error {
+	return nil
+}
+func (NoopVaultDepositInvoker) HarvestVault(_ context.Context, _, _ string, _ bool) (string, error) {
+	return "", nil
+}
+
+// Default performance fee (10%) applied when estimating harvest proceeds off-chain.
+const defaultHarvestPerformanceFeeBPS = 1000
+
+// HarvestResult is returned by POST /api/v1/vaults/{id}/harvest.
+type HarvestResult struct {
+	GrossYieldUSDC     string `json:"gross_yield_usdc"`
+	PerformanceFeeUSDC string `json:"performance_fee_usdc"`
+	NetYieldUSDC       string `json:"net_yield_usdc"`
+	Compounded         bool   `json:"compounded"`
+	NewSharesMinted    string `json:"new_shares_minted,omitempty"`
+	TxHash             string `json:"tx_hash,omitempty"`
+}
 
 type VaultService struct {
-	repository     vault.Repository
-	depositInvoker VaultDepositInvoker
+	repository            vault.Repository
+	depositInvoker        VaultDepositInvoker
+	defaultHarvestCompound bool
 }
 
 // ── Input types ──────────────────────────────────────────────────────────────
@@ -43,8 +63,10 @@ type CreateVaultInput struct {
 
 type RecordDepositInput struct {
 	VaultID uuid.UUID
+	UserID  uuid.UUID
 	Amount  decimal.Decimal
 	TxHash  string
+	Fee     decimal.Decimal
 }
 
 type UpdateAllocationsInput struct {
@@ -64,9 +86,12 @@ type CloseVaultInput struct {
 }
 
 type RecordWithdrawalInput struct {
-	VaultID uuid.UUID
-	Amount  decimal.Decimal
-	TxHash  string
+	VaultID     uuid.UUID
+	UserID      uuid.UUID
+	Amount      decimal.Decimal
+	TxHash      string
+	Fee         decimal.Decimal
+	SlippageBps int // optional; 0 uses configured default
 }
 
 // ── Constructor ──────────────────────────────────────────────────────────────
@@ -79,6 +104,11 @@ func NewVaultService(repository vault.Repository) *VaultService {
 // Call this after NewVaultService when an operator key is available.
 func (s *VaultService) SetDepositInvoker(invoker VaultDepositInvoker) {
 	s.depositInvoker = invoker
+}
+
+// SetHarvestDefaultCompound configures the compound flag when the request omits it.
+func (s *VaultService) SetHarvestDefaultCompound(compound bool) {
+	s.defaultHarvestCompound = compound
 }
 
 // ── Existing methods ─────────────────────────────────────────────────────────
@@ -129,39 +159,26 @@ func (s *VaultService) GetVault(ctx context.Context, id uuid.UUID) (vault.Vault,
 	return s.repository.GetVault(ctx, id)
 }
 
-func (s *VaultService) GetUserVaults(ctx context.Context, userID uuid.UUID) ([]vault.Vault, error) {
+func (s *VaultService) ListUserVaults(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter vault.UserListFilter,
+) ([]vault.Vault, int, error) {
 	if userID == uuid.Nil {
-		return nil, vault.ErrInvalidVault
+		return nil, 0, vault.ErrInvalidVault
 	}
-	vaults, err := s.repository.GetUserVaults(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Sort vaults by APY descending
-	for i := 0; i < len(vaults); i++ {
-		for j := i + 1; j < len(vaults); j++ {
-			// Get max APY for each vault
-			maxAPYI := decimal.Zero
-			for _, alloc := range vaults[i].Allocations {
-				if alloc.APY.GreaterThan(maxAPYI) {
-					maxAPYI = alloc.APY
-				}
-			}
-			maxAPYJ := decimal.Zero
-			for _, alloc := range vaults[j].Allocations {
-				if alloc.APY.GreaterThan(maxAPYJ) {
-					maxAPYJ = alloc.APY
-				}
-			}
-			// Swap if j has higher APY
-			if maxAPYJ.GreaterThan(maxAPYI) {
-				vaults[i], vaults[j] = vaults[j], vaults[i]
-			}
+	if filter.Status != "" {
+		if _, err := vault.ParseStatus(filter.Status); err != nil {
+			return nil, 0, err
 		}
 	}
-
-	return vaults, nil
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PerPage < 1 {
+		filter.PerPage = 20
+	}
+	return s.repository.ListUserVaults(ctx, userID, filter)
 }
 
 func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInput) (vault.Vault, error) {
@@ -175,18 +192,35 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 		return vault.Vault{}, vault.ErrInvalidPrecision
 	}
 
+	existing, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return vault.Vault{}, err
+	}
+
+	userID := input.UserID
+	if userID == uuid.Nil {
+		userID = existing.UserID
+	}
+
+	sharePrice := vault.ComputeSharePrice(existing)
+	shares := input.Amount.Div(sharePrice).Round(6)
+
 	if s.depositInvoker != nil {
-		existing, err := s.repository.GetVault(ctx, input.VaultID)
-		if err != nil {
-			return vault.Vault{}, err
-		}
 		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
 		if err := s.depositInvoker.DepositToVault(ctx, existing.ContractAddress, stroops); err != nil {
 			return vault.Vault{}, fmt.Errorf("on-chain deposit failed: %w", err)
 		}
 	}
 
-	if err := s.repository.RecordDeposit(ctx, input.VaultID, input.Amount); err != nil {
+	record := vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               input.Amount,
+		TransactionHash:      input.TxHash,
+		SharesMintedOrBurned: shares,
+		SharePriceAtTime:     sharePrice,
+		FeeCharged:           input.Fee,
+	}
+	if err := s.repository.RecordDeposit(ctx, input.VaultID, record); err != nil {
 		return vault.Vault{}, err
 	}
 
@@ -374,14 +408,30 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 		return vault.Vault{}, vault.ErrInsufficientBalance
 	}
 
+	userID := input.UserID
+	if userID == uuid.Nil {
+		userID = existing.UserID
+	}
+
+	sharePrice := vault.ComputeSharePrice(existing)
+	shares := input.Amount.Div(sharePrice).Round(6)
+
 	if s.depositInvoker != nil {
 		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
-		if err := s.depositInvoker.WithdrawFromVault(ctx, existing.ContractAddress, stroops); err != nil {
+		if err := s.depositInvoker.WithdrawFromVault(ctx, existing.ContractAddress, stroops, input.SlippageBps); err != nil {
 			return vault.Vault{}, fmt.Errorf("on-chain withdrawal failed: %w", err)
 		}
 	}
 
-	if err := s.repository.RecordWithdrawal(ctx, input.VaultID, input.Amount); err != nil {
+	record := vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               input.Amount,
+		TransactionHash:      input.TxHash,
+		SharesMintedOrBurned: shares,
+		SharePriceAtTime:     sharePrice,
+		FeeCharged:           input.Fee,
+	}
+	if err := s.repository.RecordWithdrawal(ctx, input.VaultID, record); err != nil {
 		return vault.Vault{}, err
 	}
 
@@ -401,6 +451,156 @@ func (s *VaultService) DeleteVault(ctx context.Context, vaultID uuid.UUID) error
 	return s.repository.SoftDeleteVault(ctx, vaultID)
 }
 
+const (
+	defaultVaultListLimit = 20
+	maxVaultListLimit     = 100
+)
+
+// ListVaultsInput carries validated pagination params for the public list endpoint.
+type ListVaultsInput struct {
+	Limit  int
+	Offset int
+	Status string
+}
+
+// ListVaults returns a paginated slice of all non-deleted vaults.
+func (s *VaultService) ListVaults(ctx context.Context, input ListVaultsInput) ([]vault.Vault, int, error) {
+	limit := input.Limit
+	if limit <= 0 {
+		limit = defaultVaultListLimit
+	}
+	if limit > maxVaultListLimit {
+		limit = maxVaultListLimit
+	}
+	offset := input.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	return s.repository.ListVaults(ctx, vault.ListFilter{
+		Limit:  limit,
+		Offset: offset,
+		Status: input.Status,
+	})
+}
+
+type HarvestVaultInput struct {
+	VaultID       uuid.UUID
+	UserID        uuid.UUID
+	WalletAddress string
+	Compound      *bool
+}
+
+// HarvestVault claims accrued yield for the vault owner, optionally compounding it.
+func (s *VaultService) HarvestVault(ctx context.Context, input HarvestVaultInput) (HarvestResult, error) {
+	if input.VaultID == uuid.Nil || input.UserID == uuid.Nil {
+		return HarvestResult{}, vault.ErrInvalidVault
+	}
+
+	existing, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return HarvestResult{}, err
+	}
+	if existing.UserID != input.UserID {
+		return HarvestResult{}, vault.ErrVaultForbidden
+	}
+	if existing.Status == vault.StatusClosed {
+		return HarvestResult{}, vault.ErrVaultClosed
+	}
+	if existing.Status != vault.StatusActive {
+		return HarvestResult{}, vault.ErrVaultNotActive
+	}
+
+	compound := s.defaultHarvestCompound
+	if input.Compound != nil {
+		compound = *input.Compound
+	}
+
+	grossYield := harvestableYield(existing)
+	if grossYield.Cmp(decimal.Zero) <= 0 {
+		return HarvestResult{
+			GrossYieldUSDC:     formatUSDCAmount(decimal.Zero),
+			PerformanceFeeUSDC: formatUSDCAmount(decimal.Zero),
+			NetYieldUSDC:       formatUSDCAmount(decimal.Zero),
+			Compounded:         compound,
+		}, nil
+	}
+
+	performanceFee := grossYield.Mul(decimal.NewFromInt(defaultHarvestPerformanceFeeBPS)).
+		Div(decimal.NewFromInt(10_000)).
+		Round(vault.MaxAmountScale)
+	netYield := grossYield.Sub(performanceFee)
+
+	var txHash string
+	if s.depositInvoker != nil {
+		userAddress := strings.TrimSpace(input.WalletAddress)
+		if userAddress == "" {
+			return HarvestResult{}, fmt.Errorf("wallet address required for on-chain harvest")
+		}
+		txHash, err = s.depositInvoker.HarvestVault(ctx, existing.ContractAddress, userAddress, compound)
+		if err != nil {
+			return HarvestResult{}, fmt.Errorf("on-chain harvest failed: %w", err)
+		}
+	}
+
+	var newShares *decimal.Decimal
+	newSharesStr := ""
+	if compound {
+		shares := estimateSharesMinted(existing, netYield)
+		newShares = &shares
+		newSharesStr = formatUSDCAmount(shares)
+	}
+
+	if err := s.repository.RecordHarvest(ctx, vault.HarvestRecordInput{
+		VaultID:         input.VaultID,
+		UserID:          input.UserID,
+		NetYield:        netYield,
+		PerformanceFee:  performanceFee,
+		Compounded:      compound,
+		NewSharesMinted: newShares,
+		TransactionHash: txHash,
+	}); err != nil {
+		return HarvestResult{}, err
+	}
+
+	return HarvestResult{
+		GrossYieldUSDC:     formatUSDCAmount(grossYield),
+		PerformanceFeeUSDC: formatUSDCAmount(performanceFee),
+		NetYieldUSDC:       formatUSDCAmount(netYield),
+		Compounded:         compound,
+		NewSharesMinted:    newSharesStr,
+		TxHash:             txHash,
+	}, nil
+}
+
+func harvestableYield(v vault.Vault) decimal.Decimal {
+	if v.YieldEarned.Cmp(decimal.Zero) > 0 {
+		return v.YieldEarned
+	}
+	delta := v.CurrentBalance.Sub(v.TotalDeposited)
+	if delta.Cmp(decimal.Zero) > 0 {
+		return delta
+	}
+	return decimal.Zero
+}
+
+func estimateSharesMinted(v vault.Vault, netYield decimal.Decimal) decimal.Decimal {
+	if netYield.Cmp(decimal.Zero) <= 0 {
+		return decimal.Zero
+	}
+	if v.TotalDeposited.Cmp(decimal.Zero) <= 0 {
+		return netYield
+	}
+	sharePrice := v.CurrentBalance.Div(v.TotalDeposited)
+	if sharePrice.Cmp(decimal.Zero) <= 0 {
+		return netYield
+	}
+	return netYield.Div(sharePrice).Round(vault.MaxAmountScale)
+}
+
+func formatUSDCAmount(amount decimal.Decimal) string {
+	return amount.Round(6).StringFixed(6)
+}
+
 // ListDeposits returns the deposit transaction history for a vault.
 func (s *VaultService) ListDeposits(ctx context.Context, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
 	if vaultID == uuid.Nil {
@@ -412,6 +612,25 @@ func (s *VaultService) ListDeposits(ctx context.Context, vaultID uuid.UUID) ([]v
 	}
 
 	return s.repository.ListDeposits(ctx, vaultID)
+}
+
+// GetMyPosition returns the authenticated user's aggregated position in a vault.
+func (s *VaultService) GetMyPosition(ctx context.Context, userID uuid.UUID, vaultID uuid.UUID) (vault.UserVaultPosition, error) {
+	if userID == uuid.Nil || vaultID == uuid.Nil {
+		return vault.UserVaultPosition{}, vault.ErrInvalidVault
+	}
+
+	v, err := s.repository.GetVault(ctx, vaultID)
+	if err != nil {
+		return vault.UserVaultPosition{}, err
+	}
+
+	txns, err := s.repository.ListUserVaultTransactions(ctx, userID, vaultID)
+	if err != nil {
+		return vault.UserVaultPosition{}, err
+	}
+
+	return vault.BuildUserVaultPosition(v, userID, txns), nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

@@ -20,18 +20,18 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-    const [token, setToken] = useState<string | null>(null);
+    const [token, setTokenState] = useState<string | null>(null);
     const { address } = useWallet();
 
-    // Clear token if wallet disconnects
-    useEffect(() => {
-        if (!address) {
-            setToken(null);
-        }
-    }, [address]);
+    // Clear token synchronously if wallet disconnects (using render phase)
+    const tokenToUse = address ? token : null;
+
+    const setToken = (newToken: string | null) => {
+        setTokenState(newToken);
+    };
 
     return (
-        <AuthContext.Provider value={{ token, setToken }}>
+        <AuthContext.Provider value={{ token: tokenToUse, setToken }}>
             {children}
         </AuthContext.Provider>
     );

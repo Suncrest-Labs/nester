@@ -36,19 +36,25 @@ export function useOnboarding() {
 }
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
-    const [state, setState] = useState<OnboardingState>(defaultState);
-    const [isLoaded, setIsLoaded] = useState(false);
-
-    useEffect(() => {
+    const [state, setState] = useState<OnboardingState>(() => {
+        if (typeof window === "undefined") return defaultState;
         const stored = localStorage.getItem("nester_onboarding");
         if (stored) {
             try {
-                setState(JSON.parse(stored));
+                return JSON.parse(stored);
             } catch (e) {
                 console.error("Failed to parse onboarding state", e);
+                return defaultState;
             }
         }
-        setIsLoaded(true);
+        return defaultState;
+    });
+    const [isLoaded, setIsLoaded] = useState(false);
+
+    useEffect(() => {
+        // Run once on mount to set loaded state
+        const timer = setTimeout(() => setIsLoaded(true), 0);
+        return () => clearTimeout(timer);
     }, []);
 
     useEffect(() => {
