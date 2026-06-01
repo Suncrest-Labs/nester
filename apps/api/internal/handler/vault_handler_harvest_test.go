@@ -22,7 +22,7 @@ func TestVaultHandlerHarvestReturnsZeroYield(t *testing.T) {
 	vaultService := service.NewVaultService(repository)
 	vaultService.SetHarvestDefaultCompound(true)
 
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -69,7 +69,7 @@ func TestVaultHandlerHarvestForbiddenForOtherUser(t *testing.T) {
 	otherID := uuid.New()
 	repository := newHandlerRepository(ownerID, otherID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -108,7 +108,7 @@ func TestVaultHandlerHarvestBroadcastsWebSocketEvent(t *testing.T) {
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
 
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 	hub := ws.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
 	handler.SetWSHub(hub)
 	go hub.Run(t.Context())

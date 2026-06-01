@@ -22,7 +22,7 @@ func TestVaultHandlerGetMyPositionEmpty(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 
 	mux := http.NewServeMux()
 	handler.Register(mux)
@@ -58,7 +58,7 @@ func TestVaultHandlerGetMyPositionWithYield(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 
 	mux := http.NewServeMux()
 	handler.Register(mux)
@@ -108,7 +108,7 @@ func TestVaultHandlerGetMyPositionWithYield(t *testing.T) {
 func TestVaultHandlerGetMyPositionUnauthorized(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
-	handler := NewVaultHandler(service.NewVaultService(repository))
+	handler := NewVaultHandler(service.NewVaultService(repository), nil)
 
 	mux := http.NewServeMux()
 	handler.Register(mux)
@@ -137,7 +137,7 @@ func TestVaultHandlerGetMyPositionUnauthorized(t *testing.T) {
 
 func TestVaultHandlerGetMyPositionInvalidVaultID(t *testing.T) {
 	userID := uuid.New()
-	handler := NewVaultHandler(service.NewVaultService(newHandlerRepository(userID)))
+	handler := NewVaultHandler(service.NewVaultService(newHandlerRepository(userID)), nil)
 
 	mux := http.NewServeMux()
 	handler.Register(mux)
@@ -157,7 +157,7 @@ func TestVaultHandlerGetMyPositionInvalidVaultID(t *testing.T) {
 
 func TestVaultHandlerGetMyPositionVaultNotFound(t *testing.T) {
 	userID := uuid.New()
-	handler := NewVaultHandler(service.NewVaultService(newHandlerRepository(userID)))
+	handler := NewVaultHandler(service.NewVaultService(newHandlerRepository(userID)), nil)
 
 	mux := http.NewServeMux()
 	handler.Register(mux)
@@ -179,7 +179,7 @@ func TestVaultHandlerGetMyPositionNoAuthBodyRequired(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	handler := NewVaultHandler(vaultService)
+	handler := NewVaultHandler(vaultService, nil)
 
 	mux := http.NewServeMux()
 	handler.Register(mux)
