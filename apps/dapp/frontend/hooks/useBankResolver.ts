@@ -20,7 +20,7 @@ export interface UseBankResolverResult {
   accountInfo: AccountInfo | null;
 }
 
-const DEBOUNCE_MS = 400;
+const DEBOUNCE_MS = 500;
 
 export function useBankResolver(
   accountNumber: string,

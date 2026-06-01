@@ -13,11 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/golang-migrate/migrate/v4"
 	migratedb "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -28,6 +30,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	performancesvc "github.com/suncrestlabs/nester/apps/api/internal/service/performance"
+	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
 	"github.com/suncrestlabs/nester/apps/api/internal/services"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
@@ -93,22 +96,33 @@ func run() error {
 		return err
 	}
 
+	systemStateRepository := postgres.NewSystemStateRepository(db)
+
 	vaultRepository := postgres.NewVaultRepository(db)
 	vaultService := service.NewVaultService(vaultRepository)
+	vaultService.SetHarvestDefaultCompound(cfg.Stellar().HarvestDefaultCompound())
 	sharePriceService := service.NewSharePriceService(vaultRepository)
 	vaultHandler := handler.NewVaultHandler(vaultService, sharePriceService)
 
+	portfolioService := service.NewPortfolioService(vaultRepository)
+	portfolioHandler := handler.NewPortfolioHandler(portfolioService)
+
 	transactionRepository := postgres.NewTransactionRepository(db)
 	transactionService := service.NewTransactionService(transactionRepository, cfg.Stellar().HorizonURL())
+	// Balance is moved only after a deposit/withdrawal is confirmed on-chain
+	// (issue #496); the vault repository applies it idempotently by tx hash.
+	transactionService.SetBalanceApplier(vaultRepository)
 	transactionHandler := handler.NewTransactionHandler(transactionService)
-
-	settlementRepository := postgres.NewSettlementRepository(db)
-	settlementService := service.NewSettlementService(settlementRepository)
-	settlementHandler := handler.NewSettlementHandler(settlementService)
 
 	userRepository := postgres.NewUserRepository(db)
 	userService := service.NewUserService(userRepository)
 	userHandler := handler.NewUserHandler(userService)
+	userVaultsSvc := service.NewUserVaultsService(vaultRepository)
+	userHandler.SetUserVaultsService(userVaultsSvc)
+
+	settlementRepository := postgres.NewSettlementRepository(db)
+	settlementService := service.NewSettlementService(settlementRepository)
+	settlementHandler := handler.NewSettlementHandler(settlementService, userService)
 
 	adminRepository := postgres.NewAdminRepository(db)
 
@@ -119,6 +133,7 @@ func run() error {
 			cfg.Stellar().HorizonURL(),
 			cfg.Stellar().NetworkPassphrase(),
 			secret,
+			cfg.Stellar().WithdrawalSlippageBps(),
 		)
 		if err != nil {
 			return fmt.Errorf("init chain invoker: %w", err)
@@ -129,15 +144,19 @@ func run() error {
 
 	adminService := service.NewAdminService(
 		adminRepository,
+		vaultRepository,
 		chainInvoker,
 		cfg.Stellar().HorizonURL(),
 		cfg.SettlementProviderURL(),
+		cfg.Stellar().AllocationStrategyAddress(),
+		cfg.Allocation().MinWeightPercent(),
 	)
-	adminHandler := handler.NewAdminHandler(adminService)
+	adminHandler := handler.NewAdminHandler(adminService, userService)
 	adminHandler.SetEventSyncer(&stellarpkg.EventSyncer{
-		DB:     db,
-		RPCURL: cfg.Stellar().RPCURL(),
-		Logger: baseLogger,
+		DB:      db,
+		SysRepo: systemStateRepository,
+		RPCURL:  cfg.Stellar().RPCURL(),
+		Logger:  baseLogger,
 	})
 
 	var challengeStore service.ChallengeStore
@@ -170,16 +189,23 @@ func run() error {
 	wsCtx, wsCancel := context.WithCancel(context.Background())
 	defer wsCancel()
 	go wsHub.Run(wsCtx)
+	vaultHandler.SetWSHub(wsHub)
 
 	performanceRepository := postgres.NewPerformanceRepository(db)
 	vaultRepository = postgres.NewVaultRepository(db)
 	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
 
+	contractReader := stellarpkg.NewContractReader(
+		cfg.Stellar().RPCURL(),
+		cfg.Stellar().NetworkPassphrase(),
+		"",
+	)
+
 	tracker := performancesvc.NewTracker(
 		performanceRepository,
 		vaultRepository,
-		nil, // BalanceProvider: wire to a Stellar adapter once the on-chain reader is exposed.
+		contractReader,
 		cfg.Performance().SnapshotInterval(),
 	)
 	trackerCtx, cancelTracker := context.WithCancel(context.Background())
@@ -189,6 +215,75 @@ func run() error {
 			baseLogger.Error("performance tracker stopped", "error", err.Error())
 		}
 	}()
+
+	tvlRepository := postgres.NewTVLRepository(db)
+	tvlService := tvlsvc.NewService(tvlRepository, vaultRepository)
+	tvlHandler := handler.NewTVLHandler(tvlService)
+
+	tvlTracker := tvlsvc.NewTracker(
+		tvlRepository,
+		vaultRepository,
+		contractReader,
+		cfg.TVL().RefreshInterval(),
+	).WithLogger(baseLogger.WithGroup("tvl-tracker"))
+	tvlCtx, cancelTVL := context.WithCancel(context.Background())
+	defer cancelTVL()
+	go func() {
+		if err := tvlTracker.Run(tvlCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("tvl tracker stopped", "error", err.Error())
+		}
+	}()
+
+	apyRefresher := performancesvc.NewAPYRefresher(
+		performancesvc.APYRefresherConfig{
+			Interval:              cfg.APYRefresh().RefreshInterval(),
+			BroadcastThresholdBPS: cfg.APYRefresh().BroadcastThresholdBPS(),
+			RegistryAddress:       cfg.Stellar().YieldRegistryContract(),
+		},
+		performanceRepository,
+		vaultRepository,
+		&performancesvc.RegistryReader{
+			Reader:  contractReader,
+			Address: cfg.Stellar().YieldRegistryContract(),
+		},
+		func(vaultID uuid.UUID, previousBPS, currentBPS uint32) {
+			wsHub.BroadcastEvent(ws.Event{
+				Channel: "vaults:global",
+				Type:    ws.EventYieldAccrued,
+				Data: map[string]any{
+					"vault_id":     vaultID.String(),
+					"previous_bps": previousBPS,
+					"current_bps":  currentBPS,
+				},
+			})
+		},
+	).WithLogger(baseLogger.WithGroup("apy-refresher"))
+	apyCtx, cancelAPY := context.WithCancel(context.Background())
+	defer cancelAPY()
+	go func() {
+		if err := apyRefresher.Run(apyCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("apy refresher stopped", "error", err.Error())
+		}
+	}()
+
+	// Background reconciliation of pending transactions: polls Horizon so a
+	// transaction's status is confirmed even when the client never calls
+	// GET /api/v1/transactions/{hash}. Broadcasts a WebSocket event on change.
+	txPoller := service.NewTransactionPoller(
+		service.TransactionPollerConfig{
+			Enabled:  cfg.TransactionPoller().Enabled(),
+			Interval: cfg.TransactionPoller().Interval(),
+			MinAge:   cfg.TransactionPoller().MinAge(),
+		},
+		transactionService,
+		func(_ context.Context, tx transaction.Transaction) {
+			wsHub.BroadcastEvent(transactionStatusEvent(tx))
+		},
+		baseLogger.WithGroup("tx-poller"),
+	)
+	pollerCtx, cancelPoller := context.WithCancel(context.Background())
+	defer cancelPoller()
+	go txPoller.Run(pollerCtx)
 
 	var ready atomic.Bool
 	ready.Store(true)
@@ -216,6 +311,7 @@ func run() error {
 		buildVersion: version,
 	}))
 	vaultHandler.Register(mux)
+	portfolioHandler.Register(mux)
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
 	userHandler.Register(mux)
@@ -223,6 +319,7 @@ func run() error {
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
 	performanceHandler.Register(mux)
+	tvlHandler.Register(mux)
 	analyticsHandler := handler.NewAnalyticsHandler(performanceService)
 	analyticsHandler.Register(mux)
 	
@@ -230,7 +327,54 @@ func run() error {
 	riskService := services.NewRiskService(vaultRepository)
 	riskHandler := handler.NewRiskHandler(riskService)
 	riskHandler.Register(mux)
-	
+
+	// Vault analytics (APY volatility, Sharpe, Sortino, drawdown, win rate)
+	vaultAnalyticsSvc := service.NewVaultAnalyticsService(performanceRepository)
+	vaultAnalyticsHandler := handler.NewVaultAnalyticsHandler(vaultAnalyticsSvc)
+	vaultAnalyticsHandler.Register(mux)
+
+	// Yield opportunities (DeFiLlama Stellar pools)
+	yieldSvc := service.NewYieldService("")
+	yieldHandler := handler.NewYieldHandler(yieldSvc)
+	yieldHandler.Register(mux)
+
+	// User watchlist
+	watchlistSvc := service.NewWatchlistService(db)
+	watchlistHandler := handler.NewWatchlistHandler(watchlistSvc)
+	watchlistHandler.Register(mux)
+
+	// Savings goals
+	savingsGoalRepo := postgres.NewSavingsGoalRepository(db)
+	savingsGoalSvc := service.NewSavingsGoalService(savingsGoalRepo)
+	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc)
+	savingsGoalHandler.Register(mux)
+
+	// User vault rebalance (suggestions + execution)
+	vaultRebalanceSvc := service.NewVaultRebalanceService(vaultRepository, adminService)
+	vaultHandler.SetRebalanceService(vaultRebalanceSvc)
+
+	// Intelligence proxy (forwards to Python service)
+	intelURL := cfg.Intelligence().ServiceURL()
+	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
+	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
+		BaseURL: intelURL,
+		APIKey:  cfg.Auth().ServiceAPIKey(),
+		Timeout: cfg.Intelligence().Timeout(),
+	})
+	intelligenceHandler := handler.NewIntelligenceHandler(intelProxy, prometheusClient)
+	intelligenceHandler.Register(mux)
+
+	intelRelay := service.NewRelayHandler(http.DefaultClient, service.RelayConfig{
+		BaseURL: intelURL,
+		APIKey:  cfg.Auth().ServiceAPIKey(),
+		Timeout: cfg.Intelligence().Timeout(),
+	})
+	intelligenceRelayHandler := handler.NewIntelligenceRelayHandler(intelRelay)
+	intelligenceRelayHandler.Register(mux)
+
+	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
+	performanceSnapshotsHandler.Register(mux)
+
 	bankHandler.Register(mux)
 
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
@@ -245,7 +389,7 @@ func run() error {
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}
-	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
+	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules)
 	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 	walletLimiter := middleware.WalletRateLimiter(
@@ -294,7 +438,7 @@ func run() error {
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, cfg.Stellar().RPCURL())
+	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, cfg.Stellar().RPCURL())
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -333,6 +477,27 @@ func run() error {
 		"uptime", time.Since(startedAt).String(),
 	)
 	return nil
+}
+
+// transactionStatusEvent maps a reconciled transaction to the WebSocket event
+// the dApp listens for on the "vaults:global" channel. Confirmed deposits and
+// withdrawals get their dedicated event type; everything else (failures, other
+// types) uses the generic status_changed event.
+func transactionStatusEvent(tx transaction.Transaction) ws.Event {
+	eventType := ws.EventStatusChanged
+	if tx.Status == transaction.StatusCompleted {
+		switch tx.Type {
+		case transaction.TypeDeposit:
+			eventType = ws.EventDepositConfirmed
+		case transaction.TypeWithdrawal:
+			eventType = ws.EventWithdrawalConfirmed
+		}
+	}
+	return ws.Event{
+		Channel: "vaults:global",
+		Type:    eventType,
+		Data:    tx,
+	}
 }
 
 func walletKeyFromContext(r *http.Request) string {

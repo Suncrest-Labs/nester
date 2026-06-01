@@ -11,6 +11,7 @@ const QUICK_PROMPTS = [
   'Should I rebalance now?',
   'How is the market looking?',
   'Optimize my portfolio',
+  'Recommend a vault for me',
 ]
 
 function QuickPrompts({ onSelect }: { onSelect: (p: string) => void }) {

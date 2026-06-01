@@ -43,9 +43,12 @@ pub const MAX_APY_HISTORY: u32 = 16;
 
 // Hard cap for APY stored on-chain (basis points). 10000 == 100% APY.
 const MAX_APY_BPS: u32 = 10_000;
-// Maximum single-update deviation (bps) allowed relative to last stored APY.
-// For example, 2000 == 20% absolute bps change allowed in a single update.
-const MAX_APY_SINGLE_UPDATE_DEVIATION_BPS: u32 = 5_000; // 50% absolute bps
+// Default maximum single-update deviation (bps) allowed relative to the last
+// stored APY. Used to seed the configurable threshold at `initialize`; the live
+// value is read from storage (see `apy_deviation_threshold`) so an admin can
+// tune it without a contract upgrade. 5000 == a 5000-bps (50 percentage-point)
+// absolute change allowed in a single update.
+pub const DEFAULT_APY_DEVIATION_THRESHOLD_BPS: u32 = 5_000;
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -153,6 +156,8 @@ enum DataKey {
     Source(Symbol),
     /// Ordered list of all registered source IDs.
     SourceList,
+    /// Configurable APY single-update deviation threshold, in basis points.
+    ApyDeviationThresholdBps,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +179,10 @@ impl YieldRegistryContract {
         env.storage()
             .instance()
             .set(&DataKey::SourceList, &Vec::<Symbol>::new(&env));
+        env.storage().instance().set(
+            &DataKey::ApyDeviationThresholdBps,
+            &DEFAULT_APY_DEVIATION_THRESHOLD_BPS,
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -310,6 +319,16 @@ impl YieldRegistryContract {
 
     /// Update APY in basis points and append a snapshot to the rolling history.
     /// Callable by Admin or Operator.
+    ///
+    /// A deviation guard rejects single-update jumps whose absolute change from
+    /// the last stored APY exceeds the configured threshold (see
+    /// [`Self::set_apy_deviation_threshold`]). The guard is **skipped for the
+    /// first update** (when there is no prior non-zero APY to compare against),
+    /// and the boundary is **inclusive**: a change exactly equal to the
+    /// threshold is accepted; only a strictly larger change is rejected.
+    ///
+    /// To intentionally apply a change beyond the threshold (e.g. to correct a
+    /// stuck APY), an Admin must use [`Self::update_apy_override`].
     pub fn update_apy(env: Env, caller: Address, id: Symbol, new_apy_bps: u32) {
         caller.require_auth();
         require_admin_or_operator(&env, &caller);
@@ -321,31 +340,57 @@ impl YieldRegistryContract {
 
         let mut source = get_source_or_panic(&env, &id);
 
-        // Deviation guard: reject single-update jumps that are implausible
+        // Deviation guard: reject single-update jumps that are implausible.
+        // Threshold is read from storage so it can be tuned by an admin.
         let last_apy = source.current_apy_bps;
         if last_apy != 0 {
-            let deviation = if new_apy_bps > last_apy {
-                new_apy_bps - last_apy
-            } else {
-                last_apy - new_apy_bps
-            };
-            if deviation > MAX_APY_SINGLE_UPDATE_DEVIATION_BPS {
+            let deviation = new_apy_bps.abs_diff(last_apy);
+            if deviation > apy_deviation_threshold(&env) {
                 panic_with_error!(env, ContractError::InvalidOperation);
             }
         }
 
-        source.current_apy_bps = new_apy_bps;
-        append_apy_snapshot(&env, &mut source, new_apy_bps);
-        touch_source(&env, &mut source);
-        save_source(&env, &id, &source);
+        commit_apy_update(&env, &id, &mut source, new_apy_bps);
+    }
 
-        emit_event_with_sym(
-            &env,
-            REGISTRY,
-            SOURCE_PERF,
-            id,
-            performance_event_data(&source),
-        );
+    /// Emergency override: set a source's APY, **bypassing the deviation
+    /// guard**. Admin only — Operators cannot override. The absolute
+    /// [`MAX_APY_BPS`] ceiling is still enforced.
+    ///
+    /// This exists so an operator team can correct a stuck or stale APY when a
+    /// legitimate market move is larger than the configured deviation
+    /// threshold. Because it skips the guard, it is gated on the Admin role.
+    pub fn update_apy_override(env: Env, caller: Address, id: Symbol, new_apy_bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        if new_apy_bps > MAX_APY_BPS {
+            panic_with_error!(env, ContractError::InvalidAmount);
+        }
+
+        let mut source = get_source_or_panic(&env, &id);
+        commit_apy_update(&env, &id, &mut source, new_apy_bps);
+    }
+
+    /// Set the APY single-update deviation threshold, in basis points. Admin
+    /// only. Must not exceed [`MAX_APY_BPS`]. A threshold of 0 means any change
+    /// to a non-zero APY is rejected (only the override path can move it).
+    pub fn set_apy_deviation_threshold(env: Env, caller: Address, threshold_bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        if threshold_bps > MAX_APY_BPS {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ApyDeviationThresholdBps, &threshold_bps);
+    }
+
+    /// Return the configured APY single-update deviation threshold (bps).
+    pub fn get_apy_deviation_threshold(env: Env) -> u32 {
+        apy_deviation_threshold(&env)
     }
 
     /// Update total value locked for a source.
@@ -654,6 +699,33 @@ fn save_source(env: &Env, id: &Symbol, source: &YieldSource) {
 
 fn touch_source(env: &Env, source: &mut YieldSource) {
     source.last_updated = env.ledger().timestamp();
+}
+
+/// Read the configured APY deviation threshold, falling back to the default if
+/// (for a registry initialised before this field existed) it is unset.
+fn apy_deviation_threshold(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ApyDeviationThresholdBps)
+        .unwrap_or(DEFAULT_APY_DEVIATION_THRESHOLD_BPS)
+}
+
+/// Apply a validated APY value: persist it, append a history snapshot, bump the
+/// last-updated timestamp, and emit the performance event. Shared by the
+/// guarded (`update_apy`) and override (`update_apy_override`) paths.
+fn commit_apy_update(env: &Env, id: &Symbol, source: &mut YieldSource, new_apy_bps: u32) {
+    source.current_apy_bps = new_apy_bps;
+    append_apy_snapshot(env, source, new_apy_bps);
+    touch_source(env, source);
+    save_source(env, id, source);
+
+    emit_event_with_sym(
+        env,
+        REGISTRY,
+        SOURCE_PERF,
+        id.clone(),
+        performance_event_data(source),
+    );
 }
 
 fn append_apy_snapshot(env: &Env, source: &mut YieldSource, apy_bps: u32) {

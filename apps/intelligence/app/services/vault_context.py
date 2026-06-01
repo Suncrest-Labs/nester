@@ -32,7 +32,7 @@ class VaultContextFetcher:
 
         Returns list of vault dicts: {name, balance_usd, apy, allocation_breakdown}
         """
-        url = f"{self.api_base_url}/api/v1/users/{user_id}/vaults"
+        url = f"{self.api_base_url}/api/v1/user-vaults/{user_id}"
         headers = {
             "Authorization": f"Bearer {self.service_api_key}",
             "Content-Type": "application/json"
@@ -42,10 +42,12 @@ class VaultContextFetcher:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
                     if response.status == 200:
-                        data = await response.json()
+                        payload = await response.json()
+                        data = payload.get("data", payload) if isinstance(payload, dict) else {}
+                        vault_rows = data.get("vaults", []) if isinstance(data, dict) else []
                         # Transform to expected format
                         vaults = []
-                        for vault in data.get("vaults", []):
+                        for vault in vault_rows:
                             # Calculate allocation breakdown as percentages
                             total_balance = vault.get("total_balance_usd", 0)
                             allocation_breakdown = {}
@@ -104,6 +106,58 @@ class VaultContextFetcher:
         except Exception as e:
             logger.warning(f"Error fetching risk for vault {vault_id}: {e}")
             return {}
+
+    async def fetch_available_vaults(self) -> List[Dict[str, Any]]:
+        """
+        Fetch the current vault list from Nester API.
+
+        Returns the live vault metadata used to rank recommendation options.
+        """
+        url = f"{self.api_base_url}/api/v1/vaults/all"
+        headers = {
+            "Authorization": f"Bearer {self.service_api_key}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status != 200:
+                        logger.warning(f"Failed to fetch vault list: {response.status}")
+                        return []
+
+                    data = await response.json()
+                    raw_vaults = data.get("data") if isinstance(data, dict) else data
+                    if not isinstance(raw_vaults, list):
+                        raw_vaults = data.get("vaults", []) if isinstance(data, dict) else []
+
+                    vaults: List[Dict[str, Any]] = []
+                    for vault in raw_vaults:
+                        if not isinstance(vault, dict):
+                            continue
+                        name = vault.get(
+                            "name",
+                            vault.get("contract_address", "Unknown Vault"),
+                        )
+                        balance = vault.get(
+                            "current_balance",
+                            vault.get("total_balance_usd", 0),
+                        )
+                        vaults.append({
+                            "id": vault.get("id", ""),
+                            "name": name,
+                            "apy": vault.get("average_apy", vault.get("apy", 0)),
+                            "balance_usd": balance,
+                            "risk_tier": vault.get(
+                                "risk_tier",
+                                vault.get("status", "unknown"),
+                            ),
+                            "currency": vault.get("currency", "USDC"),
+                        })
+                    return vaults
+        except Exception as e:
+            logger.warning(f"Error fetching available vaults: {e}")
+            return []
 
     async def fetch_market_rates(self) -> List[Dict[str, Any]]:
         """
@@ -233,7 +287,7 @@ class VaultContextFetcher:
             for rate in market_rates:
                 protocol = rate.get("protocol", "unknown").upper()
                 apy = rate.get("apy", 0)
-                market_lines.append(f"- {protocol}: {apy:.2f}% APY")
+                market_lines.append(f"- {protocol}: {apy * 100:.2f}% APY")
 
             market_context = f"""## Current Market Rates (Live)
 {chr(10).join(market_lines)}"""
@@ -291,8 +345,8 @@ class VaultContextFetcher:
             recommendation = self._generate_risk_recommendation(tier, primary_driver, vault_risk)
 
             risk_lines.append(
-                f"- {vault_name}: {tier.capitalize()} risk (score {overall_score:.0f}/100). "
-                f"Primary driver: {primary_driver_name}. {recommendation}"
+                f"- {vault_name}: {tier} risk (score {overall_score:.0f}/100). "
+                f"Primary driver: {primary_driver_name}. Recommendation: {recommendation}"
             )
 
         return f"""## Risk Profile
@@ -306,29 +360,43 @@ class VaultContextFetcher:
             return "Your portfolio is well-balanced. Consider maintaining current allocation."
         elif tier == "medium":
             if primary_driver == "concentration_risk":
-                return "Consider diversifying across additional protocols to reduce "
-                "concentration risk."
+                return (
+                    "Consider diversifying across additional protocols to reduce "
+                    "concentration risk."
+                )
             elif primary_driver == "protocol_risk":
                 return (
                     "Consider shifting allocation toward lower-risk protocols "
                     "like Aave or Compound."
                 )
             elif primary_driver == "yield_volatility":
-                return "Consider allocating to more stable vaults with lower "
-                "APY variability."
+                return (
+                    "Consider allocating to more stable vaults with lower "
+                    "APY variability."
+                )
             else:  # liquidity_risk
-                return "Your vault size may be large relative to protocol market "
-                "size. Consider smaller positions."
+                return (
+                    "Your vault size may be large relative to protocol market size. "
+                    "Consider smaller positions."
+                )
         else:  # high risk
             if primary_driver == "concentration_risk":
-                return "Strongly consider diversifying across multiple protocols to "
-                "reduce concentration risk."
+                return (
+                    "Strongly consider diversifying across multiple protocols to "
+                    "reduce concentration risk."
+                )
             elif primary_driver == "protocol_risk":
-                return "Consider reallocating to lower-risk protocols to reduce "
-                "overall portfolio risk."
+                return (
+                    "consider reallocating to lower-risk protocols to reduce "
+                    "overall portfolio risk."
+                )
             elif primary_driver == "yield_volatility":
-                return "Consider moving to more stable yield strategies to reduce "
-                "volatility exposure."
+                return (
+                    "consider moving to more stable yield strategies to reduce "
+                    "volatility exposure."
+                )
             else:  # liquidity_risk
-                return "Consider reducing position size to lower liquidity risk or "
-                "spreading across protocols."
+                return (
+                    "consider reducing position size to lower liquidity risk or "
+                    "spreading across protocols."
+                )

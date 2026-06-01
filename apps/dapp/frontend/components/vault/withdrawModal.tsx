@@ -19,6 +19,7 @@ import {
 } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
 import {
   executeVaultWithdraw,
   UserRejectedError,
@@ -141,6 +142,7 @@ interface WithdrawModalProps {
 export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const { address } = useWallet();
   const { getWithdrawalQuote, recordWithdrawal, refreshBalances } = usePortfolio();
+  const { isOffline } = useOfflineStatus();
 
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
@@ -169,7 +171,8 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     amount > 0 &&
     !validationError &&
     !!quote &&
-    state === "input";
+    state === "input" &&
+    !isOffline;
 
   const reset = () => {
     setAmountInput("");
@@ -426,6 +429,16 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                   <div className="flex items-start gap-2 text-sm text-destructive">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>{errorMsg}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Offline guard */}
+              {isOffline && state === "input" && (
+                <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="flex items-start gap-2 text-sm text-amber-700">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>You need an internet connection to complete this transaction.</span>
                   </div>
                 </div>
               )}

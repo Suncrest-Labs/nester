@@ -99,9 +99,23 @@ All AI suggestions include reasoning and confidence levels. Disclaimer always pr
 
 Nester is non-custodial. Users maintain full ownership of assets through smart contracts—the protocol cannot freeze, seize, or redirect funds.
 
-**Audit Status:** [Pending — link to audits when complete]
+**Audit Status:** [Audit package and report](/audits)
 
 **Risk Mitigations:** Multi-protocol diversification limits single-point-of-failure exposure. Real-time exploit monitoring with automatic pause mechanisms. Insurance fund for covered events. Rate limiting and withdrawal delays for large transactions.
+
+**Automated Security Scanning (CI)**
+
+Every pull request runs the following automated security checks:
+
+| Language / Layer | Tool | Coverage |
+|------------------|------|----------|
+| TypeScript / Next.js | [eslint-plugin-security](https://github.com/eslint-community/eslint-plugin-security) | Injection, object-injection, unsafe regex, eval |
+| TypeScript / Next.js | [Semgrep](https://semgrep.dev) (`p/typescript`, `p/react`, `p/nextjs`, `p/secrets`) | XSS, secrets, Next.js misconfigs |
+| TypeScript / Next.js | [CodeQL](https://codeql.github.com) (`javascript-typescript`) | Broad static analysis |
+| Go | gosec + govulncheck | SAST + CVE audit |
+| Python | bandit + pip-audit | SAST + CVE audit |
+| Rust | cargo-audit | CVE audit |
+| All languages | gitleaks | Secret / credential detection |
 
 ---
 

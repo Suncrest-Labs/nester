@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS user_roles (
     PRIMARY KEY (user_id, role)
 );
 
+CREATE TABLE IF NOT EXISTS system_state (
+    key        TEXT        PRIMARY KEY,
+    value      TEXT        NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed the event-indexer cursor.
+INSERT INTO system_state (key, value)
+VALUES ('event_indexer.last_ledger', '0')
+ON CONFLICT (key) DO NOTHING;
+
 -- Seed data
 
 INSERT INTO users (id, wallet_address, display_name, kyc_status, created_at, updated_at) VALUES

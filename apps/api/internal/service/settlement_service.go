@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -19,10 +20,38 @@ var (
 
 type SettlementService struct {
 	repository offramp.Repository
+	sep24      *Sep24Resolver // POC: SEP-24 integration
 }
 
 func NewSettlementService(repository offramp.Repository) *SettlementService {
 	return &SettlementService{repository: repository}
+}
+
+// SetSep24Resolver injects the SEP-24 resolver for POC testing.
+func (s *SettlementService) SetSep24Resolver(resolver *Sep24Resolver) {
+	s.sep24 = resolver
+}
+
+// InitiateSEP24Withdrawal is a POC method to start the offramp flow via the anchor.
+func (s *SettlementService) InitiateSEP24Withdrawal(ctx context.Context, id uuid.UUID) (string, string, error) {
+	if s.sep24 == nil {
+		return "", "", fmt.Errorf("SEP-24 resolver not configured")
+	}
+
+	settlement, err := s.GetSettlement(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+
+	return s.sep24.InitiateInteractiveWithdrawal(ctx, settlement.FiatCurrency, settlement.FiatAmount)
+}
+
+// CheckSEP24Status is a POC method to poll the anchor for transaction status.
+func (s *SettlementService) CheckSEP24Status(ctx context.Context, txID string) (string, error) {
+	if s.sep24 == nil {
+		return "", fmt.Errorf("SEP-24 resolver not configured")
+	}
+	return s.sep24.PollTransactionStatus(ctx, txID)
 }
 
 // InitiateSettlementInput carries caller-supplied data for a new settlement.

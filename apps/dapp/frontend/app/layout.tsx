@@ -5,6 +5,8 @@ import { WalletProvider } from "@/components/wallet-provider";
 import { NotificationsProvider } from "@/components/notifications-provider";
 import { NotificationsToaster } from "@/components/notifications-toaster";
 import { WebSocketProvider } from "@/components/websocket-provider";
+import { ReactQueryProvider } from "@/components/react-query-provider";
+import { OfflineBanner } from "@/components/offline-banner";
 import "./globals.css";
 
 const inter = Inter({
@@ -40,24 +42,27 @@ export default function RootLayout({
                 suppressHydrationWarning
                 className={`${inter.className} ${inter.variable} antialiased`}
             >
-                <NetworkProvider>
-                    <SettingsProvider>
-                        <WalletProvider>
-                            <NotificationsProvider>
-                                <NetworkBanner />
-                                <PortfolioProvider>
-                                    <WebSocketProvider>
-                                        <OnboardingProvider>
-                                            {children}
-                                            <NotificationsToaster />
-                                            <PrometheusChatbot />
-                                        </OnboardingProvider>
-                                    </WebSocketProvider>
-                                </PortfolioProvider>
-                            </NotificationsProvider>
-                        </WalletProvider>
-                    </SettingsProvider>
-                </NetworkProvider>
+                <ReactQueryProvider>
+                    <NetworkProvider>
+                        <SettingsProvider>
+                            <WalletProvider>
+                                <NotificationsProvider>
+                                    <OfflineBanner />
+                                    <NetworkBanner />
+                                    <PortfolioProvider>
+                                        <WebSocketProvider>
+                                            <OnboardingProvider>
+                                                {children}
+                                                <NotificationsToaster />
+                                                <PrometheusChatbot />
+                                            </OnboardingProvider>
+                                        </WebSocketProvider>
+                                    </PortfolioProvider>
+                                </NotificationsProvider>
+                            </WalletProvider>
+                        </SettingsProvider>
+                    </NetworkProvider>
+                </ReactQueryProvider>
             </body>
         </html>
     );

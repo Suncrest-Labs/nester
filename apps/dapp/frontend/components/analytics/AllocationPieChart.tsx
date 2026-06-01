@@ -43,7 +43,7 @@ export default function AllocationPieChart({ data }: AllocationPieChartProps) {
             cy="50%"
             labelLine={false}
             label={(props) => {
-              const { name, value } = props.dataKey ? props.data : props;
+              const { name, value } = props;
               return `${name} ${value}%`;
             }}
           >

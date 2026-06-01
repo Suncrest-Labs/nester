@@ -8,10 +8,18 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.dependencies.auth import verify_jwt
+from app.models.recommendation import (
+    Recommendation,
+    VaultRecommendationRequest,
+    VaultRecommendationResponse,
+)
 from app.services.prometheus import (
+    analyze_recommendation,
     get_market_sentiment,
     get_portfolio_insights,
     get_vault_recommendations,
+    get_yield_recommendation,
+    recommend_vaults,
 )
 
 router = APIRouter(dependencies=[Depends(verify_jwt)])
@@ -63,6 +71,41 @@ async def portfolio_insights(
 async def market_sentiment(request: Request) -> dict[str, Any]:
     """Return current market sentiment for the Stellar DeFi / stablecoin space."""
     return await get_market_sentiment()
+
+
+@router.get("/recommend/vault")
+@_limiter.limit("20/minute")
+async def yield_recommendation(
+    request: Request,
+    claims: dict[str, Any] = Depends(verify_jwt),  # noqa: ARG001
+) -> dict[str, Any]:
+    """Return an AI-picked yield opportunity based on live DeFiLlama and CoinGecko data."""
+    return await get_yield_recommendation()
+
+
+@router.post("/analyze", response_model=Recommendation)
+@_limiter.limit("20/minute")
+async def analyze(
+    request: Request,
+    body: dict[str, Any],
+    claims: dict[str, Any] = Depends(verify_jwt),
+) -> Recommendation:
+    """Return a confidence-annotated recommendation for a user prompt."""
+    prompt = str(body.get("prompt", "")).strip()
+    if not prompt:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required")
+    return await analyze_recommendation(prompt, claims.get("sub", ""))
+
+
+@router.post("/recommend/vault", response_model=VaultRecommendationResponse)
+@_limiter.limit("20/minute")
+async def recommend_vault(
+    request: Request,
+    body: VaultRecommendationRequest,
+    claims: dict[str, Any] = Depends(verify_jwt),
+) -> VaultRecommendationResponse:
+    """Return an AI-picked vault allocation based on live APY and risk data."""
+    return await recommend_vaults(body, claims.get("sub", ""))
 
 
 @router.get("/vaults/{vault_id}/recommendations")

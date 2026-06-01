@@ -28,7 +28,7 @@ type RouteRule struct {
 // secret.  rules are evaluated in order; the first matching rule determines
 // access policy.  If no rule matches, the request is treated as protected
 // (auth required, no specific scope).
-func Authenticate(secret string, rules []RouteRule) func(http.Handler) http.Handler {
+func Authenticate(secret, serviceAPIKey string, rules []RouteRule) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rule := matchRule(rules, r)
@@ -42,6 +42,18 @@ func Authenticate(secret string, rules []RouteRule) func(http.Handler) http.Hand
 			token, ok := bearerToken(r)
 			if !ok {
 				writeMiddlewareError(w, http.StatusUnauthorized, "missing or malformed authorization header")
+				return
+			}
+
+			// Service-to-service auth for intelligence and internal callers.
+			if serviceAPIKey != "" && token == serviceAPIKey {
+				userID := strings.TrimSpace(r.Header.Get("X-User-Id"))
+				if userID == "" {
+					writeMiddlewareError(w, http.StatusUnauthorized, "X-User-Id header required for service auth")
+					return
+				}
+				user := auth.User{ID: userID, WalletAddress: "", Scopes: nil, Roles: nil}
+				next.ServeHTTP(w, r.WithContext(auth.NewContext(r.Context(), user)))
 				return
 			}
 

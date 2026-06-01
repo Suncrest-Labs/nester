@@ -381,6 +381,19 @@ impl AllocationStrategyContract {
             }
         }
 
+        // Enforce delta conservation: the sum of all deltas must equal zero.
+        // A non-zero sum means `total` does not match the sum of
+        // `current_allocations`, which would create or destroy funds.
+        let mut delta_sum: i128 = 0;
+        for d in deltas.iter() {
+            delta_sum = delta_sum
+                .checked_add(d.delta)
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        }
+        if delta_sum != 0 {
+            panic_with_error!(&env, ContractError::AllocationError);
+        }
+
         deltas
     }
 

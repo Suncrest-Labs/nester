@@ -232,25 +232,32 @@ func (r *handlerRepository) UpdateVaultBalances(_ context.Context, id uuid.UUID,
 	return nil
 }
 
-func (r *handlerRepository) RecordDeposit(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
+func (r *handlerRepository) RecordDeposit(_ context.Context, id uuid.UUID, record vault.TransactionRecord) error {
 	model, ok := r.vaults[id]
 	if !ok {
 		return vault.ErrVaultNotFound
 	}
-	if amount.Cmp(decimal.Zero) <= 0 {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
 
-	model.TotalDeposited = model.TotalDeposited.Add(amount)
-	model.CurrentBalance = model.CurrentBalance.Add(amount)
+	model.TotalDeposited = model.TotalDeposited.Add(record.Amount)
+	model.CurrentBalance = model.CurrentBalance.Add(record.Amount)
 	model.UpdatedAt = time.Now().UTC()
 	r.vaults[id] = cloneHandlerVault(model)
+
+	userID := record.UserID
 	r.transactions = append(r.transactions, vault.VaultTransaction{
-		ID:        uuid.New(),
-		VaultID:   id,
-		Type:      "deposit",
-		Amount:    amount,
-		CreatedAt: time.Now().UTC(),
+		ID:                   uuid.New(),
+		VaultID:              id,
+		UserID:               &userID,
+		Type:                 "deposit",
+		Amount:               record.Amount,
+		TransactionHash:      record.TransactionHash,
+		SharesMintedOrBurned: &record.SharesMintedOrBurned,
+		SharePriceAtTime:     &record.SharePriceAtTime,
+		FeeCharged:           feePtr(record.FeeCharged),
+		CreatedAt:            time.Now().UTC(),
 	})
 	return nil
 }
@@ -278,24 +285,59 @@ func (r *handlerRepository) UpdateVault(_ context.Context, id uuid.UUID, contrac
 	return nil
 }
 
-func (r *handlerRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
+func (r *handlerRepository) RecordHarvest(_ context.Context, input vault.HarvestRecordInput) error {
+	model, ok := r.vaults[input.VaultID]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	if input.Compounded {
+		model.TotalDeposited = model.TotalDeposited.Add(input.NetYield)
+		model.CurrentBalance = model.CurrentBalance.Add(input.NetYield)
+	} else {
+		model.CurrentBalance = model.CurrentBalance.Sub(input.NetYield)
+	}
+	model.YieldEarned = model.YieldEarned.Sub(input.NetYield.Add(input.PerformanceFee))
+	if model.YieldEarned.IsNegative() {
+		model.YieldEarned = decimal.Zero
+	}
+	model.FeesPaid = model.FeesPaid.Add(input.PerformanceFee)
+	model.UpdatedAt = time.Now().UTC()
+	r.vaults[input.VaultID] = cloneHandlerVault(model)
+	r.transactions = append(r.transactions, vault.VaultTransaction{
+		ID:        uuid.New(),
+		VaultID:   input.VaultID,
+		Type:      "harvest",
+		Amount:    input.NetYield,
+		CreatedAt: time.Now().UTC(),
+	})
+	return nil
+}
+
+func (r *handlerRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, record vault.TransactionRecord) error {
 	model, ok := r.vaults[id]
 	if !ok {
 		return vault.ErrVaultNotFound
 	}
-	if amount.Cmp(decimal.Zero) <= 0 {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
 
-	model.CurrentBalance = model.CurrentBalance.Sub(amount)
+	model.CurrentBalance = model.CurrentBalance.Sub(record.Amount)
 	model.UpdatedAt = time.Now().UTC()
 	r.vaults[id] = cloneHandlerVault(model)
+
+	userID := record.UserID
 	r.transactions = append(r.transactions, vault.VaultTransaction{
-		ID:        uuid.New(),
-		VaultID:   id,
-		Type:      "withdrawal",
-		Amount:    amount,
-		CreatedAt: time.Now().UTC(),
+		ID:                   uuid.New(),
+		VaultID:              id,
+		UserID:               &userID,
+		Type:                 "withdrawal",
+		Amount:               record.Amount,
+		TransactionHash:      record.TransactionHash,
+		SharesMintedOrBurned: &record.SharesMintedOrBurned,
+		SharePriceAtTime:     &record.SharePriceAtTime,
+		FeeCharged:           feePtr(record.FeeCharged),
+		CreatedAt:            time.Now().UTC(),
 	})
 	return nil
 }
@@ -316,6 +358,43 @@ func (r *handlerRepository) ListDeposits(_ context.Context, vaultID uuid.UUID) (
 		}
 	}
 	return result, nil
+}
+
+func (r *handlerRepository) ListVaults(_ context.Context, filter vault.ListFilter) ([]vault.Vault, int, error) {
+	out := make([]vault.Vault, 0)
+	for _, v := range r.vaults {
+		if filter.Status != "" && string(v.Status) != filter.Status {
+			continue
+		}
+		out = append(out, v)
+	}
+	total := len(out)
+	if filter.Offset < total {
+		out = out[filter.Offset:]
+	} else {
+		out = nil
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, total, nil
+}
+
+func (r *handlerRepository) ListUserVaultTransactions(_ context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
+	result := make([]vault.VaultTransaction, 0)
+	for _, txn := range r.transactions {
+		if txn.VaultID == vaultID && txn.UserID != nil && *txn.UserID == userID {
+			result = append(result, txn)
+		}
+	}
+	return result, nil
+}
+
+func feePtr(fee decimal.Decimal) *decimal.Decimal {
+	if fee.IsZero() {
+		return nil
+	}
+	return &fee
 }
 
 func cloneHandlerVault(model vault.Vault) vault.Vault {

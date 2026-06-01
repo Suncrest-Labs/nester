@@ -179,7 +179,12 @@ func TestVaultRepositoryIntegrationRecordDepositConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	deposit := func() {
 		defer wg.Done()
-		if err := repository.RecordDeposit(ctx, created.ID, decimal.RequireFromString("10")); err != nil {
+		if err := repository.RecordDeposit(ctx, created.ID, vault.TransactionRecord{
+			UserID:               userID,
+			Amount:               decimal.RequireFromString("10"),
+			SharesMintedOrBurned: decimal.RequireFromString("10"),
+			SharePriceAtTime:     decimal.NewFromInt(1),
+		}); err != nil {
 			t.Errorf("RecordDeposit() error = %v", err)
 		}
 	}

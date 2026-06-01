@@ -8,7 +8,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from app.routers import analyze, chat, health, ws_chat
+from app.routers import analyze, chat, coaching, health, ws_chat
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -41,5 +41,6 @@ async def add_process_time_header(
 
 app.include_router(health.router)
 app.include_router(chat.router, prefix="/intelligence")
+app.include_router(coaching.router)
 app.include_router(analyze.router)
 app.include_router(ws_chat.router)

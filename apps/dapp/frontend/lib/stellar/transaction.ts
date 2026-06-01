@@ -63,6 +63,17 @@ export interface BuiltTransaction {
   transaction: Transaction;
 }
 
+export interface NetworkFeeEstimate {
+  /** Total fee in stroops (1 XLM = 10_000_000 stroops). */
+  feeStroops: bigint;
+  /** Human-readable XLM amount. */
+  feeXlm: number;
+  /** Whether estimation succeeded. */
+  available: boolean;
+  /** Error message when unavailable. */
+  error?: string;
+}
+
 export interface TransactionReceipt {
   txHash: string;
   explorerUrl: string;
@@ -117,6 +128,52 @@ function getServer(rpcUrl: string): SorobanRpc.Server {
   }
 
   return new SorobanRpc.Server(rpcUrl, { allowHttp: !isProd });
+}
+
+// ── Fee estimation ────────────────────────────────────────────────────────────
+
+function stroopsToXlm(stroops: bigint): number {
+  return Number(stroops) / 10_000_000;
+}
+
+/**
+ * Estimate Stellar network fee for a deposit via simulateTransaction.
+ */
+export async function estimateDepositFee(
+  params: DepositParams
+): Promise<NetworkFeeEstimate> {
+  try {
+    const { transaction } = await buildDepositTransaction(params);
+    const total = BigInt(transaction.fee) || BigInt(BASE_FEE);
+    return { feeStroops: total, feeXlm: stroopsToXlm(total), available: true };
+  } catch (err) {
+    return {
+      feeStroops: BigInt(0),
+      feeXlm: 0,
+      available: false,
+      error: err instanceof Error ? err.message : "Fee estimation unavailable",
+    };
+  }
+}
+
+/**
+ * Estimate Stellar network fee for a withdrawal via simulateTransaction.
+ */
+export async function estimateWithdrawFee(
+  params: WithdrawParams
+): Promise<NetworkFeeEstimate> {
+  try {
+    const { transaction } = await buildWithdrawTransaction(params);
+    const total = BigInt(transaction.fee) || BigInt(BASE_FEE);
+    return { feeStroops: total, feeXlm: stroopsToXlm(total), available: true };
+  } catch (err) {
+    return {
+      feeStroops: BigInt(0),
+      feeXlm: 0,
+      available: false,
+      error: err instanceof Error ? err.message : "Fee estimation unavailable",
+    };
+  }
 }
 
 // ── Transaction builders ──────────────────────────────────────────────────────

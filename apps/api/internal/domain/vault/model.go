@@ -29,6 +29,10 @@ var (
 	ErrVaultClosed          = errors.New("vault is closed")
 	ErrVaultNotActive       = errors.New("vault is not active")
 	ErrInsufficientBalance  = errors.New("vault balance must be zero before closing")
+	ErrVaultForbidden       = errors.New("vault does not belong to caller")
+	ErrAllocationNotFound   = errors.New("allocation not found")
+	ErrAllocationHasBalance = errors.New("allocation has non-zero balance; set force=true to remove")
+	ErrDuplicateProtocol    = errors.New("protocol already allocated")
 )
 
 const (
@@ -66,11 +70,22 @@ type Allocation struct {
 
 // VaultTransaction represents a single deposit or withdrawal event recorded in
 // the vault_transactions table.
+// HarvestRecordInput captures ledger updates after a successful harvest.
+type HarvestRecordInput struct {
+	VaultID              uuid.UUID
+	UserID               uuid.UUID
+	NetYield             decimal.Decimal
+	PerformanceFee       decimal.Decimal
+	Compounded           bool
+	NewSharesMinted      *decimal.Decimal
+	TransactionHash      string
+}
+
 type VaultTransaction struct {
 	ID                   uuid.UUID        `json:"id"`
 	VaultID              uuid.UUID        `json:"vault_id"`
 	UserID               *uuid.UUID       `json:"user_id,omitempty"`
-	Type                 string           `json:"type"` // "deposit" | "withdrawal"
+	Type                 string           `json:"type"` // "deposit" | "withdrawal" | "harvest"
 	Amount               decimal.Decimal  `json:"amount"`
 	TransactionHash      string           `json:"transaction_hash,omitempty"`
 	SharesMintedOrBurned *decimal.Decimal `json:"shares_minted_or_burned,omitempty"`
@@ -83,14 +98,16 @@ type Repository interface {
 	CreateVault(ctx context.Context, model Vault) (Vault, error)
 	GetVault(ctx context.Context, id uuid.UUID) (Vault, error)
 	ListUserVaults(ctx context.Context, userID uuid.UUID, filter UserListFilter) ([]Vault, int, error)
-	RecordDeposit(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error
+	ListVaults(ctx context.Context, filter ListFilter) ([]Vault, int, error)
+	RecordDeposit(ctx context.Context, vaultID uuid.UUID, record TransactionRecord) error
 	UpdateVaultBalances(ctx context.Context, id uuid.UUID, totalDeposited decimal.Decimal, currentBalance decimal.Decimal) error
 	ReplaceAllocations(ctx context.Context, vaultID uuid.UUID, allocations []Allocation) error
-	// New methods wired to the new endpoints.
 	UpdateVault(ctx context.Context, id uuid.UUID, contractAddress string, status VaultStatus) error
-	RecordWithdrawal(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error
+	RecordWithdrawal(ctx context.Context, vaultID uuid.UUID, record TransactionRecord) error
+	RecordHarvest(ctx context.Context, input HarvestRecordInput) error
 	SoftDeleteVault(ctx context.Context, id uuid.UUID) error
 	ListDeposits(ctx context.Context, vaultID uuid.UUID) ([]VaultTransaction, error)
+	ListUserVaultTransactions(ctx context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]VaultTransaction, error)
 }
 
 // CanTransitionTo reports whether moving from the receiver status to next is a

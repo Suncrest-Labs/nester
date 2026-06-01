@@ -115,7 +115,9 @@ export async function resolveAccountName(
       }
     );
 
-    if (res.status === 404) return { status: "not_found" };
+    // 422: Paystack resolved but found no matching account (valid format, wrong combo).
+    // 404: legacy fallback for older API versions.
+    if (res.status === 422 || res.status === 404) return { status: "not_found" };
     if (res.status === 429) return { status: "provider_error" }; // rate limited
     if (res.status === 503) return { status: "provider_error" }; // both providers down
     if (!res.ok) return { status: "provider_error" };

@@ -16,6 +16,7 @@ import {
 import { usePortfolio } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
 import { type Vault as VaultDefinition, type MarketStrategy } from "@/lib/mock-vaults";
 import {
   executeVaultDeposit,
@@ -174,6 +175,7 @@ function getVaultMeta(vault: VaultDefinition) {
 export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const { address } = useWallet();
   const { getAvailableBalance, recordDeposit, refreshBalances } = usePortfolio();
+  const { isOffline } = useOfflineStatus();
 
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
@@ -218,7 +220,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   }, [amount, balance, selectedAsset]);
 
   const canSubmit =
-    !!vault && !!address && amount > 0 && !validationError && state === "input";
+    !!vault && !!address && amount > 0 && !validationError && state === "input" && !isOffline;
 
   const effectiveApy = selectedStrategy ? selectedStrategy.apy / 100 : (meta ? meta.apy : 0);
   const estimatedYield = amount * effectiveApy;
@@ -546,6 +548,15 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
               <div className="flex items-start gap-2 text-sm text-destructive">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{errorMsg}</span>
+              </div>
+            </div>
+          )}
+
+          {isOffline && state === "input" && (
+            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <div className="flex items-start gap-2 text-sm text-amber-700">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>You need an internet connection to complete this transaction.</span>
               </div>
             </div>
           )}

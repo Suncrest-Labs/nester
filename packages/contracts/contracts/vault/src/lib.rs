@@ -555,6 +555,15 @@ pub struct VaultContract;
 #[contractimpl]
 impl VaultContract {
     /// Initialise the vault, setting `admin` as the sole Admin.
+    ///
+    /// # Token immutability
+    /// `token_address` and `vault_token_address` are written once here and
+    /// never updated again.  No admin function exists to change either address
+    /// after initialization.  This guarantees that withdrawals always redeem
+    /// the same token that was deposited, preventing an admin key compromise
+    /// from swapping the token to steal deposited funds.  Any future need to
+    /// migrate tokens must go through a governance-approved upgrade with a
+    /// timelock so depositors can exit before the change takes effect.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -886,11 +895,24 @@ impl VaultContract {
         let strategy = get_allocation_strategy(&env);
         let current = current_allocations_vec(&env);
 
+        // Rebalance only redistributes capital already deployed to sources.
+        // Passing the deployed sum ensures delta conservation (sum == 0) in
+        // the allocation strategy; undeployed vault buffer is not touched.
+        let mut deployed_total: i128 = 0;
+        for a in current.iter() {
+            deployed_total = deployed_total
+                .checked_add(a.amount)
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        }
+        if deployed_total <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
         // Fetch deltas from the allocation strategy.
         let deltas: Vec<AllocationDeltaView> = env.invoke_contract(
             &strategy,
             &Symbol::new(&env, "calculate_rebalance_deltas"),
-            (current, total_assets).into_val(&env),
+            (current, deployed_total).into_val(&env),
         );
 
         // Apply each delta to source-allocation bookkeeping. Min-rebalance
@@ -1179,11 +1201,17 @@ impl VaultContract {
         }
 
         // 2. Early withdrawal fee (0.1%)
-        let deposit_time: u64 = env
+        // Use the most recent deposit timestamp: either the direct-deposit record
+        // stored in the vault or the transfer-derived timestamp stored in the
+        // vault token.  Taking the maximum prevents a user who received shares
+        // via transfer from inheriting an old timestamp and skipping the fee.
+        let vault_deposit_time: u64 = env
             .storage()
             .persistent()
             .get(&DataKey::DepositTime(user.clone()))
             .unwrap_or(0);
+        let vt_deposit_time: u64 = vault_token_client(&env).get_deposit_time(&user);
+        let deposit_time = vault_deposit_time.max(vt_deposit_time);
         let min_lock: u64 = env
             .storage()
             .instance()
@@ -1650,14 +1678,19 @@ impl VaultContract {
     pub fn pending_yield(env: Env) -> i128 {
         require_initialized(&env);
         let token_address = self::VaultContract::get_token(env.clone());
-        let contract_balance = token::Client::new(&env, &token_address).balance(&env.current_contract_address());
+        let contract_balance =
+            token::Client::new(&env, &token_address).balance(&env.current_contract_address());
         let liquid_reserves = get_vault_liquid_reserves(&env);
-        
-        if contract_balance > liquid_reserves {
+        let accrued_fees = get_accrued_fees(&env);
+
+        let gross = if contract_balance > liquid_reserves {
             contract_balance - liquid_reserves
         } else {
             0
-        }
+        };
+        // Return net yield after subtracting accrued management fees so the
+        // caller sees the amount actually distributable to depositors.
+        gross.saturating_sub(accrued_fees)
     }
 
     pub fn withdrawal_fee_preview(env: Env, user: Address, shares: i128) -> WithdrawalFeePreview {
@@ -1689,11 +1722,13 @@ impl VaultContract {
             ).unwrap_or(0);
         }
 
-        let deposit_time: u64 = env
+        let vault_deposit_time: u64 = env
             .storage()
             .persistent()
             .get(&DataKey::DepositTime(user.clone()))
             .unwrap_or(0);
+        let vt_deposit_time: u64 = vault_token_client(&env).get_deposit_time(&user);
+        let deposit_time = vault_deposit_time.max(vt_deposit_time);
         let min_lock: u64 = env
             .storage()
             .instance()

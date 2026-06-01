@@ -55,6 +55,9 @@ enum DataKey {
     Name,
     Symbol,
     Decimals,
+    /// Timestamp of the last deposit or inbound transfer for a holder.
+    /// Used by the vault to determine early-withdrawal fee eligibility.
+    DepositTimestamp(Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +105,19 @@ impl VaultTokenContract {
         from.require_auth();
         spend_balance(&env, &from, amount);
         receive_balance(&env, &to, amount);
+        // Recipient gets a fresh deposit timestamp so they cannot inherit an
+        // old timestamp and bypass the early-withdrawal fee immediately after
+        // receiving shares.
+        env.storage().persistent().set(
+            &DataKey::DepositTimestamp(to.clone()),
+            &env.ledger().timestamp(),
+        );
+        // Sender's timestamp is no longer meaningful once their balance is zero.
+        if get_balance(&env, &from) == 0 {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::DepositTimestamp(from.clone()));
+        }
         env.events()
             .publish((symbol_short!("transfer"), from, to), amount);
     }
@@ -112,6 +128,16 @@ impl VaultTokenContract {
         spend_allowance(&env, &from, &spender, amount);
         spend_balance(&env, &from, amount);
         receive_balance(&env, &to, amount);
+        // Same timestamp semantics as transfer().
+        env.storage().persistent().set(
+            &DataKey::DepositTimestamp(to.clone()),
+            &env.ledger().timestamp(),
+        );
+        if get_balance(&env, &from) == 0 {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::DepositTimestamp(from.clone()));
+        }
         env.events()
             .publish((symbol_short!("xfer_frm"), spender, from), (to, amount));
     }
@@ -144,9 +170,15 @@ impl VaultTokenContract {
         get_allowance(&env, &from, &spender)
     }
 
-    /// Burn `amount` of `from`'s own shares (SEP-41 user-initiated burn).
+    /// Burn `amount` of `from`'s shares.
+    ///
+    /// Restricted to the vault contract only. Direct calls by token holders are
+    /// rejected to prevent bypassing vault fee accounting (management fee,
+    /// early-withdrawal fee, performance fee). The vault's `withdraw()` path
+    /// must be used instead, which calls `burn_for_withdrawal` after applying
+    /// all fees and updating `total_shares`.
     pub fn burn(env: Env, from: Address, amount: i128) {
-        from.require_auth();
+        require_vault(&env);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
         let assets_to_reduce = if total_supply > 0 && total_assets > 0 {
@@ -255,6 +287,12 @@ impl VaultTokenContract {
         receive_balance(&env, &to, shares);
         set_total_supply(&env, total_supply + shares);
         set_total_assets(&env, total_assets + amount);
+        // Record deposit time so the vault can enforce the early-withdrawal
+        // lock period even when shares are later received via transfer.
+        env.storage().persistent().set(
+            &DataKey::DepositTimestamp(to.clone()),
+            &env.ledger().timestamp(),
+        );
         env.events()
             .publish((symbol_short!("mint"), to), (shares, amount));
         shares
@@ -286,6 +324,16 @@ impl VaultTokenContract {
         require_vault(&env);
         set_total_assets(&env, new_total);
         env.events().publish((symbol_short!("ta_upd"),), new_total);
+    }
+
+    /// Return the deposit timestamp for `user` as tracked by this token
+    /// contract.  Returns 0 if no timestamp has been recorded (e.g. the user
+    /// has never received shares via deposit or transfer).
+    pub fn get_deposit_time(env: Env, user: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DepositTimestamp(user))
+            .unwrap_or(0)
     }
 }
 

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"  # gitleaks:allow
     nester_api_base_url: str = "http://localhost:8080"
     nester_service_api_key: str = ""
+    defillama_base_url: str = "https://api.llama.fi"
 
     model_config = SettingsConfigDict(
         env_prefix="INTELLIGENCE_",

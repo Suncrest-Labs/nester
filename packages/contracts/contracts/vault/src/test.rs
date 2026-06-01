@@ -417,6 +417,57 @@ fn performance_fee_charges_only_realized_yield_not_principal() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Impairment regression test (issue #451 / PR #275)
+//
+// The original performance-fee issue explicitly required:
+//   "User deposits at rate 1.0, rate halves (impairment) → zero performance fee."
+//
+// The withdraw path skips the performance fee whenever `yield_part =
+// assets_to_withdraw - principal` is not strictly positive. This test proves
+// that zero-performance-fee invariant holds after a loss halves the share
+// price, so an impaired position is never charged a fee on a gain it never had.
+// ---------------------------------------------------------------------------
+#[test]
+fn impairment_charges_zero_performance_fee() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Disable the early-withdrawal fee so the assertion isolates performance-fee
+    // behaviour and the withdrawn amount is unambiguous.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    // Deposit at the initial share price of 1.0.
+    vault.deposit(&user, &deposit, &0);
+    assert_eq!(vault.share_price(), 10_000_000, "deposit should occur at rate 1.0");
+
+    // Impairment: report a loss that halves the share price (1.0 -> 0.5).
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(-(500 * XLM)));
+    assert_eq!(vault.share_price(), 5_000_000, "rate should halve after impairment");
+
+    // The preview must show no performance fee owed on an impaired position.
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert_eq!(
+        preview.performance_fee_deducted, 0,
+        "no performance fee may be charged when the position has lost value"
+    );
+
+    // The actual withdrawal returns the impaired value (500 XLM) with no fees
+    // siphoned off: 1000 shares now worth 0.5 each.
+    vault.withdraw(&user, &shares, &0);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user),
+        500 * XLM,
+        "user receives the full impaired value with zero performance fee"
+    );
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #17)")]
 fn withdraw_reverts_when_min_assets_out_is_not_met() {
@@ -1037,7 +1088,6 @@ fn setup_with_yield(
     vault.grant_role(admin, admin, &Role::Manager);
     if yield_amount > 0 {
         vault.report_yield(admin, &yield_amount);
-        // Back the reported yield with real tokens so the vault can pay fees.
         mint(token, &vault.address, yield_amount);
     }
 }
@@ -1047,28 +1097,23 @@ fn harvest_happy_path_compounds_net_yield_and_sends_fee_to_treasury() {
     let (env, admin, token, vault, treasury) = setup();
     let user = Address::generate(&env);
     let deposit = 1_000 * XLM;
-    let yield_amount = 100 * XLM; // 10% yield
+    let yield_amount = 100 * XLM;
 
-    // Disable management fee so gross_yield == yield_amount exactly.
     let mut fee_config: FeeConfig = vault.get_fee_config();
     fee_config.management_fee_bps = 0;
     vault.set_fee_config(&admin, &fee_config);
 
     setup_with_yield(&token, &vault, &admin, &user, deposit, yield_amount);
-
-    // Advance past lock period so no early-withdrawal fee on subsequent withdraw.
     advance_time(&env, DAY);
 
     let result = vault.harvest(&user);
 
-    // gross_yield = 100 XLM, performance_fee = 10% of 100 = 10 XLM
     assert_eq!(result.gross_yield, yield_amount);
     assert_eq!(result.performance_fee, 10 * XLM);
     assert_eq!(result.net_yield, 90 * XLM);
     assert!(result.compounded);
     assert_eq!(result.new_share_balance, vault.get_shares(&user));
 
-    // Treasury received the performance fee.
     let treasury_balance = token::Client::new(&env, &token.address).balance(&treasury);
     assert_eq!(treasury_balance, 10 * XLM);
 }
@@ -1083,7 +1128,6 @@ fn harvest_zero_yield_is_noop() {
     vault.deposit(&user, &deposit, &0);
     vault.grant_role(&admin, &admin, &Role::Manager);
 
-    // No yield reported — gross_yield == 0.
     let result = vault.harvest(&user);
 
     assert_eq!(result.gross_yield, 0);
@@ -1091,15 +1135,12 @@ fn harvest_zero_yield_is_noop() {
     assert_eq!(result.net_yield, 0);
     assert!(!result.compounded);
 
-    // Treasury untouched.
     let treasury_balance = token::Client::new(&env, &token.address).balance(&treasury);
     assert_eq!(treasury_balance, 0);
 }
 
 #[test]
 fn harvest_impairment_no_performance_fee() {
-    // When share value < principal (impairment), gross_yield is negative.
-    // No performance fee should be charged.
     let (env, admin, token, vault, treasury) = setup();
     let user = Address::generate(&env);
     let deposit = 1_000 * XLM;
@@ -1108,7 +1149,6 @@ fn harvest_impairment_no_performance_fee() {
     vault.deposit(&user, &deposit, &0);
     vault.grant_role(&admin, &admin, &Role::Manager);
 
-    // Simulate a loss: report negative yield (total_assets decreases).
     vault.report_yield(&admin, &(-100 * XLM));
 
     let result = vault.harvest(&user);
@@ -1124,13 +1164,11 @@ fn harvest_impairment_no_performance_fee() {
 
 #[test]
 fn harvest_fee_verification_correct_bps() {
-    // Verify fee math: 1000 bps = 10% of gross_yield.
     let (env, admin, token, vault, treasury) = setup();
     let user = Address::generate(&env);
     let deposit = 2_000 * XLM;
     let yield_amount = 500 * XLM;
 
-    // Disable management fee so gross_yield == yield_amount exactly.
     let mut fee_config: FeeConfig = vault.get_fee_config();
     fee_config.management_fee_bps = 0;
     vault.set_fee_config(&admin, &fee_config);
@@ -1140,7 +1178,6 @@ fn harvest_fee_verification_correct_bps() {
 
     let result = vault.harvest(&user);
 
-    // performance_fee_bps = 1000 (10%)
     let expected_fee = yield_amount / 10;
     assert_eq!(result.performance_fee, expected_fee);
     assert_eq!(result.net_yield, yield_amount - expected_fee);
@@ -1156,7 +1193,7 @@ fn harvest_vault_harvests_all_registered_users() {
     let bob = Address::generate(&env);
 
     let deposit = 1_000 * XLM;
-    let yield_amount = 200 * XLM; // 20% yield shared across both
+    let yield_amount = 200 * XLM;
 
     mint(&token, &alice, deposit);
     mint(&token, &bob, deposit);
@@ -1165,14 +1202,11 @@ fn harvest_vault_harvests_all_registered_users() {
 
     vault.grant_role(&admin, &admin, &Role::Manager);
     vault.report_yield(&admin, &yield_amount);
-    // Back yield with real tokens.
     mint(&token, &vault.address, yield_amount);
 
-    // Register both users by having them harvest once individually.
     vault.harvest(&alice);
     vault.harvest(&bob);
 
-    // Report more yield and back it.
     vault.report_yield(&admin, &(200 * XLM));
     mint(&token, &vault.address, 200 * XLM);
 
@@ -1186,7 +1220,6 @@ fn harvest_vault_harvests_all_registered_users() {
         result.total_gross_yield - result.total_performance_fee
     );
 
-    // Treasury received fees from harvest_vault.
     let treasury_balance = token::Client::new(&env, &token.address).balance(&treasury);
     assert!(treasury_balance > 0);
 }
@@ -1198,4 +1231,33 @@ fn harvest_vault_requires_admin_role() {
     let outsider = Address::generate(&env);
     mint(&token, &outsider, 100 * XLM);
     vault.harvest_vault(&outsider);
+}
+
+// ---------------------------------------------------------------------------
+// Impairment regression (#451)
+// ---------------------------------------------------------------------------
+
+/// When a vault is impaired (`yield_part < 0`), `withdraw` must NOT charge a
+/// performance fee.
+#[test]
+fn withdrawal_charges_no_perf_fee_on_impairment() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.report_yield(&admin, &(-(200 * XLM)));
+
+    let shares = vault.get_shares(&user);
+    vault.withdraw(&user, &shares, &0);
+
+    let balance = token::Client::new(&env, &token.address).balance(&user);
+    assert_eq!(balance, 800 * XLM, "impairment must not charge a performance fee");
 }

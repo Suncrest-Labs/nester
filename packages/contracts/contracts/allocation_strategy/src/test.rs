@@ -741,6 +741,162 @@ fn suggest_weights_uses_apy_and_risk_scores() {
     assert_eq!(weight_for(&suggested, symbol_short!("comp")), 3_030);
 }
 
+// ---------------------------------------------------------------------------
+// Issue #507 — rebalance delta conservation
+// ---------------------------------------------------------------------------
+
+fn delta_sum(deltas: &soroban_sdk::Vec<AllocationDelta>) -> i128 {
+    let mut sum = 0_i128;
+    for d in deltas.iter() {
+        sum += d.delta;
+    }
+    sum
+}
+
+fn delta_for(deltas: &soroban_sdk::Vec<AllocationDelta>, id: soroban_sdk::Symbol) -> i128 {
+    for d in deltas.iter() {
+        if d.source_id == id {
+            return d.delta;
+        }
+    }
+    0
+}
+
+/// Balanced rebalance: total == sum(current_allocations).
+/// With weights 50%/30%/20% and current [700,150,150] (sum=1000),
+/// deltas are [-200, +150, +50] — exactly zero sum.
+#[test]
+fn rebalance_deltas_sum_to_zero_for_balanced_rebalance() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    client.set_weights(
+        &admin,
+        &vec![
+            &env,
+            AllocationWeight {
+                source_id: symbol_short!("aave"),
+                weight_bps: 5_000,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("blend"),
+                weight_bps: 3_000,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("comp"),
+                weight_bps: 2_000,
+            },
+        ],
+    );
+
+    let current = vec![
+        &env,
+        CurrentAllocation {
+            source_id: symbol_short!("aave"),
+            amount: 700,
+        },
+        CurrentAllocation {
+            source_id: symbol_short!("blend"),
+            amount: 150,
+        },
+        CurrentAllocation {
+            source_id: symbol_short!("comp"),
+            amount: 150,
+        },
+    ];
+    let deltas = client.calculate_rebalance_deltas(&current, &1_000_i128);
+
+    assert_eq!(delta_sum(&deltas), 0);
+    assert_eq!(delta_for(&deltas, symbol_short!("aave")), -200);
+    assert_eq!(delta_for(&deltas, symbol_short!("blend")), 150);
+    assert_eq!(delta_for(&deltas, symbol_short!("comp")), 50);
+}
+
+/// Unbalanced: total (300) != sum(current_allocations) (400).
+/// Delta sum = 300 - 400 = -100 ≠ 0 → must panic.
+#[test]
+#[should_panic]
+fn rebalance_deltas_panics_when_total_mismatches_current_sum() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    client.set_weights(
+        &admin,
+        &vec![
+            &env,
+            AllocationWeight {
+                source_id: symbol_short!("aave"),
+                weight_bps: 5_000,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("blend"),
+                weight_bps: 5_000,
+            },
+        ],
+    );
+
+    // sum(current) = 400, but total = 300 → delta sum = -100 ≠ 0
+    let current = vec![
+        &env,
+        CurrentAllocation {
+            source_id: symbol_short!("aave"),
+            amount: 300,
+        },
+        CurrentAllocation {
+            source_id: symbol_short!("blend"),
+            amount: 100,
+        },
+    ];
+    client.calculate_rebalance_deltas(&current, &300_i128);
+}
+
+/// Empty current allocations with total=0 → all deltas are zero → succeeds.
+#[test]
+fn rebalance_deltas_empty_allocations_and_zero_total_succeeds() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    client.set_weights(
+        &admin,
+        &vec![
+            &env,
+            AllocationWeight {
+                source_id: symbol_short!("aave"),
+                weight_bps: 5_000,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("blend"),
+                weight_bps: 5_000,
+            },
+        ],
+    );
+
+    let empty: soroban_sdk::Vec<CurrentAllocation> = soroban_sdk::Vec::new(&env);
+    let deltas = client.calculate_rebalance_deltas(&empty, &0_i128);
+
+    assert_eq!(delta_sum(&deltas), 0);
+}
+
+/// Stored allocation weights must always sum to exactly 10_000 bps.
+#[test]
+fn allocation_weights_always_sum_to_ten_thousand_bps() {
+    for vault_type in [
+        VaultType::Conservative,
+        VaultType::Balanced,
+        VaultType::Growth,
+        VaultType::DeFi500,
+    ] {
+        let (env, _, _, strategy_id) = setup_with_type(vault_type);
+        let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+        let weights = client.get_weights();
+        assert_eq!(
+            weight_sum(&weights),
+            10_000,
+            "weights must sum to 10_000 bps"
+        );
+    }
+}
+
 // AllocationStrategy.set_allocations requires operator role — unauthorized callers are rejected.
 #[test]
 #[should_panic]

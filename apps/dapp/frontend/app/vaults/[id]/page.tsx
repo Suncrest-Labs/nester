@@ -327,7 +327,7 @@ export default function VaultDetailPage() {
                      transition={{ duration: 0.4, delay: 0.25 }}
                      className="mt-8"
                  >
-                     <RiskGauge vaultId={id} />
+                     <RiskGauge vaultId={id as string} />
                  </motion.div>
              </AppShell>
 

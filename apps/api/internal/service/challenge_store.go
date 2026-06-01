@@ -12,6 +12,8 @@ import (
 
 var ErrChallengeNotFound = errors.New("challenge not found or expired")
 
+const defaultChallengeCleanupInterval = 30 * time.Second
+
 // ChallengeStore persists single-use auth challenges.
 // Implementations must be safe for concurrent use.
 type ChallengeStore interface {
@@ -66,10 +68,14 @@ type InMemoryChallengeStore struct {
 }
 
 func NewInMemoryChallengeStore(ttl time.Duration) *InMemoryChallengeStore {
-	return &InMemoryChallengeStore{
+	store := &InMemoryChallengeStore{
 		m:   make(map[string]inMemoryEntry),
 		ttl: ttl,
 	}
+
+	go store.cleanupExpiredLoop(challengeCleanupInterval(ttl))
+
+	return store
 }
 
 func (s *InMemoryChallengeStore) Set(_ context.Context, walletAddress, challenge string) error {
@@ -90,4 +96,32 @@ func (s *InMemoryChallengeStore) GetAndDelete(_ context.Context, walletAddress s
 	}
 	delete(s.m, walletAddress)
 	return entry.value, nil
+}
+
+func (s *InMemoryChallengeStore) cleanupExpiredLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.evictExpired(time.Now())
+	}
+}
+
+func (s *InMemoryChallengeStore) evictExpired(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for walletAddress, entry := range s.m {
+		if now.After(entry.expiresAt) {
+			delete(s.m, walletAddress)
+		}
+	}
+}
+
+func challengeCleanupInterval(ttl time.Duration) time.Duration {
+	if ttl <= 0 || ttl > defaultChallengeCleanupInterval {
+		return defaultChallengeCleanupInterval
+	}
+
+	return ttl
 }

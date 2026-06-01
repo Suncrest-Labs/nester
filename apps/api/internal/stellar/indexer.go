@@ -5,24 +5,24 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/systemstate"
 )
 
-func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, rpcURL string) {
+func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, rpcURL string) {
 	if strings.TrimSpace(rpcURL) == "" {
 		logger.Warn("event indexer disabled: STELLAR_RPC_URL is empty")
-		return
-	}
-	if err := ensureIndexerTables(ctx, db); err != nil {
-		logger.Error("event indexer disabled: failed to initialize tables", "error", err)
 		return
 	}
 
@@ -36,7 +36,7 @@ func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, rpc
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				startLedger, err := getLastIndexedLedger(ctx, db)
+				startLedger, err := getLastIndexedLedger(ctx, sysRepo)
 				if err != nil {
 					logger.Error("event indexer failed to load cursor", "error", err)
 					continue
@@ -68,7 +68,7 @@ func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, rpc
 					}
 				}
 
-				if err := setLastIndexedLedger(ctx, db, latestLedger); err != nil {
+				if err := setLastIndexedLedger(ctx, sysRepo, latestLedger); err != nil {
 					logger.Error("event indexer failed to persist cursor", "ledger", latestLedger, "error", err)
 				}
 			}
@@ -325,50 +325,36 @@ func fetchSorobanEvents(
 	return events, rpcResp.Result.LatestLedger, nil
 }
 
-func ensureIndexerTables(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS event_indexer_state (
-    id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    last_indexed_ledger BIGINT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`); err != nil {
-		return err
+// getLastIndexedLedger reads the event-indexer cursor from system_state.
+// A missing key is treated as ledger 0 (start from genesis).
+func getLastIndexedLedger(ctx context.Context, sysRepo systemstate.Repository) (uint64, error) {
+	raw, err := sysRepo.Get(ctx, systemstate.KeyLastLedger)
+	if errors.Is(err, systemstate.ErrKeyNotFound) {
+		return 0, nil
 	}
-
-	if _, err := db.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS processed_chain_events (
-    event_id TEXT PRIMARY KEY,
-    contract_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    ledger BIGINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`); err != nil {
-		return err
-	}
-
-	_, err := db.ExecContext(ctx, `
-INSERT INTO event_indexer_state (id, last_indexed_ledger)
-VALUES (1, 0)
-ON CONFLICT (id) DO NOTHING`)
-	return err
-}
-
-func getLastIndexedLedger(ctx context.Context, db *sql.DB) (uint64, error) {
-	var ledger uint64
-	err := db.QueryRowContext(ctx, `SELECT last_indexed_ledger FROM event_indexer_state WHERE id = 1`).Scan(&ledger)
 	if err != nil {
 		return 0, err
+	}
+	ledger, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse last ledger %q: %w", raw, err)
 	}
 	return ledger, nil
 }
 
-func setLastIndexedLedger(ctx context.Context, db *sql.DB, ledger uint64) error {
-	_, err := db.ExecContext(ctx, `
-UPDATE event_indexer_state
-SET last_indexed_ledger = GREATEST(last_indexed_ledger, $1::bigint),
-    updated_at = NOW()
-WHERE id = 1`, ledger)
-	return err
+// setLastIndexedLedger persists the event-indexer cursor to system_state.
+// It only advances the cursor (never moves it backwards).
+func setLastIndexedLedger(ctx context.Context, sysRepo systemstate.Repository, ledger uint64) error {
+	// Read current value so we can apply GREATEST semantics without a raw SQL
+	// UPDATE … GREATEST.
+	current, err := getLastIndexedLedger(ctx, sysRepo)
+	if err != nil {
+		return err
+	}
+	if ledger <= current {
+		return nil
+	}
+	return sysRepo.Set(ctx, systemstate.KeyLastLedger, strconv.FormatUint(ledger, 10))
 }
 
 func markEventProcessed(ctx context.Context, tx *sql.Tx, event indexedEvent) (bool, error) {
@@ -391,18 +377,16 @@ ON CONFLICT (event_id) DO NOTHING`,
 	return rowsAffected == 1, nil
 }
 
+// EventSyncer is used by the admin handler to trigger a one-shot sync.
 type EventSyncer struct {
-	DB     *sql.DB
-	RPCURL string
-	Logger *slog.Logger
+	DB      *sql.DB
+	SysRepo systemstate.Repository
+	RPCURL  string
+	Logger  *slog.Logger
 }
 
 func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
-	if err := ensureIndexerTables(ctx, s.DB); err != nil {
-		return 0, fmt.Errorf("indexer tables: %w", err)
-	}
-
-	startLedger, err := getLastIndexedLedger(ctx, s.DB)
+	startLedger, err := getLastIndexedLedger(ctx, s.SysRepo)
 	if err != nil {
 		return 0, fmt.Errorf("load cursor: %w", err)
 	}
@@ -433,7 +417,7 @@ func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
 		}
 	}
 
-	if err := setLastIndexedLedger(ctx, s.DB, latestLedger); err != nil {
+	if err := setLastIndexedLedger(ctx, s.SysRepo, latestLedger); err != nil {
 		s.Logger.Error("admin sync: failed to persist cursor", "ledger", latestLedger, "error", err)
 	}
 

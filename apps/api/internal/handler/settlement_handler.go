@@ -16,11 +16,12 @@ import (
 )
 
 type SettlementHandler struct {
-	service *service.SettlementService
+	service     *service.SettlementService
+	userService *service.UserService
 }
 
-func NewSettlementHandler(svc *service.SettlementService) *SettlementHandler {
-	return &SettlementHandler{service: svc}
+func NewSettlementHandler(svc *service.SettlementService, userSvc *service.UserService) *SettlementHandler {
+	return &SettlementHandler{service: svc, userService: userSvc}
 }
 
 func (h *SettlementHandler) Register(mux *http.ServeMux) {
@@ -73,6 +74,17 @@ func (h *SettlementHandler) initiateSettlement(w http.ResponseWriter, r *http.Re
 	userID, err := uuid.Parse(caller.ID)
 	if err != nil {
 		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "invalid caller identity"))
+		return
+	}
+
+	u, err := h.userService.GetUser(r.Context(), userID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "failed to check kyc status"))
+		return
+	}
+
+	if string(u.KYCStatus) != "verified" {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "kyc_required", "kyc verification is required"))
 		return
 	}
 

@@ -13,3 +13,10 @@ type UserListFilter struct {
 	MinBalance   *string
 	CreatedAfter *time.Time
 }
+
+// ListFilter drives paginated listing of all vaults (public endpoint).
+type ListFilter struct {
+	Limit  int
+	Offset int
+	Status string
+}

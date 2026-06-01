@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -37,8 +37,10 @@ class TestVaultContextFetcher:
             mock_response.status = 200
             mock_response.json = AsyncMock(return_value=mock_response_data)
 
-            mock_session_instance = AsyncMock()
-            mock_session_instance.get.return_value.__aenter__.return_value = mock_response
+            mock_get_cm = AsyncMock()
+            mock_get_cm.__aenter__.return_value = mock_response
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_get_cm
             mock_session.return_value.__aenter__.return_value = mock_session_instance
 
             result = await fetcher.fetch_user_vaults("test-user-id")
@@ -61,8 +63,10 @@ class TestVaultContextFetcher:
             mock_response = AsyncMock()
             mock_response.status = 500
 
-            mock_session_instance = AsyncMock()
-            mock_session_instance.get.return_value.__aenter__.return_value = mock_response
+            mock_get_cm = AsyncMock()
+            mock_get_cm.__aenter__.return_value = mock_response
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_get_cm
             mock_session.return_value.__aenter__.return_value = mock_session_instance
 
             result = await fetcher.fetch_user_vaults("test-user-id")
@@ -109,8 +113,10 @@ class TestVaultContextFetcher:
             mock_response.status = 200
             mock_response.json = AsyncMock(return_value=mock_response_data)
 
-            mock_session_instance = AsyncMock()
-            mock_session_instance.get.return_value.__aenter__.return_value = mock_response
+            mock_get_cm = AsyncMock()
+            mock_get_cm.__aenter__.return_value = mock_response
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_get_cm
             mock_session.return_value.__aenter__.return_value = mock_session_instance
 
             result = await fetcher.fetch_market_rates()
@@ -127,8 +133,10 @@ class TestVaultContextFetcher:
             mock_response = AsyncMock()
             mock_response.status = 500
 
-            mock_session_instance = AsyncMock()
-            mock_session_instance.get.return_value.__aenter__.return_value = mock_response
+            mock_get_cm = AsyncMock()
+            mock_get_cm.__aenter__.return_value = mock_response
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_get_cm
             mock_session.return_value.__aenter__.return_value = mock_session_instance
 
             result = await fetcher.fetch_market_rates()
@@ -175,8 +183,10 @@ class TestVaultContextFetcher:
             mock_response.status = 200
             mock_response.json = AsyncMock(return_value=mock_response_data)
 
-            mock_session_instance = AsyncMock()
-            mock_session_instance.get.return_value.__aenter__.return_value = mock_response
+            mock_get_cm = AsyncMock()
+            mock_get_cm.__aenter__.return_value = mock_response
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_get_cm
             mock_session.return_value.__aenter__.return_value = mock_session_instance
 
             result = await fetcher.fetch_vault_risk("test-vault-id")
@@ -194,8 +204,10 @@ class TestVaultContextFetcher:
             mock_response = AsyncMock()
             mock_response.status = 500
 
-            mock_session_instance = AsyncMock()
-            mock_session_instance.get.return_value.__aenter__.return_value = mock_response
+            mock_get_cm = AsyncMock()
+            mock_get_cm.__aenter__.return_value = mock_response
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_get_cm
             mock_session.return_value.__aenter__.return_value = mock_session_instance
 
             result = await fetcher.fetch_vault_risk("test-vault-id")

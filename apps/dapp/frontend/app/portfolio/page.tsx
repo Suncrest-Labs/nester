@@ -4,7 +4,7 @@ import { useWallet } from "@/components/wallet-provider";
 import { usePortfolio, type PortfolioPosition } from "@/components/portfolio-provider";
 import { AppShell } from "@/components/app-shell";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     RefreshCw,
@@ -26,6 +26,7 @@ import { TransferModal } from "@/components/vault-action-modals";
 import { WithdrawModal } from "@/components/vault-action-modals";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
+import { YieldComparisonChart, type ProtocolApyPoint, type ProtocolSnapshot } from "@/components/analytics/YieldComparisonChart";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ export default function PortfolioPage() {
     const [loading, setLoading] = useState(false);
     const [hideBalances, setHideBalances] = useState(false);
     const [copied, setCopied] = useState(false);
-    const [activeTab, setActiveTab] = useState<"positions" | "activity">("positions");
+    const [activeTab, setActiveTab] = useState<"positions" | "activity" | "compare">("positions");
     const [withdrawPos, setWithdrawPos] = useState<PortfolioPosition | null>(null);
     const [transferPos, setTransferPos] = useState<PortfolioPosition | null>(null);
 
@@ -125,6 +126,55 @@ export default function PortfolioPage() {
     const fmtUsd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
     const recentTx = transactions.slice(0, 15);
+
+    // ── Yield comparison data derived from positions ──────────────────────────
+    const { compareHistory, compareSnapshots } = useMemo((): {
+        compareHistory: ProtocolApyPoint[];
+        compareSnapshots: ProtocolSnapshot[];
+    } => {
+        const protocols = ["Blend", "Aave", "Compound", "Nester"];
+        const totalVault = positions.reduce((s, p) => s + p.currentValue, 0);
+
+        // Build 30 days of synthetic APY history seeded from position APYs
+        const today = new Date();
+        const nesterApy = positions.length
+            ? positions.reduce((s, p) => s + (p.apy ?? 0), 0) / positions.length
+            : 0.12;
+
+        const baseApys: Record<string, number> = {
+            Blend: 0.124,
+            Aave: 0.098,
+            Compound: 0.085,
+            Nester: nesterApy,
+        };
+
+        const history: ProtocolApyPoint[] = Array.from({ length: 30 }, (_, i) => {
+            const d = new Date(today);
+            d.setDate(d.getDate() - (29 - i));
+            const point: ProtocolApyPoint = { date: d.toISOString().slice(0, 10) };
+            protocols.forEach((p) => {
+                const jitter = (Math.sin(i * 0.4 + p.length) * 0.015);
+                point[p] = parseFloat(((baseApys[p] + jitter) * 100).toFixed(2));
+            });
+            return point;
+        });
+
+        const snapshots: ProtocolSnapshot[] = protocols.map((protocol) => {
+            const base = baseApys[protocol] * 100;
+            const posAlloc = protocol === "Nester" && totalVault > 0
+                ? 100
+                : undefined;
+            return {
+                protocol,
+                currentApy: parseFloat(base.toFixed(1)),
+                avg30d: parseFloat((base * 0.97).toFixed(1)),
+                trend7d: parseFloat(((Math.random() - 0.45) * 2).toFixed(1)),
+                allocationPct: posAlloc,
+            };
+        });
+
+        return { compareHistory: history, compareSnapshots: snapshots };
+    }, [positions]);
 
     return (
         <AppShell>
@@ -225,7 +275,7 @@ export default function PortfolioPage() {
                 transition={{ delay: 0.15 }}
                 className="mb-5 flex items-center gap-1 border-b border-black/8"
             >
-                {(["positions", "activity"] as const).map((tab) => (
+                {(["positions", "activity", "compare"] as const).map((tab) => (
                     <button
                         key={tab}
                         onClick={() => setActiveTab(tab)}
@@ -376,6 +426,21 @@ export default function PortfolioPage() {
                                 })}
                             </div>
                         )}
+                    </motion.div>
+                )}
+
+                {activeTab === "compare" && (
+                    <motion.div
+                        key="compare"
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                    >
+                        <YieldComparisonChart
+                            history={compareHistory}
+                            snapshots={compareSnapshots}
+                            loading={false}
+                        />
                     </motion.div>
                 )}
             </AnimatePresence>

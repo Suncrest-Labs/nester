@@ -103,6 +103,75 @@ func (s *Service) APY(ctx context.Context, vaultID uuid.UUID) (map[perfdom.Perio
 	return out, nil
 }
 
+// GetAPYHistory returns bucketed APY data points plus summary stats for the
+// requested period and interval.
+func (s *Service) GetAPYHistory(
+	ctx context.Context,
+	vaultID uuid.UUID,
+	period string, // "7d" | "30d" | "90d" | "1y"
+	interval string, // "daily" | "weekly"
+) (perfdom.APYHistoryResponse, error) {
+	periodDays := map[string]int{
+		"7d":  7,
+		"30d": 30,
+		"90d": 90,
+		"1y":  365,
+	}
+
+	days, ok := periodDays[period]
+	if !ok {
+		days = 30
+	}
+
+	since := s.clock().Add(-time.Duration(days) * 24 * time.Hour)
+
+	dataPoints, err := s.repo.APYHistoryForVault(ctx, vaultID, since, interval)
+	if err != nil {
+		return perfdom.APYHistoryResponse{}, err
+	}
+
+	minAPY, maxAPY, avgAPY, err := s.repo.APYStatsForVault(ctx, vaultID, since)
+	if err != nil {
+		return perfdom.APYHistoryResponse{}, err
+	}
+
+	// Current APY comes from the latest snapshot-derived value
+	latest, err := s.repo.LatestForVault(ctx, vaultID)
+	var currentAPY string
+	if err == nil && !latest.TotalDeposited.IsZero() {
+		pct := latest.TotalBalance.Sub(latest.TotalDeposited).
+			Div(latest.TotalDeposited).
+			Mul(decimal.NewFromInt(100))
+		currentAPY = pct.StringFixed(2)
+	} else {
+		currentAPY = "0.00"
+	}
+
+	// dataComplete is true when we have at least as many points as expected
+	expectedPoints := days
+	if interval == "weekly" {
+		expectedPoints = (days + 6) / 7
+	}
+	dataComplete := len(dataPoints) >= expectedPoints
+
+	if dataPoints == nil {
+		dataPoints = []perfdom.APYDataPoint{}
+	}
+
+	return perfdom.APYHistoryResponse{
+		VaultID:      vaultID.String(),
+		Period:       period,
+		Interval:     interval,
+		CurrentAPY:   currentAPY,
+		AvgAPY:       avgAPY.StringFixed(2),
+		MinAPY:       minAPY.StringFixed(2),
+		MaxAPY:       maxAPY.StringFixed(2),
+		DataComplete: dataComplete,
+		DataPoints:   dataPoints,
+	}, nil
+}
+
+
 // CalculateRealizedAPY annualizes the return between two snapshots.
 //
 //	APY = ((current_balance / total_deposited) ^ (365 / days_elapsed) - 1) * 100

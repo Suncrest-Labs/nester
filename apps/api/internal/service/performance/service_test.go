@@ -28,7 +28,7 @@ func (s *stubVaultRepository) GetUserVaults(_ context.Context, userID uuid.UUID)
 	return s.vaults, s.err
 }
 
-func (s *stubVaultRepository) RecordDeposit(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
+func (s *stubVaultRepository) RecordDeposit(_ context.Context, id uuid.UUID, record vault.TransactionRecord) error {
 	return errors.New("not implemented")
 }
 
@@ -44,7 +44,11 @@ func (s *stubVaultRepository) UpdateVault(_ context.Context, id uuid.UUID, contr
 	return errors.New("not implemented")
 }
 
-func (s *stubVaultRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, amount decimal.Decimal) error {
+func (s *stubVaultRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, record vault.TransactionRecord) error {
+	return errors.New("not implemented")
+}
+
+func (s *stubVaultRepository) RecordHarvest(_ context.Context, input vault.HarvestRecordInput) error {
 	return errors.New("not implemented")
 }
 
@@ -54,4 +58,12 @@ func (s *stubVaultRepository) SoftDeleteVault(_ context.Context, id uuid.UUID) e
 
 func (s *stubVaultRepository) ListDeposits(_ context.Context, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (s *stubVaultRepository) ListUserVaultTransactions(_ context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *stubVaultRepository) ListVaults(_ context.Context, _ vault.ListFilter) ([]vault.Vault, int, error) {
+	return nil, 0, errors.New("not implemented")
 }
