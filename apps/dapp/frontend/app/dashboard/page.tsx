@@ -495,7 +495,7 @@ export default function Dashboard() {
         const totalBalanceUsd = vaults.reduce((s, v) => {
             const balance = parseFloat(v.current_balance) || 0;
             const currency = v.currency.toUpperCase();
-            const price = tokenPrices[currency] ?? 0;
+            const price = (tokenPrices as unknown as Record<string, number>)[currency] ?? 0;
             return s + (balance * price);
         }, 0);
         
@@ -603,7 +603,6 @@ export default function Dashboard() {
                                     ${fmtUsd(totalYield)}
                                 </span>
                             )}
->>>>>>> theirs
                         </div>
                     </div>
                 </div>

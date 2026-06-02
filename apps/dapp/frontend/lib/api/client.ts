@@ -93,11 +93,7 @@ async function apiFetch<T>(
 
   if (body.trim()) {
     try {
-      json = JSON.parse(body) as {
-        success: boolean;
-        data?: T;
-        error?: { code: string; message: string };
-      };
+      json = JSON.parse(body) as ApiEnvelope<T>;
     } catch {
       if (!res.ok) {
         throw new ApiError(
@@ -311,7 +307,7 @@ export const api = {
   settlements: {
     list: (userId: string, status?: string) =>
       apiFetch<ApiSettlement[]>(
-        `/settlements?userId=${userId}${status ? \`&status=\${status}\` : ""}`
+        `/settlements?userId=${userId}${status ? `&status=${status}` : ""}`
       ),
 
     getById: (settlementId: string) =>
