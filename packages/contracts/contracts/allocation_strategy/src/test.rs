@@ -1044,3 +1044,239 @@ fn rebalance_withdraws_to_vault_when_all_unhealthy() {
     assert_eq!(delta_sum(&deltas), -1000);
     assert_eq!(delta_for(&deltas, symbol_short!("aave")), -1000);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #514 — minimum allocation weight enforcement
+// ---------------------------------------------------------------------------
+
+#[test]
+fn allocation_thresholds_initialized_with_defaults() {
+    let (env, _, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    let (min_bps, max_bps) = client.get_allocation_thresholds();
+    assert_eq!(min_bps, 500); // 5% minimum
+    assert_eq!(max_bps, 7000); // 70% maximum
+}
+
+#[test]
+#[should_panic]
+fn rejects_weight_below_minimum_threshold() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Try to set weight to 4% (400 bps), below the 5% minimum
+    client.set_weights(
+        &admin,
+        &vec![
+            &env,
+            AllocationWeight {
+                source_id: symbol_short!("aave"),
+                weight_bps: 400,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("blend"),
+                weight_bps: 9_600,
+            },
+        ],
+    );
+}
+
+#[test]
+#[should_panic]
+fn rejects_weight_above_maximum_threshold() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Try to set weight to 75% (7500 bps), above the 70% maximum
+    client.set_weights(
+        &admin,
+        &vec![
+            &env,
+            AllocationWeight {
+                source_id: symbol_short!("aave"),
+                weight_bps: 7_500,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("blend"),
+                weight_bps: 2_500,
+            },
+        ],
+    );
+}
+
+#[test]
+fn accepts_weight_within_thresholds() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Set weight to 50%, which is within the 5%-70% range
+    let weights = vec![
+        &env,
+        AllocationWeight {
+            source_id: symbol_short!("aave"),
+            weight_bps: 5_000,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("blend"),
+            weight_bps: 3_000,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("comp"),
+            weight_bps: 2_000,
+        },
+    ];
+
+    client.set_weights(&admin, &weights);
+    assert_eq!(client.get_weights(), weights);
+}
+
+#[test]
+fn admin_can_propose_threshold_update() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Propose updating thresholds to 10% minimum and 80% maximum
+    let op_id = client.propose_update_allocation_thresholds(&admin, &1000, &8000);
+    assert!(op_id > 0);
+}
+
+#[test]
+#[should_panic]
+fn rejects_invalid_threshold_proposal_min_zero() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Try to set minimum to 0
+    client.propose_update_allocation_thresholds(&admin, &0, &7000);
+}
+
+#[test]
+#[should_panic]
+fn rejects_invalid_threshold_proposal_min_exceeds_max() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Try to set minimum (8000) greater than maximum (7000)
+    client.propose_update_allocation_thresholds(&admin, &8000, &7000);
+}
+
+#[test]
+fn admin_can_execute_threshold_update_after_timelock() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    reg(&registry, &env, &admin, symbol_short!("blend"));
+    reg(&registry, &env, &admin, symbol_short!("comp"));
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize_with_vault_type(&admin, &registry_id, &VaultType::Balanced);
+
+    // Initialize timelock
+    nester_timelock::Timelock::initialize(&env);
+
+    // Propose updating thresholds to 10% minimum and 80% maximum
+    let op_id = client.propose_update_allocation_thresholds(&admin, &1000, &8000);
+
+    // Fast-forward past the timelock delay
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+
+    // Execute the proposal
+    client.execute_update_allocation_thresholds(&admin, op_id);
+
+    // Verify thresholds were updated
+    let (min_bps, max_bps) = client.get_allocation_thresholds();
+    assert_eq!(min_bps, 1000); // 10% minimum
+    assert_eq!(max_bps, 8000); // 80% maximum
+}
+
+#[test]
+fn updated_thresholds_enforce_new_limits() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    reg(&registry, &env, &admin, symbol_short!("blend"));
+    reg(&registry, &env, &admin, symbol_short!("comp"));
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize_with_vault_type(&admin, &registry_id, &VaultType::Balanced);
+
+    // Initialize timelock
+    nester_timelock::Timelock::initialize(&env);
+
+    // Propose and execute updating thresholds to 10% minimum and 80% maximum
+    let op_id = client.propose_update_allocation_thresholds(&admin, &1000, &8000);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    client.execute_update_allocation_thresholds(&admin, op_id);
+
+    // Now 5% (500 bps) should be rejected as below the new 10% minimum
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.set_weights(
+            &admin,
+            &vec![
+                &env,
+                AllocationWeight {
+                    source_id: symbol_short!("aave"),
+                    weight_bps: 500,
+                },
+                AllocationWeight {
+                    source_id: symbol_short!("blend"),
+                    weight_bps: 9_500,
+                },
+            ],
+        );
+    }));
+    assert!(result.is_err());
+
+    // And 85% (8500 bps) should be rejected as above the new 80% maximum
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.set_weights(
+            &admin,
+            &vec![
+                &env,
+                AllocationWeight {
+                    source_id: symbol_short!("aave"),
+                    weight_bps: 8_500,
+                },
+                AllocationWeight {
+                    source_id: symbol_short!("blend"),
+                    weight_bps: 1_500,
+                },
+            ],
+        );
+    }));
+    assert!(result.is_err());
+
+    // But 10% and 80% should be accepted
+    let weights = vec![
+        &env,
+        AllocationWeight {
+            source_id: symbol_short!("aave"),
+            weight_bps: 1_000,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("blend"),
+            weight_bps: 8_000,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("comp"),
+            weight_bps: 1_000,
+        },
+    ];
+    client.set_weights(&admin, &weights);
+    assert_eq!(client.get_weights(), weights);
+}

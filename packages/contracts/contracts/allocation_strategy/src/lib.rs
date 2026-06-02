@@ -1,14 +1,15 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Error,
-    IntoVal, Symbol, Val, Vec,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Bytes, Env,
+    Error, IntoVal, Symbol, Val, Vec,
 };
 
 use nester_access_control::{AccessControl, Role};
 use nester_common::{
     emit_event, fees::mul_div, ContractError, ProtocolType, SourceStatus, BASIS_POINT_SCALE,
 };
+use nester_timelock::Timelock;
 
 const STRATEGY: Symbol = symbol_short!("STRATEGY");
 const WEIGHTS_UPDATED: Symbol = symbol_short!("WTS_SET");
@@ -123,6 +124,8 @@ enum DataKey {
     Allocation(Symbol),
     RebalanceThresholdBps,
     MaxWeightBps,
+    MinAllocationBps,
+    MaxSingleAllocationBps,
 }
 
 #[contract]
@@ -157,6 +160,14 @@ impl AllocationStrategyContract {
             .instance()
             .set(&DataKey::MaxWeightBps, &params.max_weight_bps);
 
+        // Initialize allocation weight thresholds
+        env.storage()
+            .instance()
+            .set(&DataKey::MinAllocationBps, &500u32); // 5% minimum
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxSingleAllocationBps, &7000u32); // 70% maximum
+
         let default_weights = build_default_weights(&env, &registry_id, &vault_type);
         env.storage()
             .instance()
@@ -180,6 +191,78 @@ impl AllocationStrategyContract {
                 .get(&DataKey::MaxWeightBps)
                 .unwrap(),
         }
+    }
+
+    pub fn get_allocation_thresholds(env: Env) -> (u32, u32) {
+        let min_allocation_bps: u32 = env.storage().instance().get(&DataKey::MinAllocationBps).unwrap();
+        let max_single_allocation_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxSingleAllocationBps)
+            .unwrap();
+        (min_allocation_bps, max_single_allocation_bps)
+    }
+
+    pub fn propose_update_allocation_thresholds(
+        env: Env,
+        caller: Address,
+        min_allocation_bps: u32,
+        max_single_allocation_bps: u32,
+    ) -> u64 {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        // Validate thresholds
+        if min_allocation_bps == 0
+            || min_allocation_bps > BASIS_POINT_SCALE
+            || max_single_allocation_bps == 0
+            || max_single_allocation_bps > BASIS_POINT_SCALE
+            || min_allocation_bps > max_single_allocation_bps
+        {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+
+        // Encode both thresholds into payload: min_allocation_bps (4 bytes) + max_single_allocation_bps (4 bytes)
+        let mut payload_bytes = Vec::new(&env);
+        for byte in min_allocation_bps.to_be_bytes() {
+            payload_bytes.push_back(byte);
+        }
+        for byte in max_single_allocation_bps.to_be_bytes() {
+            payload_bytes.push_back(byte);
+        }
+        let payload = Bytes::from_slice(&env, &payload_bytes);
+
+        Timelock::propose(&env, &caller, symbol_short!("SET_THR"), payload)
+    }
+
+    pub fn execute_update_allocation_thresholds(env: Env, caller: Address, op_id: u64) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        let payload = Timelock::execute(&env, &caller, op_id);
+
+        // Decode payload: first 4 bytes = min_allocation_bps, next 4 bytes = max_single_allocation_bps
+        let mut buf = [0u8; 8];
+        payload.copy_into_slice(&mut buf);
+        let min_allocation_bps = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        let max_single_allocation_bps = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+
+        // Validate thresholds again on execution
+        if min_allocation_bps == 0
+            || min_allocation_bps > BASIS_POINT_SCALE
+            || max_single_allocation_bps == 0
+            || max_single_allocation_bps > BASIS_POINT_SCALE
+            || min_allocation_bps > max_single_allocation_bps
+        {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::MinAllocationBps, &min_allocation_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxSingleAllocationBps, &max_single_allocation_bps);
     }
 
     pub fn update_strategy_params(
@@ -213,9 +296,18 @@ impl AllocationStrategyContract {
         validate_weight_sum(&env, &weights);
 
         let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let min_allocation_bps: u32 = env.storage().instance().get(&DataKey::MinAllocationBps).unwrap();
+        let max_single_allocation_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxSingleAllocationBps)
+            .unwrap();
 
         for weight in weights.iter() {
-            if weight.weight_bps < 100 {
+            if weight.weight_bps < min_allocation_bps {
+                panic_with_error!(&env, ContractError::ConfigOutOfRange);
+            }
+            if weight.weight_bps > max_single_allocation_bps {
                 panic_with_error!(&env, ContractError::ConfigOutOfRange);
             }
             if !registry_has_source(&env, &registry_id, &weight.source_id) {
