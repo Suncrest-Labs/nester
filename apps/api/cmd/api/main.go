@@ -17,12 +17,12 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/suncrestlabs/nester/apps/api/internal/auth"
-	"github.com/suncrestlabs/nester/apps/api/internal/config"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/golang-migrate/migrate/v4"
 	migratedb "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
+	"github.com/suncrestlabs/nester/apps/api/internal/config"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
@@ -70,19 +70,19 @@ func run() error {
 
 	if cfg.Startup().EnableAutoMigrate() {
 		baseLogger.Info("running database migrations", "dir", cfg.Startup().MigrationsDir())
-		
+
 		driver, err := migratedb.WithInstance(db, &migratedb.Config{})
 		if err != nil {
 			return fmt.Errorf("auto-migrate: init driver: %w", err)
 		}
-		
+
 		m, err := migrate.NewWithDatabaseInstance(
 			"file://"+cfg.Startup().MigrationsDir(),
 			"postgres", driver)
 		if err != nil {
 			return fmt.Errorf("auto-migrate: new migrate instance: %w", err)
 		}
-		
+
 		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 			return fmt.Errorf("auto-migrate: up: %w", err)
 		}
@@ -118,6 +118,8 @@ func run() error {
 	userHandler := handler.NewUserHandler(userService)
 	userVaultsSvc := service.NewUserVaultsService(vaultRepository)
 	userHandler.SetUserVaultsService(userVaultsSvc)
+	notificationRepository := postgres.NewNotificationRepository(db)
+	notificationHandler := handler.NewNotificationHandler(notificationRepository)
 
 	settlementRepository := postgres.NewSettlementRepository(db)
 	settlementService := service.NewSettlementService(settlementRepository)
@@ -314,6 +316,7 @@ func run() error {
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
 	userHandler.Register(mux)
+	notificationHandler.Register(mux)
 	adminHandler.Register(mux)
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
@@ -321,7 +324,7 @@ func run() error {
 	tvlHandler.Register(mux)
 	analyticsHandler := handler.NewAnalyticsHandler(performanceService)
 	analyticsHandler.Register(mux)
-	
+
 	// Risk service
 	riskService := services.NewRiskService(vaultRepository)
 	riskHandler := handler.NewRiskHandler(riskService)
@@ -670,4 +673,3 @@ func pingStellarDependencies(logger *slog.Logger, cfg *config.Config) error {
 
 	return nil
 }
-
