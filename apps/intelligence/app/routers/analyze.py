@@ -8,12 +8,14 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.dependencies.auth import verify_jwt
+from app.models.portfolio import PortfolioAnalysisResponse
 from app.models.recommendation import (
     Recommendation,
     VaultRecommendationRequest,
     VaultRecommendationResponse,
 )
 from app.services.prometheus import (
+    analyze_portfolio,
     analyze_recommendation,
     get_market_sentiment,
     get_portfolio_insights,
@@ -93,7 +95,9 @@ async def analyze(
     """Return a confidence-annotated recommendation for a user prompt."""
     prompt = str(body.get("prompt", "")).strip()
     if not prompt:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required"
+        )
     return await analyze_recommendation(prompt, claims.get("sub", ""))
 
 
@@ -118,3 +122,32 @@ async def vault_recommendations(
     """Return AI commentary and recommendations for a specific vault."""
     safe_vault_id = _validate_id(vault_id, "vault_id")
     return await get_vault_recommendations(safe_vault_id)
+
+
+@router.post("/portfolio/analyze", response_model=PortfolioAnalysisResponse)
+@_limiter.limit("5/hour")
+async def portfolio_analyze(
+    request: Request,
+    claims: dict[str, Any] = Depends(verify_jwt),
+) -> PortfolioAnalysisResponse:
+    """Return structured portfolio analysis using Claude tool use.
+
+    Analyzes the authenticated user's vault positions and produces:
+    - Structured breakdown (allocation, risk level, recommendations)
+    - Narrative explanation
+    - Confidence level
+
+    Requires authentication via Bearer JWT token.
+    Rate limited to 5 requests per hour per user (expensive operation).
+
+    Authorization: Bearer <JWT>
+    Returns: PortfolioAnalysisResponse with analysis, narrative, and confidence.
+    """
+    user_id = claims.get("sub", "")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User ID not found in token",
+        )
+
+    return await analyze_portfolio(user_id)
