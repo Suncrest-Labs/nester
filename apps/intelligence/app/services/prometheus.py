@@ -1287,13 +1287,13 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
         # Extract tool use block from response
         tool_use_block = None
         for block in response.content:
-            if block.type == "tool_use":  # type: ignore[attr-defined]
+            if block.type == "tool_use":
                 tool_use_block = block
                 break
 
         if tool_use_block:
             # Parse tool input as structured portfolio data
-            tool_input: dict[str, Any] = tool_use_block.input  # type: ignore[attr-defined]
+            tool_input: dict[str, Any] = tool_use_block.input
 
             # Validate and construct models
             allocation_items = [
@@ -1311,7 +1311,7 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
                 ),
                 yield_30d_usdc=float(tool_input.get("yield_30d_usdc", total_yield_30d)),
                 allocation_breakdown=allocation_items,
-                risk_level=tool_input.get("risk_level", "moderate"),  # type: ignore[assignment]
+                risk_level=tool_input.get("risk_level", "moderate"),
                 top_recommendation=str(tool_input.get("top_recommendation", "")),
                 rebalance_suggested=bool(tool_input.get("rebalance_suggested", False)),
             )
