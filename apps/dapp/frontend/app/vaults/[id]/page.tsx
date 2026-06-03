@@ -9,8 +9,10 @@ import Image from "next/image";
 import { motion } from "framer-motion";
 import { ArrowLeft, TrendingUp, Info } from "lucide-react";
 import { AnimatePresence } from "framer-motion";
-import { getVaultById, formatTvl, type MarketType } from "@/lib/mock-vaults";
+import { type MarketType } from "@/lib/types/vault";
+import { formatTvl } from "@/app/vaults/page";
 import { APYChart } from "@/components/vaults/apy-chart";
+import { useVault } from "@/hooks/useVault";
 import { AllocationDonut } from "@/components/vaults/allocation-donut";
 import { UserPosition } from "@/components/vaults/user-position";
 import { DepositModal } from "@/components/vault/depositModal";
@@ -76,7 +78,7 @@ export default function VaultDetailPage() {
     const [depositOpen, setDepositOpen] = useState(false);
     const blendApy = useBlendApy();
 
-    const vault = getVaultById(id?.toString() ?? "");
+    const { vault, isLoading } = useVault(id?.toString() ?? "");
 
     // Use live Blend APY when available, fall back to vault's static value
     const liveApy = vault?.id === "usdc"
@@ -90,7 +92,9 @@ export default function VaultDetailPage() {
         else if (!vault) router.replace("/vaults");
     }, [isConnected, vault, router]);
 
-    if (!isConnected || !vault) return null;
+    if (!isConnected) return null;
+    if (isLoading) return <AppShell><div className="p-8 text-center text-sm text-black/50">Loading...</div></AppShell>;
+    if (!vault) return null;
 
     return (
         <>

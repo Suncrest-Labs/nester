@@ -1,7 +1,10 @@
 "use client";
 
 import { useWallet } from "@/components/wallet-provider";
+import { useAuth } from "@/components/auth-provider";
 import { usePortfolio, type PortfolioPosition } from "@/components/portfolio-provider";
+import { useVaults, type VaultWithPerf } from "@/hooks/useVaults";
+import { useSettlements } from "@/hooks/useSettlements";
 import { AppShell } from "@/components/app-shell";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -65,6 +68,31 @@ function truncAddr(addr: string) {
     return `${addr.slice(0, 6)}…${addr.slice(-6)}`;
 }
 
+// Convert ApiVault → PortfolioPosition shape
+function vaultToPosition(v: VaultWithPerf): PortfolioPosition {
+    const balance = parseFloat(v.current_balance) || 0;
+    const apy = v.performance?.apy_30d ?? 0;
+    const yieldEarned = parseFloat(v.yield_earned) || 0;
+    const depositedAt = v.created_at;
+    // No lock for now — assume flexible
+    return {
+        id: v.id,
+        vaultId: v.id,
+        vaultName: `${v.currency} Vault`,
+        asset: v.currency as "USDC" | "XLM",
+        principal: parseFloat(v.total_deposited) || 0,
+        shares: balance,
+        apy,
+        depositedAt,
+        maturityAt: depositedAt, // flexible — already matured
+        earlyWithdrawalPenaltyPct: 0,
+        currentValue: balance,
+        yieldEarned,
+        isMatured: true,
+        daysRemaining: 0,
+    };
+}
+
 // ── Transaction type config ──────────────────────────────────────────────────
 
 const TX_ICONS = {
@@ -78,7 +106,28 @@ const TX_ICONS = {
 
 export default function PortfolioPage() {
     const { isConnected, address } = useWallet();
-    const { transactions, positions } = usePortfolio();
+    const { userId } = useAuth();
+    
+    // Live API hooks
+    const { vaults, isLoading: vaultsLoading } = useVaults(userId ?? undefined);
+    const { settlements, isLoading: settlementsLoading } = useSettlements(userId);
+
+    const positions = useMemo(() => {
+        return vaults.filter(v => parseFloat(v.current_balance) > 0).map(vaultToPosition);
+    }, [vaults]);
+
+    const transactions = useMemo(() => settlements.map((s) => ({
+        id: s.id,
+        type: "Settlement" as const,
+        vaultName: `${s.currency} Settlement`,
+        asset: s.currency,
+        amount: s.amount,
+        status: (s.status === "confirmed" ? "Confirmed" : s.status === "failed" ? "Failed" : "Pending") as "Confirmed" | "Pending" | "Failed",
+        timestamp: s.created_at,
+        isOnChain: false,
+        txHash: undefined as string | undefined,
+    })), [settlements]);
+
     const { prices: tokenPrices } = useTokenPrices();
     const { currentNetwork } = useNetwork();
     const router = useRouter();
@@ -437,7 +486,7 @@ export default function PortfolioPage() {
                                                         target="_blank"
                                                         rel="noreferrer"
                                                         className="flex h-6 w-6 items-center justify-center rounded-md text-black/40 hover:bg-black/[0.04] hover:text-black/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
-                                                        aria-label={`View transaction ${tx.txHash.slice(0, 8)} on explorer`}
+                                                        aria-label={`View transaction ${tx.txHash?.slice(0, 8)} on explorer`}
                                                     >
                                                         <ExternalLink className="h-3 w-3" aria-hidden="true" />
                                                     </a>

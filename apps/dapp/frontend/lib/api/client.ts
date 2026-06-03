@@ -273,8 +273,8 @@ export const api = {
 
   /** Vault CRUD */
   vaults: {
-    list: (userId: string) =>
-      apiFetch<ApiVault[]>(`/vaults?userId=${userId}`),
+    list: (userId?: string) =>
+      apiFetch<ApiVault[]>(userId ? `/vaults?userId=${userId}` : "/vaults"),
 
     getById: (vaultId: string) =>
       apiFetch<ApiVault>(`/vaults/${vaultId}`),

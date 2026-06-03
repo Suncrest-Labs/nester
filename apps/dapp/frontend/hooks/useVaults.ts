@@ -22,18 +22,17 @@ interface UseVaultsResult {
   refresh: () => void;
 }
 
-export function useVaults(userId: string | null): UseVaultsResult {
+export function useVaults(userId?: string | null): UseVaultsResult {
   const [vaults, setVaults] = useState<VaultWithPerf[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchVaults = useCallback(async () => {
-    if (!userId) return;
     setIsLoading(true);
     setError(null);
     try {
-      const raw = await api.vaults.list(userId);
+      const raw = await api.vaults.list(userId || undefined);
 
       // Enrich with performance summary (best-effort — don't fail if it errors)
       const enriched: VaultWithPerf[] = await Promise.all(
@@ -65,7 +64,7 @@ export function useVaults(userId: string | null): UseVaultsResult {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    if (!userId) return;
+    if (userId === null) return;
     fetchVaults();
     timerRef.current = setInterval(fetchVaults, POLL_INTERVAL);
     return () => {

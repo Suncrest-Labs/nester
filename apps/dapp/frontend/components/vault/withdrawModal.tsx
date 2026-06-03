@@ -28,7 +28,8 @@ import {
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
-import { VAULTS } from "@/lib/mock-vaults";
+import type { Vault as VaultDefinition } from "@/lib/types/vault";
+import { getVaultById } from "@/lib/vault-data";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -189,7 +190,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
 
     try {
       setState("building");
-      const vaultDef = VAULTS.find((v) => v.id === position.vaultId);
+      const vaultDef = getVaultById(position.vaultId);
       const txReceipt = await executeVaultWithdraw({
         walletAddress: address,
         vaultId: position.vaultId,

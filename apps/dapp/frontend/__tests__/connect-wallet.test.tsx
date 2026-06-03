@@ -14,6 +14,7 @@ vi.mock("@/components/wallet-provider", () => ({
     walletsLoaded: true,
     isConnected: false,
     address: null,
+    selectedWalletId: null,
   })),
 }));
 
@@ -60,6 +61,7 @@ describe("ConnectWallet", () => {
       walletsLoaded: true,
       isConnected: true,
       address: "GABC1234567890",
+      selectedWalletId: "freighter",
     } as ReturnType<typeof useWallet>);
 
     render(<ConnectWallet />);

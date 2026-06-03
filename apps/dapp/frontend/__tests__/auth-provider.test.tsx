@@ -7,11 +7,14 @@ vi.mock("@/components/wallet-provider", () => ({
 }));
 
 function AuthConsumer() {
-  const { token, setToken } = useAuth();
+  const { token } = useAuth();
   return (
     <div>
       <span data-testid="token">{token ?? "none"}</span>
-      <button onClick={() => setToken("jwt-test")}>Set Token</button>
+      <button onClick={() => {
+        window.localStorage.setItem("nester_auth_token", "jwt-test");
+        window.dispatchEvent(new StorageEvent("storage", { key: "nester_auth_token", newValue: "jwt-test" }));
+      }}>Set Token</button>
     </div>
   );
 }
@@ -38,6 +41,7 @@ describe("AuthProvider", () => {
       isConnected: false,
       wallets: [],
       walletsLoaded: true,
+      selectedWalletId: null,
     } as ReturnType<typeof useWallet>);
 
     render(

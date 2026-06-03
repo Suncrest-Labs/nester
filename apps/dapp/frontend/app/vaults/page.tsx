@@ -21,8 +21,15 @@ import {
     TrendingUp,
     BarChart3,
 } from "lucide-react";
-import { formatTvl, type Vault as VaultType, type MarketType } from "@/lib/mock-vaults";
+import type { Vault as VaultType, MarketType } from "@/lib/types/vault";
 import { useVaultFilters, type FilterType } from "@/hooks/use-vault-filters";
+
+export function formatTvl(value: number): string {
+  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
+  return `$${value}`;
+}
 
 // ── Market type labels ───────────────────────────────────────────────────────
 

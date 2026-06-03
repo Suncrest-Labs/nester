@@ -17,7 +17,7 @@ import { usePortfolio } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
-import { type Vault as VaultDefinition, type MarketStrategy } from "@/lib/mock-vaults";
+import type { Vault as VaultDefinition, MarketStrategy } from "@/lib/types/vault";
 import {
   executeVaultDeposit,
   UserRejectedError,

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { DepositModal } from "@/components/vault/depositModal";
-import { VAULTS } from "@/lib/mock-vaults";
+import type { Vault as VaultType } from "@/lib/types/vault";
 
 vi.mock("@/components/wallet-provider", () => ({
   useWallet: () => ({
@@ -25,7 +25,23 @@ vi.mock("@/lib/stellar/transaction", () => ({
   truncateTxHash: (h: string) => h.slice(0, 8),
 }));
 
-const mockVault = VAULTS[0];
+const mockVault: VaultType = {
+  id: "usdc",
+  name: "USDC Market",
+  description: "Test market",
+  marketType: "single",
+  tokens: ["USDC"],
+  currentApy: 10,
+  apyRange: "8-12%",
+  tvl: 1000000,
+  utilization: 80,
+  allocations: [],
+  supportedAssets: ["USDC"],
+  maturityTerms: "Flexible",
+  earlyWithdrawalPenalty: "None",
+  apyHistory: [],
+  strategies: []
+};
 
 describe("DepositModal", () => {
   it("validates amount input", () => {
