@@ -1148,7 +1148,6 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
     """
     vault_context_fetcher = get_vault_context_fetcher()
     user_vaults = await vault_context_fetcher.fetch_user_vaults(user_id)
-    market_rates = await vault_context_fetcher.fetch_market_rates()
 
     if not user_vaults:
         return PortfolioAnalysisResponse(
@@ -1160,7 +1159,10 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
                 top_recommendation="Start by depositing into a Conservative vault for stability.",
                 rebalance_suggested=False,
             ),
-            narrative="You don't have any active vault positions yet. Start with a Conservative vault for stable, low-risk savings.",
+            narrative=(
+                "You don't have any active vault positions yet. Start with a "
+                "Conservative vault for stable, low-risk savings."
+            ),
             confidence="high",
             generated_at=datetime.now(timezone.utc),
         )
@@ -1185,7 +1187,10 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
     tools: list[dict[str, Any]] = [
         {
             "name": "portfolio_breakdown",
-            "description": "Return a structured portfolio analysis with allocation breakdown and recommendations",
+            "description": (
+                "Return a structured portfolio analysis with allocation "
+                "breakdown and recommendations"
+            ),
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1247,7 +1252,8 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
 
     # Build analysis prompt with portfolio context
     analysis_prompt = (
-        f"Analyze this Nester user's portfolio and provide structured output using the provided tool.\n\n"
+        "Analyze this Nester user's portfolio and provide structured output "
+        "using the provided tool.\n\n"
         f"Portfolio Overview:\n"
         f"Total Value: ${total_value_usdc:,.2f} USDC\n"
         f"30-day Yield Earned: ${total_yield_30d:,.2f} USDC\n"
@@ -1322,11 +1328,6 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
 
     # Fallback to structured response if tool use failed
     if not structured_data:
-        avg_apy = (
-            sum(float(v.get("apy", 0) or 0) for v in user_vaults) / len(user_vaults)
-            if user_vaults
-            else 0
-        )
         structured_data = PortfolioBreakdown(
             total_value_usdc=total_value_usdc,
             yield_30d_usdc=total_yield_30d,
@@ -1350,8 +1351,9 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
 
     # Generate narrative explanation
     narrative = (
-        f"Your Nester portfolio has a total value of ${total_value_usdc:,.2f} USDC across "
-        f"{len(user_vaults)} vault(s). Over the last 30 days, you've earned ${total_yield_30d:,.2f} in yield. "
+        f"Your Nester portfolio has a total value of ${total_value_usdc:,.2f} "
+        f"USDC across {len(user_vaults)} vault(s). Over the last 30 days, "
+        f"you've earned ${total_yield_30d:,.2f} in yield. "
         f"Your portfolio risk level is {structured_data.risk_level}. "
         f"{structured_data.top_recommendation}"
     )
