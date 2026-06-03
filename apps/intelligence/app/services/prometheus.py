@@ -1293,7 +1293,7 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
 
         if tool_use_block:
             # Parse tool input as structured portfolio data
-            tool_input = tool_use_block.input  # type: ignore[attr-defined]
+            tool_input: dict[str, Any] = tool_use_block.input  # type: ignore[attr-defined]
 
             # Validate and construct models
             allocation_items = [
