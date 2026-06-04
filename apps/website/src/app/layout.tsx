@@ -20,9 +20,6 @@ export const metadata: Metadata = {
   authors: [{ name: "Nester Protocol" }],
   creator: "Nester Protocol",
   publisher: "Nester Protocol",
-  alternates: {
-    canonical: "/",
-  },
   icons: {
     icon: "/logo.png",
     apple: "/logo.png",
@@ -30,7 +27,6 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: "https://nester.finance",
     siteName: "Nester",
     title: "Nester | Decentralized Savings & Liquidity",
     description: "Optimize crypto yield and settle to fiat instantly through a decentralized liquidity network built for emerging markets.",
