@@ -9,19 +9,18 @@ import (
 	"time"
 )
 
-// usdcIssuer is Circle's USDC issuer on the Stellar network.
-const usdcIssuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
-
 // StellarProvider fetches the XLM/USDC mid-market rate from Horizon's order book.
 type StellarProvider struct {
 	horizonURL string
+	usdcIssuer string
 	client     *http.Client
 }
 
-// NewStellarProvider returns a StellarProvider using the given Horizon base URL.
-func NewStellarProvider(horizonURL string) *StellarProvider {
+// NewStellarProvider returns a StellarProvider using the given Horizon base URL and USDC issuer.
+func NewStellarProvider(horizonURL, usdcIssuer string) *StellarProvider {
 	return &StellarProvider{
 		horizonURL: horizonURL,
+		usdcIssuer: usdcIssuer,
 		client:     &http.Client{Timeout: 10 * time.Second},
 	}
 }
@@ -39,7 +38,7 @@ func (p *StellarProvider) Fetch(ctx context.Context, base, quote string) (float6
 			"&buying_asset_code=USDC"+
 			"&buying_asset_issuer=%s"+
 			"&limit=1",
-		p.horizonURL, usdcIssuer,
+		p.horizonURL, p.usdcIssuer,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { hasThirdPartyConsent } from "@/lib/consent";
 
 export interface TokenPrices {
     XLM: number;
@@ -17,6 +18,10 @@ async function fetchPrices(): Promise<TokenPrices> {
         return cachedPrices;
     }
 
+    if (!hasThirdPartyConsent()) {
+        return cachedPrices ?? { XLM: 0, USDC: 1.0 };
+    }
+
     try {
         const res = await fetch(
             "https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=usd",
@@ -29,7 +34,6 @@ async function fetchPrices(): Promise<TokenPrices> {
         cacheTimestamp = now;
         return cachedPrices;
     } catch {
-        // Fallback: keep previous cache or use zeros
         return cachedPrices ?? { XLM: 0, USDC: 1.0 };
     }
 }
@@ -43,23 +47,28 @@ export function useTokenPrices() {
     useEffect(() => {
         let cancelled = false;
 
-        fetchPrices().then((p) => {
-            if (!cancelled) {
-                setPrices(p);
-                setLoading(false);
-            }
-        });
-
-        // Refresh every minute while mounted
-        const interval = setInterval(() => {
+        const load = () => {
             fetchPrices().then((p) => {
-                if (!cancelled) setPrices(p);
+                if (!cancelled) {
+                    setPrices(p);
+                    setLoading(false);
+                }
             });
-        }, CACHE_TTL_MS);
+        };
+
+        load();
+
+        const interval = setInterval(load, CACHE_TTL_MS);
+
+        const onStorage = (e: StorageEvent) => {
+            if (e.key === "nester-consent") load();
+        };
+        window.addEventListener("storage", onStorage);
 
         return () => {
             cancelled = true;
             clearInterval(interval);
+            window.removeEventListener("storage", onStorage);
         };
     }, []);
 

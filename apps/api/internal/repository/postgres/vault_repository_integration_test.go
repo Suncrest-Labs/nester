@@ -95,9 +95,9 @@ func TestVaultRepositoryIntegrationCRUD(t *testing.T) {
 		t.Fatalf("expected 2 allocations, got %d", len(fetched.Allocations))
 	}
 
-	userVaults, err := repository.GetUserVaults(ctx, userID)
+	userVaults, _, err := repository.ListUserVaults(ctx, userID, vault.UserListFilter{Page: 1, PerPage: 100})
 	if err != nil {
-		t.Fatalf("GetUserVaults() error = %v", err)
+		t.Fatalf("ListUserVaults() error = %v", err)
 	}
 	if len(userVaults) != 1 {
 		t.Fatalf("expected 1 vault for user, got %d", len(userVaults))
@@ -179,7 +179,12 @@ func TestVaultRepositoryIntegrationRecordDepositConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	deposit := func() {
 		defer wg.Done()
-		if err := repository.RecordDeposit(ctx, created.ID, decimal.RequireFromString("10")); err != nil {
+		if err := repository.RecordDeposit(ctx, created.ID, vault.TransactionRecord{
+			UserID:               userID,
+			Amount:               decimal.RequireFromString("10"),
+			SharesMintedOrBurned: decimal.RequireFromString("10"),
+			SharePriceAtTime:     decimal.NewFromInt(1),
+		}); err != nil {
 			t.Errorf("RecordDeposit() error = %v", err)
 		}
 	}

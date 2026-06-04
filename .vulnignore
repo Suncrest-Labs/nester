@@ -1,0 +1,10 @@
+// This file tracks known vulnerabilities that are accepted or mitigated
+
+// GO-2026-4316: Open redirect vulnerability in github.com/go-chi/chi
+// Justification: 
+// - RedirectSlashes middleware is not used in our codebase
+// - Dependency is transitive through github.com/stellar/go-stellar-sdk
+// - No fix available yet (Fixed in: N/A)
+// - Code review confirmed middleware is not invoked
+// Status: Waiting for upstream fix
+GO-2026-4316

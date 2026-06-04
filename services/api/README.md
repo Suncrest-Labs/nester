@@ -4,7 +4,7 @@ Production-grade Go backend service with clean architecture foundations.
 
 ## Overview
 
-The Nester backend is transitioning from Node.js/Express to Go to support long-term scalability and align with ecosystem standards. This service serves as the authoritative API layer for vault, user, and offramp domains.
+Production Go backend service powering the Nester platform. Serves as the authoritative API layer for vault, user, and offramp domains.
 
 ## Directory Structure
 

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_vault_transactions_transaction_hash_unique;

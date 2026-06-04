@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/shopspring/decimal v1.4.0
-	github.com/stellar/go-stellar-sdk v0.3.0
+	github.com/stellar/go-stellar-sdk v0.5.0
 	github.com/stretchr/testify v1.10.0
 )
 

@@ -39,9 +39,11 @@ services:
       STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
       STELLAR_RPC_URL: https://soroban-testnet.stellar.org
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      # DO NOT use in production — this is a development-only placeholder
       AUTH_JWT_SECRET: dev-nester-jwt-secret-change-in-production
       LOG_LEVEL: info
       LOG_FORMAT: text
+      RUN_MIGRATIONS: "true"
     depends_on:
       postgres:
         condition: service_healthy

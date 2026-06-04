@@ -58,32 +58,16 @@ function buildId(prefix: string) {
 
 export function NotificationsProvider({ children }: { children: ReactNode }) {
       // v1: Notifications are client-side only and persisted across page reloads via localStorage.
-    const [notifications, setNotifications] =
-        useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
-    const [toasts, setToasts] = useState<ToastItem[]>([]);
-    const timerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-
-    useEffect(() => {
-        if (typeof window === "undefined") {
-            return;
-        }
-
+    
+    const [notifications, setNotifications] = useState<AppNotification[]>(() => {
+        if (typeof window === "undefined") return INITIAL_NOTIFICATIONS;
         const raw = window.localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
-        if (!raw) {
-            return;
-        }
-
+        if (!raw) return INITIAL_NOTIFICATIONS;
         try {
             const parsed = JSON.parse(raw) as AppNotification[];
-            if (!Array.isArray(parsed)) {
-                return;
-            }
-
+            if (!Array.isArray(parsed)) return INITIAL_NOTIFICATIONS;
             const valid = parsed.filter((item) => {
-                if (!item || typeof item !== "object") {
-                    return false;
-                }
-
+                if (!item || typeof item !== "object") return false;
                 return (
                     typeof item.id === "string" &&
                     typeof item.type === "string" &&
@@ -93,14 +77,14 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
                     typeof item.read === "boolean"
                 );
             });
-
-            if (valid.length > 0) {
-                setNotifications(valid);
-            }
+            return valid.length > 0 ? valid : INITIAL_NOTIFICATIONS;
         } catch {
-            window.localStorage.removeItem(NOTIFICATIONS_STORAGE_KEY);
+            return INITIAL_NOTIFICATIONS;
         }
-    }, []);
+    });
+
+    const [toasts, setToasts] = useState<ToastItem[]>([]);
+    const timerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
     useEffect(() => {
         if (typeof window === "undefined") {

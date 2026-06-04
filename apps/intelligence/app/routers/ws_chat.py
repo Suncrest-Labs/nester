@@ -1,6 +1,6 @@
 """WebSocket chat endpoint for Prometheus AI."""
 
-from typing import Any
+from typing import Any, Optional
 
 import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -11,7 +11,7 @@ from app.services.prometheus import stream_chat
 router = APIRouter()
 
 
-async def _authenticate(websocket: WebSocket) -> str | None:
+async def _authenticate(websocket: WebSocket) -> Optional[str]:
     """Validate the Bearer token sent in the first message.
 
     Returns the authenticated user_id (JWT sub) or None if auth fails.

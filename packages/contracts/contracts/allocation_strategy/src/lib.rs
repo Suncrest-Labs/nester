@@ -355,30 +355,134 @@ impl AllocationStrategyContract {
         current_allocations: Vec<CurrentAllocation>,
         total: i128,
     ) -> Vec<AllocationDelta> {
+        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
         let target_weights = Self::get_weights(env.clone());
-        let target_amounts = allocation_amounts(&target_weights, total);
-
-        let mut deltas = Vec::new(&env);
+        
+        let mut adjusted_weights = Vec::new(&env);
+        let mut healthy_weight_sum = 0_u32;
+        let mut total_to_redistribute = total;
         let mut seen = Vec::new(&env);
+        let mut deltas = Vec::new(&env);
 
-        for (source_id, target_amount) in target_amounts.iter() {
-            let current = current_amount_for(&current_allocations, &source_id);
-            seen.push_back(source_id.clone());
-            deltas.push_back(AllocationDelta {
-                source_id,
-                delta: target_amount - current,
-            });
+        // First pass: identify healthy targets and freeze/drain unhealthy ones.
+        for w in target_weights.iter() {
+            seen.push_back(w.source_id.clone());
+            let status = registry_get_source_status(&env, &registry_id, &w.source_id);
+            let current = current_amount_for(&current_allocations, &w.source_id);
+
+            match status {
+                SourceStatus::Active => {
+                    adjusted_weights.push_back(w.clone());
+                    healthy_weight_sum += w.weight_bps;
+                }
+                SourceStatus::Paused => {
+                    // Skip: keep current allocation, delta = 0
+                    total_to_redistribute -= current;
+                    deltas.push_back(AllocationDelta {
+                        source_id: w.source_id.clone(),
+                        delta: 0,
+                    });
+                    nester_common::emit_event_with_sym(
+                        &env,
+                        STRATEGY,
+                        Symbol::new(&env, "protocol_skipped"),
+                        w.source_id,
+                        status,
+                    );
+                }
+                SourceStatus::Deprecated | SourceStatus::Exploit => {
+                    // Drain: target = 0, delta = -current
+                    deltas.push_back(AllocationDelta {
+                        source_id: w.source_id.clone(),
+                        delta: -current,
+                    });
+                    nester_common::emit_event_with_sym(
+                        &env,
+                        STRATEGY,
+                        Symbol::new(&env, "protocol_skipped"),
+                        w.source_id,
+                        status,
+                    );
+                }
+            }
         }
 
-        // Surface sources held but not in current target weights so callers
-        // know to drain them entirely.
+        // Surface sources held but NOT in current target weights.
         for current in current_allocations.iter() {
             if !contains_symbol(&seen, &current.source_id) {
+                let status = registry_get_source_status(&env, &registry_id, &current.source_id);
+                // Non-target sources are always drained.
                 deltas.push_back(AllocationDelta {
-                    source_id: current.source_id,
+                    source_id: current.source_id.clone(),
                     delta: -current.amount,
                 });
+                if !matches!(status, SourceStatus::Active) {
+                    nester_common::emit_event_with_sym(
+                        &env,
+                        STRATEGY,
+                        Symbol::new(&env, "protocol_skipped"),
+                        current.source_id,
+                        status,
+                    );
+                }
             }
+        }
+
+        // Second pass: redistribute remaining funds among Active protocols.
+        if healthy_weight_sum > 0 && total_to_redistribute > 0 {
+            let scale = healthy_weight_sum as i128;
+            let mut distributed = 0_i128;
+            let mut max_idx = None;
+            let mut max_w = 0_u32;
+
+            for w in adjusted_weights.iter() {
+                let current = current_amount_for(&current_allocations, &w.source_id);
+                // target = total_to_redistribute * w.weight_bps / healthy_weight_sum
+                let target = match mul_div(total_to_redistribute, w.weight_bps as i128, scale) {
+                    Ok(v) => v,
+                    Err(e) => panic_with_error!(&env, e),
+                };
+                distributed += target;
+                if w.weight_bps > max_w {
+                    max_w = w.weight_bps;
+                    max_idx = Some(deltas.len());
+                }
+                deltas.push_back(AllocationDelta {
+                    source_id: w.source_id,
+                    delta: target - current,
+                });
+            }
+
+            // Remainder adjustment for rounding.
+            if let Some(idx) = max_idx {
+                let remainder = total_to_redistribute - distributed;
+                if remainder != 0 {
+                    let mut d = deltas.get(idx as u32).unwrap();
+                    d.delta += remainder;
+                    deltas.set(idx as u32, d);
+                }
+            }
+        } else if total_to_redistribute > 0 {
+            // No healthy protocols to take the funds!
+            // In a real system, these would stay in the vault. 
+            // Here we must still satisfy delta conservation if total was sum(current).
+            // This case implies we are withdrawing everything to the vault.
+            // The current rebalance architecture (sum=0) doesn't allow net withdrawal
+            // unless we represent the vault as a destination.
+        }
+
+        // Enforce delta conservation: the sum of all deltas must be <= 0.
+        // A negative sum means funds are being withdrawn to the vault.
+        let mut delta_sum: i128 = 0;
+        for d in deltas.iter() {
+            delta_sum = delta_sum
+                .checked_add(d.delta)
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        }
+        
+        if delta_sum > 0 {
+            // We cannot create funds.
+            panic_with_error!(&env, ContractError::AllocationError);
         }
 
         deltas

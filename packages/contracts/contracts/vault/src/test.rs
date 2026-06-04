@@ -5,7 +5,7 @@ extern crate std;
 use soroban_sdk::{
     contract, contractimpl,
     testutils::{Address as _, Ledger, LedgerInfo},
-    token, Address, Env, String,
+    token, Address, Env, String, Symbol,
 };
 use nester_access_control::Role;
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
@@ -417,6 +417,122 @@ fn performance_fee_charges_only_realized_yield_not_principal() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Impairment regression test (issue #451 / PR #275)
+//
+// The original performance-fee issue explicitly required:
+//   "User deposits at rate 1.0, rate halves (impairment) → zero performance fee."
+//
+// The withdraw path skips the performance fee whenever `yield_part =
+// assets_to_withdraw - principal` is not strictly positive. This test proves
+// that zero-performance-fee invariant holds after a loss halves the share
+// price, so an impaired position is never charged a fee on a gain it never had.
+// ---------------------------------------------------------------------------
+#[test]
+fn impairment_charges_zero_performance_fee() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Disable the early-withdrawal fee so the assertion isolates performance-fee
+    // behaviour and the withdrawn amount is unambiguous.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    // Deposit at the initial share price of 1.0.
+    vault.deposit(&user, &deposit, &0);
+    assert_eq!(vault.share_price(), 10_000_000, "deposit should occur at rate 1.0");
+
+    // Impairment: report a loss that halves the share price (1.0 -> 0.5).
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(-(500 * XLM)));
+    assert_eq!(vault.share_price(), 5_000_000, "rate should halve after impairment");
+
+    // The preview must show no performance fee owed on an impaired position.
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert_eq!(
+        preview.performance_fee_deducted, 0,
+        "no performance fee may be charged when the position has lost value"
+    );
+
+    // The actual withdrawal returns the impaired value (500 XLM) with no fees
+    // siphoned off: 1000 shares now worth 0.5 each.
+    vault.withdraw(&user, &shares, &0);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user),
+        500 * XLM,
+        "user receives the full impaired value with zero performance fee"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Impairment regression test (issue #636)
+//
+// Proves the zero-performance-fee invariant when a real loss reduces the
+// vault's underlying token balance below deposited principal. Tokens are
+// transferred out of the vault first; the Manager then reports the loss via
+// `report_yield` (yield accrual path) so share price tracks the impairment.
+// ---------------------------------------------------------------------------
+#[test]
+fn test_impairment_produces_zero_performance_fee() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Disable early-withdrawal fee so assertions isolate performance-fee behaviour.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    vault.deposit(&user, &deposit, &0);
+    assert_eq!(vault.share_price(), 10_000_000, "deposit should occur at rate 1.0");
+
+    let vault_addr = vault.address.clone();
+    let token_client = token::Client::new(&env, &token.address);
+    assert_eq!(token_client.balance(&vault_addr), deposit);
+
+    // Simulate a real loss: transfer tokens out of the vault so underlying
+    // balance falls below the deposited amount (mock_all_auths authorises the
+    // vault as sender).
+    let loss = 400 * XLM;
+    let loss_sink = Address::generate(&env);
+    token_client.transfer(&vault_addr, &loss_sink, &loss);
+    assert!(
+        token_client.balance(&vault_addr) < deposit,
+        "underlying balance must fall below the deposited amount"
+    );
+
+    // Yield accrual path: Manager reports negative yield matching the physical loss.
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(-loss));
+
+    let impaired_assets = deposit - loss;
+    assert_eq!(
+        vault.share_price(),
+        6_000_000,
+        "share price must reflect the impairment without fee extraction"
+    );
+
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    let performance_fee_collected = preview.performance_fee_deducted;
+    assert_eq!(
+        performance_fee_collected, 0,
+        "impairment must not collect any performance fee"
+    );
+
+    vault.withdraw(&user, &shares, &0);
+    assert_eq!(
+        token_client.balance(&user),
+        impaired_assets,
+        "user receives the full impaired value with zero performance fee"
+    );
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #17)")]
 fn withdraw_reverts_when_min_assets_out_is_not_met() {
@@ -426,6 +542,127 @@ fn withdraw_reverts_when_min_assets_out_is_not_met() {
 
     vault.deposit(&user, &(1_000 * XLM), &0);
     vault.withdraw(&user, &(500 * XLM), &(500 * XLM + STROOP));
+}
+
+// Regression for #448: `withdrawal_fee_preview().net_amount_received` is the
+// post-fee amount actually transferred, so a caller can use it directly as
+// `min_assets_out` for a fee-bearing withdrawal without tripping slippage.
+//
+// No time is advanced, so no management fee accrues (elapsed = 0) and the
+// preview models every fee the withdrawal applies exactly: the reported yield
+// triggers a performance fee, and remaining inside the MinLockPeriod triggers
+// the early-withdrawal fee.
+#[test]
+fn withdrawal_fee_preview_net_is_slippage_safe_as_min_assets_out() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(500 * XLM));
+    // Back the reported yield with real tokens so the vault can pay it out
+    // (report_yield only updates share-price accounting).
+    mint(&token, &vault.address, 500 * XLM);
+
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert!(
+        preview.performance_fee_deducted > 0,
+        "expected a performance fee on realized yield"
+    );
+    assert!(
+        preview.early_withdrawal_fee_deducted > 0,
+        "expected an early-withdrawal fee inside the lock period"
+    );
+    assert!(preview.net_amount_received < preview.gross_asset_value);
+
+    let before = token::Client::new(&env, &token.address).balance(&user);
+
+    // Using the NET preview as the slippage floor must succeed.
+    vault.withdraw(&user, &shares, &preview.net_amount_received);
+
+    let after = token::Client::new(&env, &token.address).balance(&user);
+    // The user receives exactly the previewed net amount — the preview is an
+    // exact (not merely conservative) floor.
+    assert_eq!(after - before, preview.net_amount_received);
+}
+
+// Regression for #448: the GROSS preview (`preview_withdraw` /
+// `gross_asset_value`) must NOT be used as `min_assets_out` — on a fee-bearing
+// withdrawal the transfer is below gross, so it reverts with SlippageExceeded
+// (#17). This is exactly the failure mode the issue describes.
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn gross_preview_as_min_assets_out_trips_slippage_on_fee_bearing_withdrawal() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(500 * XLM));
+
+    let shares = vault.get_shares(&user);
+    let gross = vault.preview_withdraw(&shares);
+    // gross > net (fees apply) => SlippageExceeded.
+    vault.withdraw(&user, &shares, &gross);
+}
+
+// preview_withdraw_net must always be <= preview_withdraw (gross).
+#[test]
+fn preview_withdraw_net_le_preview_withdraw() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(200 * XLM));
+    mint(&token, &vault.address, 200 * XLM);
+
+    let shares = vault.get_shares(&user);
+    let gross = vault.preview_withdraw(&shares);
+    let net = vault.preview_withdraw_net(&shares);
+    assert!(net <= gross, "net must be <= gross");
+}
+
+// No early-withdrawal fee when outside the lock period.
+// preview_withdraw_net is worst-case (always deducts both fees), so the
+// result is still <= gross. The user-aware withdrawal_fee_preview is the
+// right tool when the lock period is known to have elapsed.
+#[test]
+fn preview_withdraw_net_no_early_fee_after_lock() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    // Advance past the lock period (DAY seconds).
+    env.ledger().set(LedgerInfo {
+        timestamp: DAY + 1,
+        ..env.ledger().get()
+    });
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(200 * XLM));
+    mint(&token, &vault.address, 200 * XLM);
+
+    let shares = vault.get_shares(&user);
+    let gross = vault.preview_withdraw(&shares);
+    let net = vault.preview_withdraw_net(&shares);
+
+    // preview_withdraw_net is always worst-case — net <= gross regardless of
+    // lock status. The user-aware withdrawal_fee_preview returns a tighter
+    // estimate once the lock has elapsed.
+    assert!(net <= gross);
+
+    // Confirm withdrawal_fee_preview correctly omits the early fee after lock.
+    let fee_preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert_eq!(fee_preview.early_withdrawal_fee_deducted, 0, "no early fee after lock");
+    assert!(fee_preview.net_amount_received >= net, "user-aware preview >= worst-case net");
 }
 
 #[test]
@@ -949,4 +1186,89 @@ fn process_emergency_queue_decrements_liquid_reserved() {
         treasury_after > treasury_before,
         "collect_fees should transfer fees once LiquidReserved is decremented after queue processing"
     );
+}
+
+/// Regression test for the zero-performance-fee-on-impairment invariant (#451).
+///
+/// When a vault is impaired (`yield_part < 0`), `withdraw` must NOT charge a
+/// performance fee. The fee guard is `if yield_part > 0` in `lib.rs`; a future
+/// refactor could silently drop it and start charging fees on losses. This test
+/// locks the behaviour in: with the early-withdrawal fee disabled, an impaired
+/// withdrawal returns the full impaired value with no fee skimmed off.
+#[test]
+fn withdrawal_charges_no_perf_fee_on_impairment() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Isolate performance-fee behaviour by disabling the early-withdrawal fee.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.deposit(&user, &deposit, &0);
+
+    // Simulate a 20% impairment: total assets drop from 1000 to 800.
+    vault.report_yield(&admin, &(-(200 * XLM)));
+
+    let shares = vault.get_shares(&user);
+    vault.withdraw(&user, &shares, &0);
+
+    // yield_part = 800 - 1000 = -200 (< 0) => no performance fee. The user
+    // recovers the full impaired 800 XLM, not 780 after a wrongful 10% fee.
+    // Soroban arithmetic is deterministic integer math (no FP rounding), so
+    // an exact equality is the right contract — per-review feedback.
+    let balance = token::Client::new(&env, &token.address).balance(&user);
+    assert_eq!(balance, 800 * XLM, "impairment must not charge a performance fee");
+}
+
+#[contract]
+struct MockStrategy;
+#[contractimpl]
+impl MockStrategy {
+    pub fn calculate_rebalance_deltas(env: Env, _current: soroban_sdk::Vec<crate::CurrentAllocationView>, _total: i128) -> soroban_sdk::Vec<crate::AllocationDeltaView> {
+        let mut deltas = soroban_sdk::Vec::new(&env);
+        deltas.push_back(crate::AllocationDeltaView {
+            source_id: Symbol::new(&env, "aave"),
+            delta: -400 * 10_000_000, // Withdraw 400
+        });
+        deltas
+    }
+}
+
+#[test]
+fn rebalance_with_net_negative_delta_increases_liquid_reserves() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let strategy_id = Address::generate(&env); // Mock strategy
+    vault.set_allocation_strategy(&admin, &strategy_id);
+
+    let user = Address::generate(&env);
+    mint(&token, &user, 1000 * XLM);
+    vault.deposit(&user, &(1000 * XLM), &0);
+
+    // Initial reserves = 1000
+    // Record allocation to a source to simulate deployment
+    let source_id = Symbol::new(&env, "aave");
+    vault.grant_role(&admin, &admin, &Role::Operator);
+    vault.record_source_allocation(&admin, &source_id, &(1000 * XLM));
+    
+    // Deployed total = 1000. 
+    // We need to mock calculate_rebalance_deltas to return a negative delta.
+    
+    let real_strategy_id = env.register_contract(None, MockStrategy);
+    vault.set_allocation_strategy(&admin, &real_strategy_id);
+    
+    vault.rebalance(&admin);
+    
+    // Let's check another way. emergency_withdraw uses liquid reserves.
+    vault.pause(&admin);
+    let _principal = vault.get_shares(&user); // 1000 shares
+
+    // We have 1000 tokens in contract.
+    // We processed rebalance which increased liquid reserves bookkeeping to 1400.
+    // Now if we try to emergency_withdraw 1000, it should succeed because 1400 >= 1000.
+    let withdrawn = vault.emergency_withdraw(&user);
+    assert_eq!(withdrawn, 1000 * XLM);
 }

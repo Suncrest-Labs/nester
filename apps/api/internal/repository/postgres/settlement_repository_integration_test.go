@@ -93,13 +93,13 @@ func TestSettlementRepositoryIntegration_CreateGetUpdateAndFilter(t *testing.T) 
 		t.Fatalf("Create second error = %v", err)
 	}
 
-	all, err := repo.GetByUserID(ctx, userID, "")
+	all, _, _, err := repo.ListByUserID(ctx, userID, offramp.UserListFilter{Page: 1, PerPage: 100})
 	if err != nil || len(all) != 2 {
-		t.Fatalf("GetByUserID all: err=%v len=%d", err, len(all))
+		t.Fatalf("ListByUserID all: err=%v len=%d", err, len(all))
 	}
-	initiatedOnly, err := repo.GetByUserID(ctx, userID, offramp.StatusInitiated)
+	initiatedOnly, _, _, err := repo.ListByUserID(ctx, userID, offramp.UserListFilter{Page: 1, PerPage: 100, Status: string(offramp.StatusInitiated)})
 	if err != nil || len(initiatedOnly) != 1 {
-		t.Fatalf("GetByUserID initiated: err=%v len=%d", err, len(initiatedOnly))
+		t.Fatalf("ListByUserID initiated: err=%v len=%d", err, len(initiatedOnly))
 	}
 	if initiatedOnly[0].ID != model2.ID {
 		t.Fatalf("wrong settlement in initiated filter")

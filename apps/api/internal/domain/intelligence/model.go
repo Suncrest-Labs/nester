@@ -26,3 +26,35 @@ type PortfolioInsights struct {
 	Suggestions     []string  `json:"suggestions"`
 	GeneratedAt     time.Time `json:"generated_at"`
 }
+
+// SavingsPlanRequest represents the user goal input.
+type SavingsPlanRequest struct {
+	GoalUSDC                   float64 `json:"goal_usdc"`
+	TimeHorizonMonths          int     `json:"time_horizon_months"`
+	MaxMonthlyContributionUSDC float64 `json:"max_monthly_contribution_usdc"`
+	VaultID                    string  `json:"vault_id,omitempty"`
+}
+
+// ScheduleEntry represents one month in the savings plan.
+type ScheduleEntry struct {
+	Month           int     `json:"month"`
+	Deposit         float64 `json:"deposit"`
+	ExpectedBalance float64 `json:"expected_balance"`
+	YieldEarned     float64 `json:"yield_earned"`
+}
+
+// MilestoneProjection represents a checkpoint in the plan.
+type MilestoneProjection struct {
+	Month           int     `json:"month"`
+	ExpectedBalance float64 `json:"expected_balance"`
+}
+
+// SavingsPlanResponse represents the generated savings schedule.
+type SavingsPlanResponse struct {
+	Achievable             bool                  `json:"achievable"`
+	RequiredMonthlyDeposit float64               `json:"required_monthly_deposit"`
+	MonthlySchedule        []ScheduleEntry       `json:"monthly_schedule"`
+	TotalYieldEarned       float64               `json:"total_yield_earned"`
+	Narrative              string                `json:"narrative"`
+	Milestones             []MilestoneProjection `json:"milestones"`
+}

@@ -12,6 +12,8 @@ import { z } from "zod/v4";
 import { validateAmount, validateBankAccount } from "@/lib/validation";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { KYCStatusBadge, type KYCStatus } from "@/components/kyc/KYCSection";
+import Link from "next/link";
 import {
     ChevronDown,
     ArrowDownUp,
@@ -123,6 +125,9 @@ export default function OfframpPage() {
     const { addNotification } = useNotifications();
     const router = useRouter();
 
+    // In a real app, this would come from the user's KYC state loaded via API
+    const [kycStatus] = useState<KYCStatus>("unverified");
+
     const {
         handleSubmit,
         watch,
@@ -131,7 +136,7 @@ export default function OfframpPage() {
         formState: { errors, isValid, isDirty },
         trigger,
     } = useForm<FormValues>({
-        resolver: zodResolver(formSchema as any),
+        resolver: zodResolver(formSchema),
         mode: "onBlur",
         defaultValues: {
             amount: "",
@@ -309,6 +314,34 @@ export default function OfframpPage() {
     return (
         <AppShell>
             <div className="mx-auto max-w-xl">
+                {/* KYC Banner for unverified users */}
+                {kycStatus === "unverified" && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3"
+                    >
+                        <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm text-amber-800">
+                                Identity verification required for offramp
+                            </p>
+                            <p className="text-xs text-amber-600/80 mt-0.5">
+                                Complete KYC to unlock fiat withdrawals.
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                            <KYCStatusBadge status={kycStatus} />
+                            <Link
+                                href="/settings?tab=verification"
+                                className="text-xs font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900"
+                            >
+                                Verify now
+                            </Link>
+                        </div>
+                    </motion.div>
+                )}
+
                 {/* Header */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -695,7 +728,14 @@ export default function OfframpPage() {
                     {/* CTA Button */}
                     <div className="p-4 sm:p-5 pt-0">
                         <button
-                            disabled={!isValid || quotePhase !== "done" || resolveState === "loading" || resolveState === "not_found"}
+                            disabled={
+                                !isValid ||
+                                quotePhase !== "done" ||
+                                resolveState === "loading" ||
+                                resolveState === "not_found" ||
+                                resolveState === "idle" ||
+                                (resolveState === "provider_error" && !manualName.trim())
+                            }
                             onClick={handleWithdraw}
                             className="w-full rounded-xl bg-foreground text-background py-4 text-sm font-medium transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
@@ -709,11 +749,13 @@ export default function OfframpPage() {
                                             ? "Verifying account..."
                                             : resolveState === "not_found"
                                                 ? "Account not found"
-                                                : quotePhase !== "done"
-                                                    ? "Finding best rate..."
-                                                    : showLargeWarning
-                                                        ? "Yes, confirm withdrawal"
-                                                : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
+                                                : resolveState === "idle"
+                                                    ? "Waiting for account verification..."
+                                                    : quotePhase !== "done"
+                                                        ? "Finding best rate..."
+                                                        : showLargeWarning
+                                                            ? "Yes, confirm withdrawal"
+                                                            : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
                         </button>
                     </div>
                 </motion.div>

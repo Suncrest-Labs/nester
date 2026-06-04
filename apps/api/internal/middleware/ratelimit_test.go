@@ -219,7 +219,7 @@ func TestWalletRateLimiterStackedOnAuthenticateLimitsByWalletInClaims(t *testing
 	}
 
 	rules := []RouteRule{{PathPrefix: "/api/v1/"}}
-	chain := Authenticate(testSecret, rules)(
+	chain := Authenticate(testSecret, "", rules)(
 		WalletRateLimiter(limit, time.Second, extractWallet)(ok200),
 	)
 

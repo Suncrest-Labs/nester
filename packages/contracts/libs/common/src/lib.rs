@@ -20,6 +20,7 @@ pub enum SourceStatus {
     Active,
     Paused,
     Deprecated,
+    Exploit,
 }
 
 /// The category of yield-generating protocol.

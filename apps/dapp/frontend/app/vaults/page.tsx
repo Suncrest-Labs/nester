@@ -16,6 +16,7 @@ import {
     LayoutList,
     LayoutGrid,
     Info,
+    Plus,
     Layers,
     TrendingUp,
     BarChart3,
@@ -44,12 +45,12 @@ const TYPE_FILTERS: { label: string; value: FilterType }[] = [
 
 function TokenIcons({ tokens, size = 24 }: { tokens: string[]; size?: number }) {
     return (
-        <div className="flex items-center">
+        <div className="flex items-center" aria-label={`Assets: ${tokens.join(", ")}`}>
             {tokens.map((t, i) => (
                 <Image
                     key={t}
                     src={`/${t.toLowerCase()}.png`}
-                    alt={t}
+                    alt=""
                     width={size}
                     height={size}
                     className={cn("rounded-full border-2 border-white", i > 0 && "-ml-2")}
@@ -63,7 +64,7 @@ function TokenIcons({ tokens, size = 24 }: { tokens: string[]; size?: number }) 
 
 function UtilizationBar({ value }: { value: number }) {
     return (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" role="meter" aria-label="Utilization" aria-valuenow={value} aria-valuemin={0} aria-valuemax={100}>
             <div className="h-1.5 flex-1 rounded-full bg-black/[0.06] overflow-hidden">
                 <div
                     className={cn(
@@ -73,7 +74,7 @@ function UtilizationBar({ value }: { value: number }) {
                     style={{ width: `${value}%` }}
                 />
             </div>
-            <span className="font-mono text-[11px] text-black/45 w-8 text-right">{value}%</span>
+            <span className="font-mono text-[11px] text-black/60 w-8 text-right">{value}%</span>
         </div>
     );
 }
@@ -86,14 +87,16 @@ function FilterBar({ view, onViewChange }: { view: "list" | "grid"; onViewChange
     return (
         <div className="mb-6 space-y-3">
             <div className="flex items-center justify-between gap-4 flex-wrap">
-                <div className="flex gap-1 border-b border-black/8 pb-px overflow-x-auto scrollbar-hide">
+                <div className="flex gap-1 border-b border-black/8 pb-px overflow-x-auto scrollbar-hide" role="tablist" aria-label="Market type filters">
                     {TYPE_FILTERS.map((f) => (
                         <button
                             key={f.value}
+                            role="tab"
+                            aria-selected={filterType === f.value}
                             onClick={() => setFilter(f.value)}
                             className={cn(
                                 "relative pb-3 px-1 mr-4 text-sm whitespace-nowrap transition-colors shrink-0",
-                                filterType === f.value ? "text-black" : "text-black/35 hover:text-black/55"
+                                filterType === f.value ? "text-black" : "text-black/60 hover:text-black/80"
                             )}
                         >
                             {f.label}
@@ -108,30 +111,35 @@ function FilterBar({ view, onViewChange }: { view: "list" | "grid"; onViewChange
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-black/35">Sort:</span>
-                    {(["tvl", "apy", "utilization"] as const).map((key) => (
-                        <button
-                            key={key}
-                            onClick={() => setSort(key)}
-                            className={cn(
-                                "rounded-lg border px-3 py-1.5 text-xs transition-colors",
-                                sortBy === key
-                                    ? "border-black bg-black text-white"
-                                    : "border-black/10 text-black/45 hover:border-black/20 hover:text-black"
-                            )}
-                        >
-                            {key === "apy" ? "APY" : key === "tvl" ? "TVL" : "Utilization"}
-                        </button>
-                    ))}
+                    <span className="text-xs text-black/60">Sort:</span>
+                    <div className="flex gap-1" role="radiogroup" aria-label="Sort markets by">
+                        {(["tvl", "apy", "utilization"] as const).map((key) => (
+                            <button
+                                key={key}
+                                role="radio"
+                                aria-checked={sortBy === key}
+                                onClick={() => setSort(key)}
+                                className={cn(
+                                    "rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                                    sortBy === key
+                                        ? "border-black bg-black text-white"
+                                        : "border-black/10 text-black/60 hover:border-black/20 hover:text-black"
+                                )}
+                            >
+                                {key === "apy" ? "APY" : key === "tvl" ? "TVL" : "Utilization"}
+                            </button>
+                        ))}
+                    </div>
 
-                    <div className="ml-1 flex items-center rounded-lg border border-black/10 overflow-hidden">
+                    <div className="ml-1 flex items-center rounded-lg border border-black/10 overflow-hidden" role="group" aria-label="View mode">
                         <button
                             onClick={() => onViewChange("list")}
                             className={cn(
                                 "flex h-8 w-8 items-center justify-center transition-colors",
-                                view === "list" ? "bg-black text-white" : "text-black/35 hover:text-black"
+                                view === "list" ? "bg-black text-white" : "text-black/60 hover:text-black"
                             )}
-                            title="List view"
+                            aria-label="List view"
+                            aria-current={view === "list" ? "true" : "false"}
                         >
                             <LayoutList className="h-3.5 w-3.5" />
                         </button>
@@ -139,9 +147,10 @@ function FilterBar({ view, onViewChange }: { view: "list" | "grid"; onViewChange
                             onClick={() => onViewChange("grid")}
                             className={cn(
                                 "flex h-8 w-8 items-center justify-center transition-colors",
-                                view === "grid" ? "bg-black text-white" : "text-black/35 hover:text-black"
+                                view === "grid" ? "bg-black text-white" : "text-black/60 hover:text-black"
                             )}
-                            title="Grid view"
+                            aria-label="Grid view"
+                            aria-current={view === "grid" ? "true" : "false"}
                         >
                             <LayoutGrid className="h-3.5 w-3.5" />
                         </button>
@@ -159,8 +168,11 @@ function InfoTooltip({ text }: { text: string }) {
     return (
         <div className="relative" onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
             <button
-                className="flex h-5 w-5 items-center justify-center rounded-full border border-black/12 text-black/30 hover:border-black/25 hover:text-black/55 transition-colors"
-                tabIndex={-1}
+                className="flex h-5 w-5 items-center justify-center rounded-full border border-black/12 text-black/40 hover:border-black/25 hover:text-black/60 transition-colors"
+                tabIndex={0}
+                aria-label="More info"
+                onFocus={() => setShow(true)}
+                onBlur={() => setShow(false)}
             >
                 <Info className="h-2.5 w-2.5" />
             </button>
@@ -171,7 +183,7 @@ function InfoTooltip({ text }: { text: string }) {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 4 }}
                         transition={{ duration: 0.13 }}
-                        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-20 w-56 rounded-xl border border-black/8 bg-white px-3 py-2.5 shadow-lg text-xs text-black/50 leading-relaxed pointer-events-none"
+                        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-20 w-56 rounded-xl border border-black/8 bg-white px-3 py-2.5 shadow-lg text-xs text-black/60 leading-relaxed pointer-events-none"
                     >
                         {text}
                         <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black/8" />
@@ -187,11 +199,11 @@ function InfoTooltip({ text }: { text: string }) {
 function MarketTypeIcon({ type }: { type: MarketType }) {
     switch (type) {
         case "single":
-            return <TrendingUp className="h-3.5 w-3.5" />;
+            return <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />;
         case "pair":
-            return <BarChart3 className="h-3.5 w-3.5" />;
+            return <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />;
         case "index":
-            return <Layers className="h-3.5 w-3.5" />;
+            return <Layers className="h-3.5 w-3.5" aria-hidden="true" />;
     }
 }
 
@@ -209,10 +221,10 @@ function VaultRow({ vault, index, onSelect }: { vault: VaultType; index: number;
             <div className="flex items-center gap-3 min-w-0">
                 <TokenIcons tokens={vault.tokens} size={28} />
                 <div className="min-w-0">
-                    <p className="truncate text-sm text-black">{vault.name}</p>
+                    <p className="truncate text-sm text-black font-medium">{vault.name}</p>
                     <div className="flex items-center gap-1.5 mt-0.5">
                         <MarketTypeIcon type={vault.marketType} />
-                        <span className="text-[11px] text-black/35">{MARKET_LABELS[vault.marketType]}</span>
+                        <span className="text-[11px] text-black/60">{MARKET_LABELS[vault.marketType]}</span>
                     </div>
                 </div>
             </div>
@@ -221,7 +233,7 @@ function VaultRow({ vault, index, onSelect }: { vault: VaultType; index: number;
             <div className="hidden sm:block">
                 <p className="font-mono text-lg text-black">{vault.currentApy.toFixed(1)}%</p>
                 <div className="flex items-center gap-1">
-                    <span className="text-[11px] text-black/35">APY</span>
+                    <span className="text-[11px] text-black/60">APY</span>
                     <InfoTooltip text="Annual Percentage Yield — the projected yearly return on your supplied assets." />
                 </div>
             </div>
@@ -230,7 +242,7 @@ function VaultRow({ vault, index, onSelect }: { vault: VaultType; index: number;
             <div className="hidden sm:block">
                 <p className="font-mono text-sm text-black">{formatTvl(vault.tvl)}</p>
                 <div className="flex items-center gap-1">
-                    <span className="text-[11px] text-black/35">TVL</span>
+                    <span className="text-[11px] text-black/60">TVL</span>
                     <InfoTooltip text="Total Value Locked — the total amount of assets deposited in this market." />
                 </div>
             </div>
@@ -239,7 +251,7 @@ function VaultRow({ vault, index, onSelect }: { vault: VaultType; index: number;
             <div className="hidden sm:block w-28">
                 <UtilizationBar value={vault.utilization} />
                 <div className="flex items-center gap-1 mt-1">
-                    <span className="text-[11px] text-black/35">Utilization</span>
+                    <span className="text-[11px] text-black/60">Utilization</span>
                     <InfoTooltip text="The percentage of supplied assets currently borrowed. Higher utilization means more demand and often higher yields." />
                 </div>
             </div>
@@ -248,15 +260,16 @@ function VaultRow({ vault, index, onSelect }: { vault: VaultType; index: number;
             <div className="flex items-center gap-2 shrink-0">
                 <span className="sm:hidden font-mono text-sm text-black">{vault.currentApy.toFixed(1)}%</span>
                 <Link href={`/vaults/${vault.id}`}>
-                    <button className="h-8 rounded-lg border border-black/10 px-3 text-xs text-black/45 hover:border-black/20 hover:text-black transition-colors">
+                    <button className="h-8 rounded-lg border border-black/10 px-3 text-xs text-black/60 hover:border-black/20 hover:text-black transition-colors focus-visible:ring-2 focus-visible:ring-black">
                         Details
                     </button>
                 </Link>
                 <button
                     onClick={() => onSelect(vault)}
-                    className="flex h-8 items-center gap-1 rounded-lg bg-black px-3 text-xs text-white transition-opacity hover:opacity-75"
+                    aria-label={`Supply assets to ${vault.name}`}
+                    className="flex h-8 items-center gap-1 rounded-lg bg-black px-3 text-xs text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
                 >
-                    Supply <ArrowUpRight className="h-3 w-3" />
+                    Supply <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
                 </button>
             </div>
         </motion.div>
@@ -278,10 +291,10 @@ function VaultGridCard({ vault, index, onSelect }: { vault: VaultType; index: nu
                 <div className="flex items-center gap-3">
                     <TokenIcons tokens={vault.tokens} size={32} />
                     <div>
-                        <p className="text-sm text-black">{vault.name}</p>
+                        <p className="text-sm text-black font-medium">{vault.name}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
                             <MarketTypeIcon type={vault.marketType} />
-                            <span className="text-[11px] text-black/35">{MARKET_LABELS[vault.marketType]}</span>
+                            <span className="text-[11px] text-black/60">{MARKET_LABELS[vault.marketType]}</span>
                         </div>
                     </div>
                 </div>
@@ -292,15 +305,15 @@ function VaultGridCard({ vault, index, onSelect }: { vault: VaultType; index: nu
             <div className="mb-4 flex items-end gap-6">
                 <div>
                     <div className="flex items-center gap-1 mb-1">
-                        <span className="text-[10px] text-black/35 uppercase tracking-wide">APY</span>
+                        <span className="text-[10px] text-black/60 uppercase tracking-wide">APY</span>
                         <InfoTooltip text="Annual Percentage Yield — the projected yearly return on your supplied assets." />
                     </div>
                     <p className="font-mono text-2xl text-black">{vault.currentApy.toFixed(1)}%</p>
-                    <p className="text-[11px] text-black/35 mt-0.5">{vault.apyRange} range</p>
+                    <p className="text-[11px] text-black/60 mt-0.5">{vault.apyRange} range</p>
                 </div>
                 <div>
                     <div className="flex items-center gap-1 mb-1">
-                        <span className="text-[10px] text-black/35 uppercase tracking-wide">TVL</span>
+                        <span className="text-[10px] text-black/60 uppercase tracking-wide">TVL</span>
                         <InfoTooltip text="Total Value Locked — the total amount of assets deposited in this market." />
                     </div>
                     <p className="font-mono text-2xl text-black">{formatTvl(vault.tvl)}</p>
@@ -310,27 +323,28 @@ function VaultGridCard({ vault, index, onSelect }: { vault: VaultType; index: nu
             {/* Utilization */}
             <div className="mb-5">
                 <div className="flex items-center gap-1 mb-2">
-                    <span className="text-[10px] text-black/35 uppercase tracking-wide">Utilization</span>
+                    <span className="text-[10px] text-black/60 uppercase tracking-wide">Utilization</span>
                     <InfoTooltip text="The percentage of supplied assets currently borrowed. Higher utilization means more demand and often higher yields." />
                 </div>
                 <UtilizationBar value={vault.utilization} />
             </div>
 
             {/* Maturity */}
-            <p className="mb-5 text-xs text-black/40 leading-relaxed flex-1">{vault.maturityTerms}</p>
+            <p className="mb-5 text-xs text-black/50 leading-relaxed flex-1">{vault.maturityTerms}</p>
 
             {/* Actions */}
             <div className="flex gap-2">
                 <Link href={`/vaults/${vault.id}`} className="flex-1">
-                    <button className="h-9 w-full rounded-xl border border-black/10 text-xs text-black/45 hover:border-black/20 hover:text-black transition-colors">
+                    <button className="h-9 w-full rounded-xl border border-black/10 text-xs text-black/60 hover:border-black/20 hover:text-black transition-colors focus-visible:ring-2 focus-visible:ring-black">
                         Details
                     </button>
                 </Link>
                 <button
                     onClick={() => onSelect(vault)}
-                    className="flex flex-1 h-9 items-center justify-center gap-1 rounded-xl bg-black text-xs text-white transition-opacity hover:opacity-75"
+                    aria-label={`Supply assets to ${vault.name}`}
+                    className="flex flex-1 h-9 items-center justify-center gap-1 rounded-xl bg-black text-xs text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
                 >
-                    Supply <ArrowUpRight className="h-3.5 w-3.5" />
+                    Supply <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
             </div>
         </motion.div>
@@ -354,7 +368,7 @@ function StatsBar({ vaults }: { vaults: VaultType[] }) {
                 <div key={s.label} className="rounded-2xl border border-black/8 bg-white px-5 py-4">
                     <p className="font-mono text-xl text-black sm:text-2xl">{s.value}</p>
                     <div className="mt-0.5 flex items-center gap-1.5">
-                        <span className="text-[11px] text-black/35">{s.label}</span>
+                        <span className="text-[11px] text-black/60">{s.label}</span>
                         <InfoTooltip text={s.tooltip} />
                     </div>
                 </div>
@@ -368,7 +382,7 @@ function StatsBar({ vaults }: { vaults: VaultType[] }) {
 function EmptyState() {
     return (
         <div className="flex flex-col items-center justify-center py-20 text-center">
-            <p className="text-sm text-black/40">No markets match this filter</p>
+            <p className="text-sm text-black/50">No markets match this filter</p>
         </div>
     );
 }
@@ -428,12 +442,21 @@ export default function VaultsPage() {
                 <motion.div
                     initial={{ opacity: 0, y: -8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="mb-7"
+                    className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"
                 >
-                    <h1 className="text-2xl text-black sm:text-3xl">Markets</h1>
-                    <p className="mt-1 text-sm text-black/40">
-                        Supply assets to earn yield across DeFi lending pools, LP positions, and on-chain indexes.
-                    </p>
+                    <div>
+                        <h1 className="text-2xl text-black dark:text-white sm:text-3xl">Markets</h1>
+                        <p className="mt-1 text-sm text-black/40 dark:text-white/50">
+                            Supply assets to earn yield across DeFi lending pools, LP positions, and on-chain indexes.
+                        </p>
+                    </div>
+                    <Link
+                        href="/dashboard/vaults/create"
+                        className="flex h-[var(--touch-target)] sm:h-10 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground hover:opacity-90 transition-opacity shrink-0"
+                    >
+                        <Plus className="h-4 w-4" />
+                        Create Vault
+                    </Link>
                 </motion.div>
 
                 {/* Stats */}
@@ -442,18 +465,18 @@ export default function VaultsPage() {
                 </Suspense>
 
                 {/* Accepted assets */}
-                <div className="mb-7 flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-black/35 mr-1">Supported assets</span>
+                <div className="mb-7 flex items-center gap-2 flex-wrap" aria-label="Accepted assets">
+                    <span className="text-xs text-black/60 mr-1">Supported assets</span>
                     {["USDC", "XLM"].map((a) => (
                         <div key={a} className="flex items-center gap-1.5 rounded-full border border-black/8 px-3 py-1">
                             <Image
                                 src={`/${a.toLowerCase()}.png`}
-                                alt={a}
+                                alt=""
                                 width={16}
                                 height={16}
                                 className="rounded-full"
                             />
-                            <span className="text-xs text-black/55">{a}</span>
+                            <span className="text-xs text-black/70 font-medium">{a}</span>
                         </div>
                     ))}
                 </div>
@@ -476,7 +499,7 @@ export default function VaultsPage() {
                         transition={{ delay: 0.2 }}
                         className="mt-8"
                     >
-                        <h2 className="text-sm text-black mb-3">Your Market Positions</h2>
+                        <h2 className="text-sm font-semibold text-black mb-3">Your Market Positions</h2>
                         <PositionCards positions={marketPositions} />
                     </motion.div>
                 )}

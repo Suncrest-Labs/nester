@@ -85,7 +85,28 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        run: govulncheck ./... || true
+        run: |
+          set +e
+          OUTPUT=$(govulncheck ./... 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+          
+          # Exit code 0 = no vulnerabilities
+          # Exit code 1 = error running govulncheck
+          # Exit code 3 = vulnerabilities found
+          
+          if [ $EXIT_CODE -eq 0 ]; then
+            exit 0
+          elif [ $EXIT_CODE -eq 3 ]; then
+            # Check if only known vulnerabilities are present
+            if echo "$OUTPUT" | grep -q "GO-2026-4316" && ! echo "$OUTPUT" | grep -q "GO-202[0-5]"; then
+              echo "⚠️  Only known/accepted vulnerabilities found (GO-2026-4316)"
+              exit 0
+            fi
+            exit 3
+          else
+            exit $EXIT_CODE
+          fi
 
   audit-rust:
     name: Dependency Audit (Rust)

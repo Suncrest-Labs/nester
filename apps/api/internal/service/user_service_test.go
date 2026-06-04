@@ -51,6 +51,44 @@ func (m *mockUserRepository) GetRoles(_ context.Context, _ uuid.UUID) ([]string,
 	return []string{}, nil
 }
 
+func (m *mockUserRepository) SaveKYCDocument(_ context.Context, _ *user.KYCDocument) error {
+	return nil
+}
+
+func (m *mockUserRepository) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, error) {
+	return nil, user.ErrUserNotFound
+}
+
+func (m *mockUserRepository) UpdateKYCStatus(_ context.Context, userID uuid.UUID, status user.KYCStatus, reason *string, reviewedAt *time.Time) error {
+	u, err := m.GetByID(context.Background(), userID)
+	if err != nil {
+		return err
+	}
+	u.KYCStatus = status
+	u.KYCRejectionReason = reason
+	u.KYCReviewedAt = reviewedAt
+	m.users[userID] = u
+	return nil
+}
+
+func (m *mockUserRepository) UpdateProfile(_ context.Context, id uuid.UUID, patch user.ProfilePatch) (*user.User, error) {
+	u, err := m.GetByID(context.Background(), id)
+	if err != nil {
+		return nil, err
+	}
+	if patch.RiskProfile != nil {
+		u.RiskProfile = patch.RiskProfile
+	}
+	if patch.SavingsGoal != nil {
+		u.SavingsGoal = patch.SavingsGoal
+	}
+	if patch.OnboardingCompleted != nil {
+		u.OnboardingCompleted = *patch.OnboardingCompleted
+	}
+	m.users[id] = u
+	return u, nil
+}
+
 func TestUserService_RegisterUser(t *testing.T) {
 	ctx := context.Background()
 	repo := newMockUserRepository()
@@ -64,8 +102,8 @@ func TestUserService_RegisterUser(t *testing.T) {
 	if u.ID == uuid.Nil {
 		t.Errorf("expected generated UUID")
 	}
-	if u.KYCStatus != user.KYCStatusPending {
-		t.Errorf("expected pending kyc status")
+	if u.KYCStatus != user.KYCStatusUnverified {
+		t.Errorf("expected unverified kyc status")
 	}
 
 	// Test duplicate wallet

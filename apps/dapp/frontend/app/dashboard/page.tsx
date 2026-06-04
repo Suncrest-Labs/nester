@@ -24,9 +24,14 @@ import {
 import { WithdrawModal } from "@/components/vault-action-modals";
 import { cn } from "@/lib/utils";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
+import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
+import { RebalanceSuggestionCard } from "@/components/dashboard/RebalanceSuggestionCard";
+import { profileApi } from "@/lib/api/profile";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
 import { AppShell } from "@/components/app-shell";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { formatDistanceToNow } from "date-fns";
 
 const CHART_PERIODS = ["1D", "1W", "1M", "6M", "1Y", "All"] as const;
 
@@ -53,6 +58,18 @@ export default function Dashboard() {
     const router = useRouter();
     const [selectedPosition, setSelectedPosition] = useState<PortfolioPosition | null>(null);
     const [chartPeriod, setChartPeriod] = useState<(typeof CHART_PERIODS)[number]>("1W");
+    const [onboardingOpen, setOnboardingOpen] = useState(false);
+    const { isOffline, lastSynced } = useOfflineStatus();
+
+    useEffect(() => {
+        if (!isConnected) return;
+        profileApi
+            .get()
+            .then((p) => {
+                if (!p.onboarding_completed) setOnboardingOpen(true);
+            })
+            .catch(() => {});
+    }, [isConnected]);
 
     useEffect(() => {
         if (!isConnected) router.push("/");
@@ -118,20 +135,25 @@ export default function Dashboard() {
                 {/* Left — balance + stats */}
                 <div className="p-8 lg:p-10 flex flex-col justify-between">
                     <div>
-                        <p className="text-[42px] font-light leading-none text-black tracking-[-0.02em]">
+                        <p className="text-[42px] font-light leading-none text-black tracking-[-0.02em]" aria-live="polite">
                             ${protocolBalanceUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </p>
                         <p className="mt-2 text-[12px] text-black/35 tracking-wide">Protocol Balance</p>
+                        {lastSynced && (
+                            <p className="mt-1.5 text-[11px] text-black/25">
+                                Last updated {formatDistanceToNow(lastSynced)} ago
+                            </p>
+                        )}
                     </div>
                     <div className="mt-8 space-y-5">
                         <div className="flex items-center justify-between">
-                            <span className="text-[13px] text-black/40">Position APY</span>
+                            <span className="text-[13px] text-black/60">Position APY</span>
                             <span className="text-[13px] font-medium text-black">
                                 {(avgApy * 100).toFixed(2)}%
                             </span>
                         </div>
                         <div className="flex items-center justify-between">
-                            <span className="text-[13px] text-black/40">Total earnings</span>
+                            <span className="text-[13px] text-black/60">Total earnings</span>
                             <span className="text-[13px] font-medium text-black">
                                 ${totalYield.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
@@ -141,40 +163,54 @@ export default function Dashboard() {
 
                 {/* Right — chart */}
                 <div className="border-t lg:border-t-0 lg:border-l border-black/[0.06] p-8 lg:p-10 flex flex-col">
-                    <div className="flex items-center justify-end gap-0.5 mb-6">
+                    <div className="flex items-center justify-end gap-0.5 mb-6" role="tablist" aria-label="Chart period">
                         {CHART_PERIODS.map((period) => (
                             <button
                                 key={period}
+                                role="tab"
+                                aria-selected={chartPeriod === period}
                                 onClick={() => setChartPeriod(period)}
                                 className={cn(
                                     "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
                                     chartPeriod === period
                                         ? "bg-black/[0.06] text-black"
-                                        : "text-black/30 hover:text-black/55"
+                                        : "text-black/60 hover:text-black/80"
                                 )}
                             >
                                 {period}
                             </button>
                         ))}
                     </div>
-                    <div className="flex-1 min-h-[160px] flex items-end">
+                    <div className="flex-1 min-h-[160px] flex items-end" role="img" aria-label="Protocol balance growth over time">
                         <svg viewBox="0 0 400 120" className="w-full h-full" preserveAspectRatio="none">
                             <defs>
                                 <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="0%" stopColor="rgb(99, 102, 241)" stopOpacity="0.12" />
-                                    <stop offset="100%" stopColor="rgb(99, 102, 241)" stopOpacity="0" />
+                                    <stop offset="0%" stopColor="rgb(79, 70, 229)" stopOpacity="0.12" />
+                                    <stop offset="100%" stopColor="rgb(79, 70, 229)" stopOpacity="0" />
                                 </linearGradient>
                             </defs>
                             <path d="M0,95 C40,90 70,80 110,75 C150,70 190,82 240,55 C290,28 340,38 370,32 L400,28 L400,120 L0,120Z" fill="url(#chartGrad)" />
-                            <path d="M0,95 C40,90 70,80 110,75 C150,70 190,82 240,55 C290,28 340,38 370,32 L400,28" fill="none" stroke="rgb(99, 102, 241)" strokeWidth="2" />
+                            <path d="M0,95 C40,90 70,80 110,75 C150,70 190,82 240,55 C290,28 340,38 370,32 L400,28" fill="none" stroke="rgb(79, 70, 229)" strokeWidth="2" />
                         </svg>
                     </div>
                     <div className="flex items-center gap-2 mt-4">
-                        <span className="h-2 w-2 rounded-full bg-indigo-500" />
-                        <span className="text-[11px] text-black/35">Balance</span>
+                        <span className="h-2 w-2 rounded-full bg-indigo-600" aria-hidden="true" />
+                        <span className="text-[11px] text-black/60">Balance</span>
                     </div>
                 </div>
             </motion.div>
+
+            {positions.length > 0 && (
+                <div className="mb-6 space-y-3">
+                    {positions.slice(0, 3).map((p) => (
+                        <RebalanceSuggestionCard
+                            key={p.id}
+                            vaultId={p.vaultId}
+                            vaultName={p.vaultName}
+                        />
+                    ))}
+                </div>
+            )}
 
             {/* ── Positions ── */}
             <motion.div
@@ -186,15 +222,15 @@ export default function Dashboard() {
             >
                 <div className="flex items-center justify-between px-8 pt-7 pb-0">
                     <h2 className="text-[16px] font-semibold text-black">Positions</h2>
-                    <Link href="/vaults" data-tour="deposit-cta" className="text-[12px] text-black/35 transition-colors hover:text-black">
+                    <Link href="/vaults" data-tour="deposit-cta" className="text-[12px] text-black/60 transition-colors hover:text-black">
                         + New Position
                     </Link>
                 </div>
                 <div className="px-8 pb-8 pt-6">
                     {positions.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-14 text-center">
-                            <p className="text-[14px] font-medium text-black/50">No Positions</p>
-                            <p className="mt-1.5 text-[13px] text-black/30">
+                            <p className="text-[14px] font-medium text-black/60">No Positions</p>
+                            <p className="mt-1.5 text-[13px] text-black/50">
                                 Create a position by depositing an asset from your wallet.
                             </p>
                         </div>
@@ -202,13 +238,13 @@ export default function Dashboard() {
                         <div className="overflow-x-auto">
                             <table className="w-full text-left">
                                 <thead>
-                                    <tr className="border-b border-black/[0.05] text-[11px] text-black/35">
-                                        <th className="pb-3.5 pr-6 font-medium">Vault</th>
-                                        <th className="pb-3.5 pr-6 font-medium">Balance</th>
-                                        <th className="pb-3.5 pr-6 font-medium">APY</th>
-                                        <th className="pb-3.5 pr-6 font-medium">Yield</th>
-                                        <th className="pb-3.5 pr-6 font-medium">Status</th>
-                                        <th className="pb-3.5 font-medium"></th>
+                                    <tr className="border-b border-black/[0.05] text-[11px] text-black/60">
+                                        <th scope="col" className="pb-3.5 pr-6 font-medium">Vault</th>
+                                        <th scope="col" className="pb-3.5 pr-6 font-medium">Balance</th>
+                                        <th scope="col" className="pb-3.5 pr-6 font-medium">APY</th>
+                                        <th scope="col" className="pb-3.5 pr-6 font-medium">Yield</th>
+                                        <th scope="col" className="pb-3.5 pr-6 font-medium">Status</th>
+                                        <th scope="col" className="pb-3.5 font-medium">Action</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -216,12 +252,12 @@ export default function Dashboard() {
                                         <tr key={position.id} className="border-b border-black/[0.04] last:border-0">
                                             <td className="py-4 pr-6">
                                                 <div className="flex items-center gap-3">
-                                                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/[0.04] text-black/40">
+                                                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/[0.04] text-black/60">
                                                         {getVaultIcon(position.vaultName)}
                                                     </div>
                                                     <div>
                                                         <p className="text-[14px] text-black">{position.vaultName}</p>
-                                                        <p className="text-[11px] text-black/30 mt-0.5">{position.asset}</p>
+                                                        <p className="text-[11px] text-black/60 mt-0.5">{position.asset}</p>
                                                     </div>
                                                 </div>
                                             </td>
@@ -231,18 +267,19 @@ export default function Dashboard() {
                                             <td className="py-4 pr-6 text-[14px] text-black">
                                                 {((position.apy ?? 0) * 100).toFixed(1)}%
                                             </td>
-                                            <td className="py-4 pr-6 font-mono text-[14px] text-black/60">
+                                            <td className="py-4 pr-6 font-mono text-[14px] text-black/70">
                                                 +${position.yieldEarned.toFixed(4)}
                                             </td>
                                             <td className="py-4 pr-6">
-                                                <span className="inline-flex items-center rounded-full bg-black/[0.04] px-2.5 py-1 text-[11px] font-medium text-black/50">
+                                                <span className="inline-flex items-center rounded-full bg-black/[0.04] px-2.5 py-1 text-[11px] font-medium text-black/60">
                                                     {position.isMatured ? "Matured" : `${position.daysRemaining}d left`}
                                                 </span>
                                             </td>
                                             <td className="py-4">
                                                 <button
                                                     onClick={() => setSelectedPosition(position)}
-                                                    className="rounded-lg border border-black/[0.08] px-3.5 py-1.5 text-[12px] text-black/50 transition-colors hover:border-black/20 hover:text-black"
+                                                    aria-label={`Withdraw from ${position.vaultName}`}
+                                                    className="rounded-lg border border-black/[0.08] px-3.5 py-1.5 text-[12px] text-black/60 transition-colors hover:border-black/20 hover:text-black focus-visible:ring-2 focus-visible:ring-black focus-visible:outline-none"
                                                 >
                                                     Withdraw
                                                 </button>
@@ -286,18 +323,18 @@ export default function Dashboard() {
                         {recentTransactions.map((tx) => (
                             <div key={tx.id} className="flex items-center justify-between rounded-xl bg-black/[0.015] px-5 py-3.5">
                                 <div className="flex items-center gap-3">
-                                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/[0.04] text-black/40">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/[0.04] text-black/60">
                                         {tx.type === "Deposit" ? (
-                                            <ArrowDownToLine className="h-4 w-4" />
+                                            <ArrowDownToLine className="h-4 w-4" aria-hidden="true" />
                                         ) : tx.type === "Withdrawal" ? (
-                                            <ArrowUpRight className="h-4 w-4" />
+                                            <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
                                         ) : (
-                                            <Wallet className="h-4 w-4" />
+                                            <Wallet className="h-4 w-4" aria-hidden="true" />
                                         )}
                                     </div>
                                     <div>
                                         <p className="text-[14px] text-black">{tx.type}</p>
-                                        <p className="mt-0.5 text-[11px] text-black/30">
+                                        <p className="mt-0.5 text-[11px] text-black/60">
                                             {tx.vaultName} · {new Date(tx.timestamp).toLocaleString()}
                                         </p>
                                     </div>
@@ -307,7 +344,7 @@ export default function Dashboard() {
                                         <p className="font-mono text-[14px] text-black">{tx.amount} {tx.asset}</p>
                                         <span className={cn(
                                             "inline-block mt-0.5 text-[11px] font-medium",
-                                            tx.status === "Confirmed" ? "text-black/40" : tx.status === "Pending" ? "text-amber-500/70" : "text-red-400/70"
+                                            tx.status === "Confirmed" ? "text-black/60" : tx.status === "Pending" ? "text-amber-600" : "text-red-600"
                                         )}>
                                             {tx.status}
                                         </span>
@@ -317,7 +354,8 @@ export default function Dashboard() {
                                             href={`${currentNetwork.explorerUrl}/transactions/${tx.txHash}`}
                                             target="_blank"
                                             rel="noreferrer"
-                                            className="flex h-7 w-7 items-center justify-center rounded-md text-black/25 transition-colors hover:bg-black/[0.04] hover:text-black/50"
+                                            className="flex h-7 w-7 items-center justify-center rounded-md text-black/40 transition-colors hover:bg-black/[0.04] hover:text-black/60 focus-visible:ring-2 focus-visible:ring-black focus-visible:outline-none"
+                                            aria-label={`View transaction ${tx.txHash.slice(0, 8)} on explorer`}
                                             title="View on explorer"
                                         >
                                             <ArrowUpRight className="h-3.5 w-3.5" />
@@ -334,6 +372,11 @@ export default function Dashboard() {
                 open={!!selectedPosition}
                 onClose={() => setSelectedPosition(null)}
                 position={selectedPosition}
+            />
+            <OnboardingWizard
+                open={onboardingOpen}
+                onClose={() => setOnboardingOpen(false)}
+                onComplete={() => setOnboardingOpen(false)}
             />
             <GuidedTour />
         </AppShell>
@@ -370,11 +413,11 @@ function WalletBalanceTable({
     return (
         <table className="w-full text-left">
             <thead>
-                <tr className="border-b border-black/[0.05] text-[11px] text-black/35">
-                    <th className="pb-3.5 pr-6 font-medium">Asset</th>
-                    <th className="pb-3.5 pr-6 font-medium text-right">Balance</th>
-                    <th className="pb-3.5 pr-6 font-medium text-right">Price</th>
-                    <th className="pb-3.5 font-medium text-right">USD Value</th>
+                <tr className="border-b border-black/[0.05] text-[11px] text-black/60">
+                    <th scope="col" className="pb-3.5 pr-6 font-medium">Asset</th>
+                    <th scope="col" className="pb-3.5 pr-6 font-medium text-right">Balance</th>
+                    <th scope="col" className="pb-3.5 pr-6 font-medium text-right">Price</th>
+                    <th scope="col" className="pb-3.5 font-medium text-right">USD Value</th>
                 </tr>
             </thead>
             <tbody>
@@ -384,21 +427,21 @@ function WalletBalanceTable({
                             <div className="flex items-center gap-3">
                                 <Image
                                     src={asset.logo}
-                                    alt={asset.code}
+                                    alt=""
                                     width={32}
                                     height={32}
                                     className="rounded-full"
                                 />
                                 <div>
                                     <p className="text-[14px] text-black">{asset.code}</p>
-                                    <p className="text-[11px] text-black/30 mt-0.5">{asset.name}</p>
+                                    <p className="text-[11px] text-black/60 mt-0.5">{asset.name}</p>
                                 </div>
                             </div>
                         </td>
                         <td className="py-4 pr-6 text-right font-mono text-[14px] text-black">
                             {asset.balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 7 })}
                         </td>
-                        <td className="py-4 pr-6 text-right text-[13px] text-black/40">
+                        <td className="py-4 pr-6 text-right text-[13px] text-black/60">
                             ${asset.price.toFixed(4)}
                         </td>
                         <td className="py-4 text-right font-mono text-[14px] text-black">

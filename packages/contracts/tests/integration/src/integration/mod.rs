@@ -14,6 +14,8 @@
 
 #![cfg(test)]
 
+pub mod lifecycle_tests;
+
 extern crate std;
 
 use soroban_sdk::{symbol_short, vec, Vec};

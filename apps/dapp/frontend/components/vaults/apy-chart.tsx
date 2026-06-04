@@ -43,16 +43,18 @@ export function APYChart({ data }: { data: ApyDataPoint[] }) {
   return (
     <div className="rounded-2xl border border-border bg-white p-6">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="font-heading text-lg font-light text-foreground">
+        <h2 id="apy-chart-title" className="font-heading text-lg font-light text-foreground">
           APY History
         </h2>
-        <div className="flex gap-1">
+        <div className="flex gap-1" role="tablist" aria-label="Chart time period">
           {(["7d", "30d", "90d"] as ApyTab[]).map((t) => (
             <button
               key={t}
+              role="tab"
+              aria-selected={tab === t}
               onClick={() => setTab(t)}
               className={cn(
-                "px-3 py-1 rounded-full text-xs font-medium transition-colors",
+                "px-3 py-1 rounded-full text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-black",
                 tab === t
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:text-foreground",
@@ -63,36 +65,38 @@ export function APYChart({ data }: { data: ApyDataPoint[] }) {
           ))}
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={slice} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-          <CartesianGrid
-            strokeDasharray="3 3"
-            stroke="#e5e7eb"
-            vertical={false}
-          />
-          <XAxis dataKey="date" tick={false} axisLine={false} tickLine={false} />
-          <YAxis
-            domain={["auto", "auto"]}
-            tick={{ fontSize: 11, fill: "#9ca3af" }}
-            axisLine={false}
-            tickLine={false}
-            tickFormatter={(v) => `${v}%`}
-            width={40}
-          />
-          <Tooltip
-            content={ApyTooltip}
-            cursor={{ stroke: "#e5e7eb", strokeWidth: 1 }}
-          />
-          <Line
-            type="monotone"
-            dataKey="apy"
-            stroke="#2EBAC6"
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4, fill: "#2EBAC6", strokeWidth: 0 }}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+      <div className="w-full h-[220px]" role="img" aria-labelledby="apy-chart-title" aria-label={`APY history for the last ${tab}`}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={slice} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="#e5e7eb"
+              vertical={false}
+            />
+            <XAxis dataKey="date" tick={false} axisLine={false} tickLine={false} />
+            <YAxis
+              domain={["auto", "auto"]}
+              tick={{ fontSize: 11, fill: "#9ca3af" }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={(v) => `${v}%`}
+              width={40}
+            />
+            <Tooltip
+              content={ApyTooltip}
+              cursor={{ stroke: "#e5e7eb", strokeWidth: 1 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="apy"
+              stroke="#2EBAC6"
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4, fill: "#2EBAC6", strokeWidth: 0 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }

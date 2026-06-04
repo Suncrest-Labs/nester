@@ -45,71 +45,165 @@ func (r *AdminRepository) GetLastEventIndexedAt(ctx context.Context) (*time.Time
 	return &t, nil
 }
 
-func (r *AdminRepository) GetDashboardMetrics(ctx context.Context) (admindomain.DashboardMetrics, error) {
-	const query = `
+func (r *AdminRepository) GetVaultHealthDashboard(ctx context.Context) (admindomain.VaultHealthDashboardData, error) {
+	const totalsQuery = `
 		SELECT
-			COALESCE((SELECT SUM(current_balance) FROM vaults), 0)::text AS total_tvl,
-			(SELECT COUNT(*) FROM users) AS total_users,
-			(SELECT COUNT(*) FROM vaults WHERE status = 'active') AS active_vaults,
-			COALESCE((SELECT SUM(GREATEST(current_balance - total_deposited, 0)) FROM vaults), 0)::text AS total_yield_distributed,
-			(SELECT COUNT(*) FROM settlements) AS settlements_total,
-			(SELECT COUNT(*) FROM settlements WHERE status IN ('initiated', 'liquidity_matched', 'fiat_dispatched')) AS settlements_pending,
-			(SELECT COUNT(*) FROM settlements WHERE status = 'confirmed' AND completed_at >= NOW() - INTERVAL '24 hours') AS settlements_completed_24h,
-			(SELECT COUNT(*) FROM settlements WHERE status = 'failed' AND completed_at >= NOW() - INTERVAL '24 hours') AS settlements_failed_24h,
-			COALESCE((SELECT SUM(amount) FROM settlements WHERE created_at >= NOW() - INTERVAL '24 hours'), 0)::text AS settlements_volume_24h
+			COALESCE((SELECT SUM(current_balance) FROM vaults), 0)::text,
+			COALESCE((
+				SELECT COUNT(*) FROM (
+					SELECT DISTINCT COALESCE(vt.user_id, v.user_id) AS depositor_id
+					FROM vault_transactions vt
+					JOIN vaults v ON v.id = vt.vault_id
+					WHERE vt.type = 'deposit'
+				) d
+			), 0)
 	`
 
-	var (
-		totalTVL              string
-		totalUsers            int64
-		activeVaults          int64
-		totalYieldDistributed string
-		settlementsTotal      int64
-		settlementsPending    int64
-		settlementsCompleted  int64
-		settlementsFailed     int64
-		settlementsVolume24h  string
-	)
-
-	if err := r.db.QueryRowContext(ctx, query).Scan(
-		&totalTVL,
-		&totalUsers,
-		&activeVaults,
-		&totalYieldDistributed,
-		&settlementsTotal,
-		&settlementsPending,
-		&settlementsCompleted,
-		&settlementsFailed,
-		&settlementsVolume24h,
-	); err != nil {
-		return admindomain.DashboardMetrics{}, err
+	var totalTVLStr string
+	var totalDepositors int64
+	if err := r.db.QueryRowContext(ctx, totalsQuery).Scan(&totalTVLStr, &totalDepositors); err != nil {
+		return admindomain.VaultHealthDashboardData{}, err
 	}
 
-	parsedTVL, err := decimal.NewFromString(totalTVL)
+	totalTVL, err := decimal.NewFromString(totalTVLStr)
 	if err != nil {
-		return admindomain.DashboardMetrics{}, fmt.Errorf("parse total_tvl: %w", err)
-	}
-	parsedYield, err := decimal.NewFromString(totalYieldDistributed)
-	if err != nil {
-		return admindomain.DashboardMetrics{}, fmt.Errorf("parse total_yield_distributed: %w", err)
-	}
-	parsedVolume, err := decimal.NewFromString(settlementsVolume24h)
-	if err != nil {
-		return admindomain.DashboardMetrics{}, fmt.Errorf("parse settlements volume_24h: %w", err)
+		return admindomain.VaultHealthDashboardData{}, fmt.Errorf("parse total_tvl: %w", err)
 	}
 
-	return admindomain.DashboardMetrics{
-		TotalTVL:              parsedTVL,
-		TotalUsers:            totalUsers,
-		ActiveVaults:          activeVaults,
-		TotalYieldDistributed: parsedYield,
-		Settlements: admindomain.DashboardSettlementMetrics{
-			Total:        settlementsTotal,
-			Pending:      settlementsPending,
-			Completed24h: settlementsCompleted,
-			Failed24h:    settlementsFailed,
-			Volume24h:    parsedVolume,
-		},
+	const vaultsQuery = `
+		SELECT
+			v.id,
+			COALESCE(NULLIF(TRIM(u.display_name), ''), SUBSTRING(v.contract_address, 1, 12)) AS name,
+			v.current_balance::text,
+			v.status,
+			COALESCE(dep.depositor_count, 0),
+			COALESCE(pend.pending_count, 0),
+			reb.last_rebalance_at,
+			apy_current.realized_apy,
+			apy_24h.realized_apy
+		FROM vaults v
+		JOIN users u ON u.id = v.user_id
+		LEFT JOIN LATERAL (
+			SELECT COUNT(DISTINCT COALESCE(vt.user_id, v.user_id)) AS depositor_count
+			FROM vault_transactions vt
+			WHERE vt.vault_id = v.id AND vt.type = 'deposit'
+		) dep ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*) AS pending_count
+			FROM transactions t
+			WHERE t.vault_id = v.id AND t.status = 'pending'
+		) pend ON true
+		LEFT JOIN LATERAL (
+			SELECT MAX(a.allocated_at) AS last_rebalance_at
+			FROM allocations a
+			WHERE a.vault_id = v.id
+		) reb ON true
+		LEFT JOIN LATERAL (
+			SELECT ah.realized_apy::text
+			FROM apy_history ah
+			WHERE ah.vault_id = v.id AND ah.period = '7d'
+			ORDER BY ah.calculated_at DESC
+			LIMIT 1
+		) apy_current ON true
+		LEFT JOIN LATERAL (
+			SELECT ah.realized_apy::text
+			FROM apy_history ah
+			WHERE ah.vault_id = v.id AND ah.period = '7d'
+				AND ah.calculated_at <= NOW() - INTERVAL '24 hours'
+			ORDER BY ah.calculated_at DESC
+			LIMIT 1
+		) apy_24h ON true
+		ORDER BY v.created_at ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, vaultsQuery)
+	if err != nil {
+		return admindomain.VaultHealthDashboardData{}, err
+	}
+	defer rows.Close()
+
+	vaultRows := make([]admindomain.VaultHealthRow, 0)
+	for rows.Next() {
+		var (
+			id              string
+			name            string
+			tvlStr          string
+			status          string
+			depositors      int64
+			pendingTx       int64
+			lastRebalance   sql.NullTime
+			apyCurrentStr   sql.NullString
+			apy24hStr       sql.NullString
+		)
+
+		if err := rows.Scan(
+			&id,
+			&name,
+			&tvlStr,
+			&status,
+			&depositors,
+			&pendingTx,
+			&lastRebalance,
+			&apyCurrentStr,
+			&apy24hStr,
+		); err != nil {
+			return admindomain.VaultHealthDashboardData{}, err
+		}
+
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return admindomain.VaultHealthDashboardData{}, err
+		}
+		tvl, err := decimal.NewFromString(tvlStr)
+		if err != nil {
+			return admindomain.VaultHealthDashboardData{}, err
+		}
+
+		var apy7d *decimal.Decimal
+		if apyCurrentStr.Valid {
+			parsed, err := decimal.NewFromString(apyCurrentStr.String)
+			if err != nil {
+				return admindomain.VaultHealthDashboardData{}, err
+			}
+			apy7d = &parsed
+		}
+
+		var apy7d24hAgo *decimal.Decimal
+		if apy24hStr.Valid {
+			parsed, err := decimal.NewFromString(apy24hStr.String)
+			if err != nil {
+				return admindomain.VaultHealthDashboardData{}, err
+			}
+			apy7d24hAgo = &parsed
+		}
+
+		var lastRebalanceAt *time.Time
+		if lastRebalance.Valid {
+			t := lastRebalance.Time.UTC()
+			lastRebalanceAt = &t
+		}
+
+		vaultRows = append(vaultRows, admindomain.VaultHealthRow{
+			ID:                  parsedID,
+			Name:                name,
+			TVL:                 tvl,
+			APY7d:               apy7d,
+			APY7d24hAgo:         apy7d24hAgo,
+			Depositors:          depositors,
+			PendingTransactions: pendingTx,
+			LastRebalanceAt:     lastRebalanceAt,
+			Status:              vault.VaultStatus(status),
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return admindomain.VaultHealthDashboardData{}, err
+	}
+
+	return admindomain.VaultHealthDashboardData{
+		TotalTVL:        totalTVL,
+		TotalDepositors: totalDepositors,
+		Vaults:          vaultRows,
 	}, nil
 }
 

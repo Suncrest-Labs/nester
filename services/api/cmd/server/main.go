@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/Suncrest-Labs/nester/internal/config"
 	"github.com/Suncrest-Labs/nester/internal/handler"
@@ -15,23 +14,30 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	serverCfg := cfg.Server()
 
 	health := handler.NewHealthHandler()
-	prometheus := service.NewPrometheusClient(cfg.Prometheus)
+	prometheus := service.NewPrometheusClient(cfg.Prometheus())
 	intelligence := handler.NewIntelligenceHandler(prometheus)
 
 	router := handler.NewRouter(cfg, health, intelligence)
 
 	server := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              serverCfg.Address(),
+		Handler:           router,
+		ReadTimeout:       serverCfg.ReadTimeout(),
+		ReadHeaderTimeout: serverCfg.ReadHeaderTimeout(),
+		WriteTimeout:      serverCfg.WriteTimeout(),
+		IdleTimeout:       serverCfg.IdleTimeout(),
+		MaxHeaderBytes:    serverCfg.MaxHeaderBytes(),
 	}
 
-	log.Printf("server starting on :%s", cfg.Port)
+	log.Printf("server starting on %s", serverCfg.Address())
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -47,7 +53,7 @@ func main() {
 
 	log.Println("shutdown signal received, gracefully stopping server")
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), serverCfg.GracefulShutdown())
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {

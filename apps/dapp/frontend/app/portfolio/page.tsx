@@ -4,11 +4,11 @@ import { useWallet } from "@/components/wallet-provider";
 import { usePortfolio, type PortfolioPosition } from "@/components/portfolio-provider";
 import { AppShell } from "@/components/app-shell";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     RefreshCw,
-    Wallet,
+    Wallet as WalletIcon,
     TrendingUp,
     ExternalLink,
     ArrowUpRight,
@@ -26,6 +26,7 @@ import { TransferModal } from "@/components/vault-action-modals";
 import { WithdrawModal } from "@/components/vault-action-modals";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
+import { YieldComparisonChart, type ProtocolApyPoint, type ProtocolSnapshot } from "@/components/analytics/YieldComparisonChart";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ export default function PortfolioPage() {
     const [loading, setLoading] = useState(false);
     const [hideBalances, setHideBalances] = useState(false);
     const [copied, setCopied] = useState(false);
-    const [activeTab, setActiveTab] = useState<"positions" | "activity">("positions");
+    const [activeTab, setActiveTab] = useState<"positions" | "activity" | "compare">("positions");
     const [withdrawPos, setWithdrawPos] = useState<PortfolioPosition | null>(null);
     const [transferPos, setTransferPos] = useState<PortfolioPosition | null>(null);
 
@@ -112,6 +113,55 @@ export default function PortfolioPage() {
         setTimeout(() => setCopied(false), 1500);
     };
 
+    // ── Yield comparison data derived from positions ──────────────────────────
+    const { compareHistory, compareSnapshots } = useMemo((): {
+        compareHistory: ProtocolApyPoint[];
+        compareSnapshots: ProtocolSnapshot[];
+    } => {
+        const protocols = ["Blend", "Aave", "Compound", "Nester"];
+        const totalVault = positions.reduce((s, p) => s + p.currentValue, 0);
+
+        // Build 30 days of synthetic APY history seeded from position APYs
+        const today = new Date();
+        const nesterApy = positions.length
+            ? positions.reduce((s, p) => s + (p.apy ?? 0), 0) / positions.length
+            : 0.12;
+
+        const baseApys: Record<string, number> = {
+            Blend: 0.124,
+            Aave: 0.098,
+            Compound: 0.085,
+            Nester: nesterApy,
+        };
+
+        const history: ProtocolApyPoint[] = Array.from({ length: 30 }, (_, i) => {
+            const d = new Date(today);
+            d.setDate(d.getDate() - (29 - i));
+            const point: ProtocolApyPoint = { date: d.toISOString().slice(0, 10) };
+            protocols.forEach((p) => {
+                const jitter = (Math.sin(i * 0.4 + p.length) * 0.015);
+                point[p] = parseFloat(((baseApys[p] + jitter) * 100).toFixed(2));
+            });
+            return point;
+        });
+
+        const snapshots: ProtocolSnapshot[] = protocols.map((protocol) => {
+            const base = baseApys[protocol] * 100;
+            const posAlloc = protocol === "Nester" && totalVault > 0
+                ? 100
+                : undefined;
+            return {
+                protocol,
+                currentApy: parseFloat(base.toFixed(1)),
+                avg30d: parseFloat((base * 0.97).toFixed(1)),
+                trend7d: parseFloat(((Math.random() - 0.45) * 2).toFixed(1)),
+                allocationPct: posAlloc,
+            };
+        });
+
+        return { compareHistory: history, compareSnapshots: snapshots };
+    }, [positions]);
+
     if (!isConnected) return null;
 
     const xlmBal = walletAssets.find(a => a.code === "XLM")?.balance ?? 0;
@@ -135,12 +185,16 @@ export default function PortfolioPage() {
                 className="mb-8 flex items-center justify-between gap-4"
             >
                 <div>
-                    <h1 className="text-2xl text-black sm:text-3xl">Portfolio</h1>
+                    <h1 className="text-2xl text-black sm:text-3xl font-semibold">Portfolio</h1>
                     <div className="mt-1.5 flex items-center gap-2">
-                        <span className="text-sm text-black/40">{address ? truncAddr(address) : ""}</span>
+                        <span className="text-sm text-black/60 font-medium">{address ? truncAddr(address) : ""}</span>
                         {address && (
-                            <button onClick={copyAddress} className="text-black/30 hover:text-black/60 transition-colors">
-                                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                            <button
+                                onClick={copyAddress}
+                                className="text-black/40 hover:text-black/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
+                                aria-label="Copy wallet address"
+                            >
+                                {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
                             </button>
                         )}
                     </div>
@@ -148,16 +202,19 @@ export default function PortfolioPage() {
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setHideBalances(!hideBalances)}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 text-black/40 hover:text-black/70 transition-all"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 text-black/40 hover:text-black/70 transition-all focus-visible:ring-2 focus-visible:ring-black"
+                        aria-label={hideBalances ? "Show balances" : "Hide balances"}
+                        aria-pressed={hideBalances}
                     >
-                        {hideBalances ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                        {hideBalances ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Eye className="h-3.5 w-3.5" aria-hidden="true" />}
                     </button>
                     <button
                         onClick={loadAssets}
                         disabled={loading}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 text-black/40 hover:text-black/70 transition-all disabled:opacity-40"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 text-black/40 hover:text-black/70 transition-all disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-black"
+                        aria-label="Refresh balances"
                     >
-                        <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+                        <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} aria-hidden="true" />
                     </button>
                 </div>
             </motion.div>
@@ -170,24 +227,24 @@ export default function PortfolioPage() {
                 className="mb-6 rounded-2xl border border-black/[0.06] bg-white overflow-hidden"
             >
                 <div className="p-8">
-                    <p className="text-[12px] text-black/35 tracking-wide mb-2">Net Worth</p>
-                    <p className="text-[42px] font-extralight leading-none text-black tracking-[-0.02em]">
+                    <p className="text-[12px] text-black/60 font-semibold tracking-wide mb-2 uppercase">Net Worth</p>
+                    <p className="text-[42px] font-extralight leading-none text-black tracking-[-0.02em]" aria-live="polite">
                         {hide(fmtUsd(totalUsd))}
                     </p>
                 </div>
                 <div className="border-t border-black/[0.06] grid grid-cols-2 sm:grid-cols-4 divide-x divide-black/[0.06]">
                     {[
-                        { label: "Wallet", value: fmtUsd(walletUsd), icon: Wallet },
+                        { label: "Wallet", value: fmtUsd(walletUsd), icon: WalletIcon },
                         { label: "In Markets", value: fmtUsd(vaultUsd), icon: TrendingUp },
                         { label: "Total Yield", value: `+${fmtUsd(totalYield)}`, icon: LineChart },
                         { label: "Positions", value: String(positions.length), icon: TrendingUp },
                     ].map((item) => (
                         <div key={item.label} className="px-5 py-4">
                             <div className="flex items-center gap-1.5 mb-1.5">
-                                <item.icon className="h-3 w-3 text-black/30" />
-                                <span className="text-[11px] text-black/35">{item.label}</span>
+                                <item.icon className="h-3 w-3 text-black/40" aria-hidden="true" />
+                                <span className="text-[11px] text-black/60 font-medium">{item.label}</span>
                             </div>
-                            <p className="text-sm text-black">{hide(item.value)}</p>
+                            <p className="text-sm text-black font-semibold">{hide(item.value)}</p>
                         </div>
                     ))}
                 </div>
@@ -200,17 +257,18 @@ export default function PortfolioPage() {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.1 }}
                     className="mb-6 flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1"
+                    aria-label="Wallet asset balances"
                 >
                     {walletAssets.filter(a => a.balance > 0).map((asset) => (
                         <div
                             key={asset.code}
                             className="flex items-center gap-2 rounded-xl border border-black/8 bg-white px-4 py-2.5 shrink-0"
                         >
-                            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-black/[0.04] text-[10px] text-black/50">
+                            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-black/[0.04] text-[10px] text-black/60 font-bold" aria-hidden="true">
                                 {asset.code.slice(0, 2)}
                             </div>
-                            <span className="text-xs text-black/60">{asset.code}</span>
-                            <span className="text-sm text-black">
+                            <span className="text-xs text-black/70 font-semibold">{asset.code}</span>
+                            <span className="text-sm text-black font-medium">
                                 {hide(asset.balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 }))}
                             </span>
                         </div>
@@ -224,19 +282,24 @@ export default function PortfolioPage() {
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.15 }}
                 className="mb-5 flex items-center gap-1 border-b border-black/8"
+                role="tablist"
+                aria-label="Portfolio sections"
             >
-                {(["positions", "activity"] as const).map((tab) => (
+                {(["positions", "activity", "compare"] as const).map((tab) => (
                     <button
                         key={tab}
+                        role="tab"
+                        aria-selected={activeTab === tab}
+                        aria-controls={`${tab}-panel`}
                         onClick={() => setActiveTab(tab)}
                         className={cn(
-                            "relative pb-3 px-1 mr-4 text-sm capitalize transition-colors",
-                            activeTab === tab ? "text-black" : "text-black/40 hover:text-black/60"
+                            "relative pb-3 px-1 mr-4 text-sm capitalize transition-colors focus-visible:ring-2 focus-visible:ring-black",
+                            activeTab === tab ? "text-black font-semibold" : "text-black/60 hover:text-black/80 font-medium"
                         )}
                     >
                         {tab}
                         {activeTab === tab && (
-                            <motion.div layoutId="tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-black rounded-full" />
+                            <motion.div layoutId="tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-black rounded-full" aria-hidden="true" />
                         )}
                     </button>
                 ))}
@@ -247,14 +310,17 @@ export default function PortfolioPage() {
                 {activeTab === "positions" && (
                     <motion.div
                         key="positions"
+                        id="positions-panel"
+                        role="tabpanel"
+                        aria-labelledby="positions-tab"
                         initial={{ opacity: 0, y: 8 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -8 }}
                     >
                         {positions.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-black/8 bg-white">
-                                <p className="text-sm text-black/50">No positions yet</p>
-                                <p className="mt-1 text-xs text-black/30">
+                                <p className="text-sm text-black/60 font-medium">No positions yet</p>
+                                <p className="mt-1 text-xs text-black/50">
                                     Supply assets to a market to see your positions here.
                                 </p>
                             </div>
@@ -270,38 +336,40 @@ export default function PortfolioPage() {
                                     >
                                         <div className="min-w-0">
                                             <div className="flex items-center gap-2">
-                                                <p className="text-sm text-black truncate">{pos.vaultName}</p>
-                                                <span className="text-[11px] text-black/35">{pos.asset}</span>
+                                                <p className="text-sm text-black font-semibold truncate">{pos.vaultName}</p>
+                                                <span className="text-[11px] text-black/60 font-medium">{pos.asset}</span>
                                                 {pos.isMatured ? (
-                                                    <span className="text-[10px] bg-black text-white rounded-full px-2 py-0.5">Matured</span>
+                                                    <span className="text-[10px] bg-black text-white rounded-full px-2 py-0.5 font-bold">Matured</span>
                                                 ) : (
-                                                    <span className="text-[10px] bg-black/[0.04] text-black/50 rounded-full px-2 py-0.5">{pos.daysRemaining}d left</span>
+                                                    <span className="text-[10px] bg-black/[0.04] text-black/70 rounded-full px-2 py-0.5 font-semibold">{pos.daysRemaining}d left</span>
                                                 )}
                                             </div>
-                                            <div className="mt-1 flex items-center gap-3 text-xs text-black/35">
+                                            <div className="mt-1 flex items-center gap-3 text-xs text-black/60 font-medium">
                                                 <span>APY {(pos.apy * 100).toFixed(1)}%</span>
-                                                <span>Yield +{pos.yieldEarned.toFixed(4)}</span>
+                                                <span className="text-emerald-700">Yield +{pos.yieldEarned.toFixed(4)}</span>
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-3 shrink-0">
                                             <div className="text-right">
-                                                <p className="text-base text-black">
+                                                <p className="text-base text-black font-bold">
                                                     {hide(pos.currentValue.toFixed(2))}
                                                 </p>
-                                                <p className="text-[11px] text-black/30 mt-0.5">
+                                                <p className="text-[11px] text-black/60 mt-0.5 font-medium">
                                                     Principal: {pos.principal.toFixed(2)}
                                                 </p>
                                             </div>
                                             <div className="flex gap-1.5">
                                                 <button
                                                     onClick={() => setTransferPos(pos)}
-                                                    className="rounded-lg border border-black/10 px-3 py-1.5 text-[11px] text-black/50 hover:border-black/20 hover:text-black transition-colors"
+                                                    className="rounded-lg border border-black/10 px-3 py-1.5 text-[11px] text-black/60 font-semibold hover:border-black/20 hover:text-black transition-colors focus-visible:ring-2 focus-visible:ring-black"
+                                                    aria-label={`Transfer ${pos.vaultName} position`}
                                                 >
                                                     Transfer
                                                 </button>
                                                 <button
                                                     onClick={() => setWithdrawPos(pos)}
-                                                    className="rounded-lg bg-black px-3 py-1.5 text-[11px] text-white transition-opacity hover:opacity-75"
+                                                    className="rounded-lg bg-black px-3 py-1.5 text-[11px] text-white font-semibold transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
+                                                    aria-label={`Withdraw from ${pos.vaultName}`}
                                                 >
                                                     Withdraw
                                                 </button>
@@ -317,14 +385,17 @@ export default function PortfolioPage() {
                 {activeTab === "activity" && (
                     <motion.div
                         key="activity"
+                        id="activity-panel"
+                        role="tabpanel"
+                        aria-labelledby="activity-tab"
                         initial={{ opacity: 0, y: 8 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -8 }}
                     >
                         {recentTx.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-black/8 bg-white">
-                                <p className="text-sm text-black/50">No activity yet</p>
-                                <p className="mt-1 text-xs text-black/30">
+                                <p className="text-sm text-black/60 font-medium">No activity yet</p>
+                                <p className="mt-1 text-xs text-black/50">
                                     Deposits, withdrawals, and yield events will appear here.
                                 </p>
                             </div>
@@ -341,23 +412,23 @@ export default function PortfolioPage() {
                                             className="flex items-center justify-between gap-4 rounded-xl border border-black/8 bg-white px-5 py-3.5"
                                         >
                                             <div className="flex items-center gap-3">
-                                                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-black/40">
-                                                    <Icon className="h-3.5 w-3.5" />
+                                                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-black/60">
+                                                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                                                 </div>
                                                 <div>
-                                                    <p className="text-sm text-black">{tx.type}</p>
-                                                    <p className="text-[11px] text-black/30 mt-0.5">
+                                                    <p className="text-sm text-black font-semibold">{tx.type}</p>
+                                                    <p className="text-[11px] text-black/60 mt-0.5 font-medium">
                                                         {tx.vaultName} · {new Date(tx.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                                                     </p>
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-3">
                                                 <div className="text-right">
-                                                    <p className="text-sm text-black">{tx.amount} {tx.asset}</p>
+                                                    <p className="text-sm text-black font-bold">{tx.amount} {tx.asset}</p>
                                                     <span className={cn(
-                                                        "text-[11px]",
-                                                        tx.status === "Confirmed" ? "text-black/40" :
-                                                        tx.status === "Pending" ? "text-amber-500/70" : "text-red-400/70"
+                                                        "text-[11px] font-semibold",
+                                                        tx.status === "Confirmed" ? "text-black/60" :
+                                                        tx.status === "Pending" ? "text-amber-700" : "text-red-700"
                                                     )}>{tx.status}</span>
                                                 </div>
                                                 {tx.isOnChain && tx.txHash && (
@@ -365,9 +436,10 @@ export default function PortfolioPage() {
                                                         href={`${currentNetwork.explorerUrl}/transactions/${tx.txHash}`}
                                                         target="_blank"
                                                         rel="noreferrer"
-                                                        className="flex h-6 w-6 items-center justify-center rounded-md text-black/25 hover:bg-black/[0.04] hover:text-black/50 transition-colors"
+                                                        className="flex h-6 w-6 items-center justify-center rounded-md text-black/40 hover:bg-black/[0.04] hover:text-black/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
+                                                        aria-label={`View transaction ${tx.txHash.slice(0, 8)} on explorer`}
                                                     >
-                                                        <ExternalLink className="h-3 w-3" />
+                                                        <ExternalLink className="h-3 w-3" aria-hidden="true" />
                                                     </a>
                                                 )}
                                             </div>
@@ -376,6 +448,21 @@ export default function PortfolioPage() {
                                 })}
                             </div>
                         )}
+                    </motion.div>
+                )}
+
+                {activeTab === "compare" && (
+                    <motion.div
+                        key="compare"
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                    >
+                        <YieldComparisonChart
+                            history={compareHistory}
+                            snapshots={compareSnapshots}
+                            loading={false}
+                        />
                     </motion.div>
                 )}
             </AnimatePresence>

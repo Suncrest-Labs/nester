@@ -29,23 +29,24 @@
 }
 
 :root {
+    --font-inter: Inter, ui-sans-serif, system-ui, sans-serif;
     --background: 0 0% 100%;
-    --foreground: 240 10% 10%;
+    --foreground: 240 10% 8%;
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 10%;
-    --primary: 255 60% 60%;
+    --card-foreground: 240 10% 8%;
+    --primary: 255 60% 50%;
     --primary-foreground: 0 0% 100%;
     --secondary: 240 4.8% 95.9%;
     --secondary-foreground: 240 5.9% 10%;
     --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
+    --muted-foreground: 240 5% 35%;
     --accent: 240 4.8% 95.9%;
     --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
+    --destructive: 0 72% 45%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 255 60% 60%;
+    --border: 240 5.9% 85%;
+    --input: 240 5.9% 85%;
+    --ring: 255 60% 50%;
     --gradient-brand: linear-gradient(135deg, #B6509E 0%, #2EBAC6 100%);
     --touch-target: 44px;
 }

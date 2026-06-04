@@ -18,9 +18,9 @@ func NewRouter(cfg *config.Config, health *HealthHandler, intelligence *Intellig
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   cfg.CORSOrigins,
-		AllowedMethods:   cfg.CORSMethods,
-		AllowedHeaders:   cfg.CORSHeaders,
+		AllowedOrigins:   cfg.AllowedOrigins(),
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Request-ID"},
 		ExposedHeaders:   []string{"X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           300,

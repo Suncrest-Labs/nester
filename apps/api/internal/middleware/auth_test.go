@@ -27,7 +27,7 @@ var defaultRules = []RouteRule{
 
 // authHandler wraps ok200 with Authenticate using defaultRules and testSecret.
 func authHandler() http.Handler {
-	return Authenticate(testSecret, defaultRules)(ok200)
+	return Authenticate(testSecret, "", defaultRules)(ok200)
 }
 
 // makeToken creates a signed JWT for test assertions.
@@ -170,7 +170,7 @@ func TestAuthGetUserFromContextReturnsCorrectUser(t *testing.T) {
 	capture := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		gotUser, gotOK = auth.GetUserFromContext(r.Context())
 	})
-	handler := Authenticate(testSecret, defaultRules)(capture)
+	handler := Authenticate(testSecret, "", defaultRules)(capture)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

@@ -22,13 +22,14 @@ func newTestInvoker(t *testing.T, rpcURL, horizonURL string) *service.SorobanVau
 		horizonURL,
 		"Test SDF Network ; September 2015",
 		kp.Seed(),
+		50,
 	)
 	require.NoError(t, err)
 	return inv
 }
 
 func TestNewSorobanVaultChainInvoker_BadSecret(t *testing.T) {
-	_, err := service.NewSorobanVaultChainInvoker("http://rpc", "http://horizon", "pass", "bad")
+	_, err := service.NewSorobanVaultChainInvoker("http://rpc", "http://horizon", "pass", "bad", 50)
 	assert.Error(t, err)
 }
 
@@ -98,6 +99,6 @@ func TestPauseVault_InvalidContract(t *testing.T) {
 // TestNoopVaultChainInvoker_IsDefaultWhenNilPassed ensures that NewAdminService
 // still defaults to NoopVaultChainInvoker when nil is passed.
 func TestNoopVaultChainInvoker_IsDefaultWhenNilPassed(t *testing.T) {
-	svc := service.NewAdminService(nil, nil, "", "")
+	svc := service.NewAdminService(nil, nil, nil, "", "", "", 5)
 	require.NotNil(t, svc)
 }

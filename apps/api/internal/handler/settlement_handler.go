@@ -12,15 +12,17 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
+	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
 type SettlementHandler struct {
-	service *service.SettlementService
+	service     *service.SettlementService
+	userService *service.UserService
 }
 
-func NewSettlementHandler(svc *service.SettlementService) *SettlementHandler {
-	return &SettlementHandler{service: svc}
+func NewSettlementHandler(svc *service.SettlementService, userSvc *service.UserService) *SettlementHandler {
+	return &SettlementHandler{service: svc, userService: userSvc}
 }
 
 func (h *SettlementHandler) Register(mux *http.ServeMux) {
@@ -65,9 +67,26 @@ func (h *SettlementHandler) initiateSettlement(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	userID, err := uuid.Parse(req.UserID)
+	caller, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
+	userID, err := uuid.Parse(caller.ID)
 	if err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("user_id must be a valid UUID"))
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "invalid caller identity"))
+		return
+	}
+
+	u, err := h.userService.GetUser(r.Context(), userID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "failed to check kyc status"))
+		return
+	}
+
+	if string(u.KYCStatus) != "verified" {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "kyc_required", "kyc verification is required"))
 		return
 	}
 
@@ -150,6 +169,12 @@ func (h *SettlementHandler) getSettlement(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	caller, ok := auth.GetUserFromContext(r.Context())
+	if !ok || model.UserID.String() != caller.ID {
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("settlement"))
+		return
+	}
+
 	// Always set status in response
 	if model.Status == "" {
 		model.Status = "initiated"
@@ -164,19 +189,34 @@ func (h *SettlementHandler) listUserSettlements(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	statusFilter := r.URL.Query().Get("status")
+	params, err := listquery.ParseSettlementList(r)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
 
-	models, err := h.service.GetUserSettlements(r.Context(), userID, statusFilter)
+	models, total, nextCursor, err := h.service.ListUserSettlements(r.Context(), userID, offramp.UserListFilter{
+		Page:                params.Page.Page,
+		PerPage:             params.Page.PerPage,
+		SortField:           params.Sort.Field,
+		SortOrder:           params.Sort.Order,
+		Cursor:              params.Page.Cursor,
+		Status:              params.Status,
+		DateFrom:            params.DateFrom,
+		DateTo:              params.DateTo,
+		MinAmount:           params.MinAmount,
+		DestinationProvider: params.DestinationProvider,
+		FiatCurrency:        params.FiatCurrency,
+	})
 	if err != nil {
 		h.writeDomainError(w, r, err)
 		return
 	}
 
-	// Always return an array, never an object
 	if models == nil {
 		models = []offramp.Settlement{}
 	}
-	response.WriteJSON(w, http.StatusOK, response.OK(models))
+	response.WriteJSON(w, http.StatusOK, response.PaginatedOK(models, params.Page.Page, params.Page.PerPage, total, nextCursor))
 }
 
 func (h *SettlementHandler) updateStatus(w http.ResponseWriter, r *http.Request) {

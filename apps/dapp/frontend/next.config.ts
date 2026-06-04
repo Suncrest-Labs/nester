@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 // Environment variable validation during build
 if (!process.env.NEXT_PUBLIC_STELLAR_NETWORK && process.env.NODE_ENV !== "development") {
@@ -7,6 +8,9 @@ if (!process.env.NEXT_PUBLIC_STELLAR_NETWORK && process.env.NODE_ENV !== "develo
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  turbopack: {
+    root: path.resolve(__dirname, "../../"),
+  },
   async rewrites() {
     const intelligenceUrl =
       process.env.INTELLIGENCE_SERVICE_URL ?? "http://localhost:8000";

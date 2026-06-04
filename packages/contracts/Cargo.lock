@@ -23,7 +23,6 @@ version = "0.1.0"
 dependencies = [
  "nester-access-control",
  "nester-common",
- "nester-test-utils",
  "soroban-sdk",
  "yield-registry-contract",
 ]
@@ -635,6 +634,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
 
 [[package]]
+name = "lp_aggregator"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -686,15 +692,6 @@ dependencies = [
  "vault-contract",
  "vault-token-contract",
  "yield-registry-contract",
-]
-
-[[package]]
-name = "nester-rent-escrow"
-version = "0.1.0"
-dependencies = [
- "nester-common",
- "nester-test-utils",
- "soroban-sdk",
 ]
 
 [[package]]
@@ -1594,7 +1591,6 @@ version = "0.1.0"
 dependencies = [
  "nester-access-control",
  "nester-common",
- "nester-test-utils",
  "soroban-sdk",
 ]
 

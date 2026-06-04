@@ -20,19 +20,6 @@ impl MockVault {}
 // Test helpers
 // ---------------------------------------------------------------------------
 
-/// Mint `amount` of `token` directly into `contract_address`.
-fn mint_to_contract(
-    env: &Env,
-    token_address: &Address,
-    contract_address: &Address,
-    amount: i128,
-) {
-    // We need a StellarAssetClient to mint; the token_admin is embedded in the
-    // asset contract we registered in setup().
-    // In tests the asset admin address is kept by the caller — see setup().
-    let _ = (env, token_address, contract_address, amount); // satisfied below in each test
-}
-
 /// Create a fresh environment with mock auths, register all contracts,
 /// initialise the treasury, and return the commonly needed handles.
 fn setup() -> (

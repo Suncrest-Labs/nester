@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
@@ -53,6 +54,44 @@ func (m *mockUserRepository) GetByWalletAddress(ctx context.Context, addr string
 
 func (m *mockUserRepository) GetRoles(_ context.Context, _ uuid.UUID) ([]string, error) {
 	return []string{}, nil
+}
+
+func (m *mockUserRepository) SaveKYCDocument(_ context.Context, doc *user.KYCDocument) error {
+	return nil
+}
+
+func (m *mockUserRepository) GetKYCDocument(_ context.Context, userID uuid.UUID) (*user.KYCDocument, error) {
+	return nil, user.ErrUserNotFound
+}
+
+func (m *mockUserRepository) UpdateKYCStatus(_ context.Context, userID uuid.UUID, status user.KYCStatus, reason *string, reviewedAt *time.Time) error {
+	u, err := m.GetByID(context.Background(), userID)
+	if err != nil {
+		return err
+	}
+	u.KYCStatus = status
+	u.KYCRejectionReason = reason
+	u.KYCReviewedAt = reviewedAt
+	m.users[userID] = u
+	return nil
+}
+
+func (m *mockUserRepository) UpdateProfile(_ context.Context, id uuid.UUID, patch user.ProfilePatch) (*user.User, error) {
+	u, err := m.GetByID(context.Background(), id)
+	if err != nil {
+		return nil, err
+	}
+	if patch.RiskProfile != nil {
+		u.RiskProfile = patch.RiskProfile
+	}
+	if patch.SavingsGoal != nil {
+		u.SavingsGoal = patch.SavingsGoal
+	}
+	if patch.OnboardingCompleted != nil {
+		u.OnboardingCompleted = *patch.OnboardingCompleted
+	}
+	m.users[id] = u
+	return u, nil
 }
 
 func TestUserHandler_Register(t *testing.T) {

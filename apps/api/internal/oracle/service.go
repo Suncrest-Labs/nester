@@ -22,9 +22,9 @@ type RateService struct {
 
 // NewRateService constructs a RateService with Horizon (primary) and DeFiLlama
 // (fallback) for crypto rates and the open.er-api.com feed for fiat rates.
-func NewRateService(horizonURL string) *RateService {
+func NewRateService(horizonURL, usdcIssuer string) *RateService {
 	return NewRateServiceWithFetchers(
-		[]Provider{NewStellarProvider(horizonURL), NewDefiLlamaProvider()},
+		[]Provider{NewStellarProvider(horizonURL, usdcIssuer), NewDefiLlamaProvider()},
 		NewFiatProvider(),
 	)
 }

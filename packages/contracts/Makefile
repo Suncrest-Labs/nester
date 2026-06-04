@@ -13,11 +13,15 @@ help:
 
 build:
 	@echo "Building all Soroban contracts to WASM..."
+	@echo "  Building vault_token (required by vault)..."
+	@cargo build --release --target wasm32-unknown-unknown -p vault-token || exit 1
 	@for contract in contracts/*/; do \
 		if [ -f "$$contract/Cargo.toml" ]; then \
 			pkg_name=$$(grep '^name = ' "$$contract/Cargo.toml" | sed 's/name = "\(.*\)"/\1/'); \
-			echo "  Building $$pkg_name..."; \
-			cargo build --release --target wasm32-unknown-unknown -p "$$pkg_name" || exit 1; \
+			if [ "$$pkg_name" != "vault-token" ]; then \
+				echo "  Building $$pkg_name..."; \
+				cargo build --release --target wasm32-unknown-unknown -p "$$pkg_name" || exit 1; \
+			fi \
 		fi \
 	done
 	@echo "✓ Build successful - all contracts compiled to WASM"
