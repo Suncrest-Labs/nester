@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Inter, Cormorant } from "next/font/google";
 import { CookieConsent } from "@/components/cookie-consent";
+import { Analytics } from "@/components/analytics";
 import { SmoothScroll } from "@/components/smooth-scroll";
 import "./globals.css";
 
@@ -70,11 +71,6 @@ export default function RootLayout({
     <html lang="en" className="scroll-smooth">
       <head>
         <script
-          defer
-          data-domain="nester.finance"
-          src="https://plausible.io/js/script.js"
-        />
-        <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         />
@@ -86,6 +82,7 @@ export default function RootLayout({
         <SmoothScroll>
           {children}
           <CookieConsent />
+          <Analytics />
         </SmoothScroll>
       </body>
     </html>
