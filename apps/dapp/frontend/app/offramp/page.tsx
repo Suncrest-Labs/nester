@@ -269,11 +269,12 @@ export default function OfframpPage() {
             : 0;
 
     const handleWithdraw = handleSubmit((data) => {
+        const quote = selectedQuote;
         const canSubmit =
             payoutMode.type === "saved"
-                ? numericAmount > 0 && quotePhase === "done" && selectedQuote
-                : isValid && quotePhase === "done" && selectedQuote;
-        if (!canSubmit) {
+                ? numericAmount > 0 && quotePhase === "done" && quote
+                : isValid && quotePhase === "done" && quote;
+        if (!canSubmit || !quote) {
             return;
         }
 
@@ -304,7 +305,7 @@ export default function OfframpPage() {
                 message: `Withdrew ${numericAmount.toLocaleString("en-US", {
                     maximumFractionDigits: 2,
                 })} ${sendAsset.symbol} to ${accountInfo?.bank_name ?? selectedBankCode} ending in ${data.accountNumber.slice(-4)}.`,
-                actionUrl: getExplorerTxUrl(`mock-settlement-${selectedQuote.node.id}`),
+                actionUrl: getExplorerTxUrl(`mock-settlement-${quote.node.id}`),
                 actionLabel: "View Transaction",
             },
             { showToast: true }
