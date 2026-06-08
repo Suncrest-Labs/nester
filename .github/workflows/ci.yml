@@ -293,7 +293,11 @@ jobs:
 
       - name: Check migration collisions
         run: |
-          COLLISIONS=$(ls migrations/*.sql | sed -E 's/.*\/([0-9]+).*/\1/' | sort | uniq -d)
+          COLLISIONS=$(ls migrations/*.sql \
+            | sed -E 's/\.(up|down)\.sql$//' \
+            | sort -u \
+            | sed -E 's/.*\/([0-9]+)_.*/\1/' \
+            | sort | uniq -d)
           if [ -n "$COLLISIONS" ]; then
             echo "FAIL: duplicate migration prefixes found:"
             for prefix in $COLLISIONS; do
