@@ -153,7 +153,7 @@ func validSettlementJSONBody(userID, vaultID uuid.UUID) string {
 func TestSettlementHandler_PostCreates201(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	h := newSettlementHandler(svc, userID)
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -181,7 +181,7 @@ func TestSettlementHandler_PostCreates201(t *testing.T) {
 }
 
 func TestSettlementHandler_PostInvalidBody400(t *testing.T) {
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	h := NewSettlementHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -201,7 +201,7 @@ func TestSettlementHandler_PostInvalidBody400(t *testing.T) {
 func TestSettlementHandler_PostDomainValidation400(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	h := newSettlementHandler(svc, userID)
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -233,7 +233,7 @@ func TestSettlementHandler_Get200And404(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
 	repo := newSettlementStubRepo()
-	svc := service.NewSettlementService(repo)
+	svc := service.NewSettlementService(repo, nil)
 	created, err := svc.InitiateSettlement(context.Background(), service.InitiateSettlementInput{
 		UserID:       userID,
 		VaultID:      vaultID,
@@ -307,7 +307,7 @@ func TestSettlementHandler_Get200And404(t *testing.T) {
 func TestSettlementHandler_PatchStatus200(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	created, err := svc.InitiateSettlement(context.Background(), service.InitiateSettlementInput{
 		UserID:       userID,
 		VaultID:      vaultID,
@@ -358,7 +358,7 @@ func TestSettlementHandler_PatchStatus200(t *testing.T) {
 func TestSettlementHandler_PatchStatus404NonOwner(t *testing.T) {
 	ownerID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	created, err := svc.InitiateSettlement(context.Background(), service.InitiateSettlementInput{
 		UserID:       ownerID,
 		VaultID:      vaultID,
@@ -404,7 +404,7 @@ func TestSettlementHandler_PatchStatus404NonOwner(t *testing.T) {
 }
 
 func TestSettlementHandler_PatchStatus401NoAuth(t *testing.T) {
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	h := NewSettlementHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -432,7 +432,7 @@ func TestSettlementHandler_PatchStatus401NoAuth(t *testing.T) {
 func TestSettlementHandler_ListUserSettlementsWithStatus(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	h := newSettlementHandler(svc, userID)
 	mux := http.NewServeMux()
 	h.Register(mux)

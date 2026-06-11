@@ -12,6 +12,11 @@ import anthropic
 
 from app.config import settings
 from app.models.coaching import CoachingRequest, CoachingResponse
+from app.models.portfolio import (
+    AllocationItem,
+    PortfolioAnalysisResponse,
+    PortfolioBreakdown,
+)
 from app.models.recommendation import (
     ConfidenceLevel,
     Recommendation,
@@ -59,7 +64,7 @@ def get_vault_context_fetcher() -> VaultContextFetcher:
     if _vault_context_fetcher is None:
         _vault_context_fetcher = VaultContextFetcher(
             api_base_url=settings.nester_api_base_url,
-            service_api_key=settings.nester_service_api_key
+            service_api_key=settings.nester_service_api_key,
         )
     return _vault_context_fetcher
 
@@ -71,12 +76,15 @@ def _get_redis() -> Any:
         return _redis_client if _redis_available else None
     try:
         import redis as _redis
+
         _redis_client = _redis.from_url(settings.redis_url, decode_responses=True)
         _redis_client.ping()
         _redis_available = True
         logger.info("prometheus context cache: redis connected")
     except Exception as exc:
-        logger.warning("prometheus context cache: redis unavailable (%s), using in-memory", exc)
+        logger.warning(
+            "prometheus context cache: redis unavailable (%s), using in-memory", exc
+        )
         _redis_available = False
     return _redis_client if _redis_available else None
 
@@ -240,14 +248,20 @@ one sentence. Never start a sentence with an em dash."""
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _to_anthropic_messages(history: list[dict[str, str]]) -> list[anthropic.types.MessageParam]:
+
+def _to_anthropic_messages(
+    history: list[dict[str, str]],
+) -> list[anthropic.types.MessageParam]:
     """Convert conversation store format to Anthropic message params.
 
     Conversation store uses {"role": "user"|"assistant", "content": str}.
     Anthropic uses the same role names.
     """
     return [
-        {"role": cast(Literal["user", "assistant"], msg["role"]), "content": msg["content"]}
+        {
+            "role": cast(Literal["user", "assistant"], msg["role"]),
+            "content": msg["content"],
+        }
         for msg in history
     ]
 
@@ -255,6 +269,7 @@ def _to_anthropic_messages(history: list[dict[str, str]]) -> list[anthropic.type
 # ---------------------------------------------------------------------------
 # Streaming chat
 # ---------------------------------------------------------------------------
+
 
 async def stream_chat(user_id: str, message: str) -> AsyncIterator[str]:
     """Yield SSE-formatted data strings for a streaming Claude response.
@@ -281,7 +296,9 @@ async def stream_chat(user_id: str, message: str) -> AsyncIterator[str]:
                 risk_data[vault_id] = risk_info
 
     context_block = vault_context_fetcher.build_context_block(vaults, market_rates)
-    risk_profile_block = vault_context_fetcher.build_risk_profile_block(vaults, risk_data)
+    risk_profile_block = vault_context_fetcher.build_risk_profile_block(
+        vaults, risk_data
+    )
 
     market_context_block = await _build_market_context_block()
 
@@ -365,8 +382,15 @@ portfolio."""
 # Structured analysis (non-streaming)
 # ---------------------------------------------------------------------------
 
+
 def _json_strip(raw: str) -> str:
-    return raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    return (
+        raw.strip()
+        .removeprefix("```json")
+        .removeprefix("```")
+        .removesuffix("```")
+        .strip()
+    )
 
 
 async def generate_coaching(request: CoachingRequest) -> CoachingResponse:
@@ -400,7 +424,12 @@ async def generate_coaching(request: CoachingRequest) -> CoachingResponse:
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
-            (b.text for b in response.content if isinstance(b, anthropic.types.TextBlock)), ""
+            (
+                b.text
+                for b in response.content
+                if isinstance(b, anthropic.types.TextBlock)
+            ),
+            "",
         )
         parsed = json.loads(_json_strip(text))
         schedule = [
@@ -454,7 +483,12 @@ async def get_portfolio_insights(user_id: str) -> list[dict[str, Any]]:
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
-            (b.text for b in response.content if isinstance(b, anthropic.types.TextBlock)), ""
+            (
+                b.text
+                for b in response.content
+                if isinstance(b, anthropic.types.TextBlock)
+            ),
+            "",
         )
         return list(json.loads(_json_strip(text)))
     except Exception:
@@ -483,7 +517,12 @@ async def get_market_sentiment() -> dict[str, Any]:
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
-            (b.text for b in response.content if isinstance(b, anthropic.types.TextBlock)), ""
+            (
+                b.text
+                for b in response.content
+                if isinstance(b, anthropic.types.TextBlock)
+            ),
+            "",
         )
         return dict(json.loads(_json_strip(text)))
     except Exception:
@@ -513,7 +552,9 @@ async def _build_market_context_block() -> str:
         xlm = prices.get("stellar")
         if usdc:
             peg = "stable" if abs(usdc.usd - 1.0) < 0.005 else "off-peg"
-            price_lines.append(f"- USDC: ${usdc.usd:.4f} ({peg}, 24h {usdc.usd_24h_change:+.2f}%)")
+            price_lines.append(
+                f"- USDC: ${usdc.usd:.4f} ({peg}, 24h {usdc.usd_24h_change:+.2f}%)"
+            )
         if xlm:
             price_lines.append(
                 f"- XLM: ${xlm.usd:.4f} (24h {xlm.usd_24h_change:+.2f}%, "
@@ -543,7 +584,9 @@ async def _build_market_context_block() -> str:
                 f"TVL ${p['tvlUsd']:,.0f}"
                 for p in top5
             ]
-            sections.append("## Top Stellar DeFi Pools (DeFiLlama)\n" + "\n".join(pool_lines))
+            sections.append(
+                "## Top Stellar DeFi Pools (DeFiLlama)\n" + "\n".join(pool_lines)
+            )
     except Exception as exc:
         logger.warning("market context: defillama fetch failed: %s", exc)
 
@@ -566,7 +609,10 @@ async def get_yield_recommendation() -> dict[str, Any]:
 
     try:
         raw_prices = await cg.get_prices(["usd-coin", "stellar"])
-        prices = {k: {"usd": v.usd, "change_24h": v.usd_24h_change} for k, v in raw_prices.items()}
+        prices = {
+            k: {"usd": v.usd, "change_24h": v.usd_24h_change}
+            for k, v in raw_prices.items()
+        }
         raw_sentiment = await cg.get_market_sentiment()
         sentiment_signal = raw_sentiment.signal
     except Exception as exc:
@@ -604,7 +650,12 @@ async def get_yield_recommendation() -> dict[str, Any]:
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
-            (b.text for b in response.content if isinstance(b, anthropic.types.TextBlock)), ""
+            (
+                b.text
+                for b in response.content
+                if isinstance(b, anthropic.types.TextBlock)
+            ),
+            "",
         )
         return dict(json.loads(_json_strip(text)))
     except Exception:
@@ -642,13 +693,16 @@ async def get_vault_recommendations(vault_id: str) -> dict[str, Any]:
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
-            (b.text for b in response.content if isinstance(b, anthropic.types.TextBlock)), ""
+            (
+                b.text
+                for b in response.content
+                if isinstance(b, anthropic.types.TextBlock)
+            ),
+            "",
         )
         return dict(json.loads(_json_strip(text)))
     except Exception:
-        logger.exception(
-            "Failed to get vault recommendations for vault %s", vault_id
-        )
+        logger.exception("Failed to get vault recommendations for vault %s", vault_id)
         return {
             "vaultId": vault_id,
             "commentary": "Recommendations temporarily unavailable.",
@@ -717,13 +771,15 @@ def _rank_vaults(
             float(vault.get("apy", 0.0) or 0.0)
             - (float(risk.get("overall", 100.0)) / 100.0) * 3.0
         )
-        ranked.append({
-            "id": vault_id,
-            "name": str(vault.get("name", "Vault")),
-            "apy": apy,
-            "risk": overall,
-            "score": score,
-        })
+        ranked.append(
+            {
+                "id": vault_id,
+                "name": str(vault.get("name", "Vault")),
+                "apy": apy,
+                "risk": overall,
+                "score": score,
+            }
+        )
 
     if not ranked:
         for vault in vaults:
@@ -731,16 +787,18 @@ def _rank_vaults(
             if not vault_id:
                 continue
             risk = risk_scores.get(vault_id, {})
-            ranked.append({
-                "id": vault_id,
-                "name": str(vault.get("name", "Vault")),
-                "apy": float(vault.get("apy", 0.0) or 0.0),
-                "risk": float(risk.get("overall", 100.0)),
-                "score": (
-                    float(vault.get("apy", 0.0) or 0.0)
-                    - (float(risk.get("overall", 100.0)) / 100.0) * 3.0
-                ),
-            })
+            ranked.append(
+                {
+                    "id": vault_id,
+                    "name": str(vault.get("name", "Vault")),
+                    "apy": float(vault.get("apy", 0.0) or 0.0),
+                    "risk": float(risk.get("overall", 100.0)),
+                    "score": (
+                        float(vault.get("apy", 0.0) or 0.0)
+                        - (float(risk.get("overall", 100.0)) / 100.0) * 3.0
+                    ),
+                }
+            )
 
     ranked.sort(key=lambda item: (item["score"], item["apy"]), reverse=True)
     return ranked
@@ -787,7 +845,9 @@ def _build_allocation_plan(
     return plan
 
 
-def _fallback_rationale(request: VaultRecommendationRequest, ranked: list[dict[str, Any]]) -> str:
+def _fallback_rationale(
+    request: VaultRecommendationRequest, ranked: list[dict[str, Any]]
+) -> str:
     if not ranked:
         return (
             "No live vault data was available, so the recommendation follows "
@@ -815,9 +875,7 @@ def _fallback_vault_recommendation(
             if source:
                 weighted_apy += source["apy"] * (item.allocation_pct / 100.0)
     expected = _estimate_expected_yield(
-        request.initial_deposit_usdc,
-        request.time_horizon_months,
-        weighted_apy
+        request.initial_deposit_usdc, request.time_horizon_months, weighted_apy
     )
     if not plan and ranked:
         plan = [
@@ -874,13 +932,15 @@ async def recommend_vaults(
         if source:
             weighted_apy += source["apy"] * (item.allocation_pct / 100.0)
 
-    fallback = fallback.model_copy(update={
-        "expected_yield_usdc": _estimate_expected_yield(
-            request.initial_deposit_usdc,
-            request.time_horizon_months,
-            weighted_apy,
-        ),
-    })
+    fallback = fallback.model_copy(
+        update={
+            "expected_yield_usdc": _estimate_expected_yield(
+                request.initial_deposit_usdc,
+                request.time_horizon_months,
+                weighted_apy,
+            ),
+        }
+    )
 
     vault_context_lines = [
         (
@@ -897,6 +957,7 @@ async def recommend_vaults(
         )
         for v in user_vaults[:5]
     ]
+
     def _vault_context_line(vault: dict[str, Any]) -> str:
         vid = str(vault.get("id", ""))
         risk_overall = risk_scores.get(vid, {}).get("overall", 100.0)
@@ -942,7 +1003,12 @@ async def recommend_vaults(
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
-            (b.text for b in response.content if isinstance(b, anthropic.types.TextBlock)), ""
+            (
+                b.text
+                for b in response.content
+                if isinstance(b, anthropic.types.TextBlock)
+            ),
+            "",
         )
         parsed = json.loads(_json_strip(text))
         plan = [
@@ -977,7 +1043,9 @@ async def analyze_recommendation(
     vault_context_fetcher = get_vault_context_fetcher()
     live_vaults = await vault_context_fetcher.fetch_available_vaults()
     market_rates = await vault_context_fetcher.fetch_market_rates()
-    user_vaults = await vault_context_fetcher.fetch_user_vaults(user_id) if user_id else []
+    user_vaults = (
+        await vault_context_fetcher.fetch_user_vaults(user_id) if user_id else []
+    )
 
     risk_scores: dict[str, dict[str, Any]] = {}
     for vault in live_vaults:
@@ -1023,7 +1091,12 @@ async def analyze_recommendation(
             messages=[{"role": "user", "content": analysis_prompt}],
         )
         text = next(
-            (b.text for b in response.content if isinstance(b, anthropic.types.TextBlock)), ""
+            (
+                b.text
+                for b in response.content
+                if isinstance(b, anthropic.types.TextBlock)
+            ),
+            "",
         )
         parsed = json.loads(_json_strip(text))
         return Recommendation(
@@ -1032,13 +1105,14 @@ async def analyze_recommendation(
             confidence=confidence,
             confidence_reason=str(
                 parsed.get("confidence_reason", confidence_reason)
-            ).strip() or confidence_reason,
-            data_freshness=str(
-                parsed.get("data_freshness", data_freshness)
-            ).strip() or data_freshness,
+            ).strip()
+            or confidence_reason,
+            data_freshness=str(parsed.get("data_freshness", data_freshness)).strip()
+            or data_freshness,
             disclaimer=str(
                 parsed.get("disclaimer", "This is guidance, not financial advice.")
-            ).strip() or "This is guidance, not financial advice.",
+            ).strip()
+            or "This is guidance, not financial advice.",
         )
     except Exception:
         logger.exception("Failed to analyze recommendation prompt")
@@ -1048,12 +1122,245 @@ async def analyze_recommendation(
                 VaultRecommendationRequest(
                     risk_tolerance="moderate",
                     time_horizon_months=12,
-                    initial_deposit_usdc=1.0
+                    initial_deposit_usdc=1.0,
                 ),
-                ranked=[]
+                ranked=[],
             ),
             confidence=confidence,
             confidence_reason=confidence_reason,
             data_freshness=data_freshness,
             disclaimer="This is guidance, not financial advice.",
         )
+
+
+async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
+    """Analyze user's portfolio using Claude tool use to produce structured output.
+
+    Fetches user vault positions and uses Claude's tool use capability to generate
+    structured portfolio breakdown (allocation, risk level, recommendations) along
+    with a narrative explanation.
+
+    Args:
+        user_id: The authenticated user's ID.
+
+    Returns:
+        PortfolioAnalysisResponse with structured analysis and narrative.
+    """
+    vault_context_fetcher = get_vault_context_fetcher()
+    user_vaults = await vault_context_fetcher.fetch_user_vaults(user_id)
+
+    if not user_vaults:
+        return PortfolioAnalysisResponse(
+            analysis=PortfolioBreakdown(
+                total_value_usdc=0.0,
+                yield_30d_usdc=0.0,
+                allocation_breakdown=[],
+                risk_level="moderate",
+                top_recommendation="Start by depositing into a Conservative vault for stability.",
+                rebalance_suggested=False,
+            ),
+            narrative=(
+                "You don't have any active vault positions yet. Start with a "
+                "Conservative vault for stable, low-risk savings."
+            ),
+            confidence="high",
+            generated_at=datetime.now(timezone.utc),
+        )
+
+    # Calculate portfolio totals and build allocation context
+    total_value_usdc = sum(float(v.get("balance_usd", 0) or 0) for v in user_vaults)
+    total_yield_30d = sum(float(v.get("yield_earned", 0) or 0) for v in user_vaults)
+
+    allocation_context_lines = []
+    for vault in user_vaults:
+        vault_name = vault.get("name", "Unknown Vault")
+        balance = float(vault.get("balance_usd", 0) or 0)
+        apy = float(vault.get("apy", 0) or 0)
+        pct = (balance / total_value_usdc * 100) if total_value_usdc > 0 else 0
+        allocation_context_lines.append(
+            f"- {vault_name}: ${balance:,.2f} ({pct:.1f}%), APY {apy:.2f}%"
+        )
+
+    allocation_context = "\n".join(allocation_context_lines)
+
+    # Define Claude tool schema for structured portfolio analysis
+    tools: list[dict[str, Any]] = [
+        {
+            "name": "portfolio_breakdown",
+            "description": (
+                "Return a structured portfolio analysis with allocation "
+                "breakdown and recommendations"
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "total_value_usdc": {
+                        "type": "number",
+                        "description": "Total portfolio value in USDC",
+                    },
+                    "yield_30d_usdc": {
+                        "type": "number",
+                        "description": "Expected yield over next 30 days in USDC",
+                    },
+                    "allocation_breakdown": {
+                        "type": "array",
+                        "description": "Breakdown by protocol with weights and APYs",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "protocol": {
+                                    "type": "string",
+                                    "description": "Protocol or vault name",
+                                },
+                                "weight": {
+                                    "type": "number",
+                                    "description": "Allocation weight as percentage (0-100)",
+                                },
+                                "apy": {
+                                    "type": "number",
+                                    "description": "Current APY for this allocation",
+                                },
+                            },
+                            "required": ["protocol", "weight", "apy"],
+                        },
+                    },
+                    "risk_level": {
+                        "type": "string",
+                        "enum": ["conservative", "moderate", "aggressive"],
+                        "description": "Overall portfolio risk assessment",
+                    },
+                    "top_recommendation": {
+                        "type": "string",
+                        "description": "Primary recommendation for the user",
+                    },
+                    "rebalance_suggested": {
+                        "type": "boolean",
+                        "description": "Whether rebalancing is recommended",
+                    },
+                },
+                "required": [
+                    "total_value_usdc",
+                    "yield_30d_usdc",
+                    "allocation_breakdown",
+                    "risk_level",
+                    "top_recommendation",
+                    "rebalance_suggested",
+                ],
+            },
+        }
+    ]
+
+    # Build analysis prompt with portfolio context
+    analysis_prompt = (
+        "Analyze this Nester user's portfolio and provide structured output "
+        "using the provided tool.\n\n"
+        f"Portfolio Overview:\n"
+        f"Total Value: ${total_value_usdc:,.2f} USDC\n"
+        f"30-day Yield Earned: ${total_yield_30d:,.2f} USDC\n"
+        f"Vault Positions:\n{allocation_context}\n\n"
+        f"Market Context:\n"
+        f"- Platform supports: Aave, Blend, Compound\n"
+        f"- Fee structure: 0.5% management fee on yield\n"
+        f"- Vault types: Flexible, Fixed-30d, Fixed-90d\n\n"
+        "Use the portfolio_breakdown tool to return:\n"
+        "1. Total portfolio value and expected 30-day yield\n"
+        "2. Allocation breakdown by protocol with weights and APYs\n"
+        "3. Overall risk level assessment\n"
+        "4. Top recommendation for optimization\n"
+        "5. Whether rebalancing is suggested\n\n"
+        "Base your analysis on the current positions shown above."
+    )
+
+    client = get_client()
+    structured_data = None
+    confidence: ConfidenceLevel = "medium"
+
+    try:
+        response = await client.messages.create(
+            model=settings.anthropic_model,
+            max_tokens=1000,
+            system=SYSTEM_PROMPT,
+            tools=tools,  # type: ignore[arg-type]
+            messages=[{"role": "user", "content": analysis_prompt}],
+        )
+
+        # Extract tool use block from response
+        tool_use_block = None
+        for block in response.content:
+            if block.type == "tool_use":
+                tool_use_block = block
+                break
+
+        if tool_use_block:
+            # Parse tool input as structured portfolio data
+            tool_input: dict[str, Any] = cast(dict[str, Any], tool_use_block.input)
+
+            # Validate and construct models
+            allocation_items = [
+                AllocationItem(
+                    protocol=item["protocol"],
+                    weight=float(item["weight"]),
+                    apy=float(item["apy"]),
+                )
+                for item in tool_input.get("allocation_breakdown", [])
+            ]
+
+            structured_data = PortfolioBreakdown(
+                total_value_usdc=float(
+                    tool_input.get("total_value_usdc", total_value_usdc)
+                ),
+                yield_30d_usdc=float(tool_input.get("yield_30d_usdc", total_yield_30d)),
+                allocation_breakdown=allocation_items,
+                risk_level=tool_input.get("risk_level", "moderate"),
+                top_recommendation=str(tool_input.get("top_recommendation", "")),
+                rebalance_suggested=bool(tool_input.get("rebalance_suggested", False)),
+            )
+            confidence = "high"
+        else:
+            logger.warning(
+                "No tool_use block found in Claude response for portfolio analysis"
+            )
+
+    except Exception as exc:
+        logger.exception(
+            "Failed to parse Claude tool use response for portfolio: %s", exc
+        )
+
+    # Fallback to structured response if tool use failed
+    if not structured_data:
+        structured_data = PortfolioBreakdown(
+            total_value_usdc=total_value_usdc,
+            yield_30d_usdc=total_yield_30d,
+            allocation_breakdown=[
+                AllocationItem(
+                    protocol=v.get("name", "Unknown"),
+                    weight=(
+                        (float(v.get("balance_usd", 0) or 0) / total_value_usdc * 100)
+                        if total_value_usdc > 0
+                        else 0
+                    ),
+                    apy=float(v.get("apy", 0) or 0),
+                )
+                for v in user_vaults
+            ],
+            risk_level="moderate",
+            top_recommendation="Review your allocation across your vaults.",
+            rebalance_suggested=False,
+        )
+        confidence = "medium"
+
+    # Generate narrative explanation
+    narrative = (
+        f"Your Nester portfolio has a total value of ${total_value_usdc:,.2f} "
+        f"USDC across {len(user_vaults)} vault(s). Over the last 30 days, "
+        f"you've earned ${total_yield_30d:,.2f} in yield. "
+        f"Your portfolio risk level is {structured_data.risk_level}. "
+        f"{structured_data.top_recommendation}"
+    )
+
+    return PortfolioAnalysisResponse(
+        analysis=structured_data,
+        narrative=narrative,
+        confidence=confidence,
+        generated_at=datetime.now(timezone.utc),
+    )

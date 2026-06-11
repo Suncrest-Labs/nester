@@ -283,6 +283,13 @@ export function Footer() {
         </div>
 
         <div className="flex items-center gap-4">
+          <button
+            onClick={() => window.dispatchEvent(new Event("open-cookie-consent"))}
+            className="text-[11px] font-mono text-black/20 hover:text-black/50 transition-colors duration-200"
+          >
+            Preferences
+          </button>
+          <span className="w-px h-3 bg-black/[0.12]" />
           <Link
             href="#"
             className="text-[11px] font-mono text-black/20 hover:text-black/50 transition-colors duration-200"

@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -42,14 +43,15 @@ type destinationRequest struct {
 }
 
 type initiateSettlementRequest struct {
-	UserID       string             `json:"user_id"`
-	VaultID      string             `json:"vault_id"`
-	Amount       string             `json:"amount"`
-	Currency     string             `json:"currency"`
-	FiatCurrency string             `json:"fiat_currency"`
-	FiatAmount   string             `json:"fiat_amount"`
-	ExchangeRate string             `json:"exchange_rate"`
-	Destination  destinationRequest `json:"destination"`
+	UserID        string              `json:"user_id"`
+	VaultID       string              `json:"vault_id"`
+	Amount        string              `json:"amount"`
+	Currency      string              `json:"currency"`
+	FiatCurrency  string              `json:"fiat_currency"`
+	FiatAmount    string              `json:"fiat_amount"`
+	ExchangeRate  string              `json:"exchange_rate"`
+	BankAccountID *string             `json:"bank_account_id,omitempty"`
+	Destination   *destinationRequest `json:"destination,omitempty"`
 }
 
 type updateStatusRequest struct {
@@ -112,7 +114,7 @@ func (h *SettlementHandler) initiateSettlement(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	model, err := h.service.InitiateSettlement(r.Context(), service.InitiateSettlementInput{
+	input := service.InitiateSettlementInput{
 		UserID:       userID,
 		VaultID:      vaultID,
 		Amount:       amount,
@@ -120,14 +122,28 @@ func (h *SettlementHandler) initiateSettlement(w http.ResponseWriter, r *http.Re
 		FiatCurrency: req.FiatCurrency,
 		FiatAmount:   fiatAmount,
 		ExchangeRate: exchangeRate,
-		Destination: offramp.Destination{
+	}
+	if req.BankAccountID != nil && strings.TrimSpace(*req.BankAccountID) != "" {
+		acctID, parseErr := uuid.Parse(strings.TrimSpace(*req.BankAccountID))
+		if parseErr != nil {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("bank_account_id must be a valid UUID"))
+			return
+		}
+		input.BankAccountID = &acctID
+	} else if req.Destination != nil {
+		input.Destination = offramp.Destination{
 			Type:          req.Destination.Type,
 			Provider:      req.Destination.Provider,
 			AccountNumber: req.Destination.AccountNumber,
 			AccountName:   req.Destination.AccountName,
 			BankCode:      req.Destination.BankCode,
-		},
-	})
+		}
+	} else {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("either bank_account_id or destination is required"))
+		return
+	}
+
+	model, err := h.service.InitiateSettlement(r.Context(), input)
 	if err != nil {
 		h.writeDomainError(w, r, err)
 		return

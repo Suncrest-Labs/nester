@@ -31,9 +31,9 @@ type Config struct {
 	apyRefresh            APYRefreshConfig
 	startup               StartupConfig
 	bank                  BankConfig
+	bankAccountCipherKey  string
 	transactionPoller     TransactionPollerConfig
 }
-
 
 // TransactionPollerConfig governs the background loop that reconciles pending
 // transactions against Horizon (see internal/service.TransactionPoller).
@@ -229,11 +229,16 @@ func Load() (*Config, error) {
 			paystackKey:    loader.stringDefault("PAYSTACK_SECRET_KEY", ""),
 			flutterwaveKey: loader.stringDefault("FLUTTERWAVE_SECRET_KEY", ""),
 		},
+		bankAccountCipherKey: loader.stringDefault("BANK_ACCOUNT_ENCRYPTION_KEY", ""),
 		transactionPoller: TransactionPollerConfig{
 			enabled:  loader.boolDefault("TX_POLLER_ENABLED", true),
 			interval: loader.durationDefault("TX_POLLER_INTERVAL", 15*time.Second),
 			minAge:   loader.durationDefault("TX_POLLER_MIN_AGE", 30*time.Second),
 		},
+	}
+
+	if cfg.bankAccountCipherKey == "" && environment == "development" {
+		cfg.bankAccountCipherKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 	}
 
 
@@ -368,6 +373,10 @@ func (r RedisConfig) Addr() string {
 
 func (c Config) Bank() BankConfig {
 	return c.bank
+}
+
+func (c Config) BankAccountEncryptionKey() string {
+	return c.bankAccountCipherKey
 }
 
 func (c Config) TransactionPoller() TransactionPollerConfig {

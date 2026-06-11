@@ -8,6 +8,7 @@ import { ShieldCheck, User, Bell, Globe } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { useWallet } from "@/components/wallet-provider";
 import { KYCSection, type KYCStatus } from "@/components/kyc/KYCSection";
+import { BankAccountsSection } from "@/components/settings/bank-accounts-section";
 import { cn } from "@/lib/utils";
 
 type Tab = "profile" | "verification" | "notifications" | "preferences";
@@ -195,6 +196,7 @@ export default function SettingsPage() {
                                             <option value="NGN">NGN (₦)</option>
                                         </select>
                                     </div>
+                                    <BankAccountsSection />
                                 </div>
                             </motion.div>
                         )}

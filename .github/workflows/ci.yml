@@ -291,6 +291,24 @@ jobs:
           go-version-file: apps/api/go.mod
           cache: true
 
+      - name: Check migration collisions
+        run: |
+          COLLISIONS=$(ls migrations/*.sql \
+            | sed -E 's/\.(up|down)\.sql$//' \
+            | sort -u \
+            | sed -E 's/.*\/([0-9]+)_.*/\1/' \
+            | sort | uniq -d)
+          if [ -n "$COLLISIONS" ]; then
+            echo "FAIL: duplicate migration prefixes found:"
+            for prefix in $COLLISIONS; do
+              echo "Prefix $prefix:"
+              ls migrations/${prefix}_*.sql
+            done
+            exit 1
+          else
+            echo "OK: No migration prefix collisions."
+          fi
+
       - name: Build
         run: go build ./...
 

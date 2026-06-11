@@ -43,6 +43,7 @@ const (
 	EventSettlementCompleted EventType = "settlement_completed"
 	EventSettlementFailed    EventType = "settlement_failed"
 	EventDepositConfirmed    EventType = "deposit_confirmed"
+	EventYieldMilestone      EventType = "yield_milestone"
 	EventVaultAPYDrop        EventType = "vault_apy_drop"
 	EventVaultPaused         EventType = "vault_paused"
 	EventRebalanceExecuted   EventType = "rebalance_executed"
@@ -56,15 +57,17 @@ type ChannelKind string
 const (
 	ChannelEmail     ChannelKind = "email"
 	ChannelWebSocket ChannelKind = "websocket"
+	ChannelPush      ChannelKind = "push"
 )
 
 // eventChannelMatrix is the routing table from the issue. The dispatcher
 // computes the union of channels per event, then filters by the user's
 // preferences.
 var eventChannelMatrix = map[EventType][]ChannelKind{
-	EventSettlementCompleted: {ChannelEmail, ChannelWebSocket},
-	EventSettlementFailed:    {ChannelEmail, ChannelWebSocket},
-	EventDepositConfirmed:    {ChannelEmail, ChannelWebSocket},
+	EventSettlementCompleted: {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventSettlementFailed:    {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventDepositConfirmed:    {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventYieldMilestone:      {ChannelPush},
 	EventVaultAPYDrop:        {ChannelEmail},
 	EventVaultPaused:         {ChannelEmail, ChannelWebSocket},
 	EventRebalanceExecuted:   {ChannelWebSocket},
@@ -84,16 +87,17 @@ func ChannelsFor(t EventType) []ChannelKind {
 	return out
 }
 
-// Preferences captures the user's per-channel opt-out. Both default to
+// Preferences captures the user's per-channel opt-out. All channels default to
 // `true` (notifications on) when no row exists yet.
 type Preferences struct {
-	Email     bool
-	WebSocket bool
+	Email     bool `json:"email"`
+	WebSocket bool `json:"websocket"`
+	Push      bool `json:"push"`
 }
 
 // DefaultPreferences returns the "everything on" baseline new users get
 // before they explicitly opt out.
-func DefaultPreferences() Preferences { return Preferences{Email: true, WebSocket: true} }
+func DefaultPreferences() Preferences { return Preferences{Email: true, WebSocket: true, Push: true} }
 
 // Allow returns whether the given channel is permitted by the preferences.
 func (p Preferences) Allow(c ChannelKind) bool {
@@ -102,6 +106,8 @@ func (p Preferences) Allow(c ChannelKind) bool {
 		return p.Email
 	case ChannelWebSocket:
 		return p.WebSocket
+	case ChannelPush:
+		return p.Push
 	default:
 		return false
 	}
@@ -118,6 +124,18 @@ type Notification struct {
 	Body      string
 	Payload   map[string]any
 	CreatedAt time.Time
+}
+
+// DeviceToken is a mobile push destination registered by a user device.
+type DeviceToken struct {
+	ID         uuid.UUID `json:"id"`
+	UserID     uuid.UUID `json:"user_id"`
+	Token      string    `json:"token"`
+	Platform   string    `json:"platform"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at,omitempty"`
+	LastSeenAt time.Time `json:"last_seen_at,omitempty"`
 }
 
 // Channel is one transport adapter. Implementations must be safe to call
@@ -139,6 +157,11 @@ type PreferenceStore interface {
 // Postgres-backed implementation along with the migration.
 type PersistenceStore interface {
 	Save(ctx context.Context, n Notification) error
+}
+
+// DeviceTokenStore lists active mobile push destinations for a user.
+type DeviceTokenStore interface {
+	ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]DeviceToken, error)
 }
 
 // NoopPersistenceStore is the MVP default — it discards. The dispatcher
@@ -303,6 +326,48 @@ func (c *WebSocketChannel) Deliver(ctx context.Context, n Notification) error {
 	return c.hub.PushToUser(ctx, n.UserID, "notification", n)
 }
 
+// PushSender is the provider seam for FCM, Expo, or any other mobile push
+// transport. The API stores device tokens; the concrete sender owns provider
+// credentials and delivery details.
+type PushSender interface {
+	Send(ctx context.Context, tokens []string, title string, body string, payload map[string]any) error
+}
+
+// PushChannel sends notifications to every active device token for the user.
+type PushChannel struct {
+	sender PushSender
+	tokens DeviceTokenStore
+}
+
+// NewPushChannel constructs a push notification transport adapter.
+func NewPushChannel(sender PushSender, tokens DeviceTokenStore) *PushChannel {
+	return &PushChannel{sender: sender, tokens: tokens}
+}
+
+// Kind reports ChannelPush.
+func (c *PushChannel) Kind() ChannelKind { return ChannelPush }
+
+// Deliver looks up active device tokens and sends one provider request.
+func (c *PushChannel) Deliver(ctx context.Context, n Notification) error {
+	devices, err := c.tokens.ListDeviceTokens(ctx, n.UserID)
+	if err != nil {
+		return err
+	}
+
+	tokens := make([]string, 0, len(devices))
+	for _, device := range devices {
+		if !device.Enabled || device.Token == "" {
+			continue
+		}
+		tokens = append(tokens, device.Token)
+	}
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	return c.sender.Send(ctx, tokens, n.Title, n.Body, n.Payload)
+}
+
 // --- Test doubles for use by external callers' integration tests ---
 
 // RecordingMailSender captures every send. Safe for concurrent use.
@@ -343,6 +408,69 @@ func (r *RecordingHub) PushToUser(_ context.Context, userID uuid.UUID, eventName
 	defer r.mu.Unlock()
 	r.Calls = append(r.Calls, RecordedPush{UserID: userID, EventName: eventName, Payload: payload})
 	return nil
+}
+
+// RecordingPushSender captures every push send. Safe for concurrent use.
+type RecordingPushSender struct {
+	mu    sync.Mutex
+	Calls []RecordedPushNotification
+}
+
+// RecordedPushNotification is one captured push provider call.
+type RecordedPushNotification struct {
+	Tokens  []string
+	Title   string
+	Body    string
+	Payload map[string]any
+}
+
+// Send records the push request.
+func (r *RecordingPushSender) Send(_ context.Context, tokens []string, title string, body string, payload map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	copiedTokens := make([]string, len(tokens))
+	copy(copiedTokens, tokens)
+	r.Calls = append(r.Calls, RecordedPushNotification{
+		Tokens:  copiedTokens,
+		Title:   title,
+		Body:    body,
+		Payload: payload,
+	})
+	return nil
+}
+
+// MemoryDeviceTokens is an in-memory DeviceTokenStore for tests.
+type MemoryDeviceTokens struct {
+	mu     sync.Mutex
+	tokens map[uuid.UUID][]DeviceToken
+}
+
+// NewMemoryDeviceTokens returns an empty in-memory token store.
+func NewMemoryDeviceTokens() *MemoryDeviceTokens {
+	return &MemoryDeviceTokens{tokens: map[uuid.UUID][]DeviceToken{}}
+}
+
+// ListDeviceTokens implements DeviceTokenStore.
+func (m *MemoryDeviceTokens) ListDeviceTokens(_ context.Context, userID uuid.UUID) ([]DeviceToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	items := m.tokens[userID]
+	out := make([]DeviceToken, len(items))
+	copy(out, items)
+	return out, nil
+}
+
+// Set replaces a user's device tokens. Returns the receiver for chaining.
+func (m *MemoryDeviceTokens) Set(userID uuid.UUID, tokens []DeviceToken) *MemoryDeviceTokens {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	copied := make([]DeviceToken, len(tokens))
+	copy(copied, tokens)
+	m.tokens[userID] = copied
+	return m
 }
 
 // StaticEmailLookup is a fake EmailLookup that returns a fixed address.

@@ -100,7 +100,7 @@ func validInput() service.InitiateSettlementInput {
 // ── Tests: InitiateSettlement ─────────────────────────────────────────────────
 
 func TestInitiateSettlement_CreatesInInitiatedStatus(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 
 	s, err := svc.InitiateSettlement(context.Background(), validInput())
 	if err != nil {
@@ -115,7 +115,7 @@ func TestInitiateSettlement_CreatesInInitiatedStatus(t *testing.T) {
 }
 
 func TestInitiateSettlement_ReturnsIDAndAllFields(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	in := validInput()
 
 	s, err := svc.InitiateSettlement(context.Background(), in)
@@ -141,7 +141,7 @@ func TestInitiateSettlement_ReturnsIDAndAllFields(t *testing.T) {
 }
 
 func TestInitiateSettlement_NilUserIDReturnsError(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	in := validInput()
 	in.UserID = uuid.Nil
 
@@ -152,7 +152,7 @@ func TestInitiateSettlement_NilUserIDReturnsError(t *testing.T) {
 }
 
 func TestInitiateSettlement_ZeroAmountReturnsError(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	in := validInput()
 	in.Amount = decimal.Zero
 
@@ -163,7 +163,7 @@ func TestInitiateSettlement_ZeroAmountReturnsError(t *testing.T) {
 }
 
 func TestInitiateSettlement_EmptyCurrencyReturnsError(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	in := validInput()
 	in.Currency = "   "
 
@@ -174,7 +174,7 @@ func TestInitiateSettlement_EmptyCurrencyReturnsError(t *testing.T) {
 }
 
 func TestInitiateSettlement_EmptyAccountNumberReturnsError(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	in := validInput()
 	in.Destination.AccountNumber = ""
 
@@ -185,7 +185,7 @@ func TestInitiateSettlement_EmptyAccountNumberReturnsError(t *testing.T) {
 }
 
 func TestInitiateSettlement_BankTransferRequiresBankCode(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	in := validInput()
 	in.Destination.Type = "bank_transfer"
 	in.Destination.BankCode = "" // missing
@@ -199,7 +199,7 @@ func TestInitiateSettlement_BankTransferRequiresBankCode(t *testing.T) {
 // ── Tests: GetSettlement ──────────────────────────────────────────────────────
 
 func TestGetSettlement_ReturnsExistingRecord(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 
 	created, _ := svc.InitiateSettlement(context.Background(), validInput())
 	fetched, err := svc.GetSettlement(context.Background(), created.ID)
@@ -212,7 +212,7 @@ func TestGetSettlement_ReturnsExistingRecord(t *testing.T) {
 }
 
 func TestGetSettlement_UnknownIDReturnsNotFound(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 
 	_, err := svc.GetSettlement(context.Background(), uuid.New())
 	if !errors.Is(err, offramp.ErrSettlementNotFound) {
@@ -223,7 +223,7 @@ func TestGetSettlement_UnknownIDReturnsNotFound(t *testing.T) {
 // ── Tests: GetUserSettlements ─────────────────────────────────────────────────
 
 func TestGetUserSettlements_ReturnsAllForUser(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 
 	in := validInput()
 	svc.InitiateSettlement(context.Background(), in)
@@ -240,7 +240,7 @@ func TestGetUserSettlements_ReturnsAllForUser(t *testing.T) {
 
 func TestGetUserSettlements_FilterByStatus(t *testing.T) {
 	repo := newStubRepo()
-	svc := service.NewSettlementService(repo)
+	svc := service.NewSettlementService(repo, nil)
 
 	in := validInput()
 	s1, _ := svc.InitiateSettlement(context.Background(), in)
@@ -267,7 +267,7 @@ func TestGetUserSettlements_FilterByStatus(t *testing.T) {
 }
 
 func TestGetUserSettlements_InvalidStatusReturnsError(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 
 	_, _, _, err := svc.ListUserSettlements(context.Background(), uuid.New(), offramp.UserListFilter{Status: "nonsense"})
 	if !errors.Is(err, offramp.ErrInvalidStatus) {
@@ -278,7 +278,7 @@ func TestGetUserSettlements_InvalidStatusReturnsError(t *testing.T) {
 // ── Tests: UpdateStatus / state machine ─────────────────────────────────────
 
 func TestUpdateStatus_FullLifecycleToConfirmed(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
@@ -310,7 +310,7 @@ func TestUpdateStatus_FullLifecycleToConfirmed(t *testing.T) {
 }
 
 func TestUpdateStatus_FullLifecycleToFailed(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
@@ -332,7 +332,7 @@ func TestUpdateStatus_FullLifecycleToFailed(t *testing.T) {
 }
 
 func TestUpdateStatus_FailedAfterLiquidityMatched(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
@@ -352,7 +352,7 @@ func TestUpdateStatus_FailedAfterLiquidityMatched(t *testing.T) {
 }
 
 func TestUpdateStatus_InvalidTransitionRejected(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
@@ -369,7 +369,7 @@ func TestUpdateStatus_InvalidTransitionRejected(t *testing.T) {
 }
 
 func TestUpdateStatus_CannotLeaveConfirmed(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
@@ -388,7 +388,7 @@ func TestUpdateStatus_CannotLeaveConfirmed(t *testing.T) {
 }
 
 func TestUpdateStatus_CannotLeaveFailed(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
@@ -405,7 +405,7 @@ func TestUpdateStatus_CannotLeaveFailed(t *testing.T) {
 }
 
 func TestUpdateStatus_NotFoundForNonOwner(t *testing.T) {
-	svc := service.NewSettlementService(newStubRepo())
+	svc := service.NewSettlementService(newStubRepo(), nil)
 	ctx := context.Background()
 
 	s, _ := svc.InitiateSettlement(ctx, validInput())
