@@ -1,6 +1,6 @@
 "use client";
 
-import { useSession } from "next-auth/react";
+import { useWallet } from "@/components/wallet-provider";
 import { useState, useEffect } from "react";
 import PortfolioChart from "@/components/analytics/PortfolioChart";
 import { VaultComparison } from "@/components/analytics/VaultComparison";
@@ -44,14 +44,14 @@ interface AnalyticsData {
 }
 
 export default function AnalyticsPage() {
-  const { data: session } = useSession();
+  const { address } = useWallet();
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<string>("30"); // default 30 days
 
   useEffect(() => {
-    if (!session?.user?.id) return;
+    if (!address) return;
     const fetchData = async () => {
       setLoading(true);
       setError(null);
@@ -60,7 +60,7 @@ export default function AnalyticsPage() {
         from.setDate(from.getDate() - parseInt(timeRange));
         const to = new Date();
         const response = await fetch(
-          `/api/v1/users/${session.user.id}/analytics?from=${from.toISOString().split('T')[0]}&to=${to.toISOString().split('T')[0]}`
+          `/api/v1/users/${address}/analytics?from=${from.toISOString().split('T')[0]}&to=${to.toISOString().split('T')[0]}`
         );
         if (!response.ok) throw new Error("Failed to fetch analytics");
         const data = await response.json();
@@ -72,7 +72,7 @@ export default function AnalyticsPage() {
       }
     };
     fetchData();
-  }, [session?.user?.id, timeRange]);
+  }, [address, timeRange]);
 
   if (loading) return <div className="flex h-[600px] items-center justify-center">Loading...</div>;
   if (error) return <div className="flex h-[600px] items-center justify-center text-red-500">{error}</div>;

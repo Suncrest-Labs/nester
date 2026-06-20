@@ -37,7 +37,7 @@ class _RedisConversationStore:
             logger.warning(
                 "conversation store: redis unavailable (%s), will fall back to in-memory", exc
             )
-            self._client = None  # type: ignore[assignment]
+            self._client = None
             self._available = False
 
     def _key(self, user_id: str) -> str:
@@ -49,7 +49,7 @@ class _RedisConversationStore:
             return []
 
         try:
-            raw: Optional[str] = self._client.get(self._key(user_id))  # type: ignore[assignment]
+            raw: Optional[str] = self._client.get(self._key(user_id))
             if not raw:
                 return []
             try:
