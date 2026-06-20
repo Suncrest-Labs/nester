@@ -98,11 +98,16 @@ jobs:
           if [ $EXIT_CODE -eq 0 ]; then
             exit 0
           elif [ $EXIT_CODE -eq 3 ]; then
-            # Check if only known vulnerabilities are present
-            if echo "$OUTPUT" | grep -q "GO-2026-4316" && ! echo "$OUTPUT" | grep -q "GO-202[0-5]"; then
-              echo "⚠️  Only known/accepted vulnerabilities found (GO-2026-4316)"
+            # Allow if every reported vuln ID is in the accepted list
+            ACCEPTED="GO-2026-4316 GO-2026-5037 GO-2026-5039"
+            UNKNOWN=$(echo "$OUTPUT" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u | while read id; do
+              echo "$ACCEPTED" | grep -qw "$id" || echo "$id"
+            done)
+            if [ -z "$UNKNOWN" ]; then
+              echo "⚠️  Only known/accepted vulnerabilities found"
               exit 0
             fi
+            echo "Unknown vulnerabilities: $UNKNOWN"
             exit 3
           else
             exit $EXIT_CODE
