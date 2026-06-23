@@ -182,10 +182,9 @@ func (h *PerformanceHandler) apyHistory(w http.ResponseWriter, r *http.Request) 
 	if period == "" {
 		period = "30d"
 	}
-	switch period {
-	case "7d", "30d", "90d", "all":
-	default:
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("period must be 7d, 30d, 90d, or all"))
+	// Validate period using parsePeriodDays (accepts any valid Nd or "all")
+	if _, err := parsePeriodDays(period); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 		return
 	}
 

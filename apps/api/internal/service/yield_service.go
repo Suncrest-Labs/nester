@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -37,6 +41,7 @@ type YieldService struct {
 	cacheMu       sync.Mutex
 	cache         map[string]yieldCacheEntry
 	cacheTTL      time.Duration
+	minTVLUsd     float64
 }
 
 const defaultYieldCacheTTL = 5 * time.Minute
@@ -45,11 +50,18 @@ func NewYieldService(defiLlamaURL string) *YieldService {
 	if defiLlamaURL == "" {
 		defiLlamaURL = "https://yields.llama.fi"
 	}
+	minTVL := 100_000.0
+	if v := os.Getenv("YIELD_MIN_TVL_USD"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil && parsed > 0 {
+			minTVL = parsed
+		}
+	}
 	return &YieldService{
 		httpClient:   &http.Client{Timeout: 15 * time.Second},
 		defiLlamaURL: defiLlamaURL,
 		cache:        make(map[string]yieldCacheEntry),
 		cacheTTL:     defaultYieldCacheTTL,
+		minTVLUsd:    minTVL,
 	}
 }
 
@@ -101,10 +113,14 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 	}
 
 	pools := make([]YieldPool, 0, 64)
+	totalFetched := len(raw.Data)
+	afterChainFilter := 0
+	afterTVLFilter := 0
 	for _, p := range raw.Data {
 		if p.Chain != chain {
 			continue
 		}
+		afterChainFilter++
 		pool := YieldPool{
 			Pool:    p.Pool,
 			Project: p.Project,
@@ -123,6 +139,10 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 		if p.TVLUsd != nil {
 			pool.TVLUsd = *p.TVLUsd
 		}
+		if pool.TVLUsd < s.minTVLUsd {
+			continue
+		}
+		afterTVLFilter++
 		pool.APYPct7d = p.APYPct7d
 
 		var apy7dSwing float64
@@ -133,9 +153,14 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 		if pool.APY > 0 {
 			rewardRatio = pool.APYReward / pool.APY
 		}
-		pool.RiskScore = computeRiskScore(pool.TVLUsd, apy7dSwing, rewardRatio)
+		pool.RiskScore = ComputeRiskScore(pool.TVLUsd, apy7dSwing, rewardRatio)
 		pools = append(pools, pool)
 	}
+	slog.Debug("yield pools filtered",
+		"total_fetched", totalFetched,
+		"after_chain_filter", afterChainFilter,
+		"after_tvl_filter", afterTVLFilter,
+	)
 
 	// Sort by risk-adjusted APY descending.
 	sort.Slice(pools, func(i, j int) bool {
@@ -150,19 +175,19 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 	return pools, nil
 }
 
-// computeRiskScore derives a deterministic risk score in [0.0, 1.0] from three
-// DeFiLlama signals:
-//   - tvl < $100k → +0.4 (low liquidity, higher protocol risk)
-//   - |apy7dSwing| > 20% → +0.3 (high volatility)
-//   - rewardRatio > 0.8 → +0.2 (incentive-heavy pools are less sustainable)
+// ComputeRiskScore returns a risk score in [0.0, 1.0] from multiple signals.
+// Each signal contributes additively; the result is clamped so it never
+// exceeds 1.0 or drops below 0.0.
 //
-// The result is clamped to [0.0, 1.0]. Lower score = safer pool.
-func computeRiskScore(tvl, apy7dSwing, rewardRatio float64) float64 {
+//   - tvlUsd < 100_000 adds 0.4 (low-liquidity penalty)
+//   - |apy7dSwing| > 20 adds 0.3 (high APY volatility penalty)
+//   - rewardRatio > 0.8 adds 0.2 (heavy reward-token dependency penalty)
+func ComputeRiskScore(tvlUsd, apy7dSwing, rewardRatio float64) float64 {
 	var score float64
-	if tvl < 100_000 {
+	if tvlUsd < 100_000 {
 		score += 0.4
 	}
-	if apy7dSwing > 20 || apy7dSwing < -20 {
+	if math.Abs(apy7dSwing) > 20 {
 		score += 0.3
 	}
 	if rewardRatio > 0.8 {
@@ -171,7 +196,25 @@ func computeRiskScore(tvl, apy7dSwing, rewardRatio float64) float64 {
 	if score > 1.0 {
 		return 1.0
 	}
+	if score < 0.0 {
+		return 0.0
+	}
 	return score
+}
+
+// riskScore computes a normalised [0.0, 1.0] risk score for a pool by
+// delegating to ComputeRiskScore with the pool's TVL, 7-day APY swing, and
+// reward-to-total-APY ratio.
+func riskScore(p YieldPool) float64 {
+	var apy7dSwing float64
+	if p.APYPct7d != nil {
+		apy7dSwing = *p.APYPct7d
+	}
+	var rewardRatio float64
+	if p.APY > 0 {
+		rewardRatio = p.APYReward / p.APY
+	}
+	return ComputeRiskScore(p.TVLUsd, apy7dSwing, rewardRatio)
 }
 
 // riskAdjustedAPY penalises high-risk, low-TVL pools.

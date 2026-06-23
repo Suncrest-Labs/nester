@@ -101,8 +101,10 @@ func (s *SorobanVaultChainInvoker) HarvestVault(
 }
 
 // PreviewWithdrawNet calls preview_withdraw_net on the vault contract and
-// returns the net amount (in stroops) the user receives after all fees.
-// Use this value as min_assets_out when building a withdraw transaction.
+// returns the POST-FEE net amount (in stroops) the user actually receives after
+// all vault fees have been deducted. This is the correct value to use as
+// min_assets_out when building a withdraw transaction — WithdrawFromVault
+// already uses this method for its slippage guard.
 func (s *SorobanVaultChainInvoker) PreviewWithdrawNet(ctx context.Context, contractAddress string, sharesStroops int64) (int64, error) {
 	val, err := s.invoker.QueryWithI128Arg(ctx, contractAddress, "preview_withdraw_net", sharesStroops)
 	if err != nil {
@@ -125,6 +127,12 @@ func (s *SorobanVaultChainInvoker) PreviewDeposit(ctx context.Context, contractA
 	return int64(val.I128.Lo), nil
 }
 
+// PreviewWithdraw calls preview_withdraw on the vault contract and returns the
+// GROSS PRE-FEE amount (in stroops) — the raw share-to-asset conversion before
+// any vault fees are applied. This value is higher than what the user will
+// actually receive. Callers that need the net (post-fee) amount MUST use
+// PreviewWithdrawNet instead. The slippage guard in WithdrawFromVault already
+// uses PreviewWithdrawNet to avoid over-estimating the minimum assets out.
 func (s *SorobanVaultChainInvoker) PreviewWithdraw(ctx context.Context, contractAddress string, sharesStroops int64) (int64, error) {
 	val, err := s.invoker.QueryWithI128Arg(ctx, contractAddress, "preview_withdraw", sharesStroops)
 	if err != nil {
