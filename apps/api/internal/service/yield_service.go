@@ -28,6 +28,19 @@ type YieldPool struct {
 type yieldCacheEntry struct {
 	pools     []YieldPool
 	expiresAt time.Time
+	fetchedAt time.Time
+}
+
+// YieldMeta contains metadata about the yield data (staleness, age, etc.)
+type YieldMeta struct {
+	Stale     bool   `json:"stale"`
+	FetchedAt string `json:"fetched_at,omitempty"`
+}
+
+// YieldOpportunitiesResponse wraps pools with metadata about data freshness
+type YieldOpportunitiesResponse struct {
+	Pools []YieldPool `json:"data"`
+	Meta  YieldMeta   `json:"meta"`
 }
 
 // YieldService aggregates DeFiLlama yield pool data for a given chain.
@@ -40,6 +53,7 @@ type YieldService struct {
 }
 
 const defaultYieldCacheTTL = 5 * time.Minute
+const maxStaleDataAge = 30 * time.Minute
 
 func NewYieldService(defiLlamaURL string) *YieldService {
 	if defiLlamaURL == "" {
@@ -69,12 +83,50 @@ type defiLlamaPoolsResponse struct {
 
 // GetYieldOpportunities fetches pools for the given chain from DeFiLlama,
 // scores them by risk-adjusted APY, and returns the top `limit` results.
-func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, limit int) ([]YieldPool, error) {
+// Falls back to stale cache (up to 30 minutes old) if upstream is unavailable.
+func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, limit int) (*YieldOpportunitiesResponse, error) {
 	cacheKey := fmt.Sprintf("%s:%d", chain, limit)
+	
+	// Try fresh cache first
 	if cached := s.fromCache(cacheKey); cached != nil {
-		return cached, nil
+		return &YieldOpportunitiesResponse{
+			Pools: cached,
+			Meta: YieldMeta{
+				Stale: false,
+			},
+		}, nil
 	}
 
+	// Try to fetch from upstream
+	pools, fetchErr := s.fetchFromUpstream(ctx, chain, limit)
+	if fetchErr == nil {
+		// Success: cache and return
+		s.toCache(cacheKey, pools)
+		return &YieldOpportunitiesResponse{
+			Pools: pools,
+			Meta: YieldMeta{
+				Stale: false,
+			},
+		}, nil
+	}
+
+	// Upstream failed: try stale cache
+	if stale := s.fromStaleCache(cacheKey); stale != nil {
+		return &YieldOpportunitiesResponse{
+			Pools: stale,
+			Meta: YieldMeta{
+				Stale:     true,
+				FetchedAt: s.getStaleFetchedAt(cacheKey),
+			},
+		}, nil
+	}
+
+	// No data available at all
+	return nil, fetchErr
+}
+
+// fetchFromUpstream retrieves and processes yield data from DeFiLlama
+func (s *YieldService) fetchFromUpstream(ctx context.Context, chain string, limit int) ([]YieldPool, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", s.defiLlamaURL+"/pools", nil)
 	if err != nil {
 		return nil, fmt.Errorf("build defillama request: %w", err)
@@ -137,7 +189,6 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 		pools = pools[:limit]
 	}
 
-	s.toCache(cacheKey, pools)
 	return pools, nil
 }
 
@@ -165,6 +216,7 @@ func riskAdjustedAPY(p YieldPool) float64 {
 	return p.APY * (1 - penalty)
 }
 
+// fromCache returns cached pools if they exist and are not expired
 func (s *YieldService) fromCache(key string) []YieldPool {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
@@ -175,8 +227,40 @@ func (s *YieldService) fromCache(key string) []YieldPool {
 	return entry.pools
 }
 
+// fromStaleCache returns cached pools if they exist (regardless of expiry)
+// and are not older than maxStaleDataAge
+func (s *YieldService) fromStaleCache(key string) []YieldPool {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	entry, ok := s.cache[key]
+	if !ok {
+		return nil
+	}
+	// Check if stale data is too old (older than 30 minutes)
+	if time.Since(entry.fetchedAt) > maxStaleDataAge {
+		return nil
+	}
+	return entry.pools
+}
+
+// getStaleFetchedAt returns the RFC3339 formatted timestamp of when the cache was last fetched
+func (s *YieldService) getStaleFetchedAt(key string) string {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	entry, ok := s.cache[key]
+	if !ok {
+		return ""
+	}
+	return entry.fetchedAt.Format(time.RFC3339)
+}
+
+// toCache stores pools in cache with current timestamps
 func (s *YieldService) toCache(key string, pools []YieldPool) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
-	s.cache[key] = yieldCacheEntry{pools: pools, expiresAt: time.Now().Add(s.cacheTTL)}
+	s.cache[key] = yieldCacheEntry{
+		pools:     pools,
+		expiresAt: time.Now().Add(s.cacheTTL),
+		fetchedAt: time.Now(),
+	}
 }

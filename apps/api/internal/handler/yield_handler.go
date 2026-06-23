@@ -13,7 +13,7 @@ import (
 
 // YieldOpportunitiesProvider is the service surface the handler depends on.
 type YieldOpportunitiesProvider interface {
-	GetYieldOpportunities(ctx context.Context, chain string, limit int) ([]service.YieldPool, error)
+	GetYieldOpportunities(ctx context.Context, chain string, limit int) (*service.YieldOpportunitiesResponse, error)
 }
 
 // YieldHandler serves GET /api/v1/yield-opportunities.
@@ -42,12 +42,21 @@ func (h *YieldHandler) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	pools, err := h.svc.GetYieldOpportunities(r.Context(), chain, limit)
+	yieldResp, err := h.svc.GetYieldOpportunities(r.Context(), chain, limit)
 	if err != nil {
 		logpkg.FromContext(r.Context()).Error("yield opportunities fetch failed", "chain", chain, "error", err.Error())
 		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "UPSTREAM_ERROR", "yield data temporarily unavailable"))
 		return
 	}
 
-	response.WriteJSON(w, http.StatusOK, response.OK(pools))
+	// Build response with meta information
+	responseData := map[string]interface{}{
+		"data": yieldResp.Pools,
+		"meta": yieldResp.Meta,
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.Response{
+		Success: true,
+		Data:    responseData,
+	})
 }
