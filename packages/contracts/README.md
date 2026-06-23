@@ -50,6 +50,24 @@ make test
 
 Executes all unit and integration tests across the workspace.
 
+> **Important — vault-contract tests require a pre-built WASM artifact.**
+> The `vault-contract` test suite depends on `vault-token-contract` being compiled
+> to WebAssembly before the tests run. Without this artifact the tests will fail
+> or be silently skipped.
+>
+> Build the artifact first, then run the vault-contract tests:
+>
+> ```bash
+> # 1. Build vault_token.wasm (run from packages/contracts/)
+> cargo build --release --target wasm32-unknown-unknown -p vault-token-contract
+>
+> # 2. Run vault-contract tests
+> cargo test -p vault-contract
+> ```
+>
+> CI handles this automatically — the `contracts` job builds `vault_token.wasm`
+> before executing `cargo test -p vault-contract`.
+
 ### Format Code
 
 ```bash
