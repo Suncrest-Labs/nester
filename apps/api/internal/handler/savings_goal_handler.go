@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,7 +22,7 @@ import (
 type SavingsGoalManager interface {
 	Create(ctx context.Context, userID uuid.UUID, in service.CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
-	List(ctx context.Context, userID uuid.UUID) ([]savingsgoal.SavingsGoal, error)
+	List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error)
 	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Delete(ctx context.Context, userID, goalID uuid.UUID) error
 }
@@ -47,6 +48,7 @@ type createSavingsGoalRequest struct {
 	Currency     string      `json:"currency"`
 	Deadline     string      `json:"deadline"`
 	Description  string      `json:"description"`
+	Category     string      `json:"category"`
 }
 
 type updateSavingsGoalRequest struct {
@@ -54,6 +56,7 @@ type updateSavingsGoalRequest struct {
 	Currency     *string      `json:"currency"`
 	Deadline     *string      `json:"deadline"`
 	Description  *string      `json:"description"`
+	Category     *string      `json:"category"`
 }
 
 func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +89,7 @@ func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
 		Currency:     req.Currency,
 		Deadline:     deadline,
 		Description:  req.Description,
+		Category:     req.Category,
 	})
 	if err != nil {
 		h.writeError(w, r, err)
@@ -117,7 +121,7 @@ func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	goals, err := h.svc.List(r.Context(), userID)
+	goals, err := h.svc.List(r.Context(), userID, strings.TrimSpace(r.URL.Query().Get("category")))
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -169,6 +173,7 @@ func (h *SavingsGoalHandler) update(w http.ResponseWriter, r *http.Request) {
 		in.Deadline = &d
 	}
 	in.Description = req.Description
+	in.Category = req.Category
 
 	goal, err := h.svc.Update(r.Context(), userID, goalID, in)
 	if err != nil {

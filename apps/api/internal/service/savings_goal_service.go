@@ -25,6 +25,7 @@ type CreateSavingsGoalInput struct {
 	Currency     string          `json:"currency"`
 	Deadline     time.Time       `json:"deadline"`
 	Description  string          `json:"description"`
+	Category     string          `json:"category"`
 }
 
 type UpdateSavingsGoalInput struct {
@@ -32,10 +33,15 @@ type UpdateSavingsGoalInput struct {
 	Currency     *string          `json:"currency"`
 	Deadline     *time.Time       `json:"deadline"`
 	Description  *string          `json:"description"`
+	Category     *string          `json:"category"`
 }
 
 func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
 	if err := validateSavingsGoalInput(in.TargetAmount, in.Currency, in.Deadline); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	category, err := resolveCategory(in.Category, true)
+	if err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal := &savingsgoal.SavingsGoal{
@@ -45,6 +51,7 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 		Currency:     strings.ToUpper(strings.TrimSpace(in.Currency)),
 		Deadline:     in.Deadline.UTC(),
 		Description:  strings.TrimSpace(in.Description),
+		Category:     category,
 	}
 	if err := s.repo.Create(ctx, goal); err != nil {
 		return savingsgoal.SavingsGoal{}, err
@@ -63,8 +70,17 @@ func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) 
 	return s.enrichProgress(ctx, *goal)
 }
 
-func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID) ([]savingsgoal.SavingsGoal, error) {
-	goals, err := s.repo.ListByUser(ctx, userID)
+func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+	filterCategory := ""
+	if strings.TrimSpace(category) != "" {
+		parsed, err := savingsgoal.ParseCategory(category)
+		if err != nil {
+			return nil, err
+		}
+		filterCategory = string(parsed)
+	}
+
+	goals, err := s.repo.ListByUser(ctx, userID, filterCategory)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +115,13 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	if in.Description != nil {
 		goal.Description = strings.TrimSpace(*in.Description)
 	}
+	if in.Category != nil {
+		category, err := resolveCategory(*in.Category, false)
+		if err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		goal.Category = category
+	}
 	if err := validateSavingsGoalInput(goal.TargetAmount, goal.Currency, goal.Deadline); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -129,6 +152,16 @@ func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoa
 		goal.ProgressPct = pct
 	}
 	return goal, nil
+}
+
+func resolveCategory(value string, defaultIfEmpty bool) (savingsgoal.GoalCategory, error) {
+	if strings.TrimSpace(value) == "" {
+		if defaultIfEmpty {
+			return savingsgoal.CategoryOther, nil
+		}
+		return "", fmt.Errorf("%w: invalid category", savingsgoal.ErrInvalidGoal)
+	}
+	return savingsgoal.ParseCategory(value)
 }
 
 func validateSavingsGoalInput(target decimal.Decimal, currency string, deadline time.Time) error {
