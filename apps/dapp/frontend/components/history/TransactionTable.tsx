@@ -121,4 +121,4 @@ export const TransactionTable: React.FC<Props> = ({ transactions, loading, error
       </div>
     </div>
   );
-};
+export default TransactionTable;
