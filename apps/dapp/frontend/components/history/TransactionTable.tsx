@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { ArrowUpRight, Download, FileText, AlertTriangle } from 'lucide-react';
+'use client';
+
+import React from 'react';
+import { Download, FileText, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { exportCsv } from '@/lib/export/csv';
-import { generatePdfStatement } from '@/lib/export/pdf';
 
 export interface Transaction {
   id: string;
@@ -23,7 +23,7 @@ interface Props {
   onExportPdf: () => void;
 }
 
-export const TransactionTable: React.FC<Props> = ({ transactions, loading, error, onExportCsv, onExportPdf }) => {
+const TransactionTable: React.FC<Props> = ({ transactions, loading, error, onExportCsv, onExportPdf }) => {
   const renderStatus = (status: Transaction['status']) => {
     const colors = {
       Confirmed: 'bg-green-100 text-green-800',
@@ -77,9 +77,7 @@ export const TransactionTable: React.FC<Props> = ({ transactions, loading, error
         <tbody>
           {transactions.map((tx) => (
             <tr key={tx.id} className="border-b border-black/5 last:border-0 hover:bg-black/5">
-              <td className="px-4 py-2 text-sm text-gray-700">
-                {new Date(tx.timestamp).toLocaleString()}
-              </td>
+              <td className="px-4 py-2 text-sm text-gray-700">{new Date(tx.timestamp).toLocaleString()}</td>
               <td className="px-4 py-2 text-sm text-gray-700">{tx.type}</td>
               <td className="px-4 py-2 text-sm text-gray-700">{tx.vaultName}</td>
               <td className="px-4 py-2 font-mono text-sm text-gray-700">
@@ -106,19 +104,15 @@ export const TransactionTable: React.FC<Props> = ({ transactions, loading, error
         </tbody>
       </table>
       <div className="flex items-center justify-end space-x-2 p-2">
-        <button
-          onClick={onExportCsv}
-          className="inline-flex items-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
-        >
+        <button onClick={onExportCsv} className="inline-flex items-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">
           <Download className="mr-1 h-4 w-4" /> CSV
         </button>
-        <button
-          onClick={onExportPdf}
-          className="inline-flex items-center rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900"
-        >
+        <button onClick={onExportPdf} className="inline-flex items-center rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900">
           <FileText className="mr-1 h-4 w-4" /> PDF
         </button>
       </div>
     </div>
   );
+};
+
 export default TransactionTable;

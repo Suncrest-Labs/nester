@@ -70,7 +70,7 @@ export const exportPdf = ({
 
   doc.save('transaction_statement.pdf');
 };
-  const doc = new jsPDF();
+  
 
   // Header with branding
   doc.setFontSize(20);
