@@ -193,6 +193,9 @@ func ComputeRiskScore(tvlUsd, apy7dSwing, rewardRatio float64) float64 {
 	if rewardRatio > 0.8 {
 		score += 0.2
 	}
+	// Round to 1 decimal place to eliminate IEEE 754 accumulation errors
+	// (e.g. 0.4+0.3+0.2 = 0.8999... without rounding).
+	score = math.Round(score*10) / 10
 	if score > 1.0 {
 		return 1.0
 	}

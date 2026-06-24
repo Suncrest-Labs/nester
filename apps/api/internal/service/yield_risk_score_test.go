@@ -55,12 +55,12 @@ func TestComputeRiskScore(t *testing.T) {
 			wantMax:     0.2,
 		},
 		{
-			name:        "all signals fire but score clamps to 1.0",
+			name:        "all signals fire, score is 0.9 (0.4+0.3+0.2, below clamp)",
 			tvlUsd:      10_000,
 			apy7dSwing:  50.0,
 			rewardRatio: 0.95,
-			wantMin:     1.0,
-			wantMax:     1.0,
+			wantMin:     0.9,
+			wantMax:     0.9,
 		},
 		{
 			name:        "score never exceeds 1.0 with extreme inputs",
