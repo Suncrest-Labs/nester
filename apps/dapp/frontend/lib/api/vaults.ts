@@ -42,6 +42,21 @@ export interface RebalanceSuggestion {
   reason: string;
 }
 
+export type APYHistoryPeriod = "7d" | "30d" | "90d";
+
+export interface APYHistoryPoint {
+  /** ISO timestamp of the snapshot */
+  timestamp: string;
+  /** APY as a fraction, e.g. 0.0823 for 8.23% */
+  apy: number;
+}
+
+export interface APYHistoryResponse {
+  vault_id: string;
+  period: APYHistoryPeriod;
+  points: APYHistoryPoint[];
+}
+
 export const vaultsApi = {
   getProjection: async (vaultId: string): Promise<Projection> => {
     const res = await fetch(`${API_BASE}/api/v1/vaults/${vaultId}/projection`, {
@@ -67,6 +82,11 @@ export const vaultsApi = {
     const json = await res.json();
     return json.data ?? [];
   },
+
+  getApyHistory: (vaultId: string, period: APYHistoryPeriod = "30d") =>
+    apiRequest<APYHistoryResponse>(
+      `/vaults/${vaultId}/apy-history?period=${period}`
+    ),
 
   getRebalanceSuggestion: (vaultId: string) =>
     apiRequest<RebalanceSuggestion>(`/vaults/${vaultId}/rebalance-suggestion`),

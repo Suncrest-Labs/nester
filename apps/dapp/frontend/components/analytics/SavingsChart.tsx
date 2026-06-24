@@ -1,104 +1,132 @@
 "use client";
 
 import {
-    AreaChart,
-    Area,
+    LineChart,
+    Line,
     XAxis,
     YAxis,
     CartesianGrid,
     Tooltip,
     ResponsiveContainer,
+    type TooltipContentProps,
+    type TooltipValueType,
 } from "recharts";
 
-export interface ChartDataPoint {
+/**
+ * A single point on the APY history chart.
+ *
+ * Produced by `useSavingsChartData`, which maps the raw `/apy-history`
+ * response into display-ready values:
+ *   - `date`  short label for the axis/tooltip, e.g. "Jun 15"
+ *   - `apy`   formatted percentage string, e.g. "8.23"
+ *   - `value` numeric percentage used to plot the line, e.g. 8.23
+ */
+export interface SavingsChartPoint {
     date: string;
-    actualBalance?: number;
-    projectedBalance?: number;
+    apy: string;
+    value: number;
 }
 
 interface SavingsChartProps {
-    data: ChartDataPoint[];
+    data: SavingsChartPoint[];
+    isLoading?: boolean;
 }
 
-export default function SavingsChart({ data }: SavingsChartProps) {
+function ApyTooltip({
+    active,
+    payload,
+}: TooltipContentProps<TooltipValueType, number | string>) {
+    if (!active || !payload?.length) return null;
+    const point = payload[0].payload as SavingsChartPoint;
+    return (
+        <div className="rounded-xl border border-black/8 bg-white px-3.5 py-2.5 shadow-lg shadow-black/10">
+            <p className="text-xs font-medium text-black">
+                APY: {point.apy}% <span className="text-black/40">on {point.date}</span>
+            </p>
+        </div>
+    );
+}
+
+export default function SavingsChart({ data, isLoading = false }: SavingsChartProps) {
+    if (isLoading) {
+        return (
+            <div
+                className="h-[320px] w-full animate-pulse rounded-2xl bg-black/[0.03]"
+                aria-busy="true"
+                aria-label="Loading chart data"
+            />
+        );
+    }
+
     if (!data || data.length === 0) {
         return (
-            <div className="h-[300px] flex flex-col items-center justify-center text-black/40 bg-black/[0.02] rounded-2xl border border-dashed border-black/10">
-                <p className="text-sm">No savings history yet</p>
-                <p className="text-xs mt-1">Deposits will appear here over time</p>
+            <div className="h-[320px] flex flex-col items-center justify-center text-center text-black/40 bg-black/[0.02] rounded-2xl border border-dashed border-black/10 px-6">
+                <svg
+                    width="40"
+                    height="40"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mb-3 text-black/25"
+                    aria-hidden="true"
+                >
+                    <path d="M3 3v18h18" />
+                    <path d="m19 9-5 5-4-4-3 3" />
+                </svg>
+                <p className="text-sm max-w-xs">
+                    Chart data will appear after your vault has been active for a few days.
+                </p>
             </div>
         );
     }
 
-    const fmtUsd = (val: number) => 
-        new Intl.NumberFormat("en-US", {
-            style: "currency",
-            currency: "USD",
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 0,
-        }).format(val);
-
     return (
-        <div className="w-full h-[320px]" role="img" aria-label="Savings balance growth chart showing actual and projected balance over time">
+        <div
+            className="w-full h-[320px]"
+            role="img"
+            aria-label="Vault APY performance over time"
+        >
             <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
+                <LineChart
                     data={data}
                     margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
                 >
-                    <defs>
-                        <linearGradient id="colorBalance" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#000000" stopOpacity={0.08} />
-                            <stop offset="95%" stopColor="#000000" stopOpacity={0} />
-                        </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#000000" strokeOpacity={0.05} />
-                    <XAxis 
-                        dataKey="date" 
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        vertical={false}
+                        stroke="#000000"
+                        strokeOpacity={0.05}
+                    />
+                    <XAxis
+                        dataKey="date"
                         axisLine={false}
                         tickLine={false}
                         tick={{ fontSize: 10, fill: "rgba(0,0,0,0.4)" }}
                         minTickGap={30}
                     />
-                    <YAxis 
+                    <YAxis
                         axisLine={false}
                         tickLine={false}
                         tick={{ fontSize: 10, fill: "rgba(0,0,0,0.4)" }}
-                        tickFormatter={(val) => `$${val}`}
+                        tickFormatter={(val) => `${val}%`}
+                        domain={["auto", "auto"]}
+                        width={48}
                     />
-                    <Tooltip 
-                        contentStyle={{ 
-                            borderRadius: "12px", 
-                            border: "none", 
-                            boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)",
-                            fontSize: "12px"
-                        }}
-                        formatter={(value) => [
-                            typeof value === "number" ? fmtUsd(value) : "",
-                            "",
-                        ]}
-                        labelStyle={{ color: "rgba(0,0,0,0.4)", marginBottom: "4px" }}
-                    />
-                    <Area
+                    <Tooltip content={ApyTooltip} />
+                    <Line
                         type="monotone"
-                        dataKey="actualBalance"
+                        dataKey="value"
                         stroke="#000000"
                         strokeWidth={2}
-                        fillOpacity={1}
-                        fill="url(#colorBalance)"
+                        dot={false}
+                        activeDot={{ r: 4 }}
                         animationDuration={1200}
-                        name="Actual Balance"
+                        name="APY"
                     />
-                    <Area
-                        type="monotone"
-                        dataKey="projectedBalance"
-                        stroke="#000000"
-                        strokeWidth={1.5}
-                        strokeDasharray="5 5"
-                        fill="transparent"
-                        animationDuration={1200}
-                        name="Projected Balance"
-                    />
-                </AreaChart>
+                </LineChart>
             </ResponsiveContainer>
         </div>
     );

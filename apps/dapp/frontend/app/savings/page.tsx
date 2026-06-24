@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -35,8 +35,11 @@ import {
     TransactionTimeoutError,
     truncateTxHash,
 } from "@/lib/stellar/transaction";
-import SavingsChart, { type ChartDataPoint } from "@/components/analytics/SavingsChart";
-import { vaultsApi } from "@/lib/api/vaults";
+import SavingsChart from "@/components/analytics/SavingsChart";
+import { type APYHistoryPeriod } from "@/lib/api/vaults";
+import { savingsGoals } from "@/lib/api/savings-goals";
+import { useSavingsChartData } from "@/hooks/useSavingsChartData";
+import { useQuery } from "@tanstack/react-query";
 import { intelligenceApi, type SavingsPlanResponse } from "@/lib/api/intelligence";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -779,78 +782,58 @@ function DepositModal({
 }
 
 // ── Savings Overview ──────────────────────────────────────────────────────────
+const CHART_PERIODS: APYHistoryPeriod[] = ["7d", "30d", "90d"];
+
 function SavingsOverview() {
     const { positions } = usePortfolio();
-    const [period, setPeriod] = useState<"30d" | "90d" | "all">("30d");
-    const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [period, setPeriod] = useState<APYHistoryPeriod>("30d");
 
     const activeVaultPositions = useMemo(() => {
         const ids = SAVINGS_VAULTS.map((v) => v.id);
         return positions.filter((p) => ids.includes(p.vaultId));
     }, [positions]);
 
-    const fetchData = useCallback(async () => {
-        if (activeVaultPositions.length === 0) {
-            setLoading(false);
-            return;
+    // Distinct vaults the user actually holds, used to decide what to chart.
+    const userVaults = useMemo(() => {
+        const seen = new Map<string, string>();
+        for (const p of activeVaultPositions) {
+            if (!seen.has(p.vaultId)) seen.set(p.vaultId, p.vaultName);
         }
+        return Array.from(seen, ([id, name]) => ({ id, name }));
+    }, [activeVaultPositions]);
 
-        setLoading(true);
-        try {
-            // In a real implementation, we might aggregate multiple vaults or just pick the main one
-            const vaultId = activeVaultPositions[0].vaultId;
-            const [projection] = await Promise.all([
-                vaultsApi.getProjection(vaultId),
-            ]);
+    // Linked savings goals (#688): prefer a goal-linked vault when present.
+    const { data: goals } = useQuery({
+        queryKey: ["savings-goals"],
+        queryFn: () => savingsGoals.list(),
+        staleTime: 5 * 60 * 1000,
+    });
+    const linkedVaultId = useMemo(
+        () =>
+            goals?.find(
+                (g) => g.vault_id && userVaults.some((v) => v.id === g.vault_id)
+            )?.vault_id,
+        [goals, userVaults]
+    );
 
-            // Mock historical data combined with projection
-            // Real historical data would come from transaction history endpoint
-            const now = new Date();
-            const points: ChartDataPoint[] = [];
-            
-            // Generate 30 days of "history"
-            const days = period === "30d" ? 30 : period === "90d" ? 90 : 180;
-            const balance = activeVaultPositions.reduce((s, p) => s + p.currentValue, 0);
-            const principal = activeVaultPositions.reduce((s, p) => s + p.principal, 0);
-            
-            for (let i = days; i > 0; i--) {
-                const date = new Date(now.getTime() - i * 86400000);
-                const progress = (days - i) / days;
-                points.push({
-                    date: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-                    actualBalance: principal + (balance - principal) * progress * (0.9 + Math.random() * 0.2),
-                });
-            }
+    // Which vault is currently being charted. When the user holds multiple
+    // unlinked vaults they pick via the dropdown below.
+    const [selectedVaultId, setSelectedVaultId] = useState<string | undefined>(undefined);
 
-            // Add current point
-            points.push({
-                date: "Now",
-                actualBalance: balance,
-                projectedBalance: balance,
-            });
-
-            // Add projection points
-            if (projection && projection.timeline) {
-                const projPoints = projection.timeline.slice(1, 30).map(p => ({
-                    date: new Date(p.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-                    actualBalance: undefined,
-                    projectedBalance: p.balance,
-                }));
-                setChartData([...points, ...projPoints]);
-            } else {
-                setChartData(points);
-            }
-        } catch (err) {
-            console.error("Failed to fetch savings data:", err);
-        } finally {
-            setLoading(false);
+    const primaryVaultId = useMemo(() => {
+        if (linkedVaultId) return linkedVaultId;
+        if (selectedVaultId && userVaults.some((v) => v.id === selectedVaultId)) {
+            return selectedVaultId;
         }
-    }, [activeVaultPositions, period]);
+        return userVaults[0]?.id;
+    }, [linkedVaultId, selectedVaultId, userVaults]);
 
-    useEffect(() => {
-        fetchData();
-    }, [fetchData]);
+    const showVaultPicker = !linkedVaultId && userVaults.length > 1;
+
+    const { data: chartData = [], isLoading: chartLoading } = useSavingsChartData(
+        primaryVaultId,
+        period
+    );
 
     if (activeVaultPositions.length === 0) {
         return (
@@ -873,20 +856,6 @@ function SavingsOverview() {
                     View Savings Plans
                 </button>
             </motion.div>
-        );
-    }
-
-    if (loading) {
-        return (
-            <div className="mb-10 space-y-6" aria-busy="true" aria-label="Loading savings data">
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    {[1, 2, 3, 4].map(i => (
-                        <div key={i} className="h-28 rounded-2xl bg-black/[0.03] animate-pulse" />
-                    ))}
-                </div>
-                <div className="h-[400px] rounded-3xl bg-black/[0.03] animate-pulse" />
-                <div className="h-40 rounded-2xl bg-black/[0.03] animate-pulse" />
-            </div>
         );
     }
 
@@ -945,30 +914,46 @@ function SavingsOverview() {
 
             {/* Chart Block */}
             <div className="rounded-3xl border border-black/8 bg-white p-6 sm:p-8">
-                <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center justify-between gap-4 mb-8 flex-wrap">
                     <div>
-                        <h3 className="text-sm font-semibold text-black">Balance Growth</h3>
-                        <p className="text-xs text-black/60 font-medium mt-0.5">Historical and projected balance in USD</p>
+                        <h3 className="text-sm font-semibold text-black">APY Performance</h3>
+                        <p className="text-xs text-black/60 font-medium mt-0.5">Historical vault APY over time</p>
                     </div>
-                    <div className="flex bg-black/[0.04] p-1 rounded-xl" role="tablist" aria-label="Chart period">
-                        {(["30d", "90d", "all"] as const).map((p) => (
-                            <button
-                                key={p}
-                                role="tab"
-                                aria-selected={period === p}
-                                onClick={() => setPeriod(p)}
-                                className={cn(
-                                    "px-3 py-1.5 text-[11px] rounded-lg transition-all focus-visible:ring-2 focus-visible:ring-black",
-                                    period === p ? "bg-white text-black shadow-sm font-bold" : "text-black/60 hover:text-black/80 font-medium"
-                                )}
+                    <div className="flex items-center gap-3">
+                        {showVaultPicker && (
+                            <select
+                                value={primaryVaultId ?? ""}
+                                onChange={(e) => setSelectedVaultId(e.target.value)}
+                                aria-label="Select vault to chart"
+                                className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-[11px] font-medium text-black/70 outline-none focus-visible:ring-2 focus-visible:ring-black"
                             >
-                                {p.toUpperCase()}
-                            </button>
-                        ))}
+                                {userVaults.map((v) => (
+                                    <option key={v.id} value={v.id}>
+                                        {v.name}
+                                    </option>
+                                ))}
+                            </select>
+                        )}
+                        <div className="flex bg-black/[0.04] p-1 rounded-xl" role="tablist" aria-label="Chart period">
+                            {CHART_PERIODS.map((p) => (
+                                <button
+                                    key={p}
+                                    role="tab"
+                                    aria-selected={period === p}
+                                    onClick={() => setPeriod(p)}
+                                    className={cn(
+                                        "px-3 py-1.5 text-[11px] rounded-lg transition-all focus-visible:ring-2 focus-visible:ring-black",
+                                        period === p ? "bg-white text-black shadow-sm font-bold" : "text-black/60 hover:text-black/80 font-medium"
+                                    )}
+                                >
+                                    {p.toUpperCase()}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
-                
-                <SavingsChart data={chartData} />
+
+                <SavingsChart data={chartData} isLoading={chartLoading} />
             </div>
         </div>
     );

@@ -8,6 +8,8 @@ export interface SavingsGoal {
   description?: string;
   current_amount: string | number;
   progress_pct: number;
+  /** Vault this goal is linked to, when set (see #688). */
+  vault_id?: string;
 }
 
 export interface CreateSavingsGoalInput {
