@@ -214,7 +214,7 @@ func run() error {
 	performanceRepository := postgres.NewPerformanceRepository(db)
 	vaultRepository = postgres.NewVaultRepository(db)
 	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
-	performanceHandler := handler.NewPerformanceHandler(performanceService)
+	performanceHandler := handler.NewPerformanceHandler(performanceService, handler.NewVaultOwnerAdapter(vaultRepository))
 
 	contractReader := stellarpkg.NewContractReader(
 		cfg.Stellar().RPCURL(),
