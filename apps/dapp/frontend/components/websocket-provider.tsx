@@ -71,7 +71,7 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "";
  */
 export function WebSocketProvider({ children }: { children: ReactNode }) {
     const { address } = useWallet();
-    const { applyBalanceUpdate, applyYieldAccrual } = usePortfolio();
+    const { applyBalanceUpdate, applyYieldAccrual, refreshBalances } = usePortfolio();
     const { addNotification } = useNotifications();
 
     // Derive a simple JWT placeholder from the wallet address.
@@ -196,6 +196,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         token,
         channels,
         onEvent: handleEvent,
+        // Once reconnects are exhausted, keep balances fresh via REST polling.
+        onPoll: refreshBalances,
     });
 
     const value = useMemo<WebSocketContextValue>(

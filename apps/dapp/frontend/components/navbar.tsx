@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useWallet } from "@/components/wallet-provider";
 import { NotificationBell } from "@/components/notification-bell";
+import { ConnectionStatusBadge } from "@/components/connection-status-badge";
 import { truncateAddress, cn } from "@/lib/utils";
 import { LogOut, Copy, Check, ChevronDown, Menu, X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -123,6 +124,7 @@ export function Navbar() {
                         <div className="flex items-center gap-2">
                             {isConnected && address ? (
                                 <>
+                                    <ConnectionStatusBadge className="hidden md:flex" />
                                     <NotificationBell />
 
                                     {/* Wallet dropdown (desktop) */}
