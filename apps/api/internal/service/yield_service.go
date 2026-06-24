@@ -124,7 +124,16 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 			pool.TVLUsd = *p.TVLUsd
 		}
 		pool.APYPct7d = p.APYPct7d
-		pool.RiskScore = riskScore(pool)
+
+		var apy7dSwing float64
+		if p.APYPct7d != nil {
+			apy7dSwing = *p.APYPct7d
+		}
+		var rewardRatio float64
+		if pool.APY > 0 {
+			rewardRatio = pool.APYReward / pool.APY
+		}
+		pool.RiskScore = computeRiskScore(pool.TVLUsd, apy7dSwing, rewardRatio)
 		pools = append(pools, pool)
 	}
 
@@ -141,27 +150,37 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 	return pools, nil
 }
 
-// riskScore assigns a 0-100 risk score (lower = safer).
-// Uses TVL as a proxy for protocol maturity.
-func riskScore(p YieldPool) float64 {
-	if p.TVLUsd >= 10_000_000 {
-		return 20
+// computeRiskScore derives a deterministic risk score in [0.0, 1.0] from three
+// DeFiLlama signals:
+//   - tvl < $100k → +0.4 (low liquidity, higher protocol risk)
+//   - |apy7dSwing| > 20% → +0.3 (high volatility)
+//   - rewardRatio > 0.8 → +0.2 (incentive-heavy pools are less sustainable)
+//
+// The result is clamped to [0.0, 1.0]. Lower score = safer pool.
+func computeRiskScore(tvl, apy7dSwing, rewardRatio float64) float64 {
+	var score float64
+	if tvl < 100_000 {
+		score += 0.4
 	}
-	if p.TVLUsd >= 1_000_000 {
-		return 40
+	if apy7dSwing > 20 || apy7dSwing < -20 {
+		score += 0.3
 	}
-	if p.TVLUsd >= 100_000 {
-		return 60
+	if rewardRatio > 0.8 {
+		score += 0.2
 	}
-	return 80
+	if score > 1.0 {
+		return 1.0
+	}
+	return score
 }
 
 // riskAdjustedAPY penalises high-risk, low-TVL pools.
+// RiskScore is in [0.0, 1.0]; a score of 1.0 halves the effective APY.
 func riskAdjustedAPY(p YieldPool) float64 {
 	if p.APY <= 0 {
 		return 0
 	}
-	penalty := (p.RiskScore / 100) * 0.5
+	penalty := p.RiskScore * 0.5
 	return p.APY * (1 - penalty)
 }
 
