@@ -142,7 +142,6 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 	}
 
 	summary := savingsgoal.SavingsGoalsSummary{GoalCount: len(goals)}
-	savedByCurrency := make(map[string]bool)
 
 	for _, goal := range goals {
 		enriched, err := s.enrichProgress(ctx, goal)
@@ -152,16 +151,10 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 		switch enriched.Currency {
 		case savingsgoal.CurrencyUSDC:
 			summary.TotalTargetUSDC = summary.TotalTargetUSDC.Add(enriched.TargetAmount)
-			if !savedByCurrency[savingsgoal.CurrencyUSDC] {
-				summary.TotalSavedUSDC = enriched.CurrentAmount
-				savedByCurrency[savingsgoal.CurrencyUSDC] = true
-			}
+			summary.TotalSavedUSDC = summary.TotalSavedUSDC.Add(enriched.CurrentAmount)
 		case savingsgoal.CurrencyXLM:
 			summary.TotalTargetXLM = summary.TotalTargetXLM.Add(enriched.TargetAmount)
-			if !savedByCurrency[savingsgoal.CurrencyXLM] {
-				summary.TotalSavedXLM = enriched.CurrentAmount
-				savedByCurrency[savingsgoal.CurrencyXLM] = true
-			}
+			summary.TotalSavedXLM = summary.TotalSavedXLM.Add(enriched.CurrentAmount)
 		}
 	}
 
