@@ -30,6 +30,36 @@ const (
 	CategoryOther         GoalCategory = "other"
 )
 
+const (
+	CurrencyUSDC = "USDC"
+	CurrencyXLM  = "XLM"
+)
+
+// SupportedCurrencies lists goal denominations accepted by the savings API.
+var SupportedCurrencies = map[string]bool{
+	CurrencyUSDC: true,
+	CurrencyXLM:  true,
+}
+
+// IsSupportedCurrency reports whether currency is a supported savings goal denomination.
+func IsSupportedCurrency(currency string) bool {
+	return SupportedCurrencies[NormalizeCurrency(currency)]
+}
+
+// NormalizeCurrency uppercases and trims a currency code for storage and comparison.
+func NormalizeCurrency(currency string) string {
+	return strings.ToUpper(strings.TrimSpace(currency))
+}
+
+// SavingsGoalsSummary aggregates goal totals per currency without cross-currency conversion.
+type SavingsGoalsSummary struct {
+	TotalSavedUSDC  decimal.Decimal `json:"total_saved_usdc"`
+	TotalTargetUSDC decimal.Decimal `json:"total_target_usdc"`
+	TotalSavedXLM   decimal.Decimal `json:"total_saved_xlm"`
+	TotalTargetXLM  decimal.Decimal `json:"total_target_xlm"`
+	GoalCount       int             `json:"goal_count"`
+}
+
 func ParseCategory(value string) (GoalCategory, error) {
 	category := GoalCategory(strings.ToLower(strings.TrimSpace(value)))
 	switch category {

@@ -48,7 +48,7 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 		ID:           uuid.New(),
 		UserID:       userID,
 		TargetAmount: in.TargetAmount,
-		Currency:     strings.ToUpper(strings.TrimSpace(in.Currency)),
+		Currency:     savingsgoal.NormalizeCurrency(in.Currency),
 		Deadline:     in.Deadline.UTC(),
 		Description:  strings.TrimSpace(in.Description),
 		Category:     category,
@@ -107,7 +107,7 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 		goal.TargetAmount = *in.TargetAmount
 	}
 	if in.Currency != nil {
-		goal.Currency = strings.ToUpper(strings.TrimSpace(*in.Currency))
+		goal.Currency = savingsgoal.NormalizeCurrency(*in.Currency)
 	}
 	if in.Deadline != nil {
 		goal.Deadline = in.Deadline.UTC()
@@ -133,6 +133,39 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 
 func (s *SavingsGoalService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
 	return s.repo.Delete(ctx, goalID, userID)
+}
+
+func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {
+	goals, err := s.repo.ListByUser(ctx, userID, "")
+	if err != nil {
+		return savingsgoal.SavingsGoalsSummary{}, err
+	}
+
+	summary := savingsgoal.SavingsGoalsSummary{GoalCount: len(goals)}
+	savedByCurrency := make(map[string]bool)
+
+	for _, goal := range goals {
+		enriched, err := s.enrichProgress(ctx, goal)
+		if err != nil {
+			return savingsgoal.SavingsGoalsSummary{}, err
+		}
+		switch enriched.Currency {
+		case savingsgoal.CurrencyUSDC:
+			summary.TotalTargetUSDC = summary.TotalTargetUSDC.Add(enriched.TargetAmount)
+			if !savedByCurrency[savingsgoal.CurrencyUSDC] {
+				summary.TotalSavedUSDC = enriched.CurrentAmount
+				savedByCurrency[savingsgoal.CurrencyUSDC] = true
+			}
+		case savingsgoal.CurrencyXLM:
+			summary.TotalTargetXLM = summary.TotalTargetXLM.Add(enriched.TargetAmount)
+			if !savedByCurrency[savingsgoal.CurrencyXLM] {
+				summary.TotalSavedXLM = enriched.CurrentAmount
+				savedByCurrency[savingsgoal.CurrencyXLM] = true
+			}
+		}
+	}
+
+	return summary, nil
 }
 
 func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoal.SavingsGoal) (savingsgoal.SavingsGoal, error) {
@@ -171,6 +204,10 @@ func validateSavingsGoalInput(target decimal.Decimal, currency string, deadline 
 	currency = strings.TrimSpace(currency)
 	if currency == "" {
 		return fmt.Errorf("%w: currency is required", savingsgoal.ErrInvalidGoal)
+	}
+	normalized := savingsgoal.NormalizeCurrency(currency)
+	if !savingsgoal.IsSupportedCurrency(normalized) {
+		return fmt.Errorf("%w: unsupported currency %q (supported: USDC, XLM)", savingsgoal.ErrInvalidGoal, currency)
 	}
 	if deadline.Before(time.Now().UTC()) {
 		return fmt.Errorf("%w: deadline must be in the future", savingsgoal.ErrInvalidGoal)

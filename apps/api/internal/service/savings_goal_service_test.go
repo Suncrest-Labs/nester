@@ -13,14 +13,22 @@ import (
 
 type memorySavingsGoalRepo struct {
 	goals    map[uuid.UUID]savingsgoal.SavingsGoal
-	balances map[uuid.UUID]decimal.Decimal
+	balances map[string]decimal.Decimal
 }
 
 func newMemorySavingsGoalRepo() *memorySavingsGoalRepo {
 	return &memorySavingsGoalRepo{
 		goals:    make(map[uuid.UUID]savingsgoal.SavingsGoal),
-		balances: make(map[uuid.UUID]decimal.Decimal),
+		balances: make(map[string]decimal.Decimal),
 	}
+}
+
+func balanceKey(userID uuid.UUID, currency string) string {
+	return userID.String() + ":" + savingsgoal.NormalizeCurrency(currency)
+}
+
+func (m *memorySavingsGoalRepo) setBalance(userID uuid.UUID, currency string, amount decimal.Decimal) {
+	m.balances[balanceKey(userID, currency)] = amount
 }
 
 func (m *memorySavingsGoalRepo) Create(_ context.Context, goal *savingsgoal.SavingsGoal) error {
@@ -70,8 +78,11 @@ func (m *memorySavingsGoalRepo) Delete(_ context.Context, id, userID uuid.UUID) 
 	return nil
 }
 
-func (m *memorySavingsGoalRepo) SumVaultBalance(_ context.Context, userID uuid.UUID, _ string) (decimal.Decimal, error) {
-	return m.balances[userID], nil
+func (m *memorySavingsGoalRepo) SumVaultBalance(_ context.Context, userID uuid.UUID, currency string) (decimal.Decimal, error) {
+	if bal, ok := m.balances[balanceKey(userID, currency)]; ok {
+		return bal, nil
+	}
+	return decimal.Zero, nil
 }
 
 func testDeadline() time.Time {
@@ -198,5 +209,112 @@ func TestParseCategory_AcceptsAllValues(t *testing.T) {
 		if got != want {
 			t.Fatalf("ParseCategory(%q) = %q", want, got)
 		}
+	}
+}
+
+func TestSavingsGoalService_Create_ValidXLMGoal(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	repo.setBalance(userID, "XLM", decimal.NewFromInt(120))
+	svc := NewSavingsGoalService(repo)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(500),
+		Currency:     "XLM",
+		Deadline:     testDeadline(),
+		Description:  "Staking fund",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if goal.Currency != savingsgoal.CurrencyXLM {
+		t.Fatalf("currency = %q, want XLM", goal.Currency)
+	}
+	if !goal.CurrentAmount.Equal(decimal.NewFromInt(120)) {
+		t.Fatalf("current_amount = %s, want 120 XLM vault balance", goal.CurrentAmount)
+	}
+}
+
+func TestSavingsGoalService_Create_ValidUSDCGoal(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	repo.setBalance(userID, "USDC", decimal.NewFromInt(250))
+	svc := NewSavingsGoalService(repo)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "usdc",
+		Deadline:     testDeadline(),
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if goal.Currency != savingsgoal.CurrencyUSDC {
+		t.Fatalf("currency = %q, want USDC", goal.Currency)
+	}
+	if !goal.CurrentAmount.Equal(decimal.NewFromInt(250)) {
+		t.Fatalf("current_amount = %s, want 250 USDC vault balance", goal.CurrentAmount)
+	}
+}
+
+func TestSavingsGoalService_Create_InvalidCurrency(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo())
+
+	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "BTC",
+		Deadline:     testDeadline(),
+	})
+	if err == nil {
+		t.Fatal("Create() error = nil, want invalid currency")
+	}
+}
+
+func TestSavingsGoalService_Summary_MixedCurrencies(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	repo.setBalance(userID, "USDC", decimal.NewFromInt(100))
+	repo.setBalance(userID, "XLM", decimal.NewFromInt(50))
+	usdcGoalID := uuid.New()
+	xlmGoalID := uuid.New()
+	repo.goals[usdcGoalID] = savingsgoal.SavingsGoal{
+		ID:           usdcGoalID,
+		UserID:       userID,
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     savingsgoal.CurrencyUSDC,
+		Deadline:     testDeadline(),
+	}
+	repo.goals[xlmGoalID] = savingsgoal.SavingsGoal{
+		ID:           xlmGoalID,
+		UserID:       userID,
+		TargetAmount: decimal.NewFromInt(500),
+		Currency:     savingsgoal.CurrencyXLM,
+		Deadline:     testDeadline(),
+	}
+	svc := NewSavingsGoalService(repo)
+
+	summary, err := svc.Summary(ctx, userID)
+	if err != nil {
+		t.Fatalf("Summary() error = %v", err)
+	}
+	if summary.GoalCount != 2 {
+		t.Fatalf("goal_count = %d, want 2", summary.GoalCount)
+	}
+	if !summary.TotalSavedUSDC.Equal(decimal.NewFromInt(100)) {
+		t.Fatalf("total_saved_usdc = %s, want 100", summary.TotalSavedUSDC)
+	}
+	if !summary.TotalTargetUSDC.Equal(decimal.NewFromInt(1000)) {
+		t.Fatalf("total_target_usdc = %s, want 1000", summary.TotalTargetUSDC)
+	}
+	if !summary.TotalSavedXLM.Equal(decimal.NewFromInt(50)) {
+		t.Fatalf("total_saved_xlm = %s, want 50", summary.TotalSavedXLM)
+	}
+	if !summary.TotalTargetXLM.Equal(decimal.NewFromInt(500)) {
+		t.Fatalf("total_target_xlm = %s, want 500", summary.TotalTargetXLM)
 	}
 }

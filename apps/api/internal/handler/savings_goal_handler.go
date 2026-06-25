@@ -25,6 +25,7 @@ type SavingsGoalManager interface {
 	List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error)
 	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Delete(ctx context.Context, userID, goalID uuid.UUID) error
+	Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error)
 }
 
 type SavingsGoalHandler struct {
@@ -37,6 +38,7 @@ func NewSavingsGoalHandler(svc SavingsGoalManager) *SavingsGoalHandler {
 
 func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/users/savings-goals", h.create)
+	mux.HandleFunc("GET /api/v1/users/savings-goals/summary", h.summary)
 	mux.HandleFunc("GET /api/v1/users/savings-goals", h.list)
 	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}", h.get)
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}", h.update)
@@ -130,6 +132,19 @@ func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 		goals = []savingsgoal.SavingsGoal{}
 	}
 	response.WriteJSON(w, http.StatusOK, response.OK(goals))
+}
+
+func (h *SavingsGoalHandler) summary(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	summary, err := h.svc.Summary(r.Context(), userID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(summary))
 }
 
 func (h *SavingsGoalHandler) update(w http.ResponseWriter, r *http.Request) {
