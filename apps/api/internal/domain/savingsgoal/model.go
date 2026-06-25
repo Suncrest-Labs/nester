@@ -15,6 +15,9 @@ var (
 	ErrGoalNotFound = errors.New("savings goal not found")
 	ErrInvalidGoal  = errors.New("invalid savings goal")
 	ErrUnauthorized = errors.New("unauthorized")
+	// ErrGoalCompleted is returned when an operation is not allowed on a goal
+	// that has already reached its target (e.g. changing its deadline).
+	ErrGoalCompleted = errors.New("savings goal already completed")
 )
 
 type GoalCategory string

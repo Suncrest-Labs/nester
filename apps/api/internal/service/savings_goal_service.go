@@ -41,7 +41,10 @@ type UpdateSavingsGoalInput struct {
 }
 
 func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
-	if err := validateSavingsGoalInput(in.TargetAmount, in.Currency, in.Deadline); err != nil {
+	if err := validateSavingsGoalInput(in.TargetAmount, in.Currency); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if err := validateCreateDeadline(in.Deadline.UTC()); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
 	category, err := resolveCategory(in.Category, true)
@@ -114,7 +117,22 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 		goal.Currency = savingsgoal.NormalizeCurrency(*in.Currency)
 	}
 	if in.Deadline != nil {
-		goal.Deadline = in.Deadline.UTC()
+		// Changing the deadline of a completed goal is not allowed (#684/#686).
+		balance, err := s.repo.SumVaultBalance(ctx, goal.UserID, goal.Currency)
+		if err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		if goal.TargetAmount.IsPositive() && balance.GreaterThanOrEqual(goal.TargetAmount) {
+			return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: cannot change deadline of a completed goal", savingsgoal.ErrGoalCompleted)
+		}
+		// The new deadline must be in the future. Extending an already-overdue
+		// (but not completed) goal to a future date is a legitimate use case,
+		// so the only rule on update is "must be in the future".
+		newDeadline := in.Deadline.UTC()
+		if !newDeadline.After(time.Now().UTC()) {
+			return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: deadline must be in the future", savingsgoal.ErrInvalidGoal)
+		}
+		goal.Deadline = newDeadline
 	}
 	if in.Description != nil {
 		goal.Description = strings.TrimSpace(*in.Description)
@@ -126,7 +144,9 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 		}
 		goal.Category = category
 	}
-	if err := validateSavingsGoalInput(goal.TargetAmount, goal.Currency, goal.Deadline); err != nil {
+	// Deadline is validated above (when changed); only amount/currency here, so
+	// other fields of an overdue goal can still be updated.
+	if err := validateSavingsGoalInput(goal.TargetAmount, goal.Currency); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
 	if err := s.repo.Update(ctx, goal); err != nil {
@@ -242,7 +262,12 @@ func resolveCategory(value string, defaultIfEmpty bool) (savingsgoal.GoalCategor
 	return savingsgoal.ParseCategory(value)
 }
 
-func validateSavingsGoalInput(target decimal.Decimal, currency string, deadline time.Time) error {
+// MinDeadlineLeadTime is the minimum distance into the future a new goal's
+// deadline must be. A deadline only an hour away is technically valid but
+// meaningless for a savings goal, so creation requires at least 24h (#686).
+const MinDeadlineLeadTime = 24 * time.Hour
+
+func validateSavingsGoalInput(target decimal.Decimal, currency string) error {
 	if !target.IsPositive() {
 		return fmt.Errorf("%w: target_amount must be positive", savingsgoal.ErrInvalidGoal)
 	}
@@ -254,8 +279,17 @@ func validateSavingsGoalInput(target decimal.Decimal, currency string, deadline 
 	if !savingsgoal.IsSupportedCurrency(normalized) {
 		return fmt.Errorf("%w: unsupported currency %q (supported: USDC, XLM)", savingsgoal.ErrInvalidGoal, currency)
 	}
-	if deadline.Before(time.Now().UTC()) {
+	return nil
+}
+
+// validateCreateDeadline enforces that a new goal's deadline is at least
+// MinDeadlineLeadTime in the future.
+func validateCreateDeadline(deadline time.Time) error {
+	if !deadline.After(time.Now().UTC()) {
 		return fmt.Errorf("%w: deadline must be in the future", savingsgoal.ErrInvalidGoal)
+	}
+	if deadline.Before(time.Now().UTC().Add(MinDeadlineLeadTime)) {
+		return fmt.Errorf("%w: deadline must be at least 24 hours in the future", savingsgoal.ErrInvalidGoal)
 	}
 	return nil
 }

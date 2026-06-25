@@ -233,6 +233,8 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 	switch {
 	case errors.Is(err, savingsgoal.ErrGoalNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("savings goal"))
+	case errors.Is(err, savingsgoal.ErrGoalCompleted):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_COMPLETED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:
