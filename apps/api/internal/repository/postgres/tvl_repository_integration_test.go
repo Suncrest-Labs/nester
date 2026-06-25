@@ -3,8 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,17 +23,13 @@ func (m mockTVLChain) TotalAssets(_ context.Context, _ string) (decimal.Decimal,
 	return m.assets, nil
 }
 
+// applyTVLMigrations delegates to applyPerformanceMigrations because the TVL
+// snapshot table is created by migration 031, which that helper already
+// applies. Kept as a single-purpose wrapper so the call site in
+// TestTVLTrackerIntegration_OneTick stays self-explanatory.
 func applyTVLMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 	applyPerformanceMigrations(t, db)
-	path := filepath.Join("..", "..", "..", "migrations", "024_create_vault_tvl_snapshots.up.sql")
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile migration: %v", err)
-	}
-	if _, err := db.Exec(string(contents)); err != nil {
-		t.Fatalf("apply tvl migration: %v", err)
-	}
 }
 
 func TestTVLTrackerIntegration_OneTick(t *testing.T) {

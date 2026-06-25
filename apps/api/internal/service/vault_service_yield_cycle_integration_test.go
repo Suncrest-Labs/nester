@@ -269,6 +269,20 @@ func openYieldCycleDB(t *testing.T) *sql.DB {
 
 func applyYieldCycleMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// Wipe every table in the public schema before applying so re-runs against
+	// a reused DB don't trip on non-idempotent statements from earlier
+	// migrations.
+	if _, err := db.Exec(`
+		DO $$
+		DECLARE r record;
+		BEGIN
+			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+			END LOOP;
+		END$$;
+	`); err != nil {
+		t.Fatalf("drop tables: %v", err)
+	}
 	// Migration ordering notes (also required for production):
 	//  - 008 creates vault_transactions with the `tx_hash` column.
 	//  - 033 renames `tx_hash` → `transaction_hash` and adds the fee columns.

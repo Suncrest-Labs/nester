@@ -226,12 +226,43 @@ func openIntegrationDB(t *testing.T) *sql.DB {
 func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 
+	// Wipe every table in the public schema before applying. The docker
+	// volume persists across container restarts, so tables created in prior
+	// runs must be dropped to avoid non-idempotent CREATE TABLE statements
+	// (e.g. 006_create_settlements_table) failing on the second run. CASCADE
+	// pulls in dependent objects; schema_migrations and any tables outside
+	// the public schema are untouched.
+	if _, err := db.Exec(`
+		DO $$
+		DECLARE r record;
+		BEGIN
+			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+			END LOOP;
+		END$$;
+	`); err != nil {
+		t.Fatalf("drop tables: %v", err)
+	}
+
+	// 033 must run BEFORE 023: 033 renames vault_transactions.tx_hash →
+	// transaction_hash, and 023 creates the UNIQUE INDEX on that column. 035
+	// is a byte-identical duplicate of 033 whose non-idempotent RENAME COLUMN
+	// would fail on re-runs, so it is intentionally skipped.
+	// 010 and 020 are deliberately omitted: they DROP users.email and RENAME
+	// users.name → display_name, which would break the seed helpers that
+	// INSERT into users (id, email, name). Apply either via a separate,
+	// opt-in helper if user-profile tests are extended.
 	for _, name := range []string{
 		"001_create_users_table.up.sql",
-		"004_create_vaults_table.up.sql",
+		"002_create_vaults_table.up.sql",
 		"005_create_allocations_table.up.sql",
 		"006_create_settlements_table.up.sql",
-		"007_update_users_table.up.sql",
+		"007_add_vault_deleted_at.up.sql",
+		"008_add_vault_transactions.up.sql",
+		"014_add_missing_columns.up.sql",
+		"027_user_profile_fields.up.sql",
+		"033_update_vault_transactions.up.sql",
+		"023_vault_transactions_hash_unique.up.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)

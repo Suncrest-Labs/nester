@@ -196,10 +196,11 @@ func scanTransaction(row transactionScanner) (transaction.Transaction, error) {
 	return model, nil
 }
 
+// nullString returns the trimmed value, or "" when trimmed input is empty.
+// We deliberately keep this returning "" (not nil) because columns such as
+// transactions.error_reason are NOT NULL with DEFAULT ''; sending nil would
+// produce `null value in column "error_reason" violates not-null constraint`.
 func nullString(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
 	return strings.TrimSpace(value)
 }
 

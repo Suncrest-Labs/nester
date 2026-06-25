@@ -16,16 +16,30 @@ import (
 )
 
 // applyTransactionMigrations applies the minimal set of migrations needed for
-// transaction repository integration tests. All statements use IF NOT EXISTS so
-// this is safe to run against a database that already has the schema.
+// transaction repository integration tests. We wipe every table in the public
+// schema before applying so re-runs against a reused DB don't trip on
+// non-idempotent statements like 006_create_settlements_table or
+// 003_create_transactions_table.
 func applyTransactionMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
+	if _, err := db.Exec(`
+		DO $$
+		DECLARE r record;
+		BEGIN
+			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+			END LOOP;
+		END$$;
+	`); err != nil {
+		t.Fatalf("drop tables: %v", err)
+	}
 	for _, name := range []string{
 		"001_create_users_table.up.sql",
 		"002_create_vaults_table.up.sql",
 		"005_create_allocations_table.up.sql",
 		"006_create_settlements_table.up.sql",
 		"003_create_transactions_table.up.sql",
+		"014_add_missing_columns.up.sql",
 		"009_add_confirmed_at_to_transactions.up.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "migrations", name)
