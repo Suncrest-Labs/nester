@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,10 +12,47 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsschedule"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/scheduler"
-	"github.com/suncrestlabs/nester/apps/api/internal/service"
 )
+
+// directDepositRecorder satisfies scheduler.DepositRecorder via the postgres
+// repository directly — no import of the service package (avoids import cycle).
+type directDepositRecorder struct{ repo *VaultRepository }
+
+func (d *directDepositRecorder) RecordScheduledDeposit(ctx context.Context, userID, vaultID uuid.UUID, amount decimal.Decimal, scheduleID uuid.UUID) error {
+	return d.repo.RecordDeposit(ctx, vaultID, vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               amount,
+		TransactionHash:      fmt.Sprintf("scheduled-%s", scheduleID),
+		SharesMintedOrBurned: decimal.Zero,
+		SharePriceAtTime:     decimal.NewFromInt(1),
+	})
+}
+
+// directGoalProgressChecker satisfies scheduler.GoalProgressChecker.
+type directGoalProgressChecker struct{ repo *SavingsGoalRepository }
+
+func (d *directGoalProgressChecker) IsGoalCompleted(ctx context.Context, goalID, userID uuid.UUID) (bool, string, error) {
+	goal, err := d.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return false, "", err
+	}
+	if goal.UserID != userID {
+		return false, "", savingsgoal.ErrGoalNotFound
+	}
+	bal, err := d.repo.SumVaultBalance(ctx, userID, string(goal.Currency))
+	if err != nil {
+		return false, "", err
+	}
+	name := goal.Description
+	if name == "" {
+		name = "your goal"
+	}
+	return bal.GreaterThanOrEqual(goal.TargetAmount), name, nil
+}
 
 func applySavingsScheduleMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
@@ -22,7 +60,7 @@ func applySavingsScheduleMigrations(t *testing.T, db *sql.DB) {
 	for _, name := range []string{
 		"026_create_savings_goals.up.sql",
 		"037_add_savings_goal_category.up.sql",
-		"038_create_savings_schedules.up.sql",
+		"039_create_savings_schedules.up.sql",
 	} {
 		applyMigrationFile(t, db, name)
 	}
@@ -93,9 +131,8 @@ func TestRecurringDepositJobIntegration(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	ledgerVaultSvc := service.NewVaultService(vaultRepo)
-	depositSvc := service.NewScheduledDepositService(ledgerVaultSvc)
-	goalProgressSvc := service.NewGoalProgressService(goalRepo)
+	depositSvc := &directDepositRecorder{repo: vaultRepo}
+	goalProgressSvc := &directGoalProgressChecker{repo: goalRepo}
 
 	job := scheduler.NewRecurringDepositJob(
 		scheduler.RecurringDepositConfig{Enabled: true},

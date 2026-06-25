@@ -321,6 +321,7 @@ func run() error {
 		nil,
 	)
 
+
 	var ready atomic.Bool
 	ready.Store(true)
 

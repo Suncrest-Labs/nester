@@ -15,8 +15,8 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
-	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
@@ -63,6 +63,7 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/vaults/{id}", h.getVault)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/allocations", h.getAllocations)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/harvest", h.harvestVault)
+	mux.HandleFunc("GET /api/v1/vaults/{id}/harvest/preview", h.previewHarvest)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/my-position", h.getMyPosition)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/projection", h.getProjection)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/preview-deposit", h.previewDeposit)
@@ -270,6 +271,33 @@ func (h *VaultHandler) harvestVault(w http.ResponseWriter, r *http.Request) {
 			Data:      result,
 			Timestamp: time.Now().UTC(),
 		})
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(result))
+}
+
+func (h *VaultHandler) previewHarvest(w http.ResponseWriter, r *http.Request) {
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	userID, err := h.authenticatedUserID(w, r)
+	if err != nil {
+		return
+	}
+
+	compound := r.URL.Query().Get("compound") == "true"
+
+	result, err := h.service.PreviewHarvest(r.Context(), service.PreviewHarvestInput{
+		VaultID:  vaultID,
+		UserID:   userID,
+		Compound: compound,
+	})
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(result))

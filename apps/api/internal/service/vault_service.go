@@ -55,8 +55,8 @@ type HarvestResult struct {
 }
 
 type VaultService struct {
-	repository            vault.Repository
-	depositInvoker        VaultDepositInvoker
+	repository             vault.Repository
+	depositInvoker         VaultDepositInvoker
 	defaultHarvestCompound bool
 }
 
@@ -122,42 +122,42 @@ func (s *VaultService) SetHarvestDefaultCompound(compound bool) {
 // ── Existing methods ─────────────────────────────────────────────────────────
 
 func (s *VaultService) CreateVault(ctx context.Context, input CreateVaultInput) (vault.Vault, error) {
-	       if input.UserID == uuid.Nil {
-		       return vault.Vault{}, vault.ErrInvalidVault
-	       }
-	       contractAddress := strings.TrimSpace(input.ContractAddress)
-	       if contractAddress == "" {
-		       return vault.Vault{}, vault.ErrInvalidVault
-	       }
-	       currency := strings.ToUpper(strings.TrimSpace(input.Currency))
-	       if currency == "" {
-		       return vault.Vault{}, vault.ErrInvalidVault
-	       }
-	       status := vault.StatusActive
-	       if s := strings.TrimSpace(input.Status); s != "" {
-		       parsedStatus, err := vault.ParseStatus(s)
-		       if err != nil {
-			       return vault.Vault{}, err
-		       }
-		       status = parsedStatus
-	       }
-	       now := time.Now()
-	       model := vault.Vault{
-		       ID:              uuid.New(),
-		       UserID:          input.UserID,
-		       ContractAddress: contractAddress,
-		       TotalDeposited:  decimal.Zero,
-		       CurrentBalance:  decimal.Zero,
-		       Currency:        currency,
-		       Status:          status,
-		       CreatedAt:       now,
-		       UpdatedAt:       now,
-	       }
-	       // Defensive: ensure all fields are set and normalized
-	       if model.ID == uuid.Nil || model.UserID == uuid.Nil || model.ContractAddress == "" || model.Currency == "" || model.Status == "" {
-		       return vault.Vault{}, vault.ErrInvalidVault
-	       }
-	       return s.repository.CreateVault(ctx, model)
+	if input.UserID == uuid.Nil {
+		return vault.Vault{}, vault.ErrInvalidVault
+	}
+	contractAddress := strings.TrimSpace(input.ContractAddress)
+	if contractAddress == "" {
+		return vault.Vault{}, vault.ErrInvalidVault
+	}
+	currency := strings.ToUpper(strings.TrimSpace(input.Currency))
+	if currency == "" {
+		return vault.Vault{}, vault.ErrInvalidVault
+	}
+	status := vault.StatusActive
+	if s := strings.TrimSpace(input.Status); s != "" {
+		parsedStatus, err := vault.ParseStatus(s)
+		if err != nil {
+			return vault.Vault{}, err
+		}
+		status = parsedStatus
+	}
+	now := time.Now()
+	model := vault.Vault{
+		ID:              uuid.New(),
+		UserID:          input.UserID,
+		ContractAddress: contractAddress,
+		TotalDeposited:  decimal.Zero,
+		CurrentBalance:  decimal.Zero,
+		Currency:        currency,
+		Status:          status,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	// Defensive: ensure all fields are set and normalized
+	if model.ID == uuid.Nil || model.UserID == uuid.Nil || model.ContractAddress == "" || model.Currency == "" || model.Status == "" {
+		return vault.Vault{}, vault.ErrInvalidVault
+	}
+	return s.repository.CreateVault(ctx, model)
 }
 
 func (s *VaultService) GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error) {
@@ -696,6 +696,74 @@ func decimalScale(value decimal.Decimal) int32 {
 		return 0
 	}
 	return -exponent
+}
+
+// HarvestPreview is returned by GET /api/v1/vaults/{id}/harvest/preview.
+// Same shape as HarvestResult but no TxHash — nothing is written to DB or chain.
+type HarvestPreview struct {
+	VaultID            string `json:"vault_id"`
+	GrossYieldUSDC     string `json:"gross_yield_usdc"`
+	PerformanceFeeUSDC string `json:"performance_fee_usdc"`
+	NetYieldUSDC       string `json:"net_yield_usdc"`
+	Compounded         bool   `json:"compounded"`
+	EstimatedNewShares string `json:"estimated_new_shares,omitempty"`
+	PerformanceFeeBPS  int    `json:"performance_fee_bps"`
+	Impaired           bool   `json:"impaired,omitempty"`
+}
+
+type PreviewHarvestInput struct {
+	VaultID  uuid.UUID
+	UserID   uuid.UUID
+	Compound bool
+}
+
+// PreviewHarvest computes what a harvest would yield without writing anything
+// to the DB or submitting any on-chain transaction.
+func (s *VaultService) PreviewHarvest(ctx context.Context, input PreviewHarvestInput) (HarvestPreview, error) {
+	if input.VaultID == uuid.Nil || input.UserID == uuid.Nil {
+		return HarvestPreview{}, vault.ErrInvalidVault
+	}
+
+	existing, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return HarvestPreview{}, err
+	}
+	if existing.UserID != input.UserID {
+		return HarvestPreview{}, vault.ErrVaultForbidden
+	}
+
+	grossYield := harvestableYield(existing)
+	if grossYield.Cmp(decimal.Zero) <= 0 {
+		return HarvestPreview{
+			VaultID:            existing.ID.String(),
+			GrossYieldUSDC:     formatUSDCAmount(decimal.Zero),
+			PerformanceFeeUSDC: formatUSDCAmount(decimal.Zero),
+			NetYieldUSDC:       formatUSDCAmount(decimal.Zero),
+			PerformanceFeeBPS:  defaultHarvestPerformanceFeeBPS,
+			Impaired:           existing.CurrentBalance.LessThan(existing.TotalDeposited),
+		}, nil
+	}
+
+	performanceFee := grossYield.Mul(decimal.NewFromInt(defaultHarvestPerformanceFeeBPS)).
+		Div(decimal.NewFromInt(10_000)).
+		Round(vault.MaxAmountScale)
+	netYield := grossYield.Sub(performanceFee)
+
+	preview := HarvestPreview{
+		VaultID:            existing.ID.String(),
+		GrossYieldUSDC:     formatUSDCAmount(grossYield),
+		PerformanceFeeUSDC: formatUSDCAmount(performanceFee),
+		NetYieldUSDC:       formatUSDCAmount(netYield),
+		Compounded:         input.Compound,
+		PerformanceFeeBPS:  defaultHarvestPerformanceFeeBPS,
+	}
+
+	if input.Compound {
+		shares := estimateSharesMinted(existing, netYield)
+		preview.EstimatedNewShares = formatUSDCAmount(shares)
+	}
+
+	return preview, nil
 }
 
 // ── Preview endpoints ─────────────────────────────────────────────────────────

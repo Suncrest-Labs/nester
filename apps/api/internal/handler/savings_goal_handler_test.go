@@ -126,6 +126,27 @@ func (m *mockSavingsGoalService) Summary(_ context.Context, userID uuid.UUID) (s
 	}
 	return summary, nil
 }
+func (m *mockSavingsGoalService) Complete(_ context.Context, userID, goalID uuid.UUID, action string) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	return g, nil
+}
+func (m *mockSavingsGoalService) Pause(_ context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	return g, nil
+}
+func (m *mockSavingsGoalService) Resume(_ context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	return g, nil
+}
 
 func withAuthUser(next http.Handler, userID uuid.UUID) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

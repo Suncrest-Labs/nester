@@ -96,6 +96,15 @@ func (m *memorySavingsGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.
 	m.goals[goalID] = g
 	return nil
 }
+func (m *memorySavingsGoalRepo) SumRecentDeposits(context.Context, uuid.UUID, string, time.Time) (decimal.Decimal, error) {
+	return decimal.Zero, nil
+}
+func (m *memorySavingsGoalRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
+func (m *memorySavingsGoalRepo) MarkCompleted(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
 
 type recordingGoalMilestoneNotifier struct {
 	mu    sync.Mutex

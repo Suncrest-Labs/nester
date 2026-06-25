@@ -87,7 +87,22 @@ func (m *memoryGoalRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error    
 func (m *memoryGoalRepo) SumVaultBalance(context.Context, uuid.UUID, string) (decimal.Decimal, error) {
 	return decimal.Zero, nil
 }
-func (m *memoryGoalRepo) UpdateMilestones(context.Context, uuid.UUID, []int) error {
+func (m *memoryGoalRepo) MarkCompleted(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
+func (m *memoryGoalRepo) SumRecentDeposits(context.Context, uuid.UUID, string, time.Time) (decimal.Decimal, error) {
+	return decimal.Zero, nil
+}
+func (m *memoryGoalRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
+func (m *memoryGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.UUID, milestones []int) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.NotifiedMilestones = append([]int(nil), milestones...)
+	m.goals[goalID] = g
 	return nil
 }
 
@@ -95,8 +110,9 @@ type memoryVaultRepo struct {
 	vaults map[uuid.UUID]vault.Vault
 }
 
-func (m *memoryVaultRepo) CreateVault(context.Context, vault.Vault) (vault.Vault, error) {
-	return vault.Vault{}, nil
+func (m *memoryVaultRepo) CreateVault(_ context.Context, v vault.Vault) (vault.Vault, error) {
+	m.vaults[v.ID] = v
+	return v, nil
 }
 func (m *memoryVaultRepo) GetVault(_ context.Context, id uuid.UUID) (vault.Vault, error) {
 	v, ok := m.vaults[id]
@@ -114,13 +130,27 @@ func (m *memoryVaultRepo) ListVaults(context.Context, vault.ListFilter) ([]vault
 func (m *memoryVaultRepo) RecordDeposit(context.Context, uuid.UUID, vault.TransactionRecord) error {
 	return nil
 }
-func (m *memoryVaultRepo) UpdateVaultBalances(context.Context, uuid.UUID, decimal.Decimal, decimal.Decimal) error {
+func (m *memoryVaultRepo) UpdateVaultBalances(_ context.Context, id uuid.UUID, td, cb decimal.Decimal) error {
+	v, ok := m.vaults[id]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	v.TotalDeposited = td
+	v.CurrentBalance = cb
+	m.vaults[id] = v
 	return nil
 }
 func (m *memoryVaultRepo) ReplaceAllocations(context.Context, uuid.UUID, []vault.Allocation) error {
 	return nil
 }
-func (m *memoryVaultRepo) UpdateVault(context.Context, uuid.UUID, string, vault.VaultStatus) error {
+func (m *memoryVaultRepo) UpdateVault(_ context.Context, id uuid.UUID, addr string, status vault.VaultStatus) error {
+	v, ok := m.vaults[id]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	v.ContractAddress = addr
+	v.Status = status
+	m.vaults[id] = v
 	return nil
 }
 func (m *memoryVaultRepo) RecordWithdrawal(context.Context, uuid.UUID, vault.TransactionRecord) error {
@@ -129,7 +159,8 @@ func (m *memoryVaultRepo) RecordWithdrawal(context.Context, uuid.UUID, vault.Tra
 func (m *memoryVaultRepo) RecordHarvest(context.Context, vault.HarvestRecordInput) error {
 	return nil
 }
-func (m *memoryVaultRepo) SoftDeleteVault(context.Context, uuid.UUID) error {
+func (m *memoryVaultRepo) SoftDeleteVault(_ context.Context, id uuid.UUID) error {
+	delete(m.vaults, id)
 	return nil
 }
 func (m *memoryVaultRepo) ListDeposits(context.Context, uuid.UUID) ([]vault.VaultTransaction, error) {
