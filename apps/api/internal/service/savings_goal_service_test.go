@@ -150,7 +150,7 @@ func TestSavingsGoalService_MilestoneNotifications(t *testing.T) {
 
 	t.Run("24 percent no notification", func(t *testing.T) {
 		repo := newMemorySavingsGoalRepo()
-		repo.balances[userID] = decimal.NewFromInt(24)
+		repo.setBalance(userID, "USDC", decimal.NewFromInt(24))
 		notifier := &recordingGoalMilestoneNotifier{}
 		svc := NewSavingsGoalService(repo, notifier)
 
@@ -171,7 +171,7 @@ func TestSavingsGoalService_MilestoneNotifications(t *testing.T) {
 
 	t.Run("25 percent fires notification", func(t *testing.T) {
 		repo := newMemorySavingsGoalRepo()
-		repo.balances[userID] = decimal.NewFromInt(25)
+		repo.setBalance(userID, "USDC", decimal.NewFromInt(25))
 		notifier := &recordingGoalMilestoneNotifier{}
 		svc := NewSavingsGoalService(repo, notifier)
 
@@ -195,7 +195,7 @@ func TestSavingsGoalService_MilestoneNotifications(t *testing.T) {
 
 	t.Run("25 percent again no duplicate", func(t *testing.T) {
 		repo := newMemorySavingsGoalRepo()
-		repo.balances[userID] = decimal.NewFromInt(25)
+		repo.setBalance(userID, "USDC", decimal.NewFromInt(25))
 		notifier := &recordingGoalMilestoneNotifier{}
 		svc := NewSavingsGoalService(repo, notifier)
 
@@ -359,7 +359,7 @@ func TestSavingsGoalService_Create_ValidXLMGoal(t *testing.T) {
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
 	repo.setBalance(userID, "XLM", decimal.NewFromInt(120))
-	svc := NewSavingsGoalService(repo)
+	svc := NewSavingsGoalService(repo, nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(500),
@@ -383,7 +383,7 @@ func TestSavingsGoalService_Create_ValidUSDCGoal(t *testing.T) {
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
 	repo.setBalance(userID, "USDC", decimal.NewFromInt(250))
-	svc := NewSavingsGoalService(repo)
+	svc := NewSavingsGoalService(repo, nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -404,7 +404,7 @@ func TestSavingsGoalService_Create_ValidUSDCGoal(t *testing.T) {
 func TestSavingsGoalService_Create_InvalidCurrency(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo())
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
 
 	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -438,7 +438,7 @@ func TestSavingsGoalService_Summary_MixedCurrencies(t *testing.T) {
 		Currency:     savingsgoal.CurrencyXLM,
 		Deadline:     testDeadline(),
 	}
-	svc := NewSavingsGoalService(repo)
+	svc := NewSavingsGoalService(repo, nil)
 
 	summary, err := svc.Summary(ctx, userID)
 	if err != nil {
@@ -458,5 +458,64 @@ func TestSavingsGoalService_Summary_MixedCurrencies(t *testing.T) {
 	}
 	if !summary.TotalTargetXLM.Equal(decimal.NewFromInt(500)) {
 		t.Fatalf("total_target_xlm = %s, want 500", summary.TotalTargetXLM)
+	}
+	// #683: status counts, USDC overall progress, next deadline.
+	if summary.ActiveGoals != 2 || summary.CompletedGoals != 0 {
+		t.Fatalf("active/completed = %d/%d, want 2/0", summary.ActiveGoals, summary.CompletedGoals)
+	}
+	if summary.OverallProgressPct != 10 { // 100 saved / 1000 target USDC
+		t.Fatalf("overall_progress_pct = %v, want 10", summary.OverallProgressPct)
+	}
+	if summary.NextDeadline == nil {
+		t.Fatal("next_deadline = nil, want the nearest active deadline")
+	}
+}
+
+func TestSavingsGoalService_Summary_NoGoals(t *testing.T) {
+	ctx := context.Background()
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+
+	summary, err := svc.Summary(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("Summary() error = %v", err)
+	}
+	if summary.GoalCount != 0 || summary.ActiveGoals != 0 || summary.CompletedGoals != 0 {
+		t.Fatalf("counts = %+v, want all zero", summary)
+	}
+	if summary.OverallProgressPct != 0 {
+		t.Fatalf("overall_progress_pct = %v, want 0", summary.OverallProgressPct)
+	}
+	if summary.NextDeadline != nil {
+		t.Fatalf("next_deadline = %v, want nil", summary.NextDeadline)
+	}
+}
+
+func TestSavingsGoalService_Summary_CompletedAndProgressCap(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	repo.setBalance(userID, "USDC", decimal.NewFromInt(5000)) // saved exceeds target
+	goalID := uuid.New()
+	repo.goals[goalID] = savingsgoal.SavingsGoal{
+		ID:           goalID,
+		UserID:       userID,
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     savingsgoal.CurrencyUSDC,
+		Deadline:     testDeadline(),
+	}
+	svc := NewSavingsGoalService(repo, nil)
+
+	summary, err := svc.Summary(ctx, userID)
+	if err != nil {
+		t.Fatalf("Summary() error = %v", err)
+	}
+	if summary.CompletedGoals != 1 || summary.ActiveGoals != 0 {
+		t.Fatalf("active/completed = %d/%d, want 0/1", summary.ActiveGoals, summary.CompletedGoals)
+	}
+	if summary.OverallProgressPct != 100 {
+		t.Fatalf("overall_progress_pct = %v, want 100 (capped)", summary.OverallProgressPct)
+	}
+	if summary.NextDeadline != nil {
+		t.Fatalf("next_deadline = %v, want nil (no active goals)", summary.NextDeadline)
 	}
 }

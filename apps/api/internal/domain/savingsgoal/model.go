@@ -58,6 +58,16 @@ type SavingsGoalsSummary struct {
 	TotalSavedXLM   decimal.Decimal `json:"total_saved_xlm"`
 	TotalTargetXLM  decimal.Decimal `json:"total_target_xlm"`
 	GoalCount       int             `json:"goal_count"`
+	// ActiveGoals + CompletedGoals partition GoalCount; a goal counts as
+	// completed once its current amount reaches its target (#683).
+	ActiveGoals    int `json:"active_goals"`
+	CompletedGoals int `json:"completed_goals"`
+	// OverallProgressPct is USDC progress (saved/target, capped at 100). USDC
+	// only, to avoid cross-currency conversion the rest of this type avoids.
+	OverallProgressPct float64 `json:"overall_progress_pct"`
+	// NextDeadline is the nearest future deadline across active goals, or nil.
+	// No omitempty so it serializes as JSON null when absent.
+	NextDeadline *time.Time `json:"next_deadline"`
 }
 
 func ParseCategory(value string) (GoalCategory, error) {

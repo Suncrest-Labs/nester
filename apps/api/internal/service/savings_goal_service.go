@@ -147,12 +147,13 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 
 	summary := savingsgoal.SavingsGoalsSummary{GoalCount: len(goals)}
 
+	now := time.Now().UTC()
 	for _, goal := range goals {
 		enriched, err := s.enrichProgress(ctx, goal)
 		if err != nil {
 			return savingsgoal.SavingsGoalsSummary{}, err
 		}
-		switch enriched.Currency {
+		switch savingsgoal.NormalizeCurrency(enriched.Currency) {
 		case savingsgoal.CurrencyUSDC:
 			summary.TotalTargetUSDC = summary.TotalTargetUSDC.Add(enriched.TargetAmount)
 			summary.TotalSavedUSDC = summary.TotalSavedUSDC.Add(enriched.CurrentAmount)
@@ -160,6 +161,33 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 			summary.TotalTargetXLM = summary.TotalTargetXLM.Add(enriched.TargetAmount)
 			summary.TotalSavedXLM = summary.TotalSavedXLM.Add(enriched.CurrentAmount)
 		}
+
+		// Goal status counts + nearest upcoming deadline across active goals (#683).
+		completed := enriched.TargetAmount.IsPositive() &&
+			enriched.CurrentAmount.GreaterThanOrEqual(enriched.TargetAmount)
+		if completed {
+			summary.CompletedGoals++
+		} else {
+			summary.ActiveGoals++
+			if enriched.Deadline.After(now) &&
+				(summary.NextDeadline == nil || enriched.Deadline.Before(*summary.NextDeadline)) {
+				d := enriched.Deadline
+				summary.NextDeadline = &d
+			}
+		}
+	}
+
+	// Overall progress is USDC-denominated, capped at 100 (#683).
+	if summary.TotalTargetUSDC.IsPositive() {
+		pct, _ := summary.TotalSavedUSDC.Div(summary.TotalTargetUSDC).
+			Mul(decimal.NewFromInt(100)).Float64()
+		if pct > 100 {
+			pct = 100
+		}
+		if pct < 0 {
+			pct = 0
+		}
+		summary.OverallProgressPct = pct
 	}
 
 	return summary, nil
