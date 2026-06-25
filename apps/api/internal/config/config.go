@@ -33,6 +33,7 @@ type Config struct {
 	bank                  BankConfig
 	bankAccountCipherKey  string
 	transactionPoller     TransactionPollerConfig
+	recurringDeposit      RecurringDepositConfig
 }
 
 // TransactionPollerConfig governs the background loop that reconciles pending
@@ -235,6 +236,11 @@ func Load() (*Config, error) {
 			interval: loader.durationDefault("TX_POLLER_INTERVAL", 15*time.Second),
 			minAge:   loader.durationDefault("TX_POLLER_MIN_AGE", 30*time.Second),
 		},
+		recurringDeposit: RecurringDepositConfig{
+			enabled:    loader.boolDefault("RECURRING_DEPOSIT_ENABLED", true),
+			interval:   loader.durationDefault("RECURRING_DEPOSIT_INTERVAL", time.Hour),
+			minDeposit: loader.stringDefault("MIN_DEPOSIT_AMOUNT", "0"),
+		},
 	}
 
 	if cfg.bankAccountCipherKey == "" && environment == "development" {
@@ -395,6 +401,29 @@ func (t TransactionPollerConfig) MinAge() time.Duration {
 	return t.minAge
 }
 
+// RecurringDepositConfig governs the hourly savings schedule deposit loop.
+type RecurringDepositConfig struct {
+	enabled      bool
+	interval     time.Duration
+	minDeposit   string
+}
+
+func (c Config) RecurringDeposit() RecurringDepositConfig {
+	return c.recurringDeposit
+}
+
+func (r RecurringDepositConfig) Enabled() bool {
+	return r.enabled
+}
+
+func (r RecurringDepositConfig) Interval() time.Duration {
+	return r.interval
+}
+
+func (r RecurringDepositConfig) MinDepositAmount() string {
+	return r.minDeposit
+}
+
 func (b BankConfig) PaystackKey() string {
 	return b.paystackKey
 }
@@ -520,6 +549,10 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.transactionPoller.minAge < 0 {
 		loader.addError("TX_POLLER_MIN_AGE must not be negative")
+	}
+
+	if c.recurringDeposit.interval <= 0 {
+		loader.addError("RECURRING_DEPOSIT_INTERVAL must be greater than 0")
 	}
 
 	if c.stellar.withdrawalSlippageBps <= 0 || c.stellar.withdrawalSlippageBps > 300 {

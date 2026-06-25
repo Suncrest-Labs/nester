@@ -47,9 +47,10 @@ const (
 	EventVaultAPYDrop        EventType = "vault_apy_drop"
 	EventVaultPaused         EventType = "vault_paused"
 	EventRebalanceExecuted   EventType = "rebalance_executed"
-	EventKYCApproved         EventType = "kyc_approved"
-	EventKYCRejected         EventType = "kyc_rejected"
-	EventGoalMilestone       EventType = "goal_milestone"
+	EventKYCApproved               EventType = "kyc_approved"
+	EventKYCRejected               EventType = "kyc_rejected"
+	EventGoalMilestone             EventType = "goal_milestone"
+	EventScheduledDepositCompleted EventType = "scheduled_deposit_completed"
 )
 
 // ChannelKind is the transport a notification is delivered over.
@@ -72,9 +73,10 @@ var eventChannelMatrix = map[EventType][]ChannelKind{
 	EventVaultAPYDrop:        {ChannelEmail},
 	EventVaultPaused:         {ChannelEmail, ChannelWebSocket},
 	EventRebalanceExecuted:   {ChannelWebSocket},
-	EventKYCApproved:         {ChannelEmail},
-	EventKYCRejected:         {ChannelEmail},
-	EventGoalMilestone:       {ChannelPush},
+	EventKYCApproved:               {ChannelEmail},
+	EventKYCRejected:               {ChannelEmail},
+	EventGoalMilestone:             {ChannelPush},
+	EventScheduledDepositCompleted: {ChannelEmail, ChannelWebSocket, ChannelPush},
 }
 
 // ChannelsFor returns the channels configured to deliver the given event,

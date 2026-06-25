@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 
 	"github.com/golang-migrate/migrate/v4"
 	migratedb "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -30,6 +31,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+	"github.com/suncrestlabs/nester/apps/api/internal/scheduler"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	performancesvc "github.com/suncrestlabs/nester/apps/api/internal/service/performance"
 	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
@@ -306,6 +308,14 @@ func run() error {
 	defer cancelPoller()
 	go txPoller.Run(pollerCtx)
 
+	notificationDispatcher := notifications.New(
+		[]notifications.Channel{
+			notifications.NewWebSocketChannel(wsHub),
+		},
+		notificationRepository,
+		nil,
+	)
+
 	var ready atomic.Bool
 	ready.Store(true)
 
@@ -375,6 +385,30 @@ func run() error {
 	)
 	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc)
 	savingsGoalHandler.Register(mux)
+
+	minDeposit, _ := decimal.NewFromString(cfg.RecurringDeposit().MinDepositAmount())
+	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)
+	savingsScheduleSvc := service.NewSavingsScheduleService(savingsScheduleRepo, savingsGoalRepo, vaultRepository, minDeposit)
+	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
+	savingsScheduleHandler.Register(mux)
+
+	ledgerVaultService := service.NewVaultService(vaultRepository)
+	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
+	goalProgressSvc := service.NewGoalProgressService(savingsGoalRepo)
+	recurringDepositJob := scheduler.NewRecurringDepositJob(
+		scheduler.RecurringDepositConfig{
+			Enabled:  cfg.RecurringDeposit().Enabled(),
+			Interval: cfg.RecurringDeposit().Interval(),
+		},
+		savingsScheduleRepo,
+		scheduledDepositSvc,
+		goalProgressSvc,
+		scheduler.NotificationDepositNotifier{Dispatcher: notificationDispatcher},
+		baseLogger.WithGroup("recurring-deposit"),
+	)
+	recurringCtx, cancelRecurring := context.WithCancel(context.Background())
+	defer cancelRecurring()
+	go recurringDepositJob.Run(recurringCtx)
 
 	// User vault rebalance (suggestions + execution)
 	vaultRebalanceSvc := service.NewVaultRebalanceService(vaultRepository, adminService)
