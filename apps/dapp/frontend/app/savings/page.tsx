@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRef, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     Unlock,
@@ -16,8 +15,6 @@ import {
     Info,
     Clock,
     X,
-    Calendar,
-    Target,
     Activity,
     Sparkles,
 } from "lucide-react";
@@ -37,102 +34,19 @@ import {
 } from "@/lib/stellar/transaction";
 import SavingsChart from "@/components/analytics/SavingsChart";
 import { type APYHistoryPeriod } from "@/lib/api/vaults";
-import { savingsGoals } from "@/lib/api/savings-goals";
 import { useSavingsChartData } from "@/hooks/useSavingsChartData";
-import { useQuery } from "@tanstack/react-query";
+import { useSavingsGoals } from "@/hooks/useSavingsGoals";
+import { useYieldOpportunities } from "@/hooks/useYieldOpportunities";
 import { intelligenceApi, type SavingsPlanResponse } from "@/lib/api/intelligence";
+import {
+  SAVINGS_VAULT_DEFINITIONS,
+  type SavingsVault,
+  type SavingsVaultType,
+} from "@/lib/savings/vault-definitions";
+import { buildSavingsVaults } from "@/lib/savings/apply-live-apy";
+import { SavingsGoalsSection } from "@/components/savings/SavingsGoalsSection";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-
-type SavingsVaultType = "flexible" | "auto-compound" | "stablecoin-yield" | "custom";
-
-interface SavingsVault {
-    id: string;
-    type: SavingsVaultType;
-    name: string;
-    description: string;
-    summary: string; // short tooltip summary
-    apy: number;
-    apyLabel: string;
-    lockDays: number | null;
-    penaltyPct: number;
-    badge: string;
-    features: string[];
-    supportedAssets: ("USDC" | "XLM")[];
-}
-
-// ── Vault Definitions ─────────────────────────────────────────────────────────
-
-const SAVINGS_VAULTS: SavingsVault[] = [
-    {
-        id: "flexible-savings",
-        type: "flexible",
-        name: "Flexible Savings",
-        description:
-            "Earn yield on your USDC with no lockup period. Deposit and withdraw anytime — ideal for an emergency fund or short-term savings.",
-        summary:
-            "No lock period. Funds sit in audited lending pools and accrue yield daily. Withdraw the full balance at any time with no fees.",
-        apy: 0.052,
-        apyLabel: "4–6%",
-        lockDays: null,
-
-        penaltyPct: 0,
-        badge: "No lockup",
-        features: ["Withdraw anytime", "No exit fee", "Daily yield accrual"],
-        supportedAssets: ["USDC", "XLM"],
-    },
-    {
-        id: "auto-compound",
-        type: "auto-compound",
-        name: "Auto-Compound",
-        description:
-            "Yield is automatically reinvested every 24 hours, compounding your returns without any manual action. Set it and grow.",
-        summary:
-            "Yield harvested daily and re-deposited automatically. Effective APY is higher than the base rate due to continuous compounding. No manual claiming needed.",
-        apy: 0.088,
-        apyLabel: "8–10%",
-        lockDays: null,
-
-        penaltyPct: 0,
-        badge: "Auto-reinvest",
-        features: ["Daily auto-compounding", "No manual claiming", "No exit fee"],
-        supportedAssets: ["USDC", "XLM"],
-    },
-    {
-        id: "stablecoin-yield",
-        type: "stablecoin-yield",
-        name: "Stablecoin Yield",
-        description:
-            "Spread across USDC and XLM liquidity pools for diversified, optimised stable yield.",
-        summary:
-            "Funds are split across USDC/XLM pools. Rebalanced weekly to chase the highest stable yield. Minimises single-protocol risk while keeping APY competitive.",
-        apy: 0.105,
-        apyLabel: "9–12%",
-        lockDays: null,
-
-        penaltyPct: 0,
-        badge: "Multi-pool",
-        features: ["Multi-stablecoin exposure", "Weekly rebalance", "No exit fee"],
-        supportedAssets: ["USDC", "XLM"],
-    },
-    {
-        id: "custom-savings",
-        type: "custom",
-        name: "Custom Goal",
-        description:
-            "Name your goal, set a target amount and timeline. Track progress toward a specific savings target — holiday, house deposit, anything.",
-        summary:
-            "Same underlying yield as Flexible Savings, but wrapped in goal tracking. Set a name, target amount, and target date. See progress in your portfolio.",
-        apy: 0.052,
-        apyLabel: "4–6%",
-        lockDays: null,
-
-        penaltyPct: 0,
-        badge: "Goal-based",
-        features: ["Named savings goal", "Target amount tracking", "Withdraw anytime"],
-        supportedAssets: ["USDC", "XLM"],
-    },
-];
 
 const TYPE_ICONS: Record<SavingsVaultType, React.ElementType> = {
     flexible: Unlock,
@@ -351,10 +265,12 @@ function SavingsVaultCard({
     vault,
     index,
     onDeposit,
+    isApyLoading,
 }: {
     vault: SavingsVault;
     index: number;
     onDeposit: (v: SavingsVault) => void;
+    isApyLoading?: boolean;
 }) {
     const Icon = TYPE_ICONS[vault.type];
 
@@ -380,7 +296,11 @@ function SavingsVaultCard({
                 </div>
                 <div className="flex items-start gap-2 shrink-0">
                     <div className="text-right">
-                        <p className="font-mono text-2xl text-black leading-none">{vault.apyLabel}</p>
+                        {isApyLoading ? (
+                            <div className="ml-auto h-8 w-16 animate-pulse rounded bg-black/10" aria-label="Loading APY" />
+                        ) : (
+                            <p className="font-mono text-2xl text-black leading-none">{vault.apyLabel}</p>
+                        )}
                         <p className="text-[10px] text-black/60 font-medium uppercase tracking-wide mt-1">APY</p>
                     </div>
                     <InfoTooltip text={vault.summary} />
@@ -784,14 +704,14 @@ function DepositModal({
 // ── Savings Overview ──────────────────────────────────────────────────────────
 const CHART_PERIODS: APYHistoryPeriod[] = ["7d", "30d", "90d"];
 
-function SavingsOverview() {
+function SavingsOverview({ savingsVaults }: { savingsVaults: SavingsVault[] }) {
     const { positions } = usePortfolio();
     const [period, setPeriod] = useState<APYHistoryPeriod>("30d");
 
     const activeVaultPositions = useMemo(() => {
-        const ids = SAVINGS_VAULTS.map((v) => v.id);
+        const ids = savingsVaults.map((v) => v.id);
         return positions.filter((p) => ids.includes(p.vaultId));
-    }, [positions]);
+    }, [positions, savingsVaults]);
 
     // Distinct vaults the user actually holds, used to decide what to chart.
     const userVaults = useMemo(() => {
@@ -803,11 +723,7 @@ function SavingsOverview() {
     }, [activeVaultPositions]);
 
     // Linked savings goals (#688): prefer a goal-linked vault when present.
-    const { data: goals } = useQuery({
-        queryKey: ["savings-goals"],
-        queryFn: () => savingsGoals.list(),
-        staleTime: 5 * 60 * 1000,
-    });
+    const { data: goals } = useSavingsGoals();
     const linkedVaultId = useMemo(
         () =>
             goals?.find(
@@ -974,22 +890,21 @@ const FILTERS: { label: string; value: SavingsVaultType | "all" }[] = [
 export default function SavingsPage() {
     const { isConnected } = useWallet();
     const { positions } = usePortfolio();
-    const router = useRouter();
     const [filter, setFilter] = useState<SavingsVaultType | "all">("all");
     const [selectedVault, setSelectedVault] = useState<SavingsVault | null>(null);
     const [showHowItWorks, setShowHowItWorks] = useState(false);
     const [planModalOpen, setPlanModalOpen] = useState(false);
 
-    useEffect(() => {
-        if (!isConnected) router.push("/");
-    }, [isConnected, router]);
-
-    if (!isConnected) return null;
+    const { data: yieldPools, isLoading: yieldLoading, isError: yieldError } = useYieldOpportunities();
+    const savingsVaults = useMemo(
+        () => buildSavingsVaults(SAVINGS_VAULT_DEFINITIONS, yieldPools, yieldError),
+        [yieldPools, yieldError]
+    );
 
     const filtered =
         filter === "all"
-            ? SAVINGS_VAULTS
-            : SAVINGS_VAULTS.filter((v) => v.type === filter);
+            ? savingsVaults
+            : savingsVaults.filter((v) => v.type === filter);
 
     return (
         <AppShell>
@@ -1073,8 +988,9 @@ export default function SavingsPage() {
                     </AnimatePresence>
                 </motion.div>
 
-                {/* ── Savings Overview (Stats, Chart, Milestone) ────────────── */}
-                <SavingsOverview />
+                {/* ── Savings goals + portfolio overview ───────────────────── */}
+                <SavingsGoalsSection onCreateGoal={() => setPlanModalOpen(true)} />
+                {isConnected && <SavingsOverview savingsVaults={savingsVaults} />}
 
                 {/* ── Filter tabs ──────────────────────────────────────────── */}
                 <div id="vault-grid" className="mb-6 flex gap-1.5 border-b border-black/8 pb-px overflow-x-auto scrollbar-hide" role="tablist" aria-label="Savings plan filters">
@@ -1111,13 +1027,14 @@ export default function SavingsPage() {
                             vault={vault}
                             index={i}
                             onDeposit={setSelectedVault}
+                            isApyLoading={yieldLoading}
                         />
                     ))}
                 </div>
 
                 {/* ── Open positions ──────────────────────────────────────── */}
                 {(() => {
-                    const savingsIds = SAVINGS_VAULTS.map((v) => v.id);
+                    const savingsIds = savingsVaults.map((v) => v.id);
                     const savingsPositions = positions.filter((p) => savingsIds.includes(p.vaultId));
                     if (savingsPositions.length === 0) return null;
                     return (

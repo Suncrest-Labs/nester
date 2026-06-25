@@ -6,6 +6,7 @@ export interface SavingsGoal {
   currency: string;
   deadline: string;
   description?: string;
+  category?: string;
   current_amount: string | number;
   progress_pct: number;
   /** Vault this goal is linked to, when set (see #688). */
