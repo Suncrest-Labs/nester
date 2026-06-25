@@ -118,7 +118,10 @@ func TestUserHandler_Register(t *testing.T) {
 
 	// Invalid format (missing display_name)
 	bodyInvalid := bytes.NewBufferString(`{"wallet_address":"G-WALLET-456"}`)
-	respInvalid, _ := http.Post(server.URL+"/api/v1/users", "application/json", bodyInvalid)
+	respInvalid, err := http.Post(server.URL+"/api/v1/users", "application/json", bodyInvalid)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
 	defer respInvalid.Body.Close()
 
 	if respInvalid.StatusCode != http.StatusBadRequest {
@@ -127,7 +130,10 @@ func TestUserHandler_Register(t *testing.T) {
 
 	// Duplicate wallet
 	bodyDuplicate := bytes.NewBufferString(`{"wallet_address":"G-WALLET-123","display_name":"Nakamoto"}`)
-	respDuplicate, _ := http.Post(server.URL+"/api/v1/users", "application/json", bodyDuplicate)
+	respDuplicate, err := http.Post(server.URL+"/api/v1/users", "application/json", bodyDuplicate)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
 	defer respDuplicate.Body.Close()
 
 	if respDuplicate.StatusCode != http.StatusConflict {
@@ -148,21 +154,30 @@ func TestUserHandler_GetEndpoints(t *testing.T) {
 	u, _ := svc.RegisterUser(context.Background(), "G-FETCH-ME", "Alice")
 
 	// Get by ID
-	resp1, _ := http.Get(server.URL + "/api/v1/users/" + u.ID.String())
+	resp1, err := http.Get(server.URL + "/api/v1/users/" + u.ID.String())
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
 	defer resp1.Body.Close()
 	if resp1.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 OK, got %d", resp1.StatusCode)
 	}
 
 	// Get by unknown ID
-	resp2, _ := http.Get(server.URL + "/api/v1/users/" + uuid.New().String())
+	resp2, err := http.Get(server.URL + "/api/v1/users/" + uuid.New().String())
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404 Not Found, got %d", resp2.StatusCode)
 	}
 
 	// Get by wallet
-	resp3, _ := http.Get(server.URL + "/api/v1/users/wallet/G-FETCH-ME")
+	resp3, err := http.Get(server.URL + "/api/v1/users/wallet/G-FETCH-ME")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
 	defer resp3.Body.Close()
 	if resp3.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 OK, got %d", resp3.StatusCode)

@@ -99,11 +99,16 @@ func (r *ContractReader) simulateI128(ctx context.Context, contractAddress, func
 	}
 	parts := val.MustI128()
 	hi := int64(parts.Hi)
-	lo := int64(parts.Lo)
-	if hi < 0 {
-		return (hi << 64) | int64(uint64(lo)), nil
+	lo := uint64(parts.Lo)
+	// The i128 value is expected to fit in int64 (e.g. stroops).
+	// hi==0: positive value in lo; hi==-1: negative value, lo holds two's complement.
+	if hi == 0 {
+		return int64(lo), nil
 	}
-	return (hi << 64) + lo, nil
+	if hi == -1 {
+		return int64(lo), nil
+	}
+	return 0, fmt.Errorf("i128 value from %s overflows int64 (hi=%d)", functionName, hi)
 }
 
 func (r *ContractReader) simulate(ctx context.Context, contractScAddr xdr.ScAddress, functionName string, args []xdr.ScVal) (xdr.ScVal, error) {
