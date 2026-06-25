@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,6 +75,147 @@ func (m *memorySavingsGoalRepo) SumVaultBalance(_ context.Context, userID uuid.U
 	return m.balances[userID], nil
 }
 
+func (m *memorySavingsGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.UUID, milestones []int) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.NotifiedMilestones = append([]int(nil), milestones...)
+	m.goals[goalID] = g
+	return nil
+}
+
+type recordingGoalMilestoneNotifier struct {
+	mu    sync.Mutex
+	calls []recordedGoalMilestone
+}
+
+type recordedGoalMilestone struct {
+	UserID    uuid.UUID
+	GoalID    uuid.UUID
+	Milestone int
+}
+
+func (r *recordingGoalMilestoneNotifier) SendGoalMilestone(_ context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedGoalMilestone{UserID: userID, GoalID: goal.ID, Milestone: milestone})
+}
+
+func (r *recordingGoalMilestoneNotifier) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+func waitForMilestoneNotifications(t *testing.T, notifier *recordingGoalMilestoneNotifier, want int) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if notifier.count() >= want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %d notifications, got %d", want, notifier.count())
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func assertNoMilestoneNotifications(t *testing.T, notifier *recordingGoalMilestoneNotifier) {
+	t.Helper()
+	time.Sleep(50 * time.Millisecond)
+	if n := notifier.count(); n != 0 {
+		t.Fatalf("notifications = %d, want 0", n)
+	}
+}
+
+func TestSavingsGoalService_MilestoneNotifications(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	target := decimal.NewFromInt(100)
+
+	t.Run("24 percent no notification", func(t *testing.T) {
+		repo := newMemorySavingsGoalRepo()
+		repo.balances[userID] = decimal.NewFromInt(24)
+		notifier := &recordingGoalMilestoneNotifier{}
+		svc := NewSavingsGoalService(repo, notifier)
+
+		goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+			TargetAmount: target,
+			Currency:     "USDC",
+			Deadline:     testDeadline(),
+			Description:  "Vacation",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		if goal.ProgressPct != 24 {
+			t.Fatalf("progress_pct = %v, want 24", goal.ProgressPct)
+		}
+		assertNoMilestoneNotifications(t, notifier)
+	})
+
+	t.Run("25 percent fires notification", func(t *testing.T) {
+		repo := newMemorySavingsGoalRepo()
+		repo.balances[userID] = decimal.NewFromInt(25)
+		notifier := &recordingGoalMilestoneNotifier{}
+		svc := NewSavingsGoalService(repo, notifier)
+
+		goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+			TargetAmount: target,
+			Currency:     "USDC",
+			Deadline:     testDeadline(),
+			Description:  "Vacation",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		if goal.ProgressPct != 25 {
+			t.Fatalf("progress_pct = %v, want 25", goal.ProgressPct)
+		}
+		waitForMilestoneNotifications(t, notifier, 1)
+		if notifier.calls[0].Milestone != 25 {
+			t.Fatalf("milestone = %d, want 25", notifier.calls[0].Milestone)
+		}
+	})
+
+	t.Run("25 percent again no duplicate", func(t *testing.T) {
+		repo := newMemorySavingsGoalRepo()
+		repo.balances[userID] = decimal.NewFromInt(25)
+		notifier := &recordingGoalMilestoneNotifier{}
+		svc := NewSavingsGoalService(repo, notifier)
+
+		goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+			TargetAmount: target,
+			Currency:     "USDC",
+			Deadline:     testDeadline(),
+			Description:  "Vacation",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		waitForMilestoneNotifications(t, notifier, 1)
+
+		if _, err := svc.Get(ctx, userID, goal.ID); err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+		if n := notifier.count(); n != 1 {
+			t.Fatalf("notifications = %d, want 1 (no duplicate)", n)
+		}
+		stored, err := repo.GetByID(ctx, goal.ID)
+		if err != nil {
+			t.Fatalf("GetByID() error = %v", err)
+		}
+		if !savingsgoal.ContainsMilestone(stored.NotifiedMilestones, 25) {
+			t.Fatalf("notified_milestones = %v, want 25", stored.NotifiedMilestones)
+		}
+	})
+}
+
 func testDeadline() time.Time {
 	return time.Now().UTC().Add(30 * 24 * time.Hour)
 }
@@ -82,7 +224,7 @@ func TestSavingsGoalService_Create_ValidCategory(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo)
+	svc := NewSavingsGoalService(repo, nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -101,7 +243,7 @@ func TestSavingsGoalService_Create_ValidCategory(t *testing.T) {
 func TestSavingsGoalService_Create_InvalidCategory(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo())
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
 
 	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -117,7 +259,7 @@ func TestSavingsGoalService_Create_InvalidCategory(t *testing.T) {
 func TestSavingsGoalService_Create_MissingCategoryDefaultsToOther(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo())
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -154,7 +296,7 @@ func TestSavingsGoalService_List_FilterByCategory(t *testing.T) {
 		Deadline:     testDeadline(),
 		Category:     savingsgoal.CategoryTravel,
 	}
-	svc := NewSavingsGoalService(repo)
+	svc := NewSavingsGoalService(repo, nil)
 
 	goals, err := svc.List(ctx, userID, "education")
 	if err != nil {
@@ -171,7 +313,7 @@ func TestSavingsGoalService_List_FilterByCategory(t *testing.T) {
 func TestSavingsGoalService_List_InvalidCategoryFilter(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo())
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
 
 	_, err := svc.List(ctx, userID, "invalid")
 	if err == nil {

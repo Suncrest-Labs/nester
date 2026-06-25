@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
@@ -34,7 +35,8 @@ func (r *SavingsGoalRepository) Create(ctx context.Context, goal *savingsgoal.Sa
 
 func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
 	query := `
-		SELECT id, user_id, target_amount, currency, deadline, description, category, created_at, updated_at
+		SELECT id, user_id, target_amount, currency, deadline, description, category,
+		       notified_milestones, created_at, updated_at
 		FROM savings_goals
 		WHERE user_id = $1
 	`
@@ -64,7 +66,8 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 
 func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, target_amount, currency, deadline, description, category, created_at, updated_at
+		SELECT id, user_id, target_amount, currency, deadline, description, category,
+		       notified_milestones, created_at, updated_at
 		FROM savings_goals WHERE id = $1
 	`, id)
 	g, err := scanSavingsGoal(row)
@@ -122,6 +125,25 @@ func (r *SavingsGoalRepository) SumVaultBalance(ctx context.Context, userID uuid
 	return decimal.NewFromString(total.String)
 }
 
+func (r *SavingsGoalRepository) UpdateMilestones(ctx context.Context, goalID uuid.UUID, milestones []int) error {
+	if milestones == nil {
+		milestones = []int{}
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET notified_milestones = $1, updated_at = NOW()
+		WHERE id = $2
+	`, pq.Array(milestones), goalID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
+}
+
 type savingsGoalScanner interface {
 	Scan(dest ...any) error
 }
@@ -131,8 +153,12 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 		id, userID, targetStr, currency, category string
 		deadline, createdAt, updatedAt          time.Time
 		description                             sql.NullString
+		notifiedMilestones                      pq.Int32Array
 	)
-	if err := row.Scan(&id, &userID, &targetStr, &currency, &deadline, &description, &category, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(
+		&id, &userID, &targetStr, &currency, &deadline, &description, &category,
+		&notifiedMilestones, &createdAt, &updatedAt,
+	); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
 	parsedID, _ := uuid.Parse(id)
@@ -142,16 +168,21 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 	if description.Valid {
 		desc = description.String
 	}
+	milestones := make([]int, 0, len(notifiedMilestones))
+	for _, m := range notifiedMilestones {
+		milestones = append(milestones, int(m))
+	}
 	return savingsgoal.SavingsGoal{
-		ID:           parsedID,
-		UserID:       parsedUserID,
-		TargetAmount: target,
-		Currency:     currency,
-		Deadline:     deadline,
-		Description:  desc,
-		Category:     savingsgoal.GoalCategory(category),
-		CreatedAt:    createdAt,
-		UpdatedAt:    updatedAt,
+		ID:                 parsedID,
+		UserID:             parsedUserID,
+		TargetAmount:       target,
+		Currency:           currency,
+		Deadline:           deadline,
+		Description:        desc,
+		Category:           savingsgoal.GoalCategory(category),
+		NotifiedMilestones: milestones,
+		CreatedAt:          createdAt,
+		UpdatedAt:          updatedAt,
 	}, nil
 }
 

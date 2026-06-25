@@ -19,6 +19,7 @@ func TestChannelsFor_MatchesIssueMatrix(t *testing.T) {
 		EventRebalanceExecuted:   {ChannelWebSocket},
 		EventKYCApproved:         {ChannelEmail},
 		EventKYCRejected:         {ChannelEmail},
+		EventGoalMilestone:       {ChannelPush},
 	}
 	for evt, want := range cases {
 		got := ChannelsFor(evt)

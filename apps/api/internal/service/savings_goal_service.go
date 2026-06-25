@@ -13,11 +13,15 @@ import (
 )
 
 type SavingsGoalService struct {
-	repo savingsgoal.Repository
+	repo     savingsgoal.Repository
+	notifier GoalMilestoneNotifier
 }
 
-func NewSavingsGoalService(repo savingsgoal.Repository) *SavingsGoalService {
-	return &SavingsGoalService{repo: repo}
+func NewSavingsGoalService(repo savingsgoal.Repository, notifier GoalMilestoneNotifier) *SavingsGoalService {
+	if notifier == nil {
+		notifier = noopGoalMilestoneNotifier{}
+	}
+	return &SavingsGoalService{repo: repo, notifier: notifier}
 }
 
 type CreateSavingsGoalInput struct {
@@ -151,7 +155,27 @@ func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoa
 		}
 		goal.ProgressPct = pct
 	}
+
+	newMilestones := savingsgoal.DetectNewMilestones(goal.ProgressPct, goal.NotifiedMilestones)
+	if len(newMilestones) > 0 {
+		goal.NotifiedMilestones = append(append([]int(nil), goal.NotifiedMilestones...), newMilestones...)
+		if err := s.repo.UpdateMilestones(ctx, goal.ID, goal.NotifiedMilestones); err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		s.notifyMilestonesAsync(goal, newMilestones)
+	}
+
 	return goal, nil
+}
+
+func (s *SavingsGoalService) notifyMilestonesAsync(goal savingsgoal.SavingsGoal, milestones []int) {
+	for _, milestone := range milestones {
+		m := milestone
+		goalCopy := goal
+		go func() {
+			s.notifier.SendGoalMilestone(context.Background(), goalCopy.UserID, goalCopy, m)
+		}()
+	}
 }
 
 func resolveCategory(value string, defaultIfEmpty bool) (savingsgoal.GoalCategory, error) {

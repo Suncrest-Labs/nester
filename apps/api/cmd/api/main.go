@@ -26,6 +26,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
+	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
@@ -361,7 +362,17 @@ func run() error {
 
 	// Savings goals
 	savingsGoalRepo := postgres.NewSavingsGoalRepository(db)
-	savingsGoalSvc := service.NewSavingsGoalService(savingsGoalRepo)
+	notificationDispatcher := notifications.New(
+		[]notifications.Channel{
+			notifications.NewPushChannel(notifications.NoopPushSender{}, notificationRepository),
+		},
+		notificationRepository,
+		nil,
+	)
+	savingsGoalSvc := service.NewSavingsGoalService(
+		savingsGoalRepo,
+		service.DispatcherGoalMilestoneNotifier{Dispatcher: notificationDispatcher},
+	)
 	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc)
 	savingsGoalHandler.Register(mux)
 

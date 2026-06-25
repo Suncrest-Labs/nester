@@ -49,6 +49,7 @@ const (
 	EventRebalanceExecuted   EventType = "rebalance_executed"
 	EventKYCApproved         EventType = "kyc_approved"
 	EventKYCRejected         EventType = "kyc_rejected"
+	EventGoalMilestone       EventType = "goal_milestone"
 )
 
 // ChannelKind is the transport a notification is delivered over.
@@ -73,6 +74,7 @@ var eventChannelMatrix = map[EventType][]ChannelKind{
 	EventRebalanceExecuted:   {ChannelWebSocket},
 	EventKYCApproved:         {ChannelEmail},
 	EventKYCRejected:         {ChannelEmail},
+	EventGoalMilestone:       {ChannelPush},
 }
 
 // ChannelsFor returns the channels configured to deliver the given event,
@@ -170,6 +172,25 @@ type DeviceTokenStore interface {
 type NoopPersistenceStore struct{}
 
 func (NoopPersistenceStore) Save(_ context.Context, _ Notification) error { return nil }
+
+// RecordingPersistenceStore captures persisted notifications for tests.
+type RecordingPersistenceStore struct {
+	mu    sync.Mutex
+	Saved []Notification
+}
+
+func (r *RecordingPersistenceStore) Save(_ context.Context, n Notification) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Saved = append(r.Saved, n)
+	return nil
+}
+
+func (r *RecordingPersistenceStore) Count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.Saved)
+}
 
 // Dispatcher is the service the producers call. Construct with `New`
 // and call `Send(ctx, userID, evt, title, body, payload)`.
@@ -410,6 +431,13 @@ func (r *RecordingHub) PushToUser(_ context.Context, userID uuid.UUID, eventName
 	return nil
 }
 
+// NoopPushSender discards push provider requests.
+type NoopPushSender struct{}
+
+func (NoopPushSender) Send(context.Context, []string, string, string, map[string]any) error {
+	return nil
+}
+
 // RecordingPushSender captures every push send. Safe for concurrent use.
 type RecordingPushSender struct {
 	mu    sync.Mutex
@@ -438,6 +466,22 @@ func (r *RecordingPushSender) Send(_ context.Context, tokens []string, title str
 		Payload: payload,
 	})
 	return nil
+}
+
+// CallCount returns the number of captured push sends.
+func (r *RecordingPushSender) CallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.Calls)
+}
+
+// SnapshotCalls returns a copy of captured push sends.
+func (r *RecordingPushSender) SnapshotCalls() []RecordedPushNotification {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]RecordedPushNotification, len(r.Calls))
+	copy(out, r.Calls)
+	return out
 }
 
 // MemoryDeviceTokens is an in-memory DeviceTokenStore for tests.
