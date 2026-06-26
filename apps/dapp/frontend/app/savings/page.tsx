@@ -893,22 +893,23 @@ export default function SavingsPage() {
     const { positions } = usePortfolio();
     const [filter, setFilter] = useState<SavingsVaultType | "all">("all");
     const [selectedVault, setSelectedVault] = useState<SavingsVault | null>(null);
+    const [viewMode, setViewMode] = useState<"products" | "goals">("products");
     const [showHowItWorks, setShowHowItWorks] = useState(false);
     const [planModalOpen, setPlanModalOpen] = useState(false);
     const [goalModalOpen, setGoalModalOpen] = useState(false);
 
-    const { data: yieldPools, isLoading: yieldLoading, isError: yieldError } = useYieldOpportunities();
-    const savingsVaults = useMemo(
-        () => buildSavingsVaults(SAVINGS_VAULT_DEFINITIONS, yieldPools, yieldError),
-        [yieldPools, yieldError]
-    );
+     const { data: yieldPools, isLoading: yieldLoading, isError: yieldError } = useYieldOpportunities();
+     const savingsVaults = useMemo(
+         () => buildSavingsVaults(SAVINGS_VAULT_DEFINITIONS, yieldPools, yieldError),
+         [yieldPools, yieldError]
+     );
 
-    const filtered =
-        filter === "all"
-            ? savingsVaults
-            : savingsVaults.filter((v) => v.type === filter);
+     const filtered =
+         filter === "all"
+             ? savingsVaults
+             : savingsVaults.filter((v) => v.type === filter);
 
-    return (
+     return (
         <AppShell>
 
                 {/* ── Page header ──────────────────────────────────────────── */}
@@ -992,47 +993,87 @@ export default function SavingsPage() {
 
                 {/* ── Savings goals + portfolio overview ───────────────────── */}
                 <SavingsGoalsSection onCreateGoal={() => setGoalModalOpen(true)} />
-                {isConnected && <SavingsOverview savingsVaults={savingsVaults} />}
+                {viewMode === "products" && isConnected && <SavingsOverview savingsVaults={savingsVaults} />}
 
-                {/* ── Filter tabs ──────────────────────────────────────────── */}
-                <div id="vault-grid" className="mb-6 flex gap-1.5 border-b border-black/8 pb-px overflow-x-auto scrollbar-hide" role="tablist" aria-label="Savings plan filters">
-                    {FILTERS.map((f) => (
+                {/* ── View switch + Filter tabs ────────────────────────────────── */}
+                <div className="mb-4 flex items-center justify-between gap-4">
+                    <div className="flex gap-2" role="tablist" aria-label="Savings view toggle">
                         <button
-                            key={f.value}
+                            type="button"
                             role="tab"
-                            aria-selected={filter === f.value}
-                            onClick={() => setFilter(f.value)}
+                            aria-selected={viewMode === "products"}
+                            onClick={() => setViewMode("products")}
                             className={cn(
-                                "relative pb-3 px-1 mr-4 text-sm whitespace-nowrap transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2",
-                                filter === f.value
-                                    ? "text-black font-semibold"
-                                    : "text-black/60 hover:text-black/80 font-medium"
+                                "rounded-full px-3 py-1.5 text-sm font-semibold",
+                                viewMode === "products" ? "bg-black text-white" : "bg-black/5 text-black/60 hover:bg-black/10"
                             )}
                         >
-                            {f.label}
-                            {filter === f.value && (
-                                <motion.div
-                                    layoutId="savings-tab"
-                                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-black rounded-full"
-                                    aria-hidden="true"
-                                />
-                            )}
+                            Products
                         </button>
-                    ))}
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={viewMode === "goals"}
+                            onClick={() => setViewMode("goals")}
+                            className={cn(
+                                "rounded-full px-3 py-1.5 text-sm font-semibold",
+                                viewMode === "goals" ? "bg-black text-white" : "bg-black/5 text-black/60 hover:bg-black/10"
+                            )}
+                        >
+                            My Goals
+                        </button>
+                    </div>
+
+                    <div id="vault-grid" className="mb-6 flex gap-1.5 border-b border-black/8 pb-px overflow-x-auto scrollbar-hide" role="tablist" aria-label="Savings plan filters">
+                        {FILTERS.map((f) => (
+                            <button
+                                key={f.value}
+                                role="tab"
+                                aria-selected={filter === f.value}
+                                onClick={() => setFilter(f.value)}
+                                className={cn(
+                                    "relative pb-3 px-1 mr-4 text-sm whitespace-nowrap transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2",
+                                    filter === f.value
+                                        ? "text-black font-semibold"
+                                        : "text-black/60 hover:text-black/80 font-medium"
+                                )}
+                            >
+                                {f.label}
+                                {filter === f.value && (
+                                    <motion.div
+                                        layoutId="savings-tab"
+                                        className="absolute bottom-0 left-0 right-0 h-0.5 bg-black rounded-full"
+                                        aria-hidden="true"
+                                    />
+                                )}
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
-                {/* ── Vault grid ───────────────────────────────────────────── */}
-                <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                    {filtered.map((vault, i) => (
-                        <SavingsVaultCard
-                            key={vault.id}
-                            vault={vault}
-                            index={i}
-                            onDeposit={setSelectedVault}
-                            isApyLoading={yieldLoading}
-                        />
-                    ))}
-                </div>
+                {/* ── Goals view or Vault grid ───────────────────────────────── */}
+                {viewMode === "goals" ? (
+                    <SavingsGoalsSection
+                        onCreateGoal={() => setPlanModalOpen(true)}
+                        onDepositGoal={(goal) => {
+                            if (!goal.vault_id) return;
+                            const matched = savingsVaults.find((v) => v.id === goal.vault_id);
+                            if (matched) setSelectedVault(matched);
+                        }}
+                    />
+                ) : (
+                    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                        {filtered.map((vault, i) => (
+                            <SavingsVaultCard
+                                key={vault.id}
+                                vault={vault}
+                                index={i}
+                                onDeposit={setSelectedVault}
+                                isApyLoading={yieldLoading}
+                            />
+                        ))}
+                    </div>
+                )}
 
                 {/* ── Open positions ──────────────────────────────────────── */}
                 {(() => {

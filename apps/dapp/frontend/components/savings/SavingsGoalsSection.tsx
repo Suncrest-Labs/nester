@@ -23,12 +23,12 @@ import { DeadlineBadge } from "@/components/savings/DeadlineBadge";
 import { SavingsOnboardingWizard } from "@/components/savings/SavingsOnboardingWizard";
 
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
-  emergency_fund: Shield,
-  education: GraduationCap,
-  housing: Home,
-  travel: Plane,
-  business: Briefcase,
-  health: Heart,
+  emergency_fund: Target,
+  education: Target,
+  housing: Target,
+  travel: Target,
+  business: Target,
+  health: Target,
   retirement: Target,
   other: Target,
 };
