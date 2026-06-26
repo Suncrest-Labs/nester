@@ -106,6 +106,10 @@ const HARVEST: Symbol = symbol_short!("HARVEST");
 const HARVEST_VLT: Symbol = symbol_short!("HARV_VLT");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
 const DEFAULT_REBALANCE_COOLDOWN: u64 = 3600;
+/// Default rebalance slippage tolerance: 50 bps (0.5%) — issue #638.
+const DEFAULT_REBALANCE_SLIPPAGE_BPS: u32 = 50;
+/// Upper bound on the configurable rebalance slippage tolerance (50%).
+const MAX_REBALANCE_SLIPPAGE_BPS: u32 = 5_000;
 const FEE_CONFIG_UPDATED: Symbol = symbol_short!("FEE_CFG");
 
 #[contracttype]
@@ -286,6 +290,7 @@ enum DataKey {
     AllocatedSources,
     LastRebalanceAt,
     RebalanceCooldown,
+    RebalanceSlippageBps,
     UserYield(Address),
     TotalReportedYield,
     LastHarvestAt(Address),
@@ -346,6 +351,27 @@ fn get_vault_token(env: &Env) -> Address {
 fn vault_token_client(env: &Env) -> VaultTokenContractClient<'_> {
     let vault_token = get_vault_token(env);
     VaultTokenContractClient::new(env, &vault_token)
+}
+
+/// Slippage-safe minimum proceeds for withdrawing `gross` assets during a
+/// rebalance (#638): the net-of-fees withdrawal preview reduced by
+/// `slippage_bps`. Uses `preview_withdraw_net` (never the gross
+/// `preview_withdraw`) so fees are already accounted for. Returns 0 when the
+/// gross is too small to map to any shares.
+fn rebalance_min_assets_out(env: &Env, gross: i128, slippage_bps: u32) -> i128 {
+    let shares_equiv = vault_token_client(env).shares_for_deposit(&gross);
+    if shares_equiv <= 0 {
+        return 0;
+    }
+    let net = VaultContract::preview_withdraw_net(env.clone(), shares_equiv);
+    nester_common::fees::mul_div(net, (10_000 - slippage_bps) as i128, 10_000).unwrap_or(0)
+}
+
+/// Reverts with `SlippageExceeded` when realised proceeds fall below the floor.
+fn enforce_rebalance_slippage(env: &Env, min_assets_out: i128, actual_received: i128) {
+    if actual_received < min_assets_out {
+        panic_with_error!(env, ContractError::SlippageExceeded);
+    }
 }
 
 fn get_shares(env: &Env, user: &Address) -> i128 {
@@ -729,6 +755,28 @@ impl VaultContract {
         env.storage()
             .instance()
             .set(&DataKey::RebalanceThreshold, &bps);
+    }
+
+    /// Configure this vault's rebalance slippage tolerance, in basis points
+    /// (default 50 = 0.5%). Admin/owner only. Capped at
+    /// [`MAX_REBALANCE_SLIPPAGE_BPS`]. Issue #638.
+    pub fn set_rebalance_slippage(env: Env, caller: Address, bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        if bps > MAX_REBALANCE_SLIPPAGE_BPS {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::RebalanceSlippageBps, &bps);
+    }
+
+    /// Current rebalance slippage tolerance in bps (defaults to 50).
+    pub fn get_rebalance_slippage(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::RebalanceSlippageBps)
+            .unwrap_or(DEFAULT_REBALANCE_SLIPPAGE_BPS)
     }
 
     pub fn set_circuit_breaker_config(env: Env, caller: Address, config: CircuitBreakerConfig) {
@@ -1200,6 +1248,9 @@ impl VaultContract {
             (current, deployed_total).into_val(&env),
         );
 
+        // Per-vault slippage tolerance applied to each withdrawal step (#638).
+        let slippage_bps = Self::get_rebalance_slippage(env.clone());
+
         // Apply each delta to source-allocation bookkeeping. Min-rebalance
         // skip is per-source so we don't pay tx fees for dust adjustments.
         let mut applied = Vec::new(&env);
@@ -1218,6 +1269,20 @@ impl VaultContract {
                 // Indicates the target wants to withdraw more than the source holds —
                 // refuse the entire rebalance (atomicity).
                 panic_with_error!(&env, ContractError::AllocationError);
+            }
+
+            // #638: slippage guard on each withdrawal step (negative delta).
+            // min_assets_out is the net-of-fees withdrawal preview reduced by
+            // the configured tolerance; the realised proceeds must not fall
+            // below it or the rebalance reverts with SlippageExceeded. In the
+            // current accounting model the full gross is moved internally
+            // (actual == gross); once rebalance performs real LP/protocol
+            // withdrawals, pass the call's returned amount as `actual_received`.
+            if d.delta < 0 {
+                let gross = -d.delta;
+                let min_assets_out = rebalance_min_assets_out(&env, gross, slippage_bps);
+                let actual_received = gross;
+                enforce_rebalance_slippage(&env, min_assets_out, actual_received);
             }
 
             set_source_allocation(&env, &d.source_id, new_amount);

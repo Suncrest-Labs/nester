@@ -1522,3 +1522,60 @@ fn rebalance_with_net_negative_delta_increases_liquid_reserves() {
     let withdrawn = vault.emergency_withdraw(&user);
     assert_eq!(withdrawn, 1000 * XLM);
 }
+
+// ---------------------------------------------------------------------------
+// Rebalance slippage guard (issue #638)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rebalance_slippage_default_and_configurable_per_vault() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    assert_eq!(vault.get_rebalance_slippage(), 50); // default 0.5%
+    vault.set_rebalance_slippage(&admin, &200);
+    assert_eq!(vault.get_rebalance_slippage(), 200);
+}
+
+#[test]
+#[should_panic]
+fn set_rebalance_slippage_rejects_out_of_range() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    vault.set_rebalance_slippage(&admin, &6_000); // > MAX_REBALANCE_SLIPPAGE_BPS
+}
+
+#[test]
+fn rebalance_succeeds_within_slippage_tolerance() {
+    // A normal negative-delta rebalance must not be blocked by the guard.
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1000 * XLM);
+    vault.deposit(&user, &(1000 * XLM), &0);
+
+    let source_id = Symbol::new(&env, "aave");
+    vault.grant_role(&admin, &admin, &Role::Operator);
+    vault.record_source_allocation(&admin, &source_id, &(1000 * XLM));
+
+    let strategy_id = env.register_contract(None, MockStrategy);
+    vault.set_allocation_strategy(&admin, &strategy_id);
+
+    let _ = vault.rebalance(&admin); // should not panic
+}
+
+#[test]
+fn rebalance_slippage_guard_allows_when_within_floor() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    env.as_contract(&vault.address, || {
+        // Realised proceeds at or above the floor: no revert.
+        super::enforce_rebalance_slippage(&env, 100, 100);
+        super::enforce_rebalance_slippage(&env, 100, 250);
+    });
+}
+
+#[test]
+#[should_panic]
+fn rebalance_slippage_guard_reverts_when_below_floor() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    env.as_contract(&vault.address, || {
+        // Realised proceeds below the floor → SlippageExceeded.
+        super::enforce_rebalance_slippage(&env, 100, 99);
+    });
+}
