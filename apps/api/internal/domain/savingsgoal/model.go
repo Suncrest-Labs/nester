@@ -15,7 +15,33 @@ var (
 	ErrGoalNotFound = errors.New("savings goal not found")
 	ErrInvalidGoal  = errors.New("invalid savings goal")
 	ErrUnauthorized = errors.New("unauthorized")
+	// ErrGoalCompleted is returned when an edit is attempted on a goal that has
+	// already reached its target (#684).
+	ErrGoalCompleted = errors.New("goal is already completed")
 )
+
+// GoalStatus is the lifecycle state of a savings goal (#684).
+type GoalStatus string
+
+const (
+	GoalStatusActive    GoalStatus = "active"
+	GoalStatusCompleted GoalStatus = "completed"
+	GoalStatusArchived  GoalStatus = "archived"
+)
+
+// ParseStatus validates a status filter/value.
+func ParseStatus(value string) (GoalStatus, error) {
+	switch GoalStatus(strings.ToLower(strings.TrimSpace(value))) {
+	case GoalStatusActive:
+		return GoalStatusActive, nil
+	case GoalStatusCompleted:
+		return GoalStatusCompleted, nil
+	case GoalStatusArchived:
+		return GoalStatusArchived, nil
+	default:
+		return "", fmt.Errorf("%w: invalid status", ErrInvalidGoal)
+	}
+}
 
 type GoalCategory string
 
@@ -87,6 +113,8 @@ type SavingsGoal struct {
 	Category      GoalCategory    `json:"category"`
 	CurrentAmount      decimal.Decimal `json:"current_amount"`
 	ProgressPct        float64         `json:"progress_pct"`
+	Status             GoalStatus      `json:"status"`
+	CompletedAt        *time.Time      `json:"completed_at,omitempty"`
 	NotifiedMilestones []int           `json:"-"`
 	CreatedAt          time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`

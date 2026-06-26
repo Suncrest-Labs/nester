@@ -36,7 +36,7 @@ func (r *SavingsGoalRepository) Create(ctx context.Context, goal *savingsgoal.Sa
 func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
 	query := `
 		SELECT id, user_id, target_amount, currency, deadline, description, category,
-		       notified_milestones, created_at, updated_at
+		       notified_milestones, created_at, updated_at, status, completed_at
 		FROM savings_goals
 		WHERE user_id = $1
 	`
@@ -67,7 +67,7 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, target_amount, currency, deadline, description, category,
-		       notified_milestones, created_at, updated_at
+		       notified_milestones, created_at, updated_at, status, completed_at
 		FROM savings_goals WHERE id = $1
 	`, id)
 	g, err := scanSavingsGoal(row)
@@ -83,9 +83,10 @@ func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*sav
 func (r *SavingsGoalRepository) Update(ctx context.Context, goal *savingsgoal.SavingsGoal) error {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE savings_goals
-		SET target_amount = $1, currency = $2, deadline = $3, description = $4, category = $5, updated_at = NOW()
-		WHERE id = $6 AND user_id = $7
-	`, goal.TargetAmount.String(), goal.Currency, goal.Deadline, nullSQLString(goal.Description), string(goal.Category), goal.ID, goal.UserID)
+		SET target_amount = $1, currency = $2, deadline = $3, description = $4, category = $5,
+		    status = $6, completed_at = $7, updated_at = NOW()
+		WHERE id = $8 AND user_id = $9
+	`, goal.TargetAmount.String(), goal.Currency, goal.Deadline, nullSQLString(goal.Description), string(goal.Category), string(goal.Status), nullSQLTime(goal.CompletedAt), goal.ID, goal.UserID)
 	if err != nil {
 		return err
 	}
@@ -154,10 +155,12 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 		deadline, createdAt, updatedAt          time.Time
 		description                             sql.NullString
 		notifiedMilestones                      pq.Int32Array
+		status                                  sql.NullString
+		completedAt                             sql.NullTime
 	)
 	if err := row.Scan(
 		&id, &userID, &targetStr, &currency, &deadline, &description, &category,
-		&notifiedMilestones, &createdAt, &updatedAt,
+		&notifiedMilestones, &createdAt, &updatedAt, &status, &completedAt,
 	); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -172,6 +175,15 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 	for _, m := range notifiedMilestones {
 		milestones = append(milestones, int(m))
 	}
+	goalStatus := savingsgoal.GoalStatusActive
+	if status.Valid && status.String != "" {
+		goalStatus = savingsgoal.GoalStatus(status.String)
+	}
+	var completedAtPtr *time.Time
+	if completedAt.Valid {
+		t := completedAt.Time
+		completedAtPtr = &t
+	}
 	return savingsgoal.SavingsGoal{
 		ID:                 parsedID,
 		UserID:             parsedUserID,
@@ -180,6 +192,8 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 		Deadline:           deadline,
 		Description:        desc,
 		Category:           savingsgoal.GoalCategory(category),
+		Status:             goalStatus,
+		CompletedAt:        completedAtPtr,
 		NotifiedMilestones: milestones,
 		CreatedAt:          createdAt,
 		UpdatedAt:          updatedAt,
@@ -191,4 +205,11 @@ func nullSQLString(s string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+func nullSQLTime(t *time.Time) sql.NullTime {
+	if t == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: *t, Valid: true}
 }

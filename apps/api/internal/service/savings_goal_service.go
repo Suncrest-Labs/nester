@@ -38,6 +38,7 @@ type UpdateSavingsGoalInput struct {
 	Deadline     *time.Time       `json:"deadline"`
 	Description  *string          `json:"description"`
 	Category     *string          `json:"category"`
+	Status       *string          `json:"status"`
 }
 
 func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
@@ -56,6 +57,7 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 		Deadline:     in.Deadline.UTC(),
 		Description:  strings.TrimSpace(in.Description),
 		Category:     category,
+		Status:       savingsgoal.GoalStatusActive,
 	}
 	if err := s.repo.Create(ctx, goal); err != nil {
 		return savingsgoal.SavingsGoal{}, err
@@ -74,7 +76,7 @@ func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) 
 	return s.enrichProgress(ctx, *goal)
 }
 
-func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category, status string) ([]savingsgoal.SavingsGoal, error) {
 	filterCategory := ""
 	if strings.TrimSpace(category) != "" {
 		parsed, err := savingsgoal.ParseCategory(category)
@@ -84,15 +86,29 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		filterCategory = string(parsed)
 	}
 
+	var filterStatus savingsgoal.GoalStatus
+	if strings.TrimSpace(status) != "" {
+		parsed, err := savingsgoal.ParseStatus(status)
+		if err != nil {
+			return nil, err
+		}
+		filterStatus = parsed
+	}
+
 	goals, err := s.repo.ListByUser(ctx, userID, filterCategory)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]savingsgoal.SavingsGoal, 0, len(goals))
 	for _, g := range goals {
+		// enrichProgress may auto-complete the goal, so filter on the
+		// post-enrichment status to reflect freshly completed goals (#684).
 		enriched, err := s.enrichProgress(ctx, g)
 		if err != nil {
 			return nil, err
+		}
+		if filterStatus != "" && enriched.Status != filterStatus {
+			continue
 		}
 		out = append(out, enriched)
 	}
@@ -106,6 +122,34 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	}
 	if goal.UserID != userID {
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+
+	// A completed goal is immutable except for archiving it (#684).
+	if goal.Status == savingsgoal.GoalStatusCompleted {
+		archiving := in.Status != nil &&
+			savingsgoal.GoalStatus(strings.ToLower(strings.TrimSpace(*in.Status))) == savingsgoal.GoalStatusArchived
+		otherEdits := in.TargetAmount != nil || in.Deadline != nil ||
+			in.Description != nil || in.Category != nil || in.Currency != nil
+		if !archiving || otherEdits {
+			return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalCompleted
+		}
+		goal.Status = savingsgoal.GoalStatusArchived
+		if err := s.repo.Update(ctx, goal); err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		return s.enrichProgress(ctx, *goal)
+	}
+
+	if in.Status != nil {
+		parsed, err := savingsgoal.ParseStatus(*in.Status)
+		if err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		// Completion is automatic; callers may only archive (or keep active).
+		if parsed == savingsgoal.GoalStatusCompleted {
+			return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: cannot set status to completed manually", savingsgoal.ErrInvalidGoal)
+		}
+		goal.Status = parsed
 	}
 	if in.TargetAmount != nil {
 		goal.TargetAmount = *in.TargetAmount
@@ -180,6 +224,18 @@ func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoa
 			pct = 0
 		}
 		goal.ProgressPct = pct
+	}
+
+	// Auto-complete: once a goal reaches its target, transition it to
+	// completed and stamp completed_at, persisting the change (#684).
+	if goal.ProgressPct >= 100 && goal.Status == savingsgoal.GoalStatusActive {
+		goal.Status = savingsgoal.GoalStatusCompleted
+		now := time.Now().UTC()
+		goal.CompletedAt = &now
+		if err := s.repo.Update(ctx, &goal); err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		// future: fire completion notification here.
 	}
 
 	newMilestones := savingsgoal.DetectNewMilestones(goal.ProgressPct, goal.NotifiedMilestones)

@@ -22,7 +22,7 @@ import (
 type SavingsGoalManager interface {
 	Create(ctx context.Context, userID uuid.UUID, in service.CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
-	List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error)
+	List(ctx context.Context, userID uuid.UUID, category, status string) ([]savingsgoal.SavingsGoal, error)
 	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Delete(ctx context.Context, userID, goalID uuid.UUID) error
 	Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error)
@@ -59,6 +59,7 @@ type updateSavingsGoalRequest struct {
 	Deadline     *string      `json:"deadline"`
 	Description  *string      `json:"description"`
 	Category     *string      `json:"category"`
+	Status       *string      `json:"status"`
 }
 
 func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +124,12 @@ func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	goals, err := h.svc.List(r.Context(), userID, strings.TrimSpace(r.URL.Query().Get("category")))
+	goals, err := h.svc.List(
+		r.Context(),
+		userID,
+		strings.TrimSpace(r.URL.Query().Get("category")),
+		strings.TrimSpace(r.URL.Query().Get("status")),
+	)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -189,6 +195,7 @@ func (h *SavingsGoalHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Description = req.Description
 	in.Category = req.Category
+	in.Status = req.Status
 
 	goal, err := h.svc.Update(r.Context(), userID, goalID, in)
 	if err != nil {
@@ -233,6 +240,8 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 	switch {
 	case errors.Is(err, savingsgoal.ErrGoalNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("savings goal"))
+	case errors.Is(err, savingsgoal.ErrGoalCompleted):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_COMPLETED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:

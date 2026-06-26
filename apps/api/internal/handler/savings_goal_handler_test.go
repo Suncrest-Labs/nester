@@ -61,7 +61,7 @@ func (m *mockSavingsGoalService) Get(_ context.Context, userID, goalID uuid.UUID
 	return g, nil
 }
 
-func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, category, status string) ([]savingsgoal.SavingsGoal, error) {
 	if category != "" {
 		if _, err := savingsgoal.ParseCategory(category); err != nil {
 			return nil, err
@@ -73,6 +73,9 @@ func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, categ
 			continue
 		}
 		if category != "" && string(g.Category) != category {
+			continue
+		}
+		if status != "" && string(g.Status) != status {
 			continue
 		}
 		out = append(out, g)
