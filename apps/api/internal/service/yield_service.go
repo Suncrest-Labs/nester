@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -135,6 +137,94 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 
 	// No data available at all
 	return nil, fetchErr
+}
+
+// ProtocolSummary is an aggregated, comparable view of one protocol's pools.
+type ProtocolSummary struct {
+	Protocol  string  `json:"protocol"`
+	Found     bool    `json:"found"`
+	BestAPY   float64 `json:"best_apy"`
+	BaseAPY   float64 `json:"base_apy"`
+	RewardAPY float64 `json:"reward_apy"`
+	TVLUsd    float64 `json:"tvl_usd"`
+	APYPct7d  float64 `json:"apy_pct_7d"`
+	RiskScore float64 `json:"risk_score"`
+	PoolCount int     `json:"pool_count"`
+	TopPool   string  `json:"top_pool_symbol"`
+}
+
+const (
+	minCompareProtocols = 2
+	maxCompareProtocols = 5
+)
+
+// ErrInvalidProtocolCount is returned when fewer than 2 or more than 5
+// protocols are requested for comparison.
+var ErrInvalidProtocolCount = errors.New("protocols must be between 2 and 5")
+
+// CompareProtocols returns a side-by-side summary for each requested protocol.
+// It aggregates from the shared DeFiLlama pool cache (a single fetch for the
+// whole comparison — no per-protocol HTTP calls). Protocol names are
+// case-insensitive; unknown protocols are returned with Found=false rather
+// than failing the request.
+func (s *YieldService) CompareProtocols(ctx context.Context, protocols []string) ([]ProtocolSummary, error) {
+	if len(protocols) < minCompareProtocols || len(protocols) > maxCompareProtocols {
+		return nil, ErrInvalidProtocolCount
+	}
+
+	// limit=0 → all pools for the chain, served from the shared cache.
+	resp, err := s.GetYieldOpportunities(ctx, "Stellar", 0)
+	if err != nil {
+		return nil, err
+	}
+
+	byProtocol := make(map[string][]YieldPool)
+	for _, p := range resp.Pools {
+		key := strings.ToLower(p.Project)
+		byProtocol[key] = append(byProtocol[key], p)
+	}
+
+	summaries := make([]ProtocolSummary, 0, len(protocols))
+	for _, name := range protocols {
+		key := strings.ToLower(strings.TrimSpace(name))
+		pools := byProtocol[key]
+		if len(pools) == 0 {
+			summaries = append(summaries, ProtocolSummary{Protocol: name, Found: false})
+			continue
+		}
+		summaries = append(summaries, summarizeProtocol(name, pools))
+	}
+	return summaries, nil
+}
+
+// summarizeProtocol reduces a protocol's pools to a single comparison row.
+// BestAPY (and the base/reward/7d/risk/top-pool fields tied to it) come from
+// the highest-APY pool; TVLUsd is summed across all of the protocol's pools.
+func summarizeProtocol(name string, pools []YieldPool) ProtocolSummary {
+	best := pools[0]
+	var tvl float64
+	for _, p := range pools {
+		tvl += p.TVLUsd
+		if p.APY > best.APY {
+			best = p
+		}
+	}
+	var apy7d float64
+	if best.APYPct7d != nil {
+		apy7d = *best.APYPct7d
+	}
+	return ProtocolSummary{
+		Protocol:  name,
+		Found:     true,
+		BestAPY:   best.APY,
+		BaseAPY:   best.APYBase,
+		RewardAPY: best.APYReward,
+		TVLUsd:    tvl,
+		APYPct7d:  apy7d,
+		RiskScore: best.RiskScore,
+		PoolCount: len(pools),
+		TopPool:   best.Symbol,
+	}
 }
 
 // fetchFromUpstream retrieves and processes yield data from DeFiLlama
