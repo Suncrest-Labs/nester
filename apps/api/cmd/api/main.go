@@ -311,6 +311,7 @@ func run() error {
 	notificationDispatcher := notifications.New(
 		[]notifications.Channel{
 			notifications.NewWebSocketChannel(wsHub),
+			notifications.NewPushChannel(notifications.NoopPushSender{}, notificationRepository),
 		},
 		notificationRepository,
 		nil,
@@ -372,13 +373,6 @@ func run() error {
 
 	// Savings goals
 	savingsGoalRepo := postgres.NewSavingsGoalRepository(db)
-	notificationDispatcher := notifications.New(
-		[]notifications.Channel{
-			notifications.NewPushChannel(notifications.NoopPushSender{}, notificationRepository),
-		},
-		notificationRepository,
-		nil,
-	)
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
 		service.DispatcherGoalMilestoneNotifier{Dispatcher: notificationDispatcher},

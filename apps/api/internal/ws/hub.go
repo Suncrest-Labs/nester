@@ -2,11 +2,13 @@ package ws
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -125,6 +127,19 @@ func (h *Hub) BroadcastEvent(evt Event) {
 		evt.Timestamp = time.Now()
 	}
 	h.broadcast <- evt
+}
+
+// PushToUser satisfies notifications.WebSocketHub. It broadcasts a typed event
+// to the user-scoped channel "notifications/{userID}" so any client subscribed
+// to that channel receives the payload in real time.
+func (h *Hub) PushToUser(_ context.Context, userID uuid.UUID, eventName string, payload any) error {
+	h.BroadcastEvent(Event{
+		Channel:   fmt.Sprintf("notifications/%s", userID),
+		Type:      EventType(eventName),
+		Data:      payload,
+		Timestamp: time.Now(),
+	})
+	return nil
 }
 
 func (h *Hub) subscribe(client *Client, channel string) {
