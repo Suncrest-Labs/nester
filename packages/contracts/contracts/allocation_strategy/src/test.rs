@@ -1044,3 +1044,75 @@ fn rebalance_withdraws_to_vault_when_all_unhealthy() {
     assert_eq!(delta_sum(&deltas), -1000);
     assert_eq!(delta_for(&deltas, symbol_short!("aave")), -1000);
 }
+
+// ---------------------------------------------------------------------------
+// should_rebalance / get_optimal_allocation (issue #637)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn should_rebalance_false_when_spread_below_threshold() {
+    let (env, admin, registry_id, strategy_id) = setup_with_type(VaultType::Balanced);
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Equal APYs → optimal APY == current weighted APY → zero spread.
+    registry.update_apy_override(&admin, &symbol_short!("aave"), &500);
+    registry.update_apy_override(&admin, &symbol_short!("blend"), &500);
+    registry.update_apy_override(&admin, &symbol_short!("comp"), &500);
+
+    let vault = Address::generate(&env);
+    assert!(!client.should_rebalance(&vault, &100));
+}
+
+#[test]
+fn should_rebalance_true_when_spread_above_threshold() {
+    let (env, admin, registry_id, strategy_id) = setup_with_type(VaultType::Balanced);
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // One source far better than the rest → optimal (100% comp) APY >> current.
+    registry.update_apy_override(&admin, &symbol_short!("aave"), &100);
+    registry.update_apy_override(&admin, &symbol_short!("blend"), &100);
+    registry.update_apy_override(&admin, &symbol_short!("comp"), &5_000);
+
+    let vault = Address::generate(&env);
+    assert!(client.should_rebalance(&vault, &500));
+}
+
+#[test]
+fn get_optimal_allocation_picks_highest_apy_and_sums_to_full() {
+    let (env, admin, registry_id, strategy_id) = setup_with_type(VaultType::Balanced);
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    registry.update_apy_override(&admin, &symbol_short!("aave"), &300);
+    registry.update_apy_override(&admin, &symbol_short!("blend"), &900);
+    registry.update_apy_override(&admin, &symbol_short!("comp"), &500);
+
+    let vault = Address::generate(&env);
+    let optimal = client.get_optimal_allocation(&vault);
+    assert_eq!(weight_sum(&optimal), 10_000);
+    assert_eq!(weight_for(&optimal, symbol_short!("blend")), 10_000);
+}
+
+#[test]
+fn should_rebalance_false_for_single_protocol_already_optimal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+
+    let registry = YieldRegistryContractClient::new(&env, &registry_id);
+    registry.initialize(&admin);
+    reg(&registry, &env, &admin, symbol_short!("aave"));
+    registry.update_apy_override(&admin, &symbol_short!("aave"), &800);
+
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    client.initialize_with_vault_type(&admin, &registry_id, &VaultType::Balanced);
+
+    // Default weights for a single source are 100% to it, which is already the
+    // optimal allocation → never warrants a rebalance.
+    let vault = Address::generate(&env);
+    assert!(!client.should_rebalance(&vault, &1));
+}

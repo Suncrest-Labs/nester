@@ -343,6 +343,42 @@ impl AllocationStrategyContract {
         false
     }
 
+    /// Returns the yield-maximizing allocation for `vault_id` given current
+    /// registry data: 100% (10_000 bps) to the highest-APY active source.
+    /// Weights sum to 10_000 bps; empty when the registry has no active sources.
+    ///
+    /// `vault_id` is accepted for the rebalancing scheduler's interface (and
+    /// future per-vault keying); this strategy instance represents the vault.
+    pub fn get_optimal_allocation(env: Env, vault_id: Address) -> Vec<AllocationWeight> {
+        let _ = &vault_id;
+        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let sources = registry_get_active_sources(&env, &registry_id);
+        optimal_allocation_from_sources(&env, &sources)
+    }
+
+    /// Returns true when rebalancing `vault_id` is warranted: the spread
+    /// between the optimal allocation's APY and the vault's current weighted
+    /// APY (computed from live registry APYs) exceeds `threshold_bps`.
+    ///
+    /// The Go rebalancing scheduler invokes this read-only check via Soroban
+    /// RPC to decide whether to trigger a rebalance.
+    pub fn should_rebalance(env: Env, vault_id: Address, threshold_bps: u32) -> bool {
+        let _ = &vault_id;
+        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let sources = registry_get_active_sources(&env, &registry_id);
+        if sources.is_empty() {
+            return false;
+        }
+
+        let current_weights = Self::get_weights(env.clone());
+        let current_apy = weighted_apy_for(&current_weights, &sources);
+
+        let optimal = optimal_allocation_from_sources(&env, &sources);
+        let optimal_apy = weighted_apy_for(&optimal, &sources);
+
+        optimal_apy.saturating_sub(current_apy) > threshold_bps
+    }
+
     /// Compute per-source transfers required to move from `current_allocations`
     /// to the stored target weights, given `total` assets across all sources.
     ///
@@ -627,6 +663,50 @@ fn source_score(source: &RegistrySource) -> i128 {
     };
 
     apy * risk_factor
+}
+
+/// Yield-maximizing allocation: 100% (10_000 bps) to the highest-APY active
+/// source. Returns an empty vector when there are no sources.
+fn optimal_allocation_from_sources(
+    env: &Env,
+    sources: &Vec<RegistrySource>,
+) -> Vec<AllocationWeight> {
+    let mut weights = Vec::new(env);
+    if sources.is_empty() {
+        return weights;
+    }
+    let mut best = sources.get(0).unwrap();
+    for source in sources.iter() {
+        if source.current_apy_bps > best.current_apy_bps {
+            best = source;
+        }
+    }
+    weights.push_back(AllocationWeight {
+        source_id: best.id.clone(),
+        weight_bps: BASIS_POINT_SCALE,
+    });
+    weights
+}
+
+/// Weighted APY (in bps) of `weights` using live source APYs. Sources absent
+/// from `sources` (inactive/removed) contribute 0 APY, correctly lowering the
+/// weighted result so drift is detected.
+fn weighted_apy_for(weights: &Vec<AllocationWeight>, sources: &Vec<RegistrySource>) -> u32 {
+    let mut acc: u64 = 0;
+    for weight in weights.iter() {
+        let apy = apy_for_source(sources, &weight.source_id);
+        acc += (weight.weight_bps as u64) * (apy as u64);
+    }
+    (acc / BASIS_POINT_SCALE as u64) as u32
+}
+
+fn apy_for_source(sources: &Vec<RegistrySource>, source_id: &Symbol) -> u32 {
+    for source in sources.iter() {
+        if &source.id == source_id {
+            return source.current_apy_bps;
+        }
+    }
+    0
 }
 
 /// Panic with [`ContractError::Unauthorized`] unless `account` holds Admin or
