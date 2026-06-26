@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -97,8 +98,9 @@ type defiLlamaPoolsResponse struct {
 // scores them by risk-adjusted APY, and returns the top `limit` results.
 // Falls back to stale cache (up to 30 minutes old) if upstream is unavailable.
 func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, limit int) (*YieldOpportunitiesResponse, error) {
+	chain = normalizeChain(chain)
 	cacheKey := fmt.Sprintf("%s:%d", chain, limit)
-	
+
 	// Try fresh cache first
 	if cached := s.fromCache(cacheKey); cached != nil {
 		return &YieldOpportunitiesResponse{
@@ -169,7 +171,7 @@ func (s *YieldService) fetchFromUpstream(ctx context.Context, chain string, limi
 	afterChainFilter := 0
 	afterTVLFilter := 0
 	for _, p := range raw.Data {
-		if p.Chain != chain {
+		if !strings.EqualFold(p.Chain, chain) {
 			continue
 		}
 		afterChainFilter++
@@ -328,4 +330,10 @@ func (s *YieldService) toCache(key string, pools []YieldPool) {
 		expiresAt: time.Now().Add(s.cacheTTL),
 		fetchedAt: time.Now(),
 	}
+}
+
+// normalizeChain trims whitespace and lower-cases the chain parameter
+// to match DeFiLlama's format for comparison purposes.
+func normalizeChain(chain string) string {
+	return strings.ToLower(strings.TrimSpace(chain))
 }

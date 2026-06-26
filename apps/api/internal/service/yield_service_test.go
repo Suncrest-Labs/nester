@@ -58,7 +58,7 @@ func TestGetYieldOpportunities_Fresh(t *testing.T) {
 func TestGetYieldOpportunities_CachedResponse(t *testing.T) {
 	// Arrange: Create a service with a preloaded cache
 	svc := NewYieldService("http://not-called")
-	cacheKey := "Stellar:10"
+	cacheKey := "stellar:10"
 	pools := []YieldPool{
 		{
 			Pool:    "cached_pool",
@@ -102,7 +102,7 @@ func TestGetYieldOpportunities_StaleCacheOnError(t *testing.T) {
 	svc := NewYieldService(server.URL)
 	
 	// Preload stale cache
-	cacheKey := "Stellar:10"
+	cacheKey := "stellar:10"
 	pools := []YieldPool{
 		{
 			Pool:    "stale_pool",
@@ -154,7 +154,7 @@ func TestGetYieldOpportunities_ErrorWhenStaleTooOld(t *testing.T) {
 	svc := NewYieldService(server.URL)
 	
 	// Preload very stale cache (older than 30 minutes)
-	cacheKey := "Stellar:10"
+	cacheKey := "stellar:10"
 	pools := []YieldPool{
 		{
 			Pool: "very_old_pool",
@@ -229,7 +229,7 @@ func TestGetYieldOpportunities_CacheExpiredFetchNew(t *testing.T) {
 	svc := NewYieldService(server.URL)
 	
 	// Preload expired cache
-	cacheKey := "Stellar:10"
+	cacheKey := "stellar:10"
 	oldPools := []YieldPool{
 		{
 			Pool: "old_pool",
@@ -289,8 +289,8 @@ func TestGetYieldOpportunities_FiltersChainCorrectly(t *testing.T) {
 
 	svc := NewYieldService(server.URL)
 
-	// Act: Get pools for Stellar chain
-	resp, err := svc.GetYieldOpportunities(context.Background(), "Stellar", 10)
+	// Act: Get pools for Stellar chain (lowercase to test case-insensitive filter)
+	resp, err := svc.GetYieldOpportunities(context.Background(), "stellar", 10)
 
 	// Assert: Should only get Stellar pools
 	if err != nil {
@@ -509,5 +509,131 @@ func TestFetchFromUpstream_LargeResponse(t *testing.T) {
 	}
 	if len(pools) != 10 {
 		t.Fatalf("expected 10 pools with limit=10, got %d", len(pools))
+	}
+}
+
+func TestGetYieldOpportunities_ChainCaseInsensitive(t *testing.T) {
+	// Arrange: Create a mock server that returns Stellar pools
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"data": [
+				{"pool": "stellar_pool", "project": "proj", "symbol": "USDC", "apy": 5.0, "tvlUsd": 1000000, "chain": "Stellar"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	svc := NewYieldService(server.URL)
+
+	// Act: Request with lowercase chain
+	resp, err := svc.GetYieldOpportunities(context.Background(), "stellar", 10)
+
+	// Assert: Should successfully return Stellar pools
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(resp.Pools) != 1 {
+		t.Fatalf("expected 1 pool, got %d", len(resp.Pools))
+	}
+	if resp.Pools[0].Pool != "stellar_pool" {
+		t.Fatalf("expected stellar_pool, got %s", resp.Pools[0].Pool)
+	}
+}
+
+func TestFetchFromUpstream_StrictChainFilter(t *testing.T) {
+	// Arrange: Create a mock server with mixed-chain pools including EVM pools
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"data": [
+				{"pool": "stellar_blend", "project": "Blend", "symbol": "USDC", "apy": 5.0, "tvlUsd": 5000000, "chain": "Stellar"},
+				{"pool": "ethereum_aave", "project": "Aave", "symbol": "USDC", "apy": 3.0, "tvlUsd": 10000000, "chain": "Ethereum"},
+				{"pool": "arbitrum_compound", "project": "Compound", "symbol": "USDC", "apy": 4.0, "tvlUsd": 8000000, "chain": "Arbitrum"},
+				{"pool": "multi_aave", "project": "Aave", "symbol": "USDC", "apy": 6.0, "tvlUsd": 15000000, "chain": "ethereum"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	svc := NewYieldService(server.URL)
+
+	// Act: Get pools for Stellar chain
+	resp, err := svc.GetYieldOpportunities(context.Background(), "stellar", 10)
+
+	// Assert: Should only get Stellar pools, never EVM pools
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(resp.Pools) != 1 {
+		t.Fatalf("expected 1 Stellar pool, got %d pools: %v", len(resp.Pools), resp.Pools)
+	}
+	if resp.Pools[0].Pool != "stellar_blend" {
+		t.Fatalf("expected stellar_blend, got %s", resp.Pools[0].Pool)
+	}
+	// Verify no EVM pools leaked through
+	for _, p := range resp.Pools {
+		if !strings.EqualFold(p.Chain, "Stellar") {
+			t.Fatalf("EVM pool leaked into results: chain=%s", p.Chain)
+		}
+	}
+}
+
+func TestGetYieldOpportunities_EmptyResultReturnsOK(t *testing.T) {
+	// Arrange: Create a mock server that returns no pools for the requested chain
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"data": [
+				{"pool": "eth_pool", "project": "proj", "symbol": "USDC", "apy": 5.0, "tvlUsd": 1000000, "chain": "Ethereum"},
+				{"pool": "arb_pool", "project": "proj", "symbol": "USDC", "apy": 4.0, "tvlUsd": 1000000, "chain": "Arbitrum"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	svc := NewYieldService(server.URL)
+
+	// Act: Request Stellar chain when only Ethereum/Arbitrum pools exist
+	resp, err := svc.GetYieldOpportunities(context.Background(), "Stellar", 10)
+
+	// Assert: Should return empty slice with no error
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if len(resp.Pools) != 0 {
+		t.Fatalf("expected 0 pools, got %d", len(resp.Pools))
+	}
+	if resp.Meta.Stale {
+		t.Fatal("expected stale=false for fresh fetch")
+	}
+}
+
+func TestNormalizeChain(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"stellar", "stellar"},
+		{"STELLAR", "stellar"},
+		{"Stellar", "stellar"},
+		{"  stellar  ", "stellar"},
+		{"ethereum", "ethereum"},
+		{"", ""},
+		{"  ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := normalizeChain(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeChain(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
 	}
 }
