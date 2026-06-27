@@ -13,10 +13,9 @@ export interface SavingsGoal {
   deadline: string;
   description?: string;
   category?: string;
-  status: string;
+  status?: "active" | "completed";
   current_amount: string | number;
   progress_pct: number;
-  status?: "active" | "completed";
   /** Vault this goal is linked to, when set (see #688). */
   vault_id?: string;
   /** Velocity stats (#714). */
