@@ -1,6 +1,5 @@
 "use client";
 
-import { format } from "date-fns";
 import {
   Briefcase,
   GraduationCap,
@@ -15,6 +14,7 @@ import { cn } from "@/lib/utils";
 import type { SavingsGoal } from "@/lib/api/savings-goals";
 import { useSavingsGoals } from "@/hooks/useSavingsGoals";
 import { useWallet } from "@/components/wallet-provider";
+import { DeadlineBadge } from "@/components/savings/DeadlineBadge";
 
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   emergency_fund: Shield,
@@ -61,7 +61,6 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
   const current = toNumber(goal.current_amount);
   const target = toNumber(goal.target_amount);
   const progress = Math.min(100, Math.max(0, goal.progress_pct ?? 0));
-  const deadline = goal.deadline ? format(new Date(goal.deadline), "MMM d, yyyy") : "—";
 
   return (
     <div className="rounded-2xl border border-black/8 bg-white p-5" data-testid="savings-goal-card">
@@ -94,7 +93,7 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
       </div>
       <div className="flex items-center justify-between text-[11px] text-black/50 font-medium">
         <span>{progress.toFixed(0)}% complete</span>
-        <span>Due {deadline}</span>
+        <DeadlineBadge deadline={goal.deadline} status={goal.status} />
       </div>
     </div>
   );

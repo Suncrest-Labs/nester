@@ -9,6 +9,7 @@ export interface SavingsGoal {
   category?: string;
   current_amount: string | number;
   progress_pct: number;
+  status?: "active" | "completed";
   /** Vault this goal is linked to, when set (see #688). */
   vault_id?: string;
 }
