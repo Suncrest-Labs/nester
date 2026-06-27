@@ -78,7 +78,7 @@ func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) 
 	return s.enrichProgress(ctx, *goal)
 }
 
-func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
 	filterCategory := ""
 	if strings.TrimSpace(category) != "" {
 		parsed, err := savingsgoal.ParseCategory(category)
@@ -94,6 +94,10 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 	}
 	out := make([]savingsgoal.SavingsGoal, 0, len(goals))
 	for _, g := range goals {
+		// Exclude archived goals from the default list unless explicitly requested (#721).
+		if !includeArchived && g.Status == savingsgoal.GoalStatusArchived {
+			continue
+		}
 		enriched, err := s.enrichProgress(ctx, g)
 		if err != nil {
 			return nil, err
@@ -346,6 +350,49 @@ func (s *SavingsGoalService) Complete(ctx context.Context, userID, goalID uuid.U
 	now := time.Now().UTC()
 	goal.CompletedAt = &now
 	return s.enrichProgress(ctx, *goal)
+}
+
+// Archive sets a goal's status to "archived" so it no longer appears in the default list (#721).
+// Any status may be archived; the action is reversible via Unarchive.
+// Archived goals cannot receive contributions.
+func (s *SavingsGoalService) Archive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.Status == savingsgoal.GoalStatusArchived {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: goal is already archived", savingsgoal.ErrGoalArchived)
+	}
+	if err := s.repo.MarkArchived(ctx, goalID, userID); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	now := time.Now().UTC()
+	goal.Status = savingsgoal.GoalStatusArchived
+	goal.ArchivedAt = &now
+	return *goal, nil
+}
+
+// Unarchive restores an archived goal to active status (#721).
+func (s *SavingsGoalService) Unarchive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.Status != savingsgoal.GoalStatusArchived {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: goal is not archived", savingsgoal.ErrGoalNotArchived)
+	}
+	if err := s.repo.MarkUnarchived(ctx, goalID, userID); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.Status = savingsgoal.GoalStatusActive
+	goal.ArchivedAt = nil
+	return *goal, nil
 }
 
 func (s *SavingsGoalService) notifyMilestonesAsync(goal savingsgoal.SavingsGoal, milestones []int) {

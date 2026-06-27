@@ -177,6 +177,40 @@ func (r *SavingsGoalRepository) MarkCompleted(ctx context.Context, goalID, userI
 	return nil
 }
 
+// MarkArchived sets status=archived and records archived_at timestamp (#721).
+func (r *SavingsGoalRepository) MarkArchived(ctx context.Context, goalID, userID uuid.UUID) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET status = 'archived', archived_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND user_id = $2
+	`, goalID, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
+}
+
+// MarkUnarchived restores an archived goal to active status and clears archived_at (#721).
+func (r *SavingsGoalRepository) MarkUnarchived(ctx context.Context, goalID, userID uuid.UUID) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET status = 'active', archived_at = NULL, updated_at = NOW()
+		WHERE id = $1 AND user_id = $2
+	`, goalID, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
+}
+
 func (r *SavingsGoalRepository) SumRecentDeposits(ctx context.Context, userID uuid.UUID, currency string, since time.Time) (decimal.Decimal, error) {
 	var total sql.NullString
 	err := r.db.QueryRowContext(ctx, `

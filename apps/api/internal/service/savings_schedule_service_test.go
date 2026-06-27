@@ -90,6 +90,8 @@ func (m *memoryGoalRepo) SumVaultBalance(context.Context, uuid.UUID, string) (de
 func (m *memoryGoalRepo) MarkCompleted(context.Context, uuid.UUID, uuid.UUID, string) error {
 	return nil
 }
+func (m *memoryGoalRepo) MarkArchived(context.Context, uuid.UUID, uuid.UUID) error   { return nil }
+func (m *memoryGoalRepo) MarkUnarchived(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (m *memoryGoalRepo) SumRecentDeposits(context.Context, uuid.UUID, string, time.Time) (decimal.Decimal, error) {
 	return decimal.Zero, nil
 }

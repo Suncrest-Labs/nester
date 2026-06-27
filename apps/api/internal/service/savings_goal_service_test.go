@@ -102,7 +102,35 @@ func (m *memorySavingsGoalRepo) SumRecentDeposits(context.Context, uuid.UUID, st
 func (m *memorySavingsGoalRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, string) error {
 	return nil
 }
-func (m *memorySavingsGoalRepo) MarkCompleted(context.Context, uuid.UUID, uuid.UUID, string) error {
+func (m *memorySavingsGoalRepo) MarkCompleted(_ context.Context, goalID, userID uuid.UUID, action string) error {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.Status = savingsgoal.GoalStatusCompleted
+	g.CompletionAction = action
+	m.goals[goalID] = g
+	return nil
+}
+func (m *memorySavingsGoalRepo) MarkArchived(_ context.Context, goalID, userID uuid.UUID) error {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.ErrGoalNotFound
+	}
+	now := time.Now().UTC()
+	g.Status = savingsgoal.GoalStatusArchived
+	g.ArchivedAt = &now
+	m.goals[goalID] = g
+	return nil
+}
+func (m *memorySavingsGoalRepo) MarkUnarchived(_ context.Context, goalID, userID uuid.UUID) error {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.Status = savingsgoal.GoalStatusActive
+	g.ArchivedAt = nil
+	m.goals[goalID] = g
 	return nil
 }
 
@@ -319,7 +347,7 @@ func TestSavingsGoalService_List_FilterByCategory(t *testing.T) {
 	}
 	svc := NewSavingsGoalService(repo, nil)
 
-	goals, err := svc.List(ctx, userID, "education")
+	goals, err := svc.List(ctx, userID, "education", false)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -336,7 +364,7 @@ func TestSavingsGoalService_List_InvalidCategoryFilter(t *testing.T) {
 	userID := uuid.New()
 	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
 
-	_, err := svc.List(ctx, userID, "invalid")
+	_, err := svc.List(ctx, userID, "invalid", false)
 	if err == nil {
 		t.Fatal("List() error = nil, want invalid category")
 	}

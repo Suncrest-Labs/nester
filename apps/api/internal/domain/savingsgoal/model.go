@@ -20,12 +20,19 @@ var (
 	ErrGoalCompleted = errors.New("savings goal already completed")
 	// ErrGoalPaused is returned when an action requires the goal to be active.
 	ErrGoalPaused = errors.New("savings goal is paused")
+	// ErrGoalArchived is returned when an operation is not allowed on an archived goal.
+	ErrGoalArchived = errors.New("savings goal is archived")
+	// ErrGoalNotArchived is returned by Unarchive when the goal is not currently archived.
+	ErrGoalNotArchived = errors.New("savings goal is not archived")
 )
 
 const (
 	GoalStatusActive    = "active"
 	GoalStatusPaused    = "paused"
 	GoalStatusCompleted = "completed"
+	// GoalStatusArchived marks a goal as hidden from the default list (#721).
+	// Archived goals are read-only: contributions and status changes are blocked.
+	GoalStatusArchived = "archived"
 )
 
 type GoalCategory string
@@ -106,7 +113,7 @@ type SavingsGoal struct {
 	Deadline      time.Time       `json:"deadline"`
 	Description   string          `json:"description,omitempty"`
 	Category      GoalCategory    `json:"category"`
-	// Status is one of "active", "paused", "completed" (#718, #716).
+	// Status is one of "active", "paused", "completed", "archived" (#718, #716, #721).
 	Status             string          `json:"status"`
 	CurrentAmount      decimal.Decimal `json:"current_amount"`
 	ProgressPct        float64         `json:"progress_pct"`
@@ -116,10 +123,12 @@ type SavingsGoal struct {
 	// Completion fields (#716).
 	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 	CompletionAction string    `json:"completion_action,omitempty"`
+	// Archival fields (#721).
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 	// Velocity stats (#714).
-	AvgWeeklyDeposit       decimal.Decimal `json:"avg_weekly_deposit"`
+	AvgWeeklyDeposit        decimal.Decimal `json:"avg_weekly_deposit"`
 	ProjectedDaysToComplete *int            `json:"projected_days_to_completion,omitempty"`
-	OnTrack                bool            `json:"on_track"`
+	OnTrack                 bool            `json:"on_track"`
 }
 
 type Repository interface {
@@ -136,4 +145,8 @@ type Repository interface {
 	UpdateStatus(ctx context.Context, goalID, userID uuid.UUID, status string) error
 	// MarkCompleted sets completed_at and completion_action (#716).
 	MarkCompleted(ctx context.Context, goalID, userID uuid.UUID, action string) error
+	// MarkArchived sets status=archived and archived_at timestamp (#721).
+	MarkArchived(ctx context.Context, goalID, userID uuid.UUID) error
+	// MarkUnarchived restores a goal to active status and clears archived_at (#721).
+	MarkUnarchived(ctx context.Context, goalID, userID uuid.UUID) error
 }

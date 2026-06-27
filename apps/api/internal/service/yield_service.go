@@ -28,7 +28,22 @@ type YieldPool struct {
 	TVLUsd    float64  `json:"tvlUsd"`
 	APYPct7d  *float64 `json:"apyPct7d"`
 	Chain     string   `json:"chain"`
-	RiskScore float64  `json:"riskScore"`
+	RiskScore float64  `json:"risk_score"`
+	// RiskTier buckets RiskScore: "low" (0–0.33), "medium" (0.34–0.66), "high" (0.67–1.0).
+	RiskTier string `json:"risk_tier"`
+}
+
+// RiskTierFromScore converts a [0.0, 1.0] risk score to a named tier.
+// Thresholds: Low ≤ 0.33, Medium ≤ 0.66, High > 0.66.
+func RiskTierFromScore(score float64) string {
+	switch {
+	case score <= 0.33:
+		return "low"
+	case score <= 0.66:
+		return "medium"
+	default:
+		return "high"
+	}
 }
 
 type yieldCacheEntry struct {
@@ -297,6 +312,7 @@ func (s *YieldService) fetchFromUpstream(ctx context.Context, chain string, limi
 			rewardRatio = pool.APYReward / pool.APY
 		}
 		pool.RiskScore = ComputeRiskScore(pool.TVLUsd, apy7dSwing, rewardRatio)
+		pool.RiskTier = RiskTierFromScore(pool.RiskScore)
 		pools = append(pools, pool)
 	}
 	slog.Debug("yield pools filtered",

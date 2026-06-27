@@ -22,13 +22,17 @@ import (
 type SavingsGoalManager interface {
 	Create(ctx context.Context, userID uuid.UUID, in service.CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
-	List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error)
+	List(ctx context.Context, userID uuid.UUID, category string, includeArchived bool) ([]savingsgoal.SavingsGoal, error)
 	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Delete(ctx context.Context, userID, goalID uuid.UUID) error
 	Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error)
 	Pause(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Resume(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Complete(ctx context.Context, userID, goalID uuid.UUID, action string) (savingsgoal.SavingsGoal, error)
+	// Archive moves a goal to archived status so it no longer appears in the default list (#721).
+	Archive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
+	// Unarchive restores an archived goal to active status (#721).
+	Unarchive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 }
 
 type SavingsGoalHandler struct {
@@ -51,6 +55,9 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/resume", h.resume)
 	// #716 manual completion
 	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/complete", h.complete)
+	// #721 archive/unarchive
+	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/archive", h.archive)
+	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/unarchive", h.unarchive)
 }
 
 type createSavingsGoalRequest struct {
@@ -131,7 +138,8 @@ func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	goals, err := h.svc.List(r.Context(), userID, strings.TrimSpace(r.URL.Query().Get("category")))
+	includeArchived := strings.EqualFold(r.URL.Query().Get("include_archived"), "true")
+	goals, err := h.svc.List(r.Context(), userID, strings.TrimSpace(r.URL.Query().Get("category")), includeArchived)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -291,6 +299,44 @@ func (h *SavingsGoalHandler) complete(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, http.StatusOK, response.OK(goal))
 }
 
+// archive sets a goal's status to "archived" so it no longer appears in the default list (#721).
+func (h *SavingsGoalHandler) archive(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	goal, err := h.svc.Archive(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(goal))
+}
+
+// unarchive restores an archived goal to active status (#721).
+func (h *SavingsGoalHandler) unarchive(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	goal, err := h.svc.Unarchive(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(goal))
+}
+
 func (h *SavingsGoalHandler) authenticatedUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -313,6 +359,10 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_COMPLETED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrGoalPaused):
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_PAUSED", err.Error()))
+	case errors.Is(err, savingsgoal.ErrGoalArchived):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_ARCHIVED", err.Error()))
+	case errors.Is(err, savingsgoal.ErrGoalNotArchived):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_NOT_ARCHIVED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:

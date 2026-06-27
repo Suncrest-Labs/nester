@@ -61,6 +61,9 @@ func (h *YieldHandler) compare(w http.ResponseWriter, r *http.Request) {
 // maxYieldCompare mirrors the service's upper bound for query parsing capacity.
 const maxYieldCompare = 5
 
+// validRiskTiers is the set of accepted values for the ?risk= query param.
+var validRiskTiers = map[string]bool{"low": true, "medium": true, "high": true}
+
 func (h *YieldHandler) list(w http.ResponseWriter, r *http.Request) {
 	chain := strings.TrimSpace(r.URL.Query().Get("chain"))
 	if chain == "" {
@@ -74,6 +77,16 @@ func (h *YieldHandler) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Optional risk-tier filter (#720): low | medium | high
+	riskFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("risk")))
+	if riskFilter != "" && !validRiskTiers[riskFilter] {
+		response.WriteJSON(w, http.StatusBadRequest, response.Err(
+			http.StatusBadRequest, "INVALID_RISK_TIER",
+			"risk must be one of: low, medium, high",
+		))
+		return
+	}
+
 	yieldResp, err := h.svc.GetYieldOpportunities(r.Context(), chain, limit)
 	if err != nil {
 		logpkg.FromContext(r.Context()).Error("yield opportunities fetch failed", "chain", chain, "error", err.Error())
@@ -81,9 +94,19 @@ func (h *YieldHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build response with meta information
+	pools := yieldResp.Pools
+	if riskFilter != "" {
+		filtered := pools[:0]
+		for _, p := range pools {
+			if p.RiskTier == riskFilter {
+				filtered = append(filtered, p)
+			}
+		}
+		pools = filtered
+	}
+
 	responseData := map[string]interface{}{
-		"data": yieldResp.Pools,
+		"data": pools,
 		"meta": yieldResp.Meta,
 	}
 

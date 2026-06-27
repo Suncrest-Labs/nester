@@ -61,7 +61,7 @@ func (m *mockSavingsGoalService) Get(_ context.Context, userID, goalID uuid.UUID
 	return g, nil
 }
 
-func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, category string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
 	if category != "" {
 		if _, err := savingsgoal.ParseCategory(category); err != nil {
 			return nil, err
@@ -70,6 +70,9 @@ func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, categ
 	var out []savingsgoal.SavingsGoal
 	for _, g := range m.goals {
 		if g.UserID != userID {
+			continue
+		}
+		if !includeArchived && g.Status == savingsgoal.GoalStatusArchived {
 			continue
 		}
 		if category != "" && string(g.Category) != category {
@@ -145,6 +148,24 @@ func (m *mockSavingsGoalService) Resume(_ context.Context, userID, goalID uuid.U
 	if !ok || g.UserID != userID {
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
+	return g, nil
+}
+func (m *mockSavingsGoalService) Archive(_ context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	g.Status = savingsgoal.GoalStatusArchived
+	m.goals[goalID] = g
+	return g, nil
+}
+func (m *mockSavingsGoalService) Unarchive(_ context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	g.Status = savingsgoal.GoalStatusActive
+	m.goals[goalID] = g
 	return g, nil
 }
 
