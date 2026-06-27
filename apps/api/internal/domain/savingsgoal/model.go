@@ -18,6 +18,14 @@ var (
 	// ErrGoalCompleted is returned when an operation is not allowed on a goal
 	// that has already reached its target (e.g. changing its deadline).
 	ErrGoalCompleted = errors.New("savings goal already completed")
+	// ErrGoalPaused is returned when an action requires the goal to be active.
+	ErrGoalPaused = errors.New("savings goal is paused")
+)
+
+const (
+	GoalStatusActive    = "active"
+	GoalStatusPaused    = "paused"
+	GoalStatusCompleted = "completed"
 )
 
 type GoalCategory string
@@ -98,11 +106,20 @@ type SavingsGoal struct {
 	Deadline      time.Time       `json:"deadline"`
 	Description   string          `json:"description,omitempty"`
 	Category      GoalCategory    `json:"category"`
+	// Status is one of "active", "paused", "completed" (#718, #716).
+	Status             string          `json:"status"`
 	CurrentAmount      decimal.Decimal `json:"current_amount"`
 	ProgressPct        float64         `json:"progress_pct"`
 	NotifiedMilestones []int           `json:"-"`
 	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	// Completion fields (#716).
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	CompletionAction string    `json:"completion_action,omitempty"`
+	// Velocity stats (#714).
+	AvgWeeklyDeposit       decimal.Decimal `json:"avg_weekly_deposit"`
+	ProjectedDaysToComplete *int            `json:"projected_days_to_completion,omitempty"`
+	OnTrack                bool            `json:"on_track"`
 }
 
 type Repository interface {
@@ -113,4 +130,10 @@ type Repository interface {
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	SumVaultBalance(ctx context.Context, userID uuid.UUID, currency string) (decimal.Decimal, error)
 	UpdateMilestones(ctx context.Context, goalID uuid.UUID, milestones []int) error
+	// SumRecentDeposits sums vault deposit amounts for the user in the given currency since `since` (#714).
+	SumRecentDeposits(ctx context.Context, userID uuid.UUID, currency string, since time.Time) (decimal.Decimal, error)
+	// UpdateStatus sets the goal's status column (#718).
+	UpdateStatus(ctx context.Context, goalID, userID uuid.UUID, status string) error
+	// MarkCompleted sets completed_at and completion_action (#716).
+	MarkCompleted(ctx context.Context, goalID, userID uuid.UUID, action string) error
 }

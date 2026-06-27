@@ -6,8 +6,10 @@ import {
   Heart,
   Home,
   Plane,
+  Plus,
   Shield,
   Target,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -61,16 +63,37 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
   const current = toNumber(goal.current_amount);
   const target = toNumber(goal.target_amount);
   const progress = Math.min(100, Math.max(0, goal.progress_pct ?? 0));
+  const deadline = goal.deadline ? format(new Date(goal.deadline), "MMM d, yyyy") : "—";
+  const isPaused = goal.status === "paused";
+  const isCompleted = goal.status === "completed";
 
   return (
-    <div className="rounded-2xl border border-black/8 bg-white p-5" data-testid="savings-goal-card">
+    <div
+      className={cn(
+        "rounded-2xl border bg-white p-5",
+        isPaused ? "border-amber-200 bg-amber-50/30" : isCompleted ? "border-emerald-200 bg-emerald-50/30" : "border-black/8"
+      )}
+      data-testid="savings-goal-card"
+    >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/5">
             <Icon className="h-4 w-4 text-black/50" aria-hidden="true" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-black">{goalDisplayName(goal)}</p>
+            <div className="flex items-center gap-2">
+              <p className="truncate text-sm font-semibold text-black">{goalDisplayName(goal)}</p>
+              {isPaused && (
+                <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">
+                  Paused
+                </span>
+              )}
+              {isCompleted && (
+                <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">
+                  Done
+                </span>
+              )}
+            </div>
             <p className="text-[11px] text-black/50 font-medium">
               Target {target.toLocaleString()} {goal.currency}
             </p>
@@ -83,7 +106,7 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
       </div>
       <div className="mb-2 h-2 overflow-hidden rounded-full bg-black/8">
         <div
-          className="h-full rounded-full bg-black transition-all"
+          className={cn("h-full rounded-full transition-all", isCompleted ? "bg-emerald-500" : "bg-black")}
           style={{ width: `${progress}%` }}
           role="progressbar"
           aria-valuenow={progress}
@@ -93,7 +116,20 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
       </div>
       <div className="flex items-center justify-between text-[11px] text-black/50 font-medium">
         <span>{progress.toFixed(0)}% complete</span>
-        <DeadlineBadge deadline={goal.deadline} status={goal.status} />
+        <div className="flex items-center gap-2">
+          {goal.on_track != null && !isCompleted && (
+            <span
+              className={cn(
+                "flex items-center gap-1",
+                goal.on_track ? "text-emerald-600" : "text-red-500"
+              )}
+            >
+              <TrendingUp className="h-3 w-3" aria-hidden="true" />
+              {goal.on_track ? "On track" : "Behind"}
+            </span>
+          )}
+          <span>Due {deadline}</span>
+        </div>
       </div>
     </div>
   );
@@ -124,6 +160,16 @@ export function SavingsGoalsSection({ onCreateGoal }: { onCreateGoal?: () => voi
           <h2 className="text-sm font-semibold text-black">Your Savings Goals</h2>
           <p className="text-xs text-black/60 font-medium mt-0.5">Progress toward your targets</p>
         </div>
+        {onCreateGoal && (
+          <button
+            type="button"
+            onClick={onCreateGoal}
+            className="flex items-center gap-1.5 rounded-xl bg-black px-3.5 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-75"
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            New Goal
+          </button>
+        )}
       </div>
 
       {isLoading ? (

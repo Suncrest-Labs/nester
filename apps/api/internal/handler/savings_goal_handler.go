@@ -26,6 +26,9 @@ type SavingsGoalManager interface {
 	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Delete(ctx context.Context, userID, goalID uuid.UUID) error
 	Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error)
+	Pause(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
+	Resume(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
+	Complete(ctx context.Context, userID, goalID uuid.UUID, action string) (savingsgoal.SavingsGoal, error)
 }
 
 type SavingsGoalHandler struct {
@@ -43,6 +46,11 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}", h.get)
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}", h.update)
 	mux.HandleFunc("DELETE /api/v1/users/savings-goals/{id}", h.delete)
+	// #718 pause/resume
+	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/pause", h.pause)
+	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/resume", h.resume)
+	// #716 manual completion
+	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/complete", h.complete)
 }
 
 type createSavingsGoalRequest struct {
@@ -215,6 +223,74 @@ func (h *SavingsGoalHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *SavingsGoalHandler) pause(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	goal, err := h.svc.Pause(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(goal))
+}
+
+func (h *SavingsGoalHandler) resume(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	goal, err := h.svc.Resume(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(goal))
+}
+
+type completeGoalRequest struct {
+	Action string `json:"action"`
+}
+
+func (h *SavingsGoalHandler) complete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	body, err := readJSONBody(r)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	var req completeGoalRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid JSON"))
+		return
+	}
+	goal, err := h.svc.Complete(r.Context(), userID, goalID, req.Action)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(goal))
+}
+
 func (h *SavingsGoalHandler) authenticatedUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -235,6 +311,8 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("savings goal"))
 	case errors.Is(err, savingsgoal.ErrGoalCompleted):
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_COMPLETED", err.Error()))
+	case errors.Is(err, savingsgoal.ErrGoalPaused):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_PAUSED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:

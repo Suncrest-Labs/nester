@@ -1,5 +1,11 @@
 import { apiRequest } from "@/lib/api/client";
 
+export interface SavingsGoalVelocity {
+  avg_weekly_deposit: string | number;
+  projected_days_to_completion?: number;
+  on_track: boolean;
+}
+
 export interface SavingsGoal {
   id: string;
   target_amount: string | number;
@@ -7,11 +13,19 @@ export interface SavingsGoal {
   deadline: string;
   description?: string;
   category?: string;
+  status: string;
   current_amount: string | number;
   progress_pct: number;
   status?: "active" | "completed";
   /** Vault this goal is linked to, when set (see #688). */
   vault_id?: string;
+  /** Velocity stats (#714). */
+  avg_weekly_deposit?: string | number;
+  projected_days_to_completion?: number;
+  on_track?: boolean;
+  /** Completion fields (#716). */
+  completed_at?: string;
+  completion_action?: string;
 }
 
 export interface CreateSavingsGoalInput {
@@ -19,6 +33,7 @@ export interface CreateSavingsGoalInput {
   currency: string;
   deadline: string;
   description?: string;
+  category?: string;
 }
 
 export const savingsGoals = {
@@ -40,5 +55,14 @@ export const savingsGoals = {
       headers: {
         Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("nester_token") ?? "" : ""}`,
       },
+    }),
+  pause: (id: string) =>
+    apiRequest<SavingsGoal>(`/users/savings-goals/${id}/pause`, { method: "PATCH" }),
+  resume: (id: string) =>
+    apiRequest<SavingsGoal>(`/users/savings-goals/${id}/resume`, { method: "PATCH" }),
+  complete: (id: string, action: "reinvest" | "withdraw") =>
+    apiRequest<SavingsGoal>(`/users/savings-goals/${id}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
     }),
 };
