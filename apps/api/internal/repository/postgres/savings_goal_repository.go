@@ -3,7 +3,10 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
+	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
 
 type SavingsGoalRepository struct {
@@ -234,6 +238,98 @@ func (r *SavingsGoalRepository) MarkCompleted(ctx context.Context, goalID, userI
 	return nil
 }
 
+func (r *SavingsGoalRepository) ListContributions(ctx context.Context, goalID, userID uuid.UUID, params interface{}) ([]savingsgoal.GoalContribution, int, string, error) {
+	pageParams, ok := params.(listquery.PageParams)
+	if !ok {
+		return nil, 0, "", fmt.Errorf("invalid pagination params")
+	}
+	if pageParams.PerPage <= 0 {
+		pageParams.PerPage = listquery.DefaultPerPage
+	}
+	if pageParams.Page <= 0 {
+		pageParams.Page = listquery.DefaultPage
+	}
+
+	countQuery := `
+		SELECT COUNT(*)
+		FROM vault_transactions vt
+		JOIN vaults v ON vt.vault_id = v.id
+		JOIN savings_schedules ss ON ss.vault_id = v.id
+		WHERE ss.goal_id = $1 AND ss.user_id = $2 AND vt.type = 'deposit' AND v.deleted_at IS NULL
+	`
+	var total int
+	if err := r.db.QueryRowContext(ctx, countQuery, goalID, userID).Scan(&total); err != nil {
+		return nil, 0, "", err
+	}
+
+	query := `
+               SELECT vt.id, vt.vault_id, v.user_id, vt.amount, v.currency, vt.type, vt.tx_hash, vt.created_at
+               FROM vault_transactions vt
+               JOIN vaults v ON vt.vault_id = v.id
+               JOIN savings_schedules ss ON ss.vault_id = v.id
+               WHERE ss.goal_id = $1 AND ss.user_id = $2 AND vt.type = 'deposit' AND v.deleted_at IS NULL
+       `
+	args := []any{goalID, userID}
+	if pageParams.Cursor != "" {
+		createdAt, cursorID, err := decodeGoalContributionCursor(pageParams.Cursor)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		query += ` AND (vt.created_at < $3 OR (vt.created_at = $3 AND vt.id < $4))`
+		args = append(args, createdAt.UTC(), cursorID)
+	}
+	query += fmt.Sprintf(` ORDER BY vt.created_at DESC, vt.id DESC LIMIT $%d`, len(args)+1)
+	args = append(args, pageParams.PerPage+1)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	defer rows.Close()
+
+	items := make([]savingsgoal.GoalContribution, 0, pageParams.PerPage+1)
+	for rows.Next() {
+		var (
+			id, vaultID, userIDStr, amountStr, currency, txType string
+			txHash                                              sql.NullString
+			createdAt                                           time.Time
+		)
+		if err := rows.Scan(&id, &vaultID, &userIDStr, &amountStr, &currency, &txType, &txHash, &createdAt); err != nil {
+			return nil, 0, "", err
+		}
+		parsedID, _ := uuid.Parse(id)
+		parsedVaultID, _ := uuid.Parse(vaultID)
+		parsedUserID, _ := uuid.Parse(userIDStr)
+		amount, _ := decimal.NewFromString(amountStr)
+		var txHashStr string
+		if txHash.Valid {
+			txHashStr = txHash.String
+		}
+		items = append(items, savingsgoal.GoalContribution{
+			ID:        parsedID,
+			GoalID:    goalID,
+			UserID:    parsedUserID,
+			Amount:    amount,
+			Currency:  currency,
+			Type:      txType,
+			TxHash:    txHashStr,
+			CreatedAt: createdAt.UTC(),
+		})
+		_ = parsedVaultID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, "", err
+	}
+
+	nextCursor := ""
+	if len(items) > pageParams.PerPage {
+		last := items[pageParams.PerPage-1]
+		nextCursor = encodeGoalContributionCursor(last.CreatedAt, last.ID)
+		items = items[:pageParams.PerPage]
+	}
+	return items, total, nextCursor, nil
+}
+
 func (r *SavingsGoalRepository) SumRecentDeposits(ctx context.Context, userID uuid.UUID, currency string, since time.Time) (decimal.Decimal, error) {
 	var total sql.NullString
 	err := r.db.QueryRowContext(ctx, `
@@ -381,4 +477,29 @@ func (r *SavingsGoalRepository) SumGoalDeposits(ctx context.Context, goalID uuid
 		return decimal.Zero, nil
 	}
 	return decimal.NewFromString(total.String)
+}
+
+func encodeGoalContributionCursor(createdAt time.Time, contributionID uuid.UUID) string {
+	payload := createdAt.UTC().Format(time.RFC3339Nano) + "|" + contributionID.String()
+	return base64.RawStdEncoding.EncodeToString([]byte(payload))
+}
+
+func decodeGoalContributionCursor(cursor string) (time.Time, uuid.UUID, error) {
+	decoded, err := base64.RawStdEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, uuid.Nil, err
+	}
+	parts := strings.SplitN(string(decoded), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, uuid.Nil, fmt.Errorf("invalid contribution cursor")
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, uuid.Nil, err
+	}
+	contributionID, err := uuid.Parse(parts[1])
+	if err != nil {
+		return time.Time{}, uuid.Nil, err
+	}
+	return createdAt, contributionID, nil
 }

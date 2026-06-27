@@ -12,6 +12,7 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsstreak"
+	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
 
 type SavingsGoalService struct {
@@ -225,6 +226,17 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 
 func (s *SavingsGoalService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
 	return s.repo.Delete(ctx, goalID, userID)
+}
+
+func (s *SavingsGoalService) ListContributions(ctx context.Context, userID, goalID uuid.UUID, params listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	if goal.UserID != userID {
+		return nil, 0, "", savingsgoal.ErrGoalNotFound
+	}
+	return s.repo.ListContributions(ctx, goalID, userID, params)
 }
 
 func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {

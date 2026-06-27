@@ -98,6 +98,11 @@ func (m *memorySavingsGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.
 	m.goals[goalID] = g
 	return nil
 }
+
+func (m *memorySavingsGoalRepo) ListContributions(context.Context, uuid.UUID, uuid.UUID, interface{}) ([]savingsgoal.GoalContribution, int, string, error) {
+	return nil, 0, "", nil
+}
+
 func (m *memorySavingsGoalRepo) SumRecentDeposits(context.Context, uuid.UUID, string, time.Time) (decimal.Decimal, error) {
 	return decimal.Zero, nil
 }

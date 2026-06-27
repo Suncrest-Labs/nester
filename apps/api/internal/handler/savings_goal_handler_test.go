@@ -19,6 +19,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
@@ -108,6 +109,23 @@ func (m *mockSavingsGoalService) Update(_ context.Context, userID, goalID uuid.U
 	}
 	m.goals[goalID] = g
 	return g, nil
+}
+
+func (m *mockSavingsGoalService) ListContributions(_ context.Context, userID, goalID uuid.UUID, _ listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return nil, 0, "", savingsgoal.ErrGoalNotFound
+	}
+	items := []savingsgoal.GoalContribution{{
+		ID:        uuid.New(),
+		GoalID:    goalID,
+		UserID:    userID,
+		Amount:    decimal.NewFromInt(100),
+		Currency:  g.Currency,
+		Type:      "deposit",
+		CreatedAt: time.Now().UTC(),
+	}}
+	return items, len(items), "", nil
 }
 
 func (m *mockSavingsGoalService) Delete(_ context.Context, userID, goalID uuid.UUID) error {
@@ -706,6 +724,54 @@ func TestSavingsGoalHandler_SplitDeposit(t *testing.T) {
 			t.Fatalf("status = %d, want 400", resp.StatusCode)
 		}
 	})
+}
+
+func TestSavingsGoalHandler_ListContributions(t *testing.T) {
+	userID := uuid.New()
+	goalID := uuid.New()
+	svc := &mockSavingsGoalService{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+		goalID: {
+			ID:       goalID,
+			UserID:   userID,
+			Currency: savingsgoal.CurrencyUSDC,
+		},
+	}}
+	h := NewSavingsGoalHandler(svc, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/v1/users/savings-goals/" + goalID.String() + "/contributions?per_page=5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("contributions status = %d, want 200", resp.StatusCode)
+	}
+
+	var envelope response.Response
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Meta == nil {
+		t.Fatal("expected pagination meta")
+	}
+	data, err := json.Marshal(envelope.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contributions []savingsgoal.GoalContribution
+	if err := json.Unmarshal(data, &contributions); err != nil {
+		t.Fatal(err)
+	}
+	if len(contributions) != 1 {
+		t.Fatalf("contributions len = %d, want 1", len(contributions))
+	}
+	if contributions[0].Type != "deposit" {
+		t.Fatalf("contribution type = %q, want deposit", contributions[0].Type)
+	}
 }
 
 // decodeGoalList decodes a list-of-goals response envelope.

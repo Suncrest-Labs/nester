@@ -209,6 +209,17 @@ type GoalDeposit struct {
 	Currency string
 }
 
+type GoalContribution struct {
+	ID        uuid.UUID       `json:"id"`
+	GoalID    uuid.UUID       `json:"goal_id"`
+	UserID    uuid.UUID       `json:"user_id"`
+	Amount    decimal.Decimal `json:"amount"`
+	Currency  string          `json:"currency"`
+	Type      string          `json:"type"`
+	TxHash    string          `json:"tx_hash,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
 type Repository interface {
 	Create(ctx context.Context, goal *SavingsGoal) error
 	ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]SavingsGoal, error)
@@ -217,6 +228,7 @@ type Repository interface {
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	SumVaultBalance(ctx context.Context, userID uuid.UUID, currency string) (decimal.Decimal, error)
 	UpdateMilestones(ctx context.Context, goalID uuid.UUID, milestones []int) error
+	ListContributions(ctx context.Context, goalID, userID uuid.UUID, params interface{}) ([]GoalContribution, int, string, error)
 	// SumRecentDeposits sums vault deposit amounts for the user in the given currency since `since` (#714).
 	SumRecentDeposits(ctx context.Context, userID uuid.UUID, currency string, since time.Time) (decimal.Decimal, error)
 	// UpdateStatus sets the goal's status column (#718).

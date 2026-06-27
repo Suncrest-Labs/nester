@@ -16,6 +16,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsschedule"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
@@ -36,6 +37,7 @@ type SavingsGoalManager interface {
 	Share(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Unshare(ctx context.Context, userID, goalID uuid.UUID) error
 	GetShared(ctx context.Context, token uuid.UUID) (savingsgoal.SharedGoalView, error)
+	ListContributions(ctx context.Context, userID, goalID uuid.UUID, params listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error)
 }
 
 type SavingsGoalHandler struct {
@@ -61,6 +63,7 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	// #718 pause/resume
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/pause", h.pause)
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/resume", h.resume)
+	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}/contributions", h.listContributions)
 	// #716 manual completion
 	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/complete", h.complete)
 	// #684 archive / #721 unarchive
@@ -382,9 +385,9 @@ type splitDepositAllocationRequest struct {
 }
 
 type splitDepositRequest struct {
-	TotalAmount string                           `json:"total_amount"`
-	Currency    string                           `json:"currency"`
-	Allocations []splitDepositAllocationRequest  `json:"allocations"`
+	TotalAmount string                          `json:"total_amount"`
+	Currency    string                          `json:"currency"`
+	Allocations []splitDepositAllocationRequest `json:"allocations"`
 }
 
 func (h *SavingsGoalHandler) splitDeposit(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +452,29 @@ func (h *SavingsGoalHandler) splitDeposit(w http.ResponseWriter, r *http.Request
 		return
 	}
 	response.WriteJSON(w, http.StatusCreated, response.Created(result))
+}
+
+func (h *SavingsGoalHandler) listContributions(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	params, err := listquery.ParsePage(r)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	contributions, total, nextCursor, err := h.svc.ListContributions(r.Context(), userID, goalID, params)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.PaginatedOK(contributions, params.Page, params.PerPage, total, nextCursor))
 }
 
 func (h *SavingsGoalHandler) authenticatedUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
