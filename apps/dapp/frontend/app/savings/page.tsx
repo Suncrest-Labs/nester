@@ -45,6 +45,7 @@ import {
 } from "@/lib/savings/vault-definitions";
 import { buildSavingsVaults } from "@/lib/savings/apply-live-apy";
 import { SavingsGoalsSection } from "@/components/savings/SavingsGoalsSection";
+import { CreateGoalModal } from "@/components/savings/CreateGoalModal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -894,6 +895,7 @@ export default function SavingsPage() {
     const [selectedVault, setSelectedVault] = useState<SavingsVault | null>(null);
     const [showHowItWorks, setShowHowItWorks] = useState(false);
     const [planModalOpen, setPlanModalOpen] = useState(false);
+    const [goalModalOpen, setGoalModalOpen] = useState(false);
 
     const { data: yieldPools, isLoading: yieldLoading, isError: yieldError } = useYieldOpportunities();
     const savingsVaults = useMemo(
@@ -989,7 +991,7 @@ export default function SavingsPage() {
                 </motion.div>
 
                 {/* ── Savings goals + portfolio overview ───────────────────── */}
-                <SavingsGoalsSection onCreateGoal={() => setPlanModalOpen(true)} />
+                <SavingsGoalsSection onCreateGoal={() => setGoalModalOpen(true)} />
                 {isConnected && <SavingsOverview savingsVaults={savingsVaults} />}
 
                 {/* ── Filter tabs ──────────────────────────────────────────── */}
@@ -1052,6 +1054,7 @@ export default function SavingsPage() {
 
             <DepositModal vault={selectedVault} onClose={() => setSelectedVault(null)} />
             {planModalOpen && <CreatePlanModal onClose={() => setPlanModalOpen(false)} />}
+            {goalModalOpen && <CreateGoalModal onClose={() => setGoalModalOpen(false)} />}
         </AppShell>
     );
 }

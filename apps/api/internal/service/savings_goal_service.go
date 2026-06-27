@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -230,6 +231,17 @@ func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoa
 		goal.ProgressPct = pct
 	}
 
+	// Auto-complete when target is reached and not already marked complete (#716).
+	if goal.Status == savingsgoal.GoalStatusActive &&
+		goal.TargetAmount.IsPositive() &&
+		balance.GreaterThanOrEqual(goal.TargetAmount) &&
+		goal.CompletedAt == nil {
+		_ = s.repo.MarkCompleted(ctx, goal.ID, goal.UserID, "")
+		now := time.Now().UTC()
+		goal.CompletedAt = &now
+		goal.Status = savingsgoal.GoalStatusCompleted
+	}
+
 	newMilestones := savingsgoal.DetectNewMilestones(goal.ProgressPct, goal.NotifiedMilestones)
 	if len(newMilestones) > 0 {
 		goal.NotifiedMilestones = append(append([]int(nil), goal.NotifiedMilestones...), newMilestones...)
@@ -239,7 +251,101 @@ func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoa
 		s.notifyMilestonesAsync(goal, newMilestones)
 	}
 
+	// Velocity stats (#714): compute from last 30 days of deposits.
+	since := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	deposited30d, err := s.repo.SumRecentDeposits(ctx, goal.UserID, goal.Currency, since)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	weeksInWindow := decimal.NewFromFloat(30.0 / 7.0)
+	if weeksInWindow.IsPositive() {
+		goal.AvgWeeklyDeposit = deposited30d.Div(weeksInWindow).Round(8)
+	}
+	remaining := goal.TargetAmount.Sub(balance)
+	if goal.AvgWeeklyDeposit.IsPositive() && remaining.IsPositive() {
+		dailyRate := goal.AvgWeeklyDeposit.Div(decimal.NewFromInt(7))
+		days := int(math.Ceil(remaining.Div(dailyRate).InexactFloat64()))
+		goal.ProjectedDaysToComplete = &days
+		daysUntilDeadline := int(math.Ceil(time.Until(goal.Deadline).Hours() / 24))
+		goal.OnTrack = days <= daysUntilDeadline
+	} else if remaining.IsZero() || remaining.IsNegative() {
+		goal.OnTrack = true
+	}
+
 	return goal, nil
+}
+
+// Pause suspends deposits and notifications for a goal (#718).
+func (s *SavingsGoalService) Pause(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.Status == savingsgoal.GoalStatusCompleted {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: cannot pause a completed goal", savingsgoal.ErrGoalCompleted)
+	}
+	if goal.Status == savingsgoal.GoalStatusPaused {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: goal is already paused", savingsgoal.ErrGoalPaused)
+	}
+	if err := s.repo.UpdateStatus(ctx, goalID, userID, savingsgoal.GoalStatusPaused); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.Status = savingsgoal.GoalStatusPaused
+	return s.enrichProgress(ctx, *goal)
+}
+
+// Resume reactivates a paused goal (#718).
+func (s *SavingsGoalService) Resume(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.Status != savingsgoal.GoalStatusPaused {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: goal is not paused", savingsgoal.ErrGoalPaused)
+	}
+	if err := s.repo.UpdateStatus(ctx, goalID, userID, savingsgoal.GoalStatusActive); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.Status = savingsgoal.GoalStatusActive
+	return s.enrichProgress(ctx, *goal)
+}
+
+// Complete explicitly marks a goal as completed with a disposition action (#716).
+func (s *SavingsGoalService) Complete(ctx context.Context, userID, goalID uuid.UUID, action string) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.Status == savingsgoal.GoalStatusCompleted {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: goal is already completed", savingsgoal.ErrGoalCompleted)
+	}
+	if action != "reinvest" && action != "withdraw" {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: action must be 'reinvest' or 'withdraw'", savingsgoal.ErrInvalidGoal)
+	}
+	balance, err := s.repo.SumVaultBalance(ctx, goal.UserID, goal.Currency)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.TargetAmount.IsPositive() && balance.LessThan(goal.TargetAmount) {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: target not yet reached", savingsgoal.ErrInvalidGoal)
+	}
+	if err := s.repo.MarkCompleted(ctx, goalID, userID, action); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.Status = savingsgoal.GoalStatusCompleted
+	goal.CompletionAction = action
+	now := time.Now().UTC()
+	goal.CompletedAt = &now
+	return s.enrichProgress(ctx, *goal)
 }
 
 func (s *SavingsGoalService) notifyMilestonesAsync(goal savingsgoal.SavingsGoal, milestones []int) {
