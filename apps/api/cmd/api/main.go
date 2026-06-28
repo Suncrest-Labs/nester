@@ -455,6 +455,15 @@ func run() error {
 
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
 
+	// APY snapshot scheduler and history endpoint
+	apySnapshotRepo := postgres.NewAPYSnapshotRepository(db)
+	apySvc := service.NewAPYService(apySnapshotRepo)
+	apyHandler := handler.NewAPYHandler(apySvc)
+	apyHandler.Register(mux)
+	apySchedulerCtx, cancelAPYScheduler := context.WithCancel(context.Background())
+	defer cancelAPYScheduler()
+	go apySvc.StartScheduler(apySchedulerCtx)
+
 	authRules := []middleware.RouteRule{
 		{PathPrefix: "/health", Public: true},
 		{PathPrefix: "/healthz", Public: true},
@@ -462,6 +471,7 @@ func run() error {
 		{PathPrefix: "/ws", Public: true},
 		{PathPrefix: "/api/v1/auth/", Public: true},
 		{PathPrefix: "/api/v1/banks/", Public: true},
+		{PathPrefix: "/api/v1/yields/", Public: true},
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}
