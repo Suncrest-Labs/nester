@@ -63,6 +63,9 @@ func (s *SavingsScheduleService) Create(
 	if goal.Status == savingsgoal.GoalStatusArchived {
 		return savingsschedule.SavingsSchedule{}, fmt.Errorf("%w: cannot add contributions to an archived goal", savingsgoal.ErrGoalArchived)
 	}
+	if goal.Status == savingsgoal.GoalStatusPaused {
+		return savingsschedule.SavingsSchedule{}, savingsgoal.ErrGoalPaused
+	}
 
 	frequency, err := savingsschedule.ParseFrequency(in.Frequency)
 	if err != nil {
@@ -137,6 +140,95 @@ func (s *SavingsScheduleService) Cancel(
 		return savingsgoal.ErrGoalNotFound
 	}
 	return s.scheduleRepo.Cancel(ctx, scheduleID, goalID, userID)
+}
+
+func (s *SavingsScheduleService) GetActive(
+	ctx context.Context,
+	userID, goalID uuid.UUID,
+) (*savingsschedule.SavingsSchedule, error) {
+	goal, err := s.goalRepo.GetByID(ctx, goalID)
+	if err != nil {
+		return nil, err
+	}
+	if goal.UserID != userID {
+		return nil, savingsgoal.ErrGoalNotFound
+	}
+	return s.scheduleRepo.GetActiveByGoal(ctx, goalID, userID)
+}
+
+type UpdateSavingsScheduleInput struct {
+	Amount    *decimal.Decimal `json:"amount"`
+	Currency  *string          `json:"currency"`
+	Frequency *string          `json:"frequency"`
+	VaultID   *uuid.UUID       `json:"vault_id"`
+}
+
+func (s *SavingsScheduleService) Update(
+	ctx context.Context,
+	userID, goalID uuid.UUID,
+	in UpdateSavingsScheduleInput,
+) (savingsschedule.SavingsSchedule, error) {
+	goal, err := s.goalRepo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsschedule.SavingsSchedule{}, err
+	}
+	if goal.UserID != userID {
+		return savingsschedule.SavingsSchedule{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.Status == savingsgoal.GoalStatusPaused || goal.Status == savingsgoal.GoalStatusArchived {
+		return savingsschedule.SavingsSchedule{}, savingsgoal.ErrGoalPaused
+	}
+
+	active, err := s.scheduleRepo.GetActiveByGoal(ctx, goalID, userID)
+	if err != nil {
+		return savingsschedule.SavingsSchedule{}, err
+	}
+	if active == nil {
+		return savingsschedule.SavingsSchedule{}, savingsschedule.ErrScheduleNotFound
+	}
+
+	if in.Amount != nil {
+		if err := validateScheduleAmount(*in.Amount, s.minDeposit); err != nil {
+			return savingsschedule.SavingsSchedule{}, err
+		}
+		active.Amount = *in.Amount
+	}
+	if in.Currency != nil {
+		active.Currency = strings.ToUpper(strings.TrimSpace(*in.Currency))
+	}
+	if in.Frequency != nil {
+		frequency, err := savingsschedule.ParseFrequency(*in.Frequency)
+		if err != nil {
+			return savingsschedule.SavingsSchedule{}, err
+		}
+		active.Frequency = frequency
+	}
+	if in.VaultID != nil {
+		v, err := s.vaultRepo.GetVault(ctx, *in.VaultID)
+		if err != nil {
+			return savingsschedule.SavingsSchedule{}, err
+		}
+		if v.UserID != userID {
+			return savingsschedule.SavingsSchedule{}, savingsschedule.ErrUnauthorizedVault
+		}
+		active.VaultID = *in.VaultID
+	}
+
+	if err := s.scheduleRepo.Update(ctx, active); err != nil {
+		return savingsschedule.SavingsSchedule{}, err
+	}
+	return *active, nil
+}
+
+func (s *SavingsScheduleService) DeleteActive(ctx context.Context, userID, goalID uuid.UUID) error {
+	goal, err := s.goalRepo.GetByID(ctx, goalID)
+	if err != nil {
+		return err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return s.scheduleRepo.CancelActiveByGoal(ctx, goalID, userID)
 }
 
 func validateScheduleAmount(amount, minDeposit decimal.Decimal) error {

@@ -23,6 +23,9 @@ type SavingsScheduleManager interface {
 	Create(ctx context.Context, userID, goalID uuid.UUID, in service.CreateSavingsScheduleInput) (savingsschedule.SavingsSchedule, error)
 	List(ctx context.Context, userID, goalID uuid.UUID) ([]savingsschedule.SavingsSchedule, error)
 	Cancel(ctx context.Context, userID, goalID, scheduleID uuid.UUID) error
+	GetActive(ctx context.Context, userID, goalID uuid.UUID) (*savingsschedule.SavingsSchedule, error)
+	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsScheduleInput) (savingsschedule.SavingsSchedule, error)
+	DeleteActive(ctx context.Context, userID, goalID uuid.UUID) error
 }
 
 type SavingsScheduleHandler struct {
@@ -37,6 +40,10 @@ func (h *SavingsScheduleHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/schedules", h.create)
 	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}/schedules", h.list)
 	mux.HandleFunc("DELETE /api/v1/users/savings-goals/{id}/schedules/{schedule_id}", h.cancel)
+	// Issue #734 singular schedule routes
+	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/schedule", h.create)
+	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/schedule", h.updateSingular)
+	mux.HandleFunc("DELETE /api/v1/users/savings-goals/{id}/schedule", h.deleteSingular)
 }
 
 type createSavingsScheduleRequest struct {
@@ -129,6 +136,78 @@ func (h *SavingsScheduleHandler) cancel(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type updateSavingsScheduleRequest struct {
+	Amount    *json.Number `json:"amount"`
+	Currency  *string      `json:"currency"`
+	Frequency *string      `json:"frequency"`
+	VaultID   *string      `json:"vault_id"`
+}
+
+func (h *SavingsScheduleHandler) updateSingular(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8*1024))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	var req updateSavingsScheduleRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid JSON"))
+		return
+	}
+	input := service.UpdateSavingsScheduleInput{
+		Currency:  req.Currency,
+		Frequency: req.Frequency,
+	}
+	if req.Amount != nil {
+		amount, err := parseScheduleAmount(*req.Amount)
+		if err != nil {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+			return
+		}
+		input.Amount = &amount
+	}
+	if req.VaultID != nil {
+		vaultID, err := uuid.Parse(*req.VaultID)
+		if err != nil {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault_id must be a valid UUID"))
+			return
+		}
+		input.VaultID = &vaultID
+	}
+	schedule, err := h.svc.Update(r.Context(), userID, goalID, input)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(schedule))
+}
+
+func (h *SavingsScheduleHandler) deleteSingular(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	if err := h.svc.DeleteActive(r.Context(), userID, goalID); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *SavingsScheduleHandler) authenticatedUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -155,6 +234,8 @@ func (h *SavingsScheduleHandler) writeError(w http.ResponseWriter, r *http.Reque
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "ACTIVE_SCHEDULE_EXISTS", "an active schedule already exists for this goal"))
 	case errors.Is(err, savingsschedule.ErrUnauthorizedVault):
 		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "vault does not belong to user"))
+	case errors.Is(err, savingsgoal.ErrGoalPaused):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_PAUSED", "cannot modify schedule while goal is paused or archived"))
 	case errors.Is(err, vault.ErrVaultNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 	case errors.Is(err, savingsschedule.ErrInvalidSchedule):

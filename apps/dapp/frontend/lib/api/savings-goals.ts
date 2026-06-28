@@ -27,6 +27,15 @@ export interface SavingsGoal {
   /** Completion fields (#716). */
   completed_at?: string;
   completion_action?: string;
+  /** Active recurring schedule (#734). */
+  active_schedule?: {
+    id: string;
+    amount: string | number;
+    currency: string;
+    frequency: "weekly" | "biweekly" | "monthly";
+    next_run_at: string;
+    status: string;
+  };
 }
 
 /** A single contribution toward a savings goal (#732). */

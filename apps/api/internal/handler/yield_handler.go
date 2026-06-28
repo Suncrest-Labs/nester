@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
@@ -18,18 +21,26 @@ type YieldOpportunitiesProvider interface {
 	CompareProtocols(ctx context.Context, protocols []string) ([]service.ProtocolSummary, error)
 }
 
-// YieldHandler serves GET /api/v1/yield-opportunities.
-type YieldHandler struct {
-	svc YieldOpportunitiesProvider
+// YieldBookmarkSlugLister lists bookmark slugs for sorting.
+type YieldBookmarkSlugLister interface {
+	ListSlugs(ctx context.Context, userID uuid.UUID) ([]string, error)
+	SortPoolsByBookmarks(pools []service.YieldPool, bookmarkSlugs []string) []service.YieldPool
 }
 
-func NewYieldHandler(svc YieldOpportunitiesProvider) *YieldHandler {
-	return &YieldHandler{svc: svc}
+// YieldHandler serves yield opportunity endpoints.
+type YieldHandler struct {
+	svc       YieldOpportunitiesProvider
+	bookmarks YieldBookmarkSlugLister
+}
+
+func NewYieldHandler(svc YieldOpportunitiesProvider, bookmarks YieldBookmarkSlugLister) *YieldHandler {
+	return &YieldHandler{svc: svc, bookmarks: bookmarks}
 }
 
 func (h *YieldHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/yield-opportunities", h.list)
 	mux.HandleFunc("GET /api/v1/yield-opportunities/compare", h.compare)
+	mux.HandleFunc("GET /api/v1/yields", h.list)
 }
 
 func (h *YieldHandler) compare(w http.ResponseWriter, r *http.Request) {
@@ -88,9 +99,20 @@ func (h *YieldHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build response with meta information
+	pools := yieldResp.Pools
+	if h.bookmarks != nil && r.URL.Query().Get("sort_bookmarks") == "true" {
+		if user, ok := auth.GetUserFromContext(r.Context()); ok {
+			if userID, err := uuid.Parse(user.ID); err == nil {
+				slugs, err := h.bookmarks.ListSlugs(r.Context(), userID)
+				if err == nil && len(slugs) > 0 {
+					pools = h.bookmarks.SortPoolsByBookmarks(pools, slugs)
+				}
+			}
+		}
+	}
+
 	responseData := map[string]interface{}{
-		"data": yieldResp.Pools,
+		"data": pools,
 		"meta": yieldResp.Meta,
 	}
 

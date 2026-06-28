@@ -376,8 +376,11 @@ func run() error {
 
 	// Yield opportunities (DeFiLlama Stellar pools)
 	yieldSvc := service.NewYieldService("")
-	yieldHandler := handler.NewYieldHandler(yieldSvc)
+	yieldBookmarkSvc := service.NewYieldBookmarkService(db, yieldSvc)
+	yieldHandler := handler.NewYieldHandler(yieldSvc, yieldBookmarkSvc)
 	yieldHandler.Register(mux)
+	yieldBookmarkHandler := handler.NewYieldBookmarkHandler(yieldBookmarkSvc)
+	yieldBookmarkHandler.Register(mux)
 
 	// User watchlist
 	watchlistSvc := service.NewWatchlistService(db)
@@ -406,12 +409,13 @@ func run() error {
 			},
 		},
 	)
-	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc)
-	savingsGoalHandler.Register(mux)
 
 	minDeposit, _ := decimal.NewFromString(cfg.RecurringDeposit().MinDepositAmount())
 	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)
 	savingsScheduleSvc := service.NewSavingsScheduleService(savingsScheduleRepo, savingsGoalRepo, vaultRepository, minDeposit)
+	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc, savingsScheduleSvc)
+	savingsGoalHandler.Register(mux)
+
 	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
 	savingsScheduleHandler.Register(mux)
 

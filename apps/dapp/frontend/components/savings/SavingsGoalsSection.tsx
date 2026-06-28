@@ -65,15 +65,16 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
   const current = toNumber(goal.current_amount);
   const target = toNumber(goal.target_amount);
   const progress = Math.min(100, Math.max(0, goal.progress_pct ?? 0));
-  const deadline = goal.deadline ? format(new Date(goal.deadline), "MMM d, yyyy") : "—";
   const isPaused = goal.status === "paused";
   const isCompleted = goal.status === "completed";
 
   return (
     <div
       className={cn(
-        "rounded-2xl border bg-white p-5",
-        isPaused ? "border-amber-200 bg-amber-50/30" : isCompleted ? "border-emerald-200 bg-emerald-50/30" : "border-black/8"
+        "rounded-2xl border bg-white p-5 transition-opacity",
+        isPaused && "opacity-60 border-amber-200 bg-amber-50/40",
+        isCompleted && "border-emerald-200 bg-emerald-50/30",
+        !isPaused && !isCompleted && "border-black/8"
       )}
       data-testid="savings-goal-card"
     >
@@ -130,7 +131,9 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
               {goal.on_track ? "On track" : "Behind"}
             </span>
           )}
-          <span>Due {deadline}</span>
+          {goal.deadline && (
+            <DeadlineBadge deadline={goal.deadline} status={goal.status} />
+          )}
         </div>
       </div>
     </div>

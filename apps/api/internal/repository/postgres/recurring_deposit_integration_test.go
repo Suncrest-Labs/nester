@@ -54,6 +54,17 @@ func (d *directGoalProgressChecker) IsGoalCompleted(ctx context.Context, goalID,
 	return bal.GreaterThanOrEqual(goal.TargetAmount), name, nil
 }
 
+func (d *directGoalProgressChecker) IsGoalPausedOrArchived(ctx context.Context, goalID, userID uuid.UUID) (bool, error) {
+	goal, err := d.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return false, err
+	}
+	if goal.UserID != userID {
+		return false, savingsgoal.ErrGoalNotFound
+	}
+	return goal.Status == savingsgoal.StatusPaused || goal.Status == savingsgoal.StatusArchived, nil
+}
+
 func applySavingsScheduleMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 	applyIntegrationMigrations(t, db)

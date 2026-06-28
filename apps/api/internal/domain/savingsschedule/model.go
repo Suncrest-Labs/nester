@@ -21,17 +21,18 @@ var (
 type Frequency string
 
 const (
-	FrequencyWeekly  Frequency = "weekly"
-	FrequencyMonthly Frequency = "monthly"
+	FrequencyWeekly   Frequency = "weekly"
+	FrequencyBiweekly Frequency = "biweekly"
+	FrequencyMonthly  Frequency = "monthly"
 )
 
 func ParseFrequency(value string) (Frequency, error) {
 	f := Frequency(strings.ToLower(strings.TrimSpace(value)))
 	switch f {
-	case FrequencyWeekly, FrequencyMonthly:
+	case FrequencyWeekly, FrequencyBiweekly, FrequencyMonthly:
 		return f, nil
 	default:
-		return "", fmt.Errorf("%w: frequency must be weekly or monthly", ErrInvalidSchedule)
+		return "", fmt.Errorf("%w: frequency must be weekly, biweekly, or monthly", ErrInvalidSchedule)
 	}
 }
 
@@ -54,7 +55,10 @@ type Repository interface {
 	Create(ctx context.Context, schedule *SavingsSchedule) error
 	ListByGoal(ctx context.Context, goalID, userID uuid.UUID) ([]SavingsSchedule, error)
 	GetByID(ctx context.Context, scheduleID uuid.UUID) (*SavingsSchedule, error)
+	GetActiveByGoal(ctx context.Context, goalID, userID uuid.UUID) (*SavingsSchedule, error)
 	Cancel(ctx context.Context, scheduleID, goalID, userID uuid.UUID) error
+	CancelActiveByGoal(ctx context.Context, goalID, userID uuid.UUID) error
+	Update(ctx context.Context, schedule *SavingsSchedule) error
 	ListDue(ctx context.Context, now time.Time) ([]SavingsSchedule, error)
 	UpdateAfterRun(ctx context.Context, id uuid.UUID, lastRunAt, nextRunAt time.Time) error
 	Deactivate(ctx context.Context, id uuid.UUID) error

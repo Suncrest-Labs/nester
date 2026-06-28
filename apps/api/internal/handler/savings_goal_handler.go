@@ -14,6 +14,7 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsschedule"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
@@ -35,11 +36,16 @@ type SavingsGoalManager interface {
 }
 
 type SavingsGoalHandler struct {
-	svc SavingsGoalManager
+	svc       SavingsGoalManager
+	schedules SavingsScheduleActiveReader
 }
 
-func NewSavingsGoalHandler(svc SavingsGoalManager) *SavingsGoalHandler {
-	return &SavingsGoalHandler{svc: svc}
+type SavingsScheduleActiveReader interface {
+	GetActive(ctx context.Context, userID, goalID uuid.UUID) (*savingsschedule.SavingsSchedule, error)
+}
+
+func NewSavingsGoalHandler(svc SavingsGoalManager, schedules SavingsScheduleActiveReader) *SavingsGoalHandler {
+	return &SavingsGoalHandler{svc: svc, schedules: schedules}
 }
 
 func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
@@ -137,7 +143,18 @@ func (h *SavingsGoalHandler) get(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
-	response.WriteJSON(w, http.StatusOK, response.OK(goal))
+	detail := savingsGoalDetail{SavingsGoal: goal}
+	if h.schedules != nil {
+		if active, err := h.schedules.GetActive(r.Context(), userID, goalID); err == nil {
+			detail.ActiveSchedule = active
+		}
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(detail))
+}
+
+type savingsGoalDetail struct {
+	savingsgoal.SavingsGoal
+	ActiveSchedule *savingsschedule.SavingsSchedule `json:"active_schedule,omitempty"`
 }
 
 func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {

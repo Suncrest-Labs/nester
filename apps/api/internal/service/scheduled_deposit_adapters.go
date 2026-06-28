@@ -65,3 +65,14 @@ func (s *GoalProgressService) IsGoalCompleted(ctx context.Context, goalID, userI
 	}
 	return balance.GreaterThanOrEqual(goal.TargetAmount), name, nil
 }
+
+func (s *GoalProgressService) IsGoalPausedOrArchived(ctx context.Context, goalID, userID uuid.UUID) (bool, error) {
+	goal, err := s.goals.GetByID(ctx, goalID)
+	if err != nil {
+		return false, err
+	}
+	if goal.UserID != userID {
+		return false, savingsgoal.ErrGoalNotFound
+	}
+	return goal.Status == savingsgoal.GoalStatusPaused || goal.Status == savingsgoal.GoalStatusArchived, nil
+}

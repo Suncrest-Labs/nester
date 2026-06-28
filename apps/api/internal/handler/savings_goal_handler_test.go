@@ -216,7 +216,7 @@ func withAuthUser(next http.Handler, userID uuid.UUID) http.Handler {
 func TestSavingsGoalHandler_CRUD(t *testing.T) {
 	userID := uuid.New()
 	svc := &mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -249,7 +249,7 @@ func TestSavingsGoalHandler_CRUD(t *testing.T) {
 
 func TestSavingsGoalHandler_Create_InvalidCategory(t *testing.T) {
 	userID := uuid.New()
-	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)})
+	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -270,7 +270,7 @@ func TestSavingsGoalHandler_Create_InvalidCategory(t *testing.T) {
 
 func TestSavingsGoalHandler_Create_DefaultCategory(t *testing.T) {
 	userID := uuid.New()
-	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)})
+	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -317,7 +317,7 @@ func TestSavingsGoalHandler_List_FilterByCategory(t *testing.T) {
 			Category:     savingsgoal.CategoryEducation,
 		},
 	}}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -352,7 +352,7 @@ func TestSavingsGoalHandler_List_FilterByCategory(t *testing.T) {
 
 func TestSavingsGoalHandler_Create_ValidXLM(t *testing.T) {
 	userID := uuid.New()
-	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)})
+	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -373,7 +373,7 @@ func TestSavingsGoalHandler_Create_ValidXLM(t *testing.T) {
 
 func TestSavingsGoalHandler_Create_InvalidCurrency(t *testing.T) {
 	userID := uuid.New()
-	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)})
+	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -401,7 +401,7 @@ func TestSavingsGoalHandler_List_FilterByStatus(t *testing.T) {
 		completedID: {ID: completedID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
 			Currency: "USDC", Category: savingsgoal.CategoryTravel, Status: savingsgoal.GoalStatusCompleted},
 	}}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	server := httptest.NewServer(withAuthUser(mux, userID))
@@ -438,7 +438,7 @@ func TestSavingsGoalHandler_Archive(t *testing.T) {
 		goalID: {ID: goalID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
 			Currency: "USDC", Category: savingsgoal.CategoryOther, Status: savingsgoal.GoalStatusCompleted},
 	}}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	server := httptest.NewServer(withAuthUser(mux, userID))

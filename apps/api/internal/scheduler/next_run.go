@@ -8,6 +8,8 @@ func NextRunAt(from time.Time, frequency string) time.Time {
 	switch frequency {
 	case "weekly":
 		return from.AddDate(0, 0, 7)
+	case "biweekly":
+		return from.AddDate(0, 0, 14)
 	case "monthly":
 		return addOneMonth(from)
 	default:

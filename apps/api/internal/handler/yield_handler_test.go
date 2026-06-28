@@ -29,7 +29,7 @@ func newYieldServerWithRealSvc(t *testing.T) *httptest.Server {
 	t.Cleanup(defiLlama.Close)
 
 	mux := http.NewServeMux()
-	NewYieldHandler(service.NewYieldService(defiLlama.URL)).Register(mux)
+	NewYieldHandler(service.NewYieldService(defiLlama.URL), nil).Register(mux)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server

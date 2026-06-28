@@ -22,6 +22,7 @@ type DepositRecorder interface {
 // GoalProgressChecker returns whether a savings goal has been completed.
 type GoalProgressChecker interface {
 	IsGoalCompleted(ctx context.Context, goalID, userID uuid.UUID) (bool, string, error)
+	IsGoalPausedOrArchived(ctx context.Context, goalID, userID uuid.UUID) (bool, error)
 }
 
 // ScheduleStore loads and updates recurring deposit schedules.
@@ -128,6 +129,23 @@ func (j *RecurringDepositJob) Tick(ctx context.Context) {
 }
 
 func (j *RecurringDepositJob) processSchedule(ctx context.Context, schedule savingsschedule.SavingsSchedule, now time.Time) {
+	paused, err := j.goals.IsGoalPausedOrArchived(ctx, schedule.GoalID, schedule.UserID)
+	if err != nil {
+		j.logger.Warn("recurring deposit job: goal status check failed",
+			"schedule_id", schedule.ID,
+			"goal_id", schedule.GoalID,
+			"error", err,
+		)
+		return
+	}
+	if paused {
+		j.logger.Info("recurring deposit job: skipping paused or archived goal",
+			"schedule_id", schedule.ID,
+			"goal_id", schedule.GoalID,
+		)
+		return
+	}
+
 	completed, goalName, err := j.goals.IsGoalCompleted(ctx, schedule.GoalID, schedule.UserID)
 	if err != nil {
 		j.logger.Warn("recurring deposit job: goal check failed",

@@ -92,6 +92,56 @@ func (r *SavingsScheduleRepository) GetByID(ctx context.Context, scheduleID uuid
 	return &s, nil
 }
 
+func (r *SavingsScheduleRepository) GetActiveByGoal(ctx context.Context, goalID, userID uuid.UUID) (*savingsschedule.SavingsSchedule, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, goal_id, vault_id, amount, currency, frequency,
+		       next_run_at, last_run_at, is_active, created_at, updated_at
+		FROM savings_schedules
+		WHERE goal_id = $1 AND user_id = $2 AND is_active = TRUE
+		ORDER BY created_at DESC LIMIT 1
+	`, goalID, userID)
+	s, err := scanSavingsSchedule(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (r *SavingsScheduleRepository) CancelActiveByGoal(ctx context.Context, goalID, userID uuid.UUID) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_schedules
+		SET is_active = FALSE, updated_at = NOW()
+		WHERE goal_id = $1 AND user_id = $2 AND is_active = TRUE
+	`, goalID, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsschedule.ErrScheduleNotFound
+	}
+	return nil
+}
+
+func (r *SavingsScheduleRepository) Update(ctx context.Context, schedule *savingsschedule.SavingsSchedule) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_schedules
+		SET amount = $2, currency = $3, frequency = $4, vault_id = $5, updated_at = NOW()
+		WHERE id = $1 AND user_id = $6 AND goal_id = $7 AND is_active = TRUE
+	`, schedule.ID, schedule.Amount.String(), schedule.Currency, string(schedule.Frequency), schedule.VaultID, schedule.UserID, schedule.GoalID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsschedule.ErrScheduleNotFound
+	}
+	return nil
+}
+
 func (r *SavingsScheduleRepository) Cancel(ctx context.Context, scheduleID, goalID, userID uuid.UUID) error {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE savings_schedules
