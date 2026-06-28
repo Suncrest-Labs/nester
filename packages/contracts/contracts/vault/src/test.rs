@@ -78,7 +78,7 @@ fn setup() -> (
 
     // Create token client
     let sac: token::StellarAssetClient<'static> =
-        token::StellarAssetClient::new(unsafe { core::mem::transmute(&env) }, &token_id);
+        token::StellarAssetClient::new(unsafe { core::mem::transmute::<&Env, &'static Env>(&env) }, &token_id);
 
     // -----------------------------
     // Vault setup
@@ -90,7 +90,7 @@ fn setup() -> (
     let vault_token_id = env.register_contract(None, VaultTokenContract);
 
     let vault: VaultContractClient<'static> =
-        VaultContractClient::new(unsafe { core::mem::transmute(&env) }, &vault_id);
+        VaultContractClient::new(unsafe { core::mem::transmute::<&Env, &'static Env>(&env) }, &vault_id);
 
     // Pass admin, deposit token, vault token, and treasury.
     vault.initialize(&admin, &token_id, &vault_token_id, &treasury);
@@ -278,7 +278,7 @@ fn deposit_of_zero_is_rejected() {
 fn deposit_of_negative_amount_is_rejected() {
     let (_env, _admin, _token, vault, _treasury) = setup();
     let user = Address::generate(&_env);
-    vault.deposit(&user, &(-1 * XLM), &0);
+    vault.deposit(&user, &(-XLM), &0);
 }
 
 #[test]
@@ -992,7 +992,7 @@ fn emergency_withdraw_queues_when_liquidity_insufficient() {
     let preview = vault.emergency_withdraw_preview(&user);
     assert_eq!(preview.vault_liquid_reserves, 9995890411);
     assert_eq!(preview.estimated_return, 10000000000);
-    assert_eq!(preview.can_process, false);
+    assert!(!preview.can_process);
 
     let returned = vault.emergency_withdraw(&user);
 
