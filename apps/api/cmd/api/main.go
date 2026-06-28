@@ -393,9 +393,18 @@ func run() error {
 		notificationRepository,
 		nil,
 	)
+	webhookRepo := postgres.NewWebhookRepository(db)
+	webhookSvc := service.NewWebhookService(webhookRepo)
+	webhookHandler := handler.NewWebhookHandler(webhookSvc)
+	webhookHandler.Register(mux)
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
-		service.DispatcherGoalMilestoneNotifier{Dispatcher: notificationDispatcher2},
+		service.CompositeGoalMilestoneNotifier{
+			Notifiers: []service.GoalMilestoneNotifier{
+				service.DispatcherGoalMilestoneNotifier{Dispatcher: notificationDispatcher2},
+				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
+			},
+		},
 	)
 	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc)
 	savingsGoalHandler.Register(mux)
