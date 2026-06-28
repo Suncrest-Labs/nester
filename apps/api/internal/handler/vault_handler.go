@@ -576,6 +576,8 @@ func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("user"))
 	case errors.Is(err, vault.ErrInvalidVault), errors.Is(err, vault.ErrInvalidAmount), errors.Is(err, vault.ErrInvalidAllocation):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	case errors.Is(err, vault.ErrBelowMinDeposit):
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:
 		logpkg.FromContext(r.Context()).Error("vault handler failed", "error", err.Error())
 		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))

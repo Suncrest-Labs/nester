@@ -1579,3 +1579,66 @@ fn rebalance_slippage_guard_reverts_when_below_floor() {
         super::enforce_rebalance_slippage(&env, 100, 99);
     });
 }
+
+// ---------------------------------------------------------------------------
+// Minimum deposit enforcement (issue #730)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #21)")]
+fn deposit_below_min_deposit_panics() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    // 5 XLM is below the 10 XLM minimum — must panic.
+    vault.deposit(&user, &(5 * XLM), &0);
+}
+
+#[test]
+fn deposit_exactly_at_min_deposit_succeeds() {
+    let (_env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    let shares = vault.deposit(&user, &(10 * XLM), &0);
+    assert_eq!(shares, 10 * XLM);
+}
+
+#[test]
+fn deposit_above_min_deposit_succeeds() {
+    let (_env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    let shares = vault.deposit(&user, &(50 * XLM), &0);
+    assert_eq!(shares, 50 * XLM);
+}
+
+#[test]
+#[should_panic]
+fn set_min_deposit_by_non_admin_panics() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+
+    vault.set_min_deposit(&outsider, &(10 * XLM));
+}
+
+#[test]
+fn get_min_deposit_returns_zero_when_unset() {
+    let (_env, _admin, _token, vault, _treasury) = setup();
+    assert_eq!(vault.get_min_deposit(), 0);
+}
+
+#[test]
+fn get_min_deposit_returns_configured_value() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    vault.set_min_deposit(&admin, &(10 * XLM));
+    assert_eq!(vault.get_min_deposit(), 10 * XLM);
+}
