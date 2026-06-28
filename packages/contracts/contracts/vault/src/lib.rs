@@ -277,6 +277,7 @@ enum DataKey {
     MinLockPeriod, // For early withdrawal fee
     DepositTime(Address),
     MaxDeposit,
+    MinDeposit,
     RebalanceThreshold,
     CircuitBreakerConfig,
     WithdrawalHistory,
@@ -744,6 +745,23 @@ impl VaultContract {
             panic_with_error!(&env, ContractError::ConfigOutOfRange);
         }
         env.storage().instance().set(&DataKey::MaxDeposit, &amount);
+    }
+
+    pub fn set_min_deposit(env: Env, caller: Address, amount: i128) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        if amount < 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        env.storage().instance().set(&DataKey::MinDeposit, &amount);
+    }
+
+    pub fn get_min_deposit(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MinDeposit)
+            .unwrap_or(0)
     }
 
     pub fn set_rebalance_threshold(env: Env, caller: Address, bps: u32) {
@@ -1394,6 +1412,15 @@ impl VaultContract {
             .unwrap_or(i128::MAX);
         if amount > max_deposit {
             panic_with_error!(&env, ContractError::ExceedsLimit);
+        }
+
+        let min_deposit: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDeposit)
+            .unwrap_or(0);
+        if amount < min_deposit {
+            panic_with_error!(&env, ContractError::BelowMinDeposit);
         }
 
         if amount < nester_common::MIN_DEPOSIT_AMOUNT {

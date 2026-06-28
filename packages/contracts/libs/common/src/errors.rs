@@ -23,4 +23,5 @@ pub enum ContractError {
     FeeTooHigh = 18,
     ConfigOutOfRange = 19,
     ArithmeticOverflow = 20,
+    BelowMinDeposit = 21,
 }

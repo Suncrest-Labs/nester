@@ -33,6 +33,7 @@ var (
 	ErrAllocationNotFound   = errors.New("allocation not found")
 	ErrAllocationHasBalance = errors.New("allocation has non-zero balance; set force=true to remove")
 	ErrDuplicateProtocol    = errors.New("protocol already allocated")
+	ErrBelowMinDeposit      = errors.New("deposit amount is below the minimum required for this protocol")
 )
 
 const (

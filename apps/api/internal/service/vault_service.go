@@ -223,6 +223,9 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 	if s.depositInvoker != nil {
 		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
 		if err := s.depositInvoker.DepositToVault(ctx, existing.ContractAddress, stroops); err != nil {
+			if strings.Contains(err.Error(), "#21") {
+				return vault.Vault{}, vault.ErrBelowMinDeposit
+			}
 			return vault.Vault{}, fmt.Errorf("on-chain deposit failed: %w", err)
 		}
 	}
