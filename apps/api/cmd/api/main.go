@@ -107,6 +107,10 @@ func run() error {
 	vaultService.SetHarvestDefaultCompound(cfg.Stellar().HarvestDefaultCompound())
 	vaultHandler := handler.NewVaultHandler(vaultService)
 
+	yieldHarvestRepository := postgres.NewYieldHarvestRepository(db)
+	yieldHarvestService := service.NewYieldHarvestService(yieldHarvestRepository)
+	vaultService.SetYieldHarvestRecorder(yieldHarvestService)
+
 	portfolioService := service.NewPortfolioService(vaultRepository)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioService)
 
@@ -342,6 +346,9 @@ func run() error {
 		environment:  cfg.Environment(),
 		buildVersion: version,
 	}))
+	yieldHarvestHandler := handler.NewYieldHarvestHandler(yieldHarvestService)
+	yieldHarvestHandler.Register(mux)
+
 	vaultHandler.Register(mux)
 	portfolioHandler.Register(mux)
 	transactionHandler.Register(mux)
