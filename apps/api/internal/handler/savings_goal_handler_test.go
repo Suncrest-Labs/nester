@@ -61,11 +61,15 @@ func (m *mockSavingsGoalService) Get(_ context.Context, userID, goalID uuid.UUID
 	return g, nil
 }
 
-func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, category, status string) ([]savingsgoal.SavingsGoal, error) {
 	if category != "" {
 		if _, err := savingsgoal.ParseCategory(category); err != nil {
 			return nil, err
 		}
+	}
+	filterStatus, err := savingsgoal.ParseStatusFilter(status)
+	if err != nil {
+		return nil, err
 	}
 	var out []savingsgoal.SavingsGoal
 	for _, g := range m.goals {
@@ -73,6 +77,9 @@ func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, categ
 			continue
 		}
 		if category != "" && string(g.Category) != category {
+			continue
+		}
+		if filterStatus != "" && g.Status != filterStatus {
 			continue
 		}
 		out = append(out, g)
@@ -145,6 +152,15 @@ func (m *mockSavingsGoalService) Resume(_ context.Context, userID, goalID uuid.U
 	if !ok || g.UserID != userID {
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
+	return g, nil
+}
+func (m *mockSavingsGoalService) Archive(_ context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	g.Status = savingsgoal.GoalStatusArchived
+	m.goals[goalID] = g
 	return g, nil
 }
 
@@ -332,4 +348,99 @@ func TestSavingsGoalHandler_Create_InvalidCurrency(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("create status = %d, want 400", resp.StatusCode)
 	}
+}
+
+func TestSavingsGoalHandler_List_FilterByStatus(t *testing.T) {
+	userID := uuid.New()
+	activeID, completedID := uuid.New(), uuid.New()
+	svc := &mockSavingsGoalService{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+		activeID: {ID: activeID, UserID: userID, TargetAmount: decimal.NewFromInt(1000),
+			Currency: "USDC", Category: savingsgoal.CategoryEducation, Status: savingsgoal.GoalStatusActive},
+		completedID: {ID: completedID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
+			Currency: "USDC", Category: savingsgoal.CategoryTravel, Status: savingsgoal.GoalStatusCompleted},
+	}}
+	h := NewSavingsGoalHandler(svc)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/v1/users/savings-goals?status=completed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", resp.StatusCode)
+	}
+	goals := decodeGoalList(t, resp)
+	if len(goals) != 1 || goals[0].Status != savingsgoal.GoalStatusCompleted {
+		t.Fatalf("goals = %+v, want one completed goal", goals)
+	}
+
+	// Invalid status → 400.
+	bad, err := http.Get(server.URL + "/api/v1/users/savings-goals?status=bogus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bad.Body.Close()
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid status = %d, want 400", bad.StatusCode)
+	}
+}
+
+func TestSavingsGoalHandler_Archive(t *testing.T) {
+	userID := uuid.New()
+	goalID := uuid.New()
+	svc := &mockSavingsGoalService{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+		goalID: {ID: goalID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
+			Currency: "USDC", Category: savingsgoal.CategoryOther, Status: savingsgoal.GoalStatusCompleted},
+	}}
+	h := NewSavingsGoalHandler(svc)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	req, _ := http.NewRequest(http.MethodPatch,
+		server.URL+"/api/v1/users/savings-goals/"+goalID.String()+"/archive", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archive status = %d, want 200", resp.StatusCode)
+	}
+
+	var envelope response.Response
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(envelope.Data)
+	var goal savingsgoal.SavingsGoal
+	if err := json.Unmarshal(data, &goal); err != nil {
+		t.Fatal(err)
+	}
+	if goal.Status != savingsgoal.GoalStatusArchived {
+		t.Fatalf("archived goal status = %q, want archived", goal.Status)
+	}
+}
+
+// decodeGoalList decodes a list-of-goals response envelope.
+func decodeGoalList(t *testing.T, resp *http.Response) []savingsgoal.SavingsGoal {
+	t.Helper()
+	var envelope response.Response
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(envelope.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goals []savingsgoal.SavingsGoal
+	if err := json.Unmarshal(data, &goals); err != nil {
+		t.Fatal(err)
+	}
+	return goals
 }

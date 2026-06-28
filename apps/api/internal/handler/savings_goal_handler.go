@@ -22,13 +22,14 @@ import (
 type SavingsGoalManager interface {
 	Create(ctx context.Context, userID uuid.UUID, in service.CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
-	List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error)
+	List(ctx context.Context, userID uuid.UUID, category, status string) ([]savingsgoal.SavingsGoal, error)
 	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Delete(ctx context.Context, userID, goalID uuid.UUID) error
 	Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error)
 	Pause(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Resume(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Complete(ctx context.Context, userID, goalID uuid.UUID, action string) (savingsgoal.SavingsGoal, error)
+	Archive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 }
 
 type SavingsGoalHandler struct {
@@ -51,6 +52,8 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/resume", h.resume)
 	// #716 manual completion
 	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/complete", h.complete)
+	// #684 archive
+	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/archive", h.archive)
 }
 
 type createSavingsGoalRequest struct {
@@ -131,7 +134,12 @@ func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	goals, err := h.svc.List(r.Context(), userID, strings.TrimSpace(r.URL.Query().Get("category")))
+	goals, err := h.svc.List(
+		r.Context(),
+		userID,
+		strings.TrimSpace(r.URL.Query().Get("category")),
+		strings.TrimSpace(r.URL.Query().Get("status")),
+	)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -252,6 +260,24 @@ func (h *SavingsGoalHandler) resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	goal, err := h.svc.Resume(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(goal))
+}
+
+func (h *SavingsGoalHandler) archive(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	goal, err := h.svc.Archive(r.Context(), userID, goalID)
 	if err != nil {
 		h.writeError(w, r, err)
 		return

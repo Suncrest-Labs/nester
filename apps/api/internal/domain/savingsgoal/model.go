@@ -26,7 +26,23 @@ const (
 	GoalStatusActive    = "active"
 	GoalStatusPaused    = "paused"
 	GoalStatusCompleted = "completed"
+	// GoalStatusArchived is a terminal state a user can move a goal into (e.g.
+	// after it completes) to hide it without deleting it (#684).
+	GoalStatusArchived = "archived"
 )
+
+// ParseStatusFilter validates a status used to filter the goal list. An empty
+// value means "no filter" and returns ("", nil).
+func ParseStatusFilter(value string) (string, error) {
+	switch status := strings.ToLower(strings.TrimSpace(value)); status {
+	case "":
+		return "", nil
+	case GoalStatusActive, GoalStatusPaused, GoalStatusCompleted, GoalStatusArchived:
+		return status, nil
+	default:
+		return "", fmt.Errorf("%w: invalid status", ErrInvalidGoal)
+	}
+}
 
 type GoalCategory string
 

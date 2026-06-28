@@ -78,7 +78,7 @@ func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) 
 	return s.enrichProgress(ctx, *goal)
 }
 
-func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category, status string) ([]savingsgoal.SavingsGoal, error) {
 	filterCategory := ""
 	if strings.TrimSpace(category) != "" {
 		parsed, err := savingsgoal.ParseCategory(category)
@@ -86,6 +86,14 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 			return nil, err
 		}
 		filterCategory = string(parsed)
+	}
+
+	// Status is filtered after enrichment so the dynamic auto-complete (#716) is
+	// reflected: a stored-active goal that has reached its target reads as
+	// "completed" here, matching ?status=completed and excluded by ?status=active.
+	filterStatus, err := savingsgoal.ParseStatusFilter(status)
+	if err != nil {
+		return nil, err
 	}
 
 	goals, err := s.repo.ListByUser(ctx, userID, filterCategory)
@@ -97,6 +105,9 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		enriched, err := s.enrichProgress(ctx, g)
 		if err != nil {
 			return nil, err
+		}
+		if filterStatus != "" && enriched.Status != filterStatus {
+			continue
 		}
 		out = append(out, enriched)
 	}
@@ -345,6 +356,27 @@ func (s *SavingsGoalService) Complete(ctx context.Context, userID, goalID uuid.U
 	goal.CompletionAction = action
 	now := time.Now().UTC()
 	goal.CompletedAt = &now
+	return s.enrichProgress(ctx, *goal)
+}
+
+// Archive moves a goal into the terminal "archived" state, hiding it without
+// deleting it. This is the only mutation allowed on a completed goal (#684);
+// already-archived goals are returned unchanged.
+func (s *SavingsGoalService) Archive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.Status == savingsgoal.GoalStatusArchived {
+		return s.enrichProgress(ctx, *goal)
+	}
+	if err := s.repo.UpdateStatus(ctx, goalID, userID, savingsgoal.GoalStatusArchived); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.Status = savingsgoal.GoalStatusArchived
 	return s.enrichProgress(ctx, *goal)
 }
 

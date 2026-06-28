@@ -319,7 +319,7 @@ func TestSavingsGoalService_List_FilterByCategory(t *testing.T) {
 	}
 	svc := NewSavingsGoalService(repo, nil)
 
-	goals, err := svc.List(ctx, userID, "education")
+	goals, err := svc.List(ctx, userID, "education", "")
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -336,9 +336,104 @@ func TestSavingsGoalService_List_InvalidCategoryFilter(t *testing.T) {
 	userID := uuid.New()
 	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
 
-	_, err := svc.List(ctx, userID, "invalid")
+	_, err := svc.List(ctx, userID, "invalid", "")
 	if err == nil {
 		t.Fatal("List() error = nil, want invalid category")
+	}
+}
+
+func TestSavingsGoalService_List_StatusFilter(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+
+	// An active goal under target — stays "active" after enrichment.
+	activeID := uuid.New()
+	repo.goals[activeID] = savingsgoal.SavingsGoal{
+		ID: activeID, UserID: userID, TargetAmount: decimal.NewFromInt(1000),
+		Currency: "USDC", Deadline: testDeadline(), Category: savingsgoal.CategoryEducation,
+		Status: savingsgoal.GoalStatusActive,
+	}
+	// An active goal whose balance has reached target — auto-completes (#716),
+	// so it must read as "completed" and be excluded from ?status=active.
+	completedID := uuid.New()
+	repo.goals[completedID] = savingsgoal.SavingsGoal{
+		ID: completedID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
+		Currency: "XLM", Deadline: testDeadline(), Category: savingsgoal.CategoryTravel,
+		Status: savingsgoal.GoalStatusActive,
+	}
+	repo.setBalance(userID, "XLM", decimal.NewFromInt(500))
+	// An archived goal.
+	archivedID := uuid.New()
+	repo.goals[archivedID] = savingsgoal.SavingsGoal{
+		ID: archivedID, UserID: userID, TargetAmount: decimal.NewFromInt(200),
+		Currency: "USDC", Deadline: testDeadline(), Category: savingsgoal.CategoryHousing,
+		Status: savingsgoal.GoalStatusArchived,
+	}
+
+	svc := NewSavingsGoalService(repo, nil)
+
+	cases := map[string]uuid.UUID{
+		savingsgoal.GoalStatusActive:    activeID,
+		savingsgoal.GoalStatusCompleted: completedID,
+		savingsgoal.GoalStatusArchived:  archivedID,
+	}
+	for status, wantID := range cases {
+		goals, err := svc.List(ctx, userID, "", status)
+		if err != nil {
+			t.Fatalf("List(status=%q) error = %v", status, err)
+		}
+		if len(goals) != 1 {
+			t.Fatalf("List(status=%q) returned %d goals, want 1", status, len(goals))
+		}
+		if goals[0].ID != wantID {
+			t.Fatalf("List(status=%q) returned goal %s, want %s", status, goals[0].ID, wantID)
+		}
+		if goals[0].Status != status {
+			t.Fatalf("List(status=%q) goal status = %q, want %q", status, goals[0].Status, status)
+		}
+	}
+
+	// No filter returns all three.
+	all, err := svc.List(ctx, userID, "", "")
+	if err != nil {
+		t.Fatalf("List(no filter) error = %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("List(no filter) returned %d goals, want 3", len(all))
+	}
+}
+
+func TestSavingsGoalService_List_InvalidStatusFilter(t *testing.T) {
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+	if _, err := svc.List(context.Background(), uuid.New(), "", "bogus"); err == nil {
+		t.Fatal("List() error = nil, want invalid status")
+	}
+}
+
+func TestSavingsGoalService_Archive(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	goalID := uuid.New()
+	repo.goals[goalID] = savingsgoal.SavingsGoal{
+		ID: goalID, UserID: userID, TargetAmount: decimal.NewFromInt(1000),
+		Currency: "USDC", Deadline: testDeadline(), Category: savingsgoal.CategoryEducation,
+		Status: savingsgoal.GoalStatusCompleted,
+	}
+	svc := NewSavingsGoalService(repo, nil)
+
+	goal, err := svc.Archive(ctx, userID, goalID)
+	if err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	if goal.Status != savingsgoal.GoalStatusArchived {
+		t.Fatalf("status = %q, want archived", goal.Status)
+	}
+
+	// Archiving someone else's goal is not found.
+	if _, err := svc.Archive(ctx, uuid.New(), goalID); err != savingsgoal.ErrGoalNotFound {
+		t.Fatalf("Archive(other user) error = %v, want ErrGoalNotFound", err)
 	}
 }
 
