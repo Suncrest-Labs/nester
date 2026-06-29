@@ -28,7 +28,43 @@ type YieldPool struct {
 	TVLUsd    float64  `json:"tvlUsd"`
 	APYPct7d  *float64 `json:"apyPct7d"`
 	Chain     string   `json:"chain"`
-	RiskScore float64  `json:"riskScore"`
+	RiskScore float64  `json:"risk_score"`
+	// RiskTier is the human-facing bucket of RiskScore: "low", "medium", or
+	// "high". Lets clients filter by risk appetite without re-deriving the
+	// thresholds. See RiskTierForScore.
+	RiskTier string `json:"risk_tier"`
+}
+
+// Risk tiers, bucketed from a [0.0, 1.0] risk score viewed as a 0–100 scale:
+// Low (0–33), Medium (34–66), High (67–100).
+const (
+	RiskTierLow    = "low"
+	RiskTierMedium = "medium"
+	RiskTierHigh   = "high"
+)
+
+// IsValidRiskTier reports whether s names one of the known risk tiers.
+func IsValidRiskTier(s string) bool {
+	switch s {
+	case RiskTierLow, RiskTierMedium, RiskTierHigh:
+		return true
+	default:
+		return false
+	}
+}
+
+// RiskTierForScore buckets a [0.0, 1.0] risk score into a tier. The score is
+// read as a 0–100 percentage: Low (0–33), Medium (34–66), High (67–100).
+func RiskTierForScore(score float64) string {
+	pct := math.Round(score * 100)
+	switch {
+	case pct <= 33:
+		return RiskTierLow
+	case pct <= 66:
+		return RiskTierMedium
+	default:
+		return RiskTierHigh
+	}
 }
 
 type yieldCacheEntry struct {
@@ -138,6 +174,39 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 
 	// No data available at all
 	return nil, fetchErr
+}
+
+// GetYieldOpportunitiesByTier returns up to `limit` opportunities on `chain`
+// whose risk score falls in `tier` ("low"|"medium"|"high"). An empty tier means
+// "all tiers" and behaves exactly like GetYieldOpportunities.
+//
+// When a tier is given, it filters the full scored set for the chain (fetched
+// with limit=0) and only then applies the limit, so callers still receive up to
+// `limit` opportunities of the requested tier rather than whatever survived a
+// pre-filter truncation. Risk scoring — and therefore this filter — runs after
+// the DeFiLlama TVL threshold check in fetchFromUpstream.
+func (s *YieldService) GetYieldOpportunitiesByTier(ctx context.Context, chain string, limit int, tier string) (*YieldOpportunitiesResponse, error) {
+	tier = strings.ToLower(strings.TrimSpace(tier))
+	if tier == "" {
+		return s.GetYieldOpportunities(ctx, chain, limit)
+	}
+
+	resp, err := s.GetYieldOpportunities(ctx, chain, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]YieldPool, 0, len(resp.Pools))
+	for _, p := range resp.Pools {
+		if RiskTierForScore(p.RiskScore) == tier {
+			filtered = append(filtered, p)
+		}
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+
+	return &YieldOpportunitiesResponse{Pools: filtered, Meta: resp.Meta}, nil
 }
 
 // ProtocolSummary is an aggregated, comparable view of one protocol's pools.
@@ -297,6 +366,7 @@ func (s *YieldService) fetchFromUpstream(ctx context.Context, chain string, limi
 			rewardRatio = pool.APYReward / pool.APY
 		}
 		pool.RiskScore = ComputeRiskScore(pool.TVLUsd, apy7dSwing, rewardRatio)
+		pool.RiskTier = RiskTierForScore(pool.RiskScore)
 		pools = append(pools, pool)
 	}
 	slog.Debug("yield pools filtered",

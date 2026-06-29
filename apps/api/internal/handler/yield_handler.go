@@ -14,7 +14,7 @@ import (
 
 // YieldOpportunitiesProvider is the service surface the handler depends on.
 type YieldOpportunitiesProvider interface {
-	GetYieldOpportunities(ctx context.Context, chain string, limit int) (*service.YieldOpportunitiesResponse, error)
+	GetYieldOpportunitiesByTier(ctx context.Context, chain string, limit int, tier string) (*service.YieldOpportunitiesResponse, error)
 	CompareProtocols(ctx context.Context, protocols []string) ([]service.ProtocolSummary, error)
 }
 
@@ -74,7 +74,14 @@ func (h *YieldHandler) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	yieldResp, err := h.svc.GetYieldOpportunities(r.Context(), chain, limit)
+	// Optional risk-tier filter: low|medium|high. Omitting it returns all tiers.
+	tier := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("risk")))
+	if tier != "" && !service.IsValidRiskTier(tier) {
+		response.WriteJSON(w, http.StatusBadRequest, response.Err(http.StatusBadRequest, "INVALID_RISK_TIER", "risk must be one of: low, medium, high"))
+		return
+	}
+
+	yieldResp, err := h.svc.GetYieldOpportunitiesByTier(r.Context(), chain, limit, tier)
 	if err != nil {
 		logpkg.FromContext(r.Context()).Error("yield opportunities fetch failed", "chain", chain, "error", err.Error())
 		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "UPSTREAM_ERROR", "yield data temporarily unavailable"))
