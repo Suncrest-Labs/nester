@@ -57,6 +57,26 @@ export interface APYHistoryResponse {
   points: APYHistoryPoint[];
 }
 
+export interface HarvestPreview {
+  vault_id: string;
+  gross_yield_usdc: string;
+  performance_fee_usdc: string;
+  net_yield_usdc: string;
+  compounded: boolean;
+  estimated_new_shares?: string;
+  performance_fee_bps: number;
+  impaired?: boolean;
+}
+
+export interface HarvestResult {
+  gross_yield_usdc: string;
+  performance_fee_usdc: string;
+  net_yield_usdc: string;
+  compounded: boolean;
+  new_shares_minted?: string;
+  tx_hash?: string;
+}
+
 export const vaultsApi = {
   getProjection: async (vaultId: string): Promise<Projection> => {
     const res = await fetch(`${API_BASE}/api/v1/vaults/${vaultId}/projection`, {
@@ -90,7 +110,18 @@ export const vaultsApi = {
 
   getRebalanceSuggestion: (vaultId: string) =>
     apiRequest<RebalanceSuggestion>(`/vaults/${vaultId}/rebalance-suggestion`),
-    
+
+  previewHarvest: (vaultId: string, compound: boolean) =>
+    apiRequest<HarvestPreview>(
+      `/vaults/${vaultId}/harvest/preview?compound=${compound}`
+    ),
+
+  harvest: (vaultId: string, compound: boolean) =>
+    apiRequest<HarvestResult>(`/vaults/${vaultId}/harvest`, {
+      method: "POST",
+      body: JSON.stringify({ compound }),
+    }),
+
   applyRebalance: (vaultId: string, allocations: AllocationPct[]) =>
     apiRequest<unknown>(`/vaults/${vaultId}/rebalance`, {
       method: "POST",

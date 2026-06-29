@@ -16,6 +16,7 @@ import { useVault } from "@/hooks/useVault";
 import { AllocationDonut } from "@/components/vaults/allocation-donut";
 import { UserPosition } from "@/components/vaults/user-position";
 import { DepositModal } from "@/components/vault/depositModal";
+import { HarvestModal } from "@/components/vault/HarvestModal";
 import { useBlendApy } from "@/hooks/useBlendApy";
 import { cn } from "@/lib/utils";
 import { RiskGauge } from "@/components/vaults/risk-gauge";
@@ -76,6 +77,7 @@ export default function VaultDetailPage() {
     const router = useRouter();
     const { id } = useParams();
     const [depositOpen, setDepositOpen] = useState(false);
+    const [harvestOpen, setHarvestOpen] = useState(false);
     const blendApy = useBlendApy();
 
     const { vault, isLoading } = useVault(id?.toString() ?? "");
@@ -89,12 +91,15 @@ export default function VaultDetailPage() {
 
     useEffect(() => {
         if (!isConnected) router.push("/");
-        else if (!vault) router.replace("/vaults");
-    }, [isConnected, vault, router]);
+        else if (!isLoading && !vault) router.replace("/vaults");
+    }, [isConnected, isLoading, vault, router]);
 
     if (!isConnected) return null;
     if (isLoading) return <AppShell><div className="p-8 text-center text-sm text-black/50">Loading...</div></AppShell>;
     if (!vault) return null;
+
+    const canHarvest =
+        vault.status === "active" && (vault.yieldEarned ?? 0) > 0;
 
     return (
         <>
@@ -310,6 +315,14 @@ export default function VaultDetailPage() {
 
                          {/* Supply CTA */}
                          <div className="rounded-2xl border border-black/8 bg-white p-5">
+                             {canHarvest && (
+                                 <button
+                                     onClick={() => setHarvestOpen(true)}
+                                     className="mb-3 w-full rounded-xl border border-emerald-200 bg-emerald-50 py-3.5 text-sm text-emerald-700 font-medium transition-colors hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-600"
+                                 >
+                                     Harvest Yield
+                                 </button>
+                             )}
                              {vault.contractAddress ? (
                                  <button
                                      onClick={() => setDepositOpen(true)}
@@ -341,6 +354,12 @@ export default function VaultDetailPage() {
             open={depositOpen}
             onClose={() => setDepositOpen(false)}
             vault={vault}
+        />
+        <HarvestModal
+            open={harvestOpen}
+            onClose={() => setHarvestOpen(false)}
+            vaultId={vault.id}
+            vaultName={vault.name}
         />
         </>
     );

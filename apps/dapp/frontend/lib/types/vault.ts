@@ -39,6 +39,11 @@ export interface Vault {
   apyHistory: ApyDataPoint[];
   strategies: MarketStrategy[];
   contractAddress?: string;
+  status?: "active" | "paused" | "closed";
+  totalDeposited?: number;
+  currentBalance?: number;
+  yieldEarned?: number;
+  feesPaid?: number;
 }
 
 // Keep RiskTier as alias for backward compat during transition

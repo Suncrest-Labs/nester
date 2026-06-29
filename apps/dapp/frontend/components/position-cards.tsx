@@ -4,6 +4,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { type PortfolioPosition } from "@/components/portfolio-provider";
 import { WithdrawModal } from "@/components/vault-action-modals";
+import { HarvestModal } from "@/components/vault/HarvestModal";
 
 /**
  * Renders a list of position cards with withdraw buttons.
@@ -11,14 +12,15 @@ import { WithdrawModal } from "@/components/vault-action-modals";
  */
 export function PositionCards({
     positions,
-    emptyLabel = "No positions yet",
-    emptyHint = "Deposit to see your positions here.",
+    showHarvestAction = false,
 }: {
     positions: PortfolioPosition[];
     emptyLabel?: string;
     emptyHint?: string;
+    showHarvestAction?: boolean;
 }) {
     const [withdrawPos, setWithdrawPos] = useState<PortfolioPosition | null>(null);
+    const [harvestPos, setHarvestPos] = useState<PortfolioPosition | null>(null);
 
     if (positions.length === 0) return null;
 
@@ -57,6 +59,14 @@ export function PositionCards({
                                     Principal: {pos.principal.toFixed(2)}
                                 </p>
                             </div>
+                            {showHarvestAction && pos.yieldEarned > 0 && (
+                                <button
+                                    onClick={() => setHarvestPos(pos)}
+                                    className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] text-emerald-700 transition-colors hover:bg-emerald-100"
+                                >
+                                    Harvest
+                                </button>
+                            )}
                             <button
                                 onClick={() => setWithdrawPos(pos)}
                                 className="rounded-lg bg-black px-3 py-1.5 text-[11px] text-white transition-opacity hover:opacity-75"
@@ -72,6 +82,12 @@ export function PositionCards({
                 open={!!withdrawPos}
                 onClose={() => setWithdrawPos(null)}
                 position={withdrawPos}
+            />
+            <HarvestModal
+                open={!!harvestPos}
+                onClose={() => setHarvestPos(null)}
+                vaultId={harvestPos?.vaultId ?? ""}
+                vaultName={harvestPos?.vaultName}
             />
         </>
     );

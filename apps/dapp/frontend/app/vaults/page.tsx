@@ -507,7 +507,7 @@ export default function VaultsPage() {
                         className="mt-8"
                     >
                         <h2 className="text-sm font-semibold text-black mb-3">Your Market Positions</h2>
-                        <PositionCards positions={marketPositions} />
+                        <PositionCards positions={marketPositions} showHarvestAction />
                     </motion.div>
                 )}
 
