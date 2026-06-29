@@ -245,8 +245,10 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
                         tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
                       />
                       <Tooltip 
-                        formatter={(value: number, name: string) => [
-                          `$${value.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
+                        formatter={(value: number | string | undefined, name: string) => [
+                          typeof value === "number"
+                            ? `$${value.toLocaleString("en-US", { minimumFractionDigits: 2 })}`
+                            : String(value ?? ""),
                           name === "total" ? "Total Balance" : name === "principal" ? "Principal" : "Yield"
                         ]}
                         labelFormatter={(month: number) => `Month ${month}`}
