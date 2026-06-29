@@ -420,6 +420,7 @@ func (s *SavingsGoalService) Archive(ctx context.Context, userID, goalID uuid.UU
 	return s.enrichProgress(ctx, *goal)
 }
 
+// Unarchive restores an archived goal to active status (#721).
 func (s *SavingsGoalService) Unarchive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
 	goal, err := s.repo.GetByID(ctx, goalID)
 	if err != nil {
@@ -456,6 +457,174 @@ func resolveCategory(value string, defaultIfEmpty bool) (savingsgoal.GoalCategor
 		return "", fmt.Errorf("%w: invalid category", savingsgoal.ErrInvalidGoal)
 	}
 	return savingsgoal.ParseCategory(value)
+}
+
+// DepositSplitAllocation is a single goal allocation in a multi-goal deposit (#719).
+type DepositSplitAllocation struct {
+	GoalID     uuid.UUID
+	Amount     decimal.Decimal // set when splitting by fixed amount
+	Percentage decimal.Decimal // set when splitting by percentage; mutually exclusive with Amount
+}
+
+// DepositSplitInput is the input for a multi-goal deposit (#719).
+type DepositSplitInput struct {
+	TotalAmount decimal.Decimal
+	Currency    string
+	Allocations []DepositSplitAllocation
+}
+
+// GoalDepositResult is the per-goal result returned by DepositSplit (#719).
+type GoalDepositResult struct {
+	GoalID        uuid.UUID       `json:"goal_id"`
+	Deposited     decimal.Decimal `json:"deposited"`
+	CurrentAmount decimal.Decimal `json:"current_amount"`
+	ProgressPct   float64         `json:"progress_pct"`
+}
+
+// SplitDepositResult is the response from DepositSplit (#719).
+type SplitDepositResult struct {
+	TotalDeposited decimal.Decimal     `json:"total_deposited"`
+	Currency       string              `json:"currency"`
+	Goals          []GoalDepositResult `json:"goals"`
+}
+
+// DepositSplit routes a single deposit across multiple active savings goals (#719).
+func (s *SavingsGoalService) DepositSplit(ctx context.Context, userID uuid.UUID, in DepositSplitInput) (SplitDepositResult, error) {
+	currency := savingsgoal.NormalizeCurrency(in.Currency)
+	if !savingsgoal.IsSupportedCurrency(currency) {
+		return SplitDepositResult{}, fmt.Errorf("%w: unsupported currency %q", savingsgoal.ErrInvalidGoal, in.Currency)
+	}
+	if !in.TotalAmount.IsPositive() {
+		return SplitDepositResult{}, fmt.Errorf("%w: total_amount must be positive", savingsgoal.ErrInvalidGoal)
+	}
+	if len(in.Allocations) == 0 {
+		return SplitDepositResult{}, fmt.Errorf("%w: at least one allocation is required", savingsgoal.ErrInvalidGoal)
+	}
+
+	// Detect mode: all amount or all percentage.
+	allAmount := true
+	allPct := true
+	for _, a := range in.Allocations {
+		if a.Amount.IsZero() {
+			allAmount = false
+		}
+		if a.Percentage.IsZero() {
+			allPct = false
+		}
+	}
+	if !allAmount && !allPct {
+		return SplitDepositResult{}, fmt.Errorf("%w: each allocation must set either amount or percentage, not both or neither", savingsgoal.ErrInvalidGoal)
+	}
+	if allAmount && allPct {
+		return SplitDepositResult{}, fmt.Errorf("%w: each allocation must set either amount or percentage, not both", savingsgoal.ErrInvalidGoal)
+	}
+
+	// Compute per-goal amounts.
+	amounts := make([]decimal.Decimal, len(in.Allocations))
+	if allPct {
+		totalPct := decimal.Zero
+		for _, a := range in.Allocations {
+			if !a.Percentage.IsPositive() {
+				return SplitDepositResult{}, fmt.Errorf("%w: percentage must be positive", savingsgoal.ErrInvalidGoal)
+			}
+			totalPct = totalPct.Add(a.Percentage)
+		}
+		if !totalPct.Equal(decimal.NewFromInt(100)) {
+			return SplitDepositResult{}, fmt.Errorf("%w: percentages must sum to 100 (got %s)", savingsgoal.ErrInvalidGoal, totalPct.String())
+		}
+		for i, a := range in.Allocations {
+			amounts[i] = in.TotalAmount.Mul(a.Percentage).Div(decimal.NewFromInt(100)).Round(8)
+		}
+	} else {
+		totalAmt := decimal.Zero
+		for i, a := range in.Allocations {
+			if !a.Amount.IsPositive() {
+				return SplitDepositResult{}, fmt.Errorf("%w: allocation amount must be positive", savingsgoal.ErrInvalidGoal)
+			}
+			amounts[i] = a.Amount
+			totalAmt = totalAmt.Add(a.Amount)
+		}
+		if !totalAmt.Equal(in.TotalAmount) {
+			return SplitDepositResult{}, fmt.Errorf("%w: allocation amounts sum to %s but total_amount is %s", savingsgoal.ErrInvalidGoal, totalAmt.String(), in.TotalAmount.String())
+		}
+	}
+
+	// Validate goal IDs are unique.
+	seen := make(map[uuid.UUID]struct{}, len(in.Allocations))
+	for _, a := range in.Allocations {
+		if _, dup := seen[a.GoalID]; dup {
+			return SplitDepositResult{}, fmt.Errorf("%w: duplicate goal_id %s", savingsgoal.ErrInvalidGoal, a.GoalID)
+		}
+		seen[a.GoalID] = struct{}{}
+	}
+
+	// Validate each goal exists, belongs to user, is active, and matches currency.
+	goals := make([]*savingsgoal.SavingsGoal, len(in.Allocations))
+	for i, a := range in.Allocations {
+		g, err := s.repo.GetByID(ctx, a.GoalID)
+		if err != nil {
+			return SplitDepositResult{}, err
+		}
+		if g.UserID != userID {
+			return SplitDepositResult{}, savingsgoal.ErrGoalNotFound
+		}
+		if savingsgoal.NormalizeCurrency(g.Currency) != currency {
+			return SplitDepositResult{}, fmt.Errorf("%w: goal %s currency %s does not match deposit currency %s", savingsgoal.ErrInvalidGoal, a.GoalID, g.Currency, currency)
+		}
+		switch g.Status {
+		case savingsgoal.GoalStatusPaused:
+			return SplitDepositResult{}, fmt.Errorf("%w: goal %s is paused", savingsgoal.ErrGoalPaused, a.GoalID)
+		case savingsgoal.GoalStatusCompleted:
+			return SplitDepositResult{}, fmt.Errorf("%w: goal %s is already completed", savingsgoal.ErrGoalCompleted, a.GoalID)
+		case savingsgoal.GoalStatusArchived:
+			return SplitDepositResult{}, fmt.Errorf("%w: goal %s is archived", savingsgoal.ErrGoalArchived, a.GoalID)
+		}
+		goals[i] = g
+	}
+
+	// Build deposit records and persist atomically.
+	deposits := make([]savingsgoal.GoalDeposit, len(in.Allocations))
+	for i, a := range in.Allocations {
+		deposits[i] = savingsgoal.GoalDeposit{
+			ID:       uuid.New(),
+			GoalID:   a.GoalID,
+			UserID:   userID,
+			Amount:   amounts[i],
+			Currency: currency,
+		}
+	}
+	if err := s.repo.RecordGoalDeposits(ctx, deposits); err != nil {
+		return SplitDepositResult{}, err
+	}
+
+	// Build per-goal results.
+	results := make([]GoalDepositResult, len(in.Allocations))
+	for i, g := range goals {
+		current, err := s.repo.SumGoalDeposits(ctx, g.ID)
+		if err != nil {
+			return SplitDepositResult{}, err
+		}
+		var pct float64
+		if g.TargetAmount.IsPositive() {
+			p, _ := current.Div(g.TargetAmount).Mul(decimal.NewFromInt(100)).Float64()
+			if p > 100 {
+				p = 100
+			}
+			pct = p
+		}
+		results[i] = GoalDepositResult{
+			GoalID:        g.ID,
+			Deposited:     amounts[i],
+			CurrentAmount: current,
+			ProgressPct:   pct,
+		}
+	}
+
+	return SplitDepositResult{
+		TotalDeposited: in.TotalAmount,
+		Currency:       currency,
+		Goals:          results,
+	}, nil
 }
 
 // MinDeadlineLeadTime is the minimum distance into the future a new goal's

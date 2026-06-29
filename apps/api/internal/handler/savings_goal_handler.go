@@ -31,6 +31,7 @@ type SavingsGoalManager interface {
 	Complete(ctx context.Context, userID, goalID uuid.UUID, action string) (savingsgoal.SavingsGoal, error)
 	Archive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Unarchive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
+	DepositSplit(ctx context.Context, userID uuid.UUID, in service.DepositSplitInput) (service.SplitDepositResult, error)
 }
 
 type SavingsGoalHandler struct {
@@ -56,6 +57,8 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	// #684 archive / #721 unarchive
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/archive", h.archive)
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/unarchive", h.unarchive)
+	// #719 multi-goal deposit split
+	mux.HandleFunc("POST /api/v1/users/savings-goals/deposit", h.splitDeposit)
 }
 
 type createSavingsGoalRequest struct {
@@ -348,6 +351,82 @@ func (h *SavingsGoalHandler) complete(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, http.StatusOK, response.OK(goal))
 }
 
+type splitDepositAllocationRequest struct {
+	GoalID     string `json:"goal_id"`
+	Amount     string `json:"amount"`
+	Percentage string `json:"percentage"`
+}
+
+type splitDepositRequest struct {
+	TotalAmount string                           `json:"total_amount"`
+	Currency    string                           `json:"currency"`
+	Allocations []splitDepositAllocationRequest  `json:"allocations"`
+}
+
+func (h *SavingsGoalHandler) splitDeposit(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	body, err := readJSONBody(r)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	var req splitDepositRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid JSON"))
+		return
+	}
+	totalAmount, err := decimal.NewFromString(req.TotalAmount)
+	if err != nil || !totalAmount.IsPositive() {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("total_amount must be a positive decimal"))
+		return
+	}
+	if len(req.Allocations) == 0 {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("allocations must not be empty"))
+		return
+	}
+	allocations := make([]service.DepositSplitAllocation, len(req.Allocations))
+	for i, a := range req.Allocations {
+		goalID, err := uuid.Parse(a.GoalID)
+		if err != nil {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("allocation goal_id must be a valid UUID"))
+			return
+		}
+		var amt, pct decimal.Decimal
+		if a.Amount != "" {
+			amt, err = decimal.NewFromString(a.Amount)
+			if err != nil {
+				response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("allocation amount must be a valid decimal"))
+				return
+			}
+		}
+		if a.Percentage != "" {
+			pct, err = decimal.NewFromString(a.Percentage)
+			if err != nil {
+				response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("allocation percentage must be a valid decimal"))
+				return
+			}
+		}
+		allocations[i] = service.DepositSplitAllocation{
+			GoalID:     goalID,
+			Amount:     amt,
+			Percentage: pct,
+		}
+	}
+	result, err := h.svc.DepositSplit(r.Context(), userID, service.DepositSplitInput{
+		TotalAmount: totalAmount,
+		Currency:    req.Currency,
+		Allocations: allocations,
+	})
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusCreated, response.Created(result))
+}
+
 func (h *SavingsGoalHandler) authenticatedUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -370,6 +449,8 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_COMPLETED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrGoalPaused):
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_PAUSED", err.Error()))
+	case errors.Is(err, savingsgoal.ErrGoalArchived):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_ARCHIVED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:

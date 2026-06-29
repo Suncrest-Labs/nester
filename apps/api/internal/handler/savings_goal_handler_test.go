@@ -178,6 +178,34 @@ func (m *mockSavingsGoalService) Unarchive(_ context.Context, userID, goalID uui
 	return g, nil
 }
 
+func (m *mockSavingsGoalService) DepositSplit(_ context.Context, userID uuid.UUID, in service.DepositSplitInput) (service.SplitDepositResult, error) {
+	results := make([]service.GoalDepositResult, 0, len(in.Allocations))
+	for _, a := range in.Allocations {
+		g, ok := m.goals[a.GoalID]
+		if !ok || g.UserID != userID {
+			return service.SplitDepositResult{}, savingsgoal.ErrGoalNotFound
+		}
+		if g.Status == savingsgoal.GoalStatusPaused {
+			return service.SplitDepositResult{}, savingsgoal.ErrGoalPaused
+		}
+		amt := a.Amount
+		if amt.IsZero() {
+			amt = in.TotalAmount.Mul(a.Percentage).Div(decimal.NewFromInt(100))
+		}
+		results = append(results, service.GoalDepositResult{
+			GoalID:        a.GoalID,
+			Deposited:     amt,
+			CurrentAmount: amt,
+			ProgressPct:   0,
+		})
+	}
+	return service.SplitDepositResult{
+		TotalDeposited: in.TotalAmount,
+		Currency:       in.Currency,
+		Goals:          results,
+	}, nil
+}
+
 func withAuthUser(next http.Handler, userID uuid.UUID) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := auth.User{ID: userID.String(), WalletAddress: "GTEST"}
@@ -515,6 +543,127 @@ func TestSavingsGoalHandler_List_ExcludesArchivedByDefault(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("include_archived list = %d goals, want 2", len(all))
 	}
+}
+
+func TestSavingsGoalHandler_SplitDeposit(t *testing.T) {
+	userID := uuid.New()
+	svc := &mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}
+	h := NewSavingsGoalHandler(svc)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	handler := withAuthUser(mux, userID)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	g1ID := uuid.New()
+	g2ID := uuid.New()
+	svc.goals[g1ID] = savingsgoal.SavingsGoal{
+		ID:           g1ID,
+		UserID:       userID,
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Status:       savingsgoal.GoalStatusActive,
+	}
+	svc.goals[g2ID] = savingsgoal.SavingsGoal{
+		ID:           g2ID,
+		UserID:       userID,
+		TargetAmount: decimal.NewFromInt(500),
+		Currency:     "USDC",
+		Status:       savingsgoal.GoalStatusActive,
+	}
+
+	t.Run("happy path amount mode", func(t *testing.T) {
+		body := map[string]any{
+			"total_amount": "100",
+			"currency":     "USDC",
+			"allocations": []map[string]any{
+				{"goal_id": g1ID.String(), "amount": "60"},
+				{"goal_id": g2ID.String(), "amount": "40"},
+			},
+		}
+		b, _ := json.Marshal(body)
+		resp, err := http.Post(server.URL+"/api/v1/users/savings-goals/deposit", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("status = %d, want 201", resp.StatusCode)
+		}
+	})
+
+	t.Run("invalid JSON returns 400", func(t *testing.T) {
+		resp, err := http.Post(server.URL+"/api/v1/users/savings-goals/deposit", "application/json", bytes.NewReader([]byte("not-json")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", resp.StatusCode)
+		}
+	})
+
+	t.Run("goal not found returns 404", func(t *testing.T) {
+		body := map[string]any{
+			"total_amount": "100",
+			"currency":     "USDC",
+			"allocations": []map[string]any{
+				{"goal_id": uuid.New().String(), "amount": "100"},
+			},
+		}
+		b, _ := json.Marshal(body)
+		resp, err := http.Post(server.URL+"/api/v1/users/savings-goals/deposit", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", resp.StatusCode)
+		}
+	})
+
+	t.Run("paused goal returns 409", func(t *testing.T) {
+		pausedID := uuid.New()
+		svc.goals[pausedID] = savingsgoal.SavingsGoal{
+			ID:     pausedID,
+			UserID: userID,
+			Status: savingsgoal.GoalStatusPaused,
+		}
+		body := map[string]any{
+			"total_amount": "100",
+			"currency":     "USDC",
+			"allocations": []map[string]any{
+				{"goal_id": pausedID.String(), "amount": "100"},
+			},
+		}
+		b, _ := json.Marshal(body)
+		resp, err := http.Post(server.URL+"/api/v1/users/savings-goals/deposit", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("status = %d, want 409", resp.StatusCode)
+		}
+	})
+
+	t.Run("missing total_amount returns 400", func(t *testing.T) {
+		body := map[string]any{
+			"currency": "USDC",
+			"allocations": []map[string]any{
+				{"goal_id": g1ID.String(), "amount": "100"},
+			},
+		}
+		b, _ := json.Marshal(body)
+		resp, err := http.Post(server.URL+"/api/v1/users/savings-goals/deposit", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 // decodeGoalList decodes a list-of-goals response envelope.

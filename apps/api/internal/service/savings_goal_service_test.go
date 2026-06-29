@@ -14,14 +14,16 @@ import (
 )
 
 type memorySavingsGoalRepo struct {
-	goals    map[uuid.UUID]savingsgoal.SavingsGoal
-	balances map[string]decimal.Decimal
+	goals        map[uuid.UUID]savingsgoal.SavingsGoal
+	balances     map[string]decimal.Decimal
+	goalDeposits map[string]decimal.Decimal // keyed by goalID string
 }
 
 func newMemorySavingsGoalRepo() *memorySavingsGoalRepo {
 	return &memorySavingsGoalRepo{
-		goals:    make(map[uuid.UUID]savingsgoal.SavingsGoal),
-		balances: make(map[string]decimal.Decimal),
+		goals:        make(map[uuid.UUID]savingsgoal.SavingsGoal),
+		balances:     make(map[string]decimal.Decimal),
+		goalDeposits: make(map[string]decimal.Decimal),
 	}
 }
 
@@ -100,14 +102,31 @@ func (m *memorySavingsGoalRepo) SumRecentDeposits(context.Context, uuid.UUID, st
 	return decimal.Zero, nil
 }
 func (m *memorySavingsGoalRepo) UpdateStatus(_ context.Context, goalID, _ uuid.UUID, status string) error {
-	if g, ok := m.goals[goalID]; ok {
-		g.Status = status
-		m.goals[goalID] = g
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
 	}
+	g.Status = status
+	m.goals[goalID] = g
 	return nil
 }
 func (m *memorySavingsGoalRepo) MarkCompleted(context.Context, uuid.UUID, uuid.UUID, string) error {
 	return nil
+}
+
+func (m *memorySavingsGoalRepo) RecordGoalDeposits(_ context.Context, deposits []savingsgoal.GoalDeposit) error {
+	for _, d := range deposits {
+		key := d.GoalID.String()
+		m.goalDeposits[key] = m.goalDeposits[key].Add(d.Amount)
+	}
+	return nil
+}
+
+func (m *memorySavingsGoalRepo) SumGoalDeposits(_ context.Context, goalID uuid.UUID) (decimal.Decimal, error) {
+	if v, ok := m.goalDeposits[goalID.String()]; ok {
+		return v, nil
+	}
+	return decimal.Zero, nil
 }
 
 type recordingGoalMilestoneNotifier struct {
@@ -398,22 +417,22 @@ func TestSavingsGoalService_List_StatusFilter(t *testing.T) {
 		}
 	}
 
-	// No filter excludes archived by default.
-	all, err := svc.List(ctx, userID, "", "", false)
+	// No filter excludes archived by default (#721).
+	nonArchived, err := svc.List(ctx, userID, "", "", false)
 	if err != nil {
 		t.Fatalf("List(no filter) error = %v", err)
 	}
-	if len(all) != 2 {
-		t.Fatalf("List(no filter) returned %d goals, want 2 (archived excluded)", len(all))
+	if len(nonArchived) != 2 {
+		t.Fatalf("List(no filter) returned %d goals, want 2 (archived excluded)", len(nonArchived))
 	}
 
 	// include_archived=true returns all three.
-	allWithArchived, err := svc.List(ctx, userID, "", "", true)
+	all, err := svc.List(ctx, userID, "", "", true)
 	if err != nil {
-		t.Fatalf("List(includeArchived=true) error = %v", err)
+		t.Fatalf("List(include_archived) error = %v", err)
 	}
-	if len(allWithArchived) != 3 {
-		t.Fatalf("List(includeArchived=true) returned %d goals, want 3", len(allWithArchived))
+	if len(all) != 3 {
+		t.Fatalf("List(include_archived) returned %d goals, want 3", len(all))
 	}
 }
 
@@ -778,5 +797,281 @@ func TestSavingsGoalService_Unarchive(t *testing.T) {
 	}
 	if active.Status != savingsgoal.GoalStatusActive {
 		t.Fatalf("status = %q, want active", active.Status)
+	}
+}
+
+func makeActiveGoal(repo *memorySavingsGoalRepo, userID uuid.UUID, currency string, target int64) uuid.UUID {
+	id := uuid.New()
+	repo.goals[id] = savingsgoal.SavingsGoal{
+		ID:           id,
+		UserID:       userID,
+		TargetAmount: decimal.NewFromInt(target),
+		Currency:     savingsgoal.NormalizeCurrency(currency),
+		Status:       savingsgoal.GoalStatusActive,
+		Deadline:     time.Now().UTC().Add(30 * 24 * time.Hour),
+	}
+	return id
+}
+
+func TestSavingsGoalService_DepositSplit_AmountMode(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
+	g2 := makeActiveGoal(repo, userID, "USDC", 500)
+
+	result, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Amount: decimal.NewFromInt(60)},
+			{GoalID: g2, Amount: decimal.NewFromInt(40)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DepositSplit() error = %v", err)
+	}
+	if len(result.Goals) != 2 {
+		t.Fatalf("len(Goals) = %d, want 2", len(result.Goals))
+	}
+	if !result.TotalDeposited.Equal(decimal.NewFromInt(100)) {
+		t.Fatalf("TotalDeposited = %s, want 100", result.TotalDeposited)
+	}
+	if !result.Goals[0].Deposited.Equal(decimal.NewFromInt(60)) {
+		t.Fatalf("Goals[0].Deposited = %s, want 60", result.Goals[0].Deposited)
+	}
+	if !result.Goals[1].Deposited.Equal(decimal.NewFromInt(40)) {
+		t.Fatalf("Goals[1].Deposited = %s, want 40", result.Goals[1].Deposited)
+	}
+	// current_amount from SumGoalDeposits
+	if !result.Goals[0].CurrentAmount.Equal(decimal.NewFromInt(60)) {
+		t.Fatalf("Goals[0].CurrentAmount = %s, want 60", result.Goals[0].CurrentAmount)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_PercentageMode(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
+	g2 := makeActiveGoal(repo, userID, "USDC", 500)
+
+	result, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(200),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Percentage: decimal.NewFromInt(75)},
+			{GoalID: g2, Percentage: decimal.NewFromInt(25)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DepositSplit() percentage error = %v", err)
+	}
+	if !result.Goals[0].Deposited.Equal(decimal.NewFromInt(150)) {
+		t.Fatalf("Goals[0].Deposited = %s, want 150", result.Goals[0].Deposited)
+	}
+	if !result.Goals[1].Deposited.Equal(decimal.NewFromInt(50)) {
+		t.Fatalf("Goals[1].Deposited = %s, want 50", result.Goals[1].Deposited)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_AmountMismatch(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Amount: decimal.NewFromInt(60)},
+		},
+	})
+	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
+		t.Fatalf("mismatch error = %v, want ErrInvalidGoal", err)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_PercentageMismatch(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Percentage: decimal.NewFromInt(70)},
+		},
+	})
+	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
+		t.Fatalf("percentage mismatch error = %v, want ErrInvalidGoal", err)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_DuplicateGoal(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Amount: decimal.NewFromInt(50)},
+			{GoalID: g1, Amount: decimal.NewFromInt(50)},
+		},
+	})
+	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
+		t.Fatalf("duplicate goal error = %v, want ErrInvalidGoal", err)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_GoalNotFound(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: uuid.New(), Amount: decimal.NewFromInt(100)},
+		},
+	})
+	if !errors.Is(err, savingsgoal.ErrGoalNotFound) {
+		t.Fatalf("not-found error = %v, want ErrGoalNotFound", err)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_GoalPaused(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
+	g := repo.goals[g1]
+	g.Status = savingsgoal.GoalStatusPaused
+	repo.goals[g1] = g
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Amount: decimal.NewFromInt(100)},
+		},
+	})
+	if !errors.Is(err, savingsgoal.ErrGoalPaused) {
+		t.Fatalf("paused error = %v, want ErrGoalPaused", err)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_GoalArchived(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
+	g := repo.goals[g1]
+	g.Status = savingsgoal.GoalStatusArchived
+	repo.goals[g1] = g
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Amount: decimal.NewFromInt(100)},
+		},
+	})
+	if !errors.Is(err, savingsgoal.ErrGoalArchived) {
+		t.Fatalf("archived error = %v, want ErrGoalArchived", err)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_CurrencyMismatch(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "XLM", 1000)
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Amount: decimal.NewFromInt(100)},
+		},
+	})
+	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
+		t.Fatalf("currency mismatch error = %v, want ErrInvalidGoal", err)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_WrongUser(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	otherUser := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, otherUser, "USDC", 1000)
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Amount: decimal.NewFromInt(100)},
+		},
+	})
+	if !errors.Is(err, savingsgoal.ErrGoalNotFound) {
+		t.Fatalf("wrong user error = %v, want ErrGoalNotFound", err)
+	}
+}
+
+func TestSavingsGoalService_DepositSplit_Atomic_RecordsAll(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil)
+
+	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
+	g2 := makeActiveGoal(repo, userID, "USDC", 500)
+
+	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
+		TotalAmount: decimal.NewFromInt(100),
+		Currency:    "USDC",
+		Allocations: []DepositSplitAllocation{
+			{GoalID: g1, Amount: decimal.NewFromInt(70)},
+			{GoalID: g2, Amount: decimal.NewFromInt(30)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DepositSplit() error = %v", err)
+	}
+
+	sum1, _ := repo.SumGoalDeposits(ctx, g1)
+	sum2, _ := repo.SumGoalDeposits(ctx, g2)
+	if !sum1.Equal(decimal.NewFromInt(70)) {
+		t.Fatalf("goal1 deposits = %s, want 70", sum1)
+	}
+	if !sum2.Equal(decimal.NewFromInt(30)) {
+		t.Fatalf("goal2 deposits = %s, want 30", sum2)
 	}
 }

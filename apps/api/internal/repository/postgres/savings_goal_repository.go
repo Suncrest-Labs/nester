@@ -270,3 +270,44 @@ func nullSQLString(s string) sql.NullString {
 	}
 	return sql.NullString{String: s, Valid: true}
 }
+
+// RecordGoalDeposits atomically inserts all per-goal deposit rows (#719).
+func (r *SavingsGoalRepository) RecordGoalDeposits(ctx context.Context, deposits []savingsgoal.GoalDeposit) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO savings_goal_deposits (id, goal_id, user_id, amount, currency)
+		VALUES ($1, $2, $3, $4::numeric, $5)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, d := range deposits {
+		if _, err := stmt.ExecContext(ctx, d.ID, d.GoalID, d.UserID, d.Amount.String(), d.Currency); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SumGoalDeposits returns the total deposited to a specific goal via deposit-split (#719).
+func (r *SavingsGoalRepository) SumGoalDeposits(ctx context.Context, goalID uuid.UUID) (decimal.Decimal, error) {
+	var total sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(amount), 0) FROM savings_goal_deposits WHERE goal_id = $1`,
+		goalID,
+	).Scan(&total)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	if !total.Valid || total.String == "" {
+		return decimal.Zero, nil
+	}
+	return decimal.NewFromString(total.String)
+}

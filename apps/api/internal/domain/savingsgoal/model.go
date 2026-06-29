@@ -178,6 +178,15 @@ type SavingsGoal struct {
 	OnTrack                bool            `json:"on_track"`
 }
 
+// GoalDeposit records a single allocation in a multi-goal deposit split (#719).
+type GoalDeposit struct {
+	ID       uuid.UUID
+	GoalID   uuid.UUID
+	UserID   uuid.UUID
+	Amount   decimal.Decimal
+	Currency string
+}
+
 type Repository interface {
 	Create(ctx context.Context, goal *SavingsGoal) error
 	ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]SavingsGoal, error)
@@ -192,4 +201,8 @@ type Repository interface {
 	UpdateStatus(ctx context.Context, goalID, userID uuid.UUID, status string) error
 	// MarkCompleted sets completed_at and completion_action (#716).
 	MarkCompleted(ctx context.Context, goalID, userID uuid.UUID, action string) error
+	// RecordGoalDeposits atomically inserts all deposits in a single DB transaction (#719).
+	RecordGoalDeposits(ctx context.Context, deposits []GoalDeposit) error
+	// SumGoalDeposits returns the total deposited to a specific goal via deposit-split (#719).
+	SumGoalDeposits(ctx context.Context, goalID uuid.UUID) (decimal.Decimal, error)
 }
