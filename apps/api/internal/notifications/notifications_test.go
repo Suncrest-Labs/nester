@@ -14,7 +14,7 @@ func TestChannelsFor_MatchesIssueMatrix(t *testing.T) {
 		EventSettlementFailed:    {ChannelEmail, ChannelWebSocket, ChannelPush},
 		EventDepositConfirmed:    {ChannelEmail, ChannelWebSocket, ChannelPush},
 		EventYieldMilestone:      {ChannelPush},
-		EventVaultAPYDrop:        {ChannelEmail},
+		EventVaultAPYDrop:        {ChannelEmail, ChannelPush},
 		EventVaultPaused:         {ChannelEmail, ChannelWebSocket},
 		EventRebalanceExecuted:   {ChannelWebSocket},
 		EventKYCApproved:               {ChannelEmail},

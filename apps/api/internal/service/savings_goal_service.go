@@ -225,7 +225,13 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 		}
 
 		// Goal status counts (#733): active excludes archived/paused/completed.
-		switch enriched.Status {
+		// Treat "" as active: the postgres repo always normalises to "active" on
+		// scan, but in-memory test repos may leave Status unset.
+		effectiveStatus := enriched.Status
+		if effectiveStatus == "" {
+			effectiveStatus = savingsgoal.GoalStatusActive
+		}
+		switch effectiveStatus {
 		case savingsgoal.GoalStatusCompleted:
 			summary.CompletedGoalCount++
 		case savingsgoal.GoalStatusActive:
@@ -272,7 +278,8 @@ func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoa
 	}
 
 	// Auto-complete when target is reached and not already marked complete (#716).
-	if goal.Status == savingsgoal.GoalStatusActive &&
+	// Treat "" as active (postgres repo always normalises on scan; in-memory repos may not).
+	if (goal.Status == savingsgoal.GoalStatusActive || goal.Status == "") &&
 		goal.TargetAmount.IsPositive() &&
 		balance.GreaterThanOrEqual(goal.TargetAmount) &&
 		goal.CompletedAt == nil {
