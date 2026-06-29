@@ -525,7 +525,7 @@ fn deactivated_and_unregistered_sources_receive_zero_weight() {
 fn needs_rebalance_when_drift_exceeds_threshold() {
     let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
-    client.update_strategy_params(&admin, &250, &6_500);
+    client.update_strategy_params(&admin, &250, &6_500, &500);
 
     let current = vec![
         &env,
@@ -557,7 +557,7 @@ fn needs_rebalance_when_drift_exceeds_threshold() {
 fn does_not_rebalance_when_within_tolerance() {
     let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
-    client.update_strategy_params(&admin, &250, &6_500);
+    client.update_strategy_params(&admin, &250, &6_500, &500);
 
     let current = vec![
         &env,
@@ -589,7 +589,7 @@ fn does_not_rebalance_when_within_tolerance() {
 fn does_not_rebalance_at_threshold_boundary() {
     let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
-    client.update_strategy_params(&admin, &250, &6_500);
+    client.update_strategy_params(&admin, &250, &6_500, &500);
 
     let current = vec![
         &env,
@@ -621,13 +621,14 @@ fn does_not_rebalance_at_threshold_boundary() {
 fn admin_can_update_strategy_parameters() {
     let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
-    client.update_strategy_params(&admin, &125, &4_500);
+    client.update_strategy_params(&admin, &125, &4_500, &300);
 
     assert_eq!(
         client.get_strategy_params(),
         StrategyParams {
             rebalance_threshold_bps: 125,
             max_weight_bps: 4_500,
+            min_weight_bps: 300,
         }
     );
 }
@@ -638,7 +639,7 @@ fn non_admin_update_attempts_are_rejected() {
     let (env, _, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     let outsider = Address::generate(&env);
-    client.update_strategy_params(&outsider, &125, &4_500);
+    client.update_strategy_params(&outsider, &125, &4_500, &500);
 }
 
 #[test]
@@ -1012,7 +1013,7 @@ fn rebalance_redistributes_from_unhealthy_to_active() {
 
 #[test]
 fn rebalance_withdraws_to_vault_when_all_unhealthy() {
-    let (env, admin, registry_id, strategy_id) = setup_with_type(VaultType::Balanced);
+    let (env, admin, registry_id, strategy_id) = setup_with_type(VaultType::DeFi500);
     let registry = YieldRegistryContractClient::new(&env, &registry_id);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
 
@@ -1115,4 +1116,145 @@ fn should_rebalance_false_for_single_protocol_already_optimal() {
     // optimal allocation → never warrants a rebalance.
     let vault = Address::generate(&env);
     assert!(!client.should_rebalance(&vault, &1));
+}
+
+// ---------------------------------------------------------------------------
+// Issue #514 — minimum allocation weight enforcement
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_weights_rejects_below_minimum() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // min_weight_bps for Balanced = 500; 499 is below minimum
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.set_weights(
+            &admin,
+            &vec![
+                &env,
+                AllocationWeight {
+                    source_id: symbol_short!("aave"),
+                    weight_bps: 499,
+                },
+                AllocationWeight {
+                    source_id: symbol_short!("blend"),
+                    weight_bps: 9_501,
+                },
+            ],
+        );
+    }));
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn set_weights_rejects_above_maximum() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // max_weight_bps for Balanced = 6_500; 7_000 exceeds it
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.set_weights(
+            &admin,
+            &vec![
+                &env,
+                AllocationWeight {
+                    source_id: symbol_short!("aave"),
+                    weight_bps: 7_000,
+                },
+                AllocationWeight {
+                    source_id: symbol_short!("blend"),
+                    weight_bps: 3_000,
+                },
+            ],
+        );
+    }));
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn set_weights_accepts_valid_weights_within_bounds() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // All weights ≥ 500 (min) and ≤ 6500 (max), sum == 10_000
+    let weights = vec![
+        &env,
+        AllocationWeight {
+            source_id: symbol_short!("aave"),
+            weight_bps: 5_000,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("blend"),
+            weight_bps: 3_000,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("comp"),
+            weight_bps: 2_000,
+        },
+    ];
+
+    client.set_weights(&admin, &weights);
+    assert_eq!(client.get_weights(), weights);
+}
+
+#[test]
+fn admin_can_update_min_weight_threshold() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Lower the minimum to 300 bps so a 400 bps weight is now accepted
+    client.update_strategy_params(&admin, &500, &6_500, &300);
+    assert_eq!(client.get_strategy_params().min_weight_bps, 300);
+
+    client.set_weights(
+        &admin,
+        &vec![
+            &env,
+            AllocationWeight {
+                source_id: symbol_short!("aave"),
+                weight_bps: 400,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("blend"),
+                weight_bps: 5_000,
+            },
+            AllocationWeight {
+                source_id: symbol_short!("comp"),
+                weight_bps: 4_600,
+            },
+        ],
+    );
+    assert_eq!(weight_for(&client.get_weights(), symbol_short!("aave")), 400);
+}
+
+#[test]
+fn admin_can_update_max_weight_threshold() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    // Tighten the maximum to 5_500 bps; 6_000 should now be rejected
+    client.update_strategy_params(&admin, &500, &5_500, &500);
+    assert_eq!(client.get_strategy_params().max_weight_bps, 5_500);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.set_weights(
+            &admin,
+            &vec![
+                &env,
+                AllocationWeight {
+                    source_id: symbol_short!("aave"),
+                    weight_bps: 6_000,
+                },
+                AllocationWeight {
+                    source_id: symbol_short!("blend"),
+                    weight_bps: 4_000,
+                },
+            ],
+        );
+    }));
+
+    assert!(result.is_err());
 }

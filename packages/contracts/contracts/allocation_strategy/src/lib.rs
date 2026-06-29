@@ -112,6 +112,7 @@ pub enum VaultType {
 pub struct StrategyParams {
     pub rebalance_threshold_bps: u32,
     pub max_weight_bps: u32,
+    pub min_weight_bps: u32,
 }
 
 #[contracttype]
@@ -123,6 +124,7 @@ enum DataKey {
     Allocation(Symbol),
     RebalanceThresholdBps,
     MaxWeightBps,
+    MinWeightBps,
 }
 
 #[contract]
@@ -156,6 +158,9 @@ impl AllocationStrategyContract {
         env.storage()
             .instance()
             .set(&DataKey::MaxWeightBps, &params.max_weight_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinWeightBps, &params.min_weight_bps);
 
         let default_weights = build_default_weights(&env, &registry_id, &vault_type);
         env.storage()
@@ -179,6 +184,11 @@ impl AllocationStrategyContract {
                 .instance()
                 .get(&DataKey::MaxWeightBps)
                 .unwrap(),
+            min_weight_bps: env
+                .storage()
+                .instance()
+                .get(&DataKey::MinWeightBps)
+                .unwrap(),
         }
     }
 
@@ -187,6 +197,7 @@ impl AllocationStrategyContract {
         caller: Address,
         rebalance_threshold_bps: u32,
         max_weight_bps: u32,
+        min_weight_bps: u32,
     ) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -194,6 +205,8 @@ impl AllocationStrategyContract {
         if rebalance_threshold_bps > BASIS_POINT_SCALE
             || max_weight_bps == 0
             || max_weight_bps > BASIS_POINT_SCALE
+            || min_weight_bps == 0
+            || min_weight_bps >= max_weight_bps
         {
             panic_with_error!(&env, ContractError::InvalidOperation);
         }
@@ -204,6 +217,9 @@ impl AllocationStrategyContract {
         env.storage()
             .instance()
             .set(&DataKey::MaxWeightBps, &max_weight_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinWeightBps, &min_weight_bps);
     }
 
     pub fn set_weights(env: Env, caller: Address, weights: Vec<AllocationWeight>) {
@@ -213,9 +229,13 @@ impl AllocationStrategyContract {
         validate_weight_sum(&env, &weights);
 
         let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let params = Self::get_strategy_params(env.clone());
 
         for weight in weights.iter() {
-            if weight.weight_bps < 100 {
+            if weight.weight_bps < params.min_weight_bps {
+                panic_with_error!(&env, ContractError::ConfigOutOfRange);
+            }
+            if weight.weight_bps > params.max_weight_bps {
                 panic_with_error!(&env, ContractError::ConfigOutOfRange);
             }
             if !registry_has_source(&env, &registry_id, &weight.source_id) {
@@ -724,18 +744,22 @@ fn default_strategy_params(vault_type: &VaultType) -> StrategyParams {
         VaultType::Conservative => StrategyParams {
             rebalance_threshold_bps: 250,
             max_weight_bps: 5_000,
+            min_weight_bps: 500,
         },
         VaultType::Balanced => StrategyParams {
             rebalance_threshold_bps: 500,
             max_weight_bps: 6_500,
+            min_weight_bps: 500,
         },
         VaultType::Growth => StrategyParams {
             rebalance_threshold_bps: 750,
             max_weight_bps: 8_500,
+            min_weight_bps: 500,
         },
         VaultType::DeFi500 => StrategyParams {
             rebalance_threshold_bps: 100,
             max_weight_bps: 10_000,
+            min_weight_bps: 200,
         },
     }
 }
