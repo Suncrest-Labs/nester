@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -10,6 +10,122 @@ import { useWallet } from "@/components/wallet-provider";
 import { KYCSection, type KYCStatus } from "@/components/kyc/KYCSection";
 import { BankAccountsSection } from "@/components/settings/bank-accounts-section";
 import { cn } from "@/lib/utils";
+
+// --- Savings goal notification settings (#740) ---
+
+type Channel = "push" | "email" | "in_app";
+type Milestone = "25" | "50" | "75" | "100" | "deadline";
+
+const CHANNELS: { id: Channel; label: string }[] = [
+    { id: "push", label: "Push" },
+    { id: "email", label: "Email" },
+    { id: "in_app", label: "In-App" },
+];
+
+const MILESTONES: { id: Milestone; label: string }[] = [
+    { id: "25", label: "25% reached" },
+    { id: "50", label: "50% reached" },
+    { id: "75", label: "75% reached" },
+    { id: "100", label: "Goal completed" },
+    { id: "deadline", label: "Deadline breach" },
+];
+
+type SavingsNotifPrefs = Record<Milestone, Record<Channel, boolean>>;
+
+function defaultSavingsPrefs(): SavingsNotifPrefs {
+    const prefs = {} as SavingsNotifPrefs;
+    for (const m of MILESTONES) {
+        prefs[m.id] = { push: true, email: true, in_app: true };
+    }
+    return prefs;
+}
+
+function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void }) {
+    return (
+        <label className="relative inline-flex cursor-pointer items-center">
+            <input type="checkbox" checked={checked} onChange={onChange} className="peer sr-only" />
+            <div className="h-5 w-9 rounded-full bg-black/10 peer-checked:bg-black transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-4" />
+        </label>
+    );
+}
+
+function SavingsNotificationsSection() {
+    const [prefs, setPrefs] = useState<SavingsNotifPrefs>(defaultSavingsPrefs);
+    const [saving, setSaving] = useState(false);
+    const [saved, setSaved] = useState(false);
+
+    const toggle = useCallback((milestone: Milestone, channel: Channel) => {
+        setPrefs((prev) => ({
+            ...prev,
+            [milestone]: { ...prev[milestone], [channel]: !prev[milestone][channel] },
+        }));
+        setSaved(false);
+    }, []);
+
+    const save = useCallback(async () => {
+        setSaving(true);
+        try {
+            await fetch("/api/v1/notifications/preferences", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ savings_milestones: prefs }),
+            });
+            setSaved(true);
+        } finally {
+            setSaving(false);
+        }
+    }, [prefs]);
+
+    return (
+        <div className="rounded-2xl border border-black/8 bg-white p-6">
+            <h2 className="mb-1 text-sm font-medium text-black">Savings Goal Milestones</h2>
+            <p className="mb-5 text-xs text-black/40">Choose which channels receive alerts at each milestone</p>
+
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr>
+                            <th className="pb-3 text-left text-xs font-medium text-black/40 w-40">Milestone</th>
+                            {CHANNELS.map((c) => (
+                                <th key={c.id} className="pb-3 text-center text-xs font-medium text-black/40 w-20">
+                                    {c.label}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-black/4">
+                        {MILESTONES.map((m) => (
+                            <tr key={m.id}>
+                                <td className="py-3 text-sm text-black">{m.label}</td>
+                                {CHANNELS.map((c) => (
+                                    <td key={c.id} className="py-3 text-center">
+                                        <div className="flex justify-center">
+                                            <Toggle
+                                                checked={prefs[m.id][c.id]}
+                                                onChange={() => toggle(m.id, c.id)}
+                                            />
+                                        </div>
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            <div className="mt-5 flex items-center gap-3">
+                <button
+                    onClick={save}
+                    disabled={saving}
+                    className="rounded-xl bg-black px-5 py-2.5 text-sm text-white transition-opacity hover:opacity-75 disabled:opacity-40"
+                >
+                    {saving ? "Saving…" : "Save"}
+                </button>
+                {saved && <span className="text-xs text-black/40">Saved</span>}
+            </div>
+        </div>
+    );
+}
 
 type Tab = "profile" | "verification" | "notifications" | "preferences";
 
@@ -152,28 +268,31 @@ export default function SettingsPage() {
                                 initial={{ opacity: 0, y: 8 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: 8 }}
-                                className="rounded-2xl border border-black/8 bg-white p-6"
+                                className="space-y-6"
                             >
-                                <h2 className="mb-5 text-sm font-medium text-black">Notification Preferences</h2>
-                                <div className="space-y-4">
-                                    {[
-                                        { label: "Deposit confirmed", desc: "When a deposit is confirmed on-chain" },
-                                        { label: "Withdrawal processed", desc: "When a fiat withdrawal is settled" },
-                                        { label: "KYC status update", desc: "When your verification status changes" },
-                                        { label: "Yield accrual", desc: "Daily yield summary" },
-                                    ].map((item) => (
-                                        <div key={item.label} className="flex items-center justify-between gap-4">
-                                            <div>
-                                                <p className="text-sm text-black">{item.label}</p>
-                                                <p className="text-xs text-black/40">{item.desc}</p>
+                                <div className="rounded-2xl border border-black/8 bg-white p-6">
+                                    <h2 className="mb-5 text-sm font-medium text-black">Notification Preferences</h2>
+                                    <div className="space-y-4">
+                                        {[
+                                            { label: "Deposit confirmed", desc: "When a deposit is confirmed on-chain" },
+                                            { label: "Withdrawal processed", desc: "When a fiat withdrawal is settled" },
+                                            { label: "KYC status update", desc: "When your verification status changes" },
+                                            { label: "Yield accrual", desc: "Daily yield summary" },
+                                        ].map((item) => (
+                                            <div key={item.label} className="flex items-center justify-between gap-4">
+                                                <div>
+                                                    <p className="text-sm text-black">{item.label}</p>
+                                                    <p className="text-xs text-black/40">{item.desc}</p>
+                                                </div>
+                                                <label className="relative inline-flex cursor-pointer items-center">
+                                                    <input type="checkbox" defaultChecked className="peer sr-only" />
+                                                    <div className="h-5 w-9 rounded-full bg-black/10 peer-checked:bg-black transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-4" />
+                                                </label>
                                             </div>
-                                            <label className="relative inline-flex cursor-pointer items-center">
-                                                <input type="checkbox" defaultChecked className="peer sr-only" />
-                                                <div className="h-5 w-9 rounded-full bg-black/10 peer-checked:bg-black transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-4" />
-                                            </label>
-                                        </div>
-                                    ))}
+                                        ))}
+                                    </div>
                                 </div>
+                                <SavingsNotificationsSection />
                             </motion.div>
                         )}
 

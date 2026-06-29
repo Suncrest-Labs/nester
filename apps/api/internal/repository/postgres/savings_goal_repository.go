@@ -23,13 +23,15 @@ func NewSavingsGoalRepository(db *sql.DB) *SavingsGoalRepository {
 
 func (r *SavingsGoalRepository) Create(ctx context.Context, goal *savingsgoal.SavingsGoal) error {
 	query := `
-		INSERT INTO savings_goals (id, user_id, target_amount, currency, deadline, description, category)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO savings_goals (id, user_id, target_amount, currency, deadline, description, category, name, emoji)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING created_at, updated_at, status
 	`
 	return r.db.QueryRowContext(
 		ctx, query,
-		goal.ID, goal.UserID, goal.TargetAmount.String(), goal.Currency, goal.Deadline, nullSQLString(goal.Description), string(goal.Category),
+		goal.ID, goal.UserID, goal.TargetAmount.String(), goal.Currency, goal.Deadline,
+		nullSQLString(goal.Description), string(goal.Category),
+		nullSQLString(goal.Name), nullSQLString(goal.Emoji),
 	).Scan(&goal.CreatedAt, &goal.UpdatedAt, &goal.Status)
 }
 
@@ -37,7 +39,7 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 	query := `
 		SELECT id, user_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, created_at, updated_at,
-		       status, completed_at, completion_action
+		       status, completed_at, completion_action, name, emoji
 		FROM savings_goals
 		WHERE user_id = $1
 	`
@@ -69,7 +71,7 @@ func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*sav
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, created_at, updated_at,
-		       status, completed_at, completion_action
+		       status, completed_at, completion_action, name, emoji
 		FROM savings_goals WHERE id = $1
 	`, id)
 	g, err := scanSavingsGoal(row)
@@ -85,9 +87,12 @@ func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*sav
 func (r *SavingsGoalRepository) Update(ctx context.Context, goal *savingsgoal.SavingsGoal) error {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE savings_goals
-		SET target_amount = $1, currency = $2, deadline = $3, description = $4, category = $5, updated_at = NOW()
-		WHERE id = $6 AND user_id = $7
-	`, goal.TargetAmount.String(), goal.Currency, goal.Deadline, nullSQLString(goal.Description), string(goal.Category), goal.ID, goal.UserID)
+		SET target_amount = $1, currency = $2, deadline = $3, description = $4, category = $5,
+		    name = $6, emoji = $7, updated_at = NOW()
+		WHERE id = $8 AND user_id = $9
+	`, goal.TargetAmount.String(), goal.Currency, goal.Deadline, nullSQLString(goal.Description),
+		string(goal.Category), nullSQLString(goal.Name), nullSQLString(goal.Emoji),
+		goal.ID, goal.UserID)
 	if err != nil {
 		return err
 	}
@@ -211,11 +216,12 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 		status                                    sql.NullString
 		completedAt                               sql.NullTime
 		completionAction                          sql.NullString
+		name, emoji                               sql.NullString
 	)
 	if err := row.Scan(
 		&id, &userID, &targetStr, &currency, &deadline, &description, &category,
 		&notifiedMilestones, &createdAt, &updatedAt,
-		&status, &completedAt, &completionAction,
+		&status, &completedAt, &completionAction, &name, &emoji,
 	); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -240,19 +246,21 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 		completedAtPtr = &t
 	}
 	return savingsgoal.SavingsGoal{
-		ID:                  parsedID,
-		UserID:              parsedUserID,
-		TargetAmount:        target,
-		Currency:            currency,
-		Deadline:            deadline,
-		Description:         desc,
-		Category:            savingsgoal.GoalCategory(category),
-		Status:              goalStatus,
-		NotifiedMilestones:  milestones,
-		CreatedAt:           createdAt,
-		UpdatedAt:           updatedAt,
-		CompletedAt:         completedAtPtr,
-		CompletionAction:    completionAction.String,
+		ID:               parsedID,
+		UserID:           parsedUserID,
+		TargetAmount:     target,
+		Currency:         currency,
+		Deadline:         deadline,
+		Description:      desc,
+		Name:             name.String,
+		Emoji:            emoji.String,
+		Category:         savingsgoal.GoalCategory(category),
+		Status:           goalStatus,
+		NotifiedMilestones: milestones,
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
+		CompletedAt:      completedAtPtr,
+		CompletionAction: completionAction.String,
 	}, nil
 }
 

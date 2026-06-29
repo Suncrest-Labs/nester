@@ -62,6 +62,8 @@ type createSavingsGoalRequest struct {
 	Deadline     string      `json:"deadline"`
 	Description  string      `json:"description"`
 	Category     string      `json:"category"`
+	Name         string      `json:"name"`
+	Emoji        string      `json:"emoji"`
 }
 
 type updateSavingsGoalRequest struct {
@@ -70,6 +72,8 @@ type updateSavingsGoalRequest struct {
 	Deadline     *string      `json:"deadline"`
 	Description  *string      `json:"description"`
 	Category     *string      `json:"category"`
+	Name         *string      `json:"name"`
+	Emoji        *string      `json:"emoji"`
 }
 
 func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +107,8 @@ func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
 		Deadline:     deadline,
 		Description:  req.Description,
 		Category:     req.Category,
+		Name:         req.Name,
+		Emoji:        req.Emoji,
 	})
 	if err != nil {
 		h.writeError(w, r, err)
@@ -160,6 +166,7 @@ func (h *SavingsGoalHandler) summary(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "private, max-age=30")
 	response.WriteJSON(w, http.StatusOK, response.OK(summary))
 }
 
@@ -205,6 +212,8 @@ func (h *SavingsGoalHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Description = req.Description
 	in.Category = req.Category
+	in.Name = req.Name
+	in.Emoji = req.Emoji
 
 	goal, err := h.svc.Update(r.Context(), userID, goalID, in)
 	if err != nil {

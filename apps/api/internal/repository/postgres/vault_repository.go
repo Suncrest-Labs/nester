@@ -203,6 +203,62 @@ func (r *VaultRepository) ListActive(ctx context.Context) ([]vault.Vault, error)
 	return out, nil
 }
 
+// VaultAPYInfo is a lightweight projection used by the APY deviation scheduler.
+type VaultAPYInfo struct {
+	ID                 uuid.UUID
+	UserID             uuid.UUID
+	Currency           string
+	LastAPYAlertSentAt *time.Time
+}
+
+// ListActiveVaultsForAPYCheck returns id, user_id, currency, and last_apy_alert_sent_at
+// for all active, non-deleted vaults. Used by the APY deviation check job (#670).
+func (r *VaultRepository) ListActiveVaultsForAPYCheck(ctx context.Context) ([]VaultAPYInfo, error) {
+	const query = `
+		SELECT id, user_id, currency, last_apy_alert_sent_at
+		FROM vaults
+		WHERE deleted_at IS NULL AND status = 'active'
+		ORDER BY created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []VaultAPYInfo
+	for rows.Next() {
+		var (
+			id, userID, currency string
+			alertAt              sql.NullTime
+		)
+		if err := rows.Scan(&id, &userID, &currency, &alertAt); err != nil {
+			return nil, err
+		}
+		parsedID, _ := uuid.Parse(id)
+		parsedUserID, _ := uuid.Parse(userID)
+		var alertAtPtr *time.Time
+		if alertAt.Valid {
+			t := alertAt.Time
+			alertAtPtr = &t
+		}
+		out = append(out, VaultAPYInfo{
+			ID:                 parsedID,
+			UserID:             parsedUserID,
+			Currency:           currency,
+			LastAPYAlertSentAt: alertAtPtr,
+		})
+	}
+	return out, rows.Err()
+}
+
+// UpdateAPYAlertSentAt records the time an APY drop alert was sent for a vault (#670).
+func (r *VaultRepository) UpdateAPYAlertSentAt(ctx context.Context, vaultID uuid.UUID, sentAt time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE vaults SET last_apy_alert_sent_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
+		vaultID.String(), sentAt)
+	return err
+}
+
 func (r *VaultRepository) UpdateVaultBalances(ctx context.Context, id uuid.UUID, totalDeposited decimal.Decimal, currentBalance decimal.Decimal) error {
 	result, err := r.db.ExecContext(
 		ctx,

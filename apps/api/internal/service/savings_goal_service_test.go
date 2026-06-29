@@ -565,8 +565,8 @@ func TestSavingsGoalService_Summary_MixedCurrencies(t *testing.T) {
 		t.Fatalf("total_target_xlm = %s, want 500", summary.TotalTargetXLM)
 	}
 	// #683: status counts, USDC overall progress, next deadline.
-	if summary.ActiveGoals != 2 || summary.CompletedGoals != 0 {
-		t.Fatalf("active/completed = %d/%d, want 2/0", summary.ActiveGoals, summary.CompletedGoals)
+	if summary.ActiveGoalCount != 2 || summary.CompletedGoalCount != 0 {
+		t.Fatalf("active/completed = %d/%d, want 2/0", summary.ActiveGoalCount, summary.CompletedGoalCount)
 	}
 	if summary.OverallProgressPct != 10 { // 100 saved / 1000 target USDC
 		t.Fatalf("overall_progress_pct = %v, want 10", summary.OverallProgressPct)
@@ -584,7 +584,7 @@ func TestSavingsGoalService_Summary_NoGoals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Summary() error = %v", err)
 	}
-	if summary.GoalCount != 0 || summary.ActiveGoals != 0 || summary.CompletedGoals != 0 {
+	if summary.GoalCount != 0 || summary.ActiveGoalCount != 0 || summary.CompletedGoalCount != 0 {
 		t.Fatalf("counts = %+v, want all zero", summary)
 	}
 	if summary.OverallProgressPct != 0 {
@@ -614,8 +614,8 @@ func TestSavingsGoalService_Summary_CompletedAndProgressCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Summary() error = %v", err)
 	}
-	if summary.CompletedGoals != 1 || summary.ActiveGoals != 0 {
-		t.Fatalf("active/completed = %d/%d, want 0/1", summary.ActiveGoals, summary.CompletedGoals)
+	if summary.CompletedGoalCount != 1 || summary.ActiveGoalCount != 0 {
+		t.Fatalf("active/completed = %d/%d, want 0/1", summary.ActiveGoalCount, summary.CompletedGoalCount)
 	}
 	if summary.OverallProgressPct != 100 {
 		t.Fatalf("overall_progress_pct = %v, want 100 (capped)", summary.OverallProgressPct)

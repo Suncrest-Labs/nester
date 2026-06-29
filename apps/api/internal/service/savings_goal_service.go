@@ -31,6 +31,8 @@ type CreateSavingsGoalInput struct {
 	Deadline     time.Time       `json:"deadline"`
 	Description  string          `json:"description"`
 	Category     string          `json:"category"`
+	Name         string          `json:"name"`
+	Emoji        string          `json:"emoji"`
 }
 
 type UpdateSavingsGoalInput struct {
@@ -39,6 +41,8 @@ type UpdateSavingsGoalInput struct {
 	Deadline     *time.Time       `json:"deadline"`
 	Description  *string          `json:"description"`
 	Category     *string          `json:"category"`
+	Name         *string          `json:"name"`
+	Emoji        *string          `json:"emoji"`
 }
 
 func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
@@ -52,13 +56,29 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
+	emoji := strings.TrimSpace(in.Emoji)
+	if err := savingsgoal.ValidateEmoji(emoji); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	desc := strings.TrimSpace(in.Description)
+	name := strings.TrimSpace(in.Name)
+	if name == "" && desc != "" {
+		runes := []rune(desc)
+		if len(runes) > 50 {
+			name = string(runes[:50])
+		} else {
+			name = desc
+		}
+	}
 	goal := &savingsgoal.SavingsGoal{
 		ID:           uuid.New(),
 		UserID:       userID,
 		TargetAmount: in.TargetAmount,
 		Currency:     savingsgoal.NormalizeCurrency(in.Currency),
 		Deadline:     in.Deadline.UTC(),
-		Description:  strings.TrimSpace(in.Description),
+		Description:  desc,
+		Name:         name,
+		Emoji:        emoji,
 		Category:     category,
 	}
 	if err := s.repo.Create(ctx, goal); err != nil {
@@ -156,6 +176,16 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 		}
 		goal.Category = category
 	}
+	if in.Name != nil {
+		goal.Name = strings.TrimSpace(*in.Name)
+	}
+	if in.Emoji != nil {
+		e := strings.TrimSpace(*in.Emoji)
+		if err := savingsgoal.ValidateEmoji(e); err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		goal.Emoji = e
+	}
 	// Deadline is validated above (when changed); only amount/currency here, so
 	// other fields of an overdue goal can still be updated.
 	if err := validateSavingsGoalInput(goal.TargetAmount, goal.Currency); err != nil {
@@ -194,13 +224,12 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 			summary.TotalSavedXLM = summary.TotalSavedXLM.Add(enriched.CurrentAmount)
 		}
 
-		// Goal status counts + nearest upcoming deadline across active goals (#683).
-		completed := enriched.TargetAmount.IsPositive() &&
-			enriched.CurrentAmount.GreaterThanOrEqual(enriched.TargetAmount)
-		if completed {
-			summary.CompletedGoals++
-		} else {
-			summary.ActiveGoals++
+		// Goal status counts (#733): active excludes archived/paused/completed.
+		switch enriched.Status {
+		case savingsgoal.GoalStatusCompleted:
+			summary.CompletedGoalCount++
+		case savingsgoal.GoalStatusActive:
+			summary.ActiveGoalCount++
 			if enriched.Deadline.After(now) &&
 				(summary.NextDeadline == nil || enriched.Deadline.Before(*summary.NextDeadline)) {
 				d := enriched.Deadline

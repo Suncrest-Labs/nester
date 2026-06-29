@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -85,16 +86,48 @@ type SavingsGoalsSummary struct {
 	TotalSavedXLM   decimal.Decimal `json:"total_saved_xlm"`
 	TotalTargetXLM  decimal.Decimal `json:"total_target_xlm"`
 	GoalCount       int             `json:"goal_count"`
-	// ActiveGoals + CompletedGoals partition GoalCount; a goal counts as
-	// completed once its current amount reaches its target (#683).
-	ActiveGoals    int `json:"active_goals"`
-	CompletedGoals int `json:"completed_goals"`
+	// ActiveGoalCount counts goals in "active" status only (excludes archived, paused, completed).
+	ActiveGoalCount    int `json:"active_goal_count"`
+	CompletedGoalCount int `json:"completed_goal_count"`
 	// OverallProgressPct is USDC progress (saved/target, capped at 100). USDC
 	// only, to avoid cross-currency conversion the rest of this type avoids.
 	OverallProgressPct float64 `json:"overall_progress_pct"`
 	// NextDeadline is the nearest future deadline across active goals, or nil.
 	// No omitempty so it serializes as JSON null when absent.
 	NextDeadline *time.Time `json:"next_deadline"`
+}
+
+// ValidateEmoji checks that s is a single emoji character (or empty).
+// Returns ErrInvalidGoal if s contains non-emoji runes.
+func ValidateEmoji(s string) error {
+	if s == "" {
+		return nil
+	}
+	runes := []rune(s)
+	for _, r := range runes {
+		if !unicode.Is(unicode.So, r) && !unicode.Is(unicode.Sm, r) &&
+			!unicode.Is(unicode.Sk, r) && !isEmojiRange(r) {
+			return fmt.Errorf("%w: emoji must contain only emoji characters", ErrInvalidGoal)
+		}
+	}
+	return nil
+}
+
+func isEmojiRange(r rune) bool {
+	return (r >= 0x1F600 && r <= 0x1F64F) || // emoticons
+		(r >= 0x1F300 && r <= 0x1F5FF) || // misc symbols
+		(r >= 0x1F680 && r <= 0x1F6FF) || // transport
+		(r >= 0x1F700 && r <= 0x1F77F) || // alchemical
+		(r >= 0x1F780 && r <= 0x1F7FF) || // geometric shapes extended
+		(r >= 0x1F800 && r <= 0x1F8FF) || // supplemental arrows
+		(r >= 0x1F900 && r <= 0x1F9FF) || // supplemental symbols
+		(r >= 0x1FA00 && r <= 0x1FA6F) || // chess symbols
+		(r >= 0x1FA70 && r <= 0x1FAFF) || // symbols and pictographs extended
+		(r >= 0x2600 && r <= 0x26FF) ||   // misc symbols
+		(r >= 0x2700 && r <= 0x27BF) ||   // dingbats
+		r == 0xFE0F ||                     // variation selector-16
+		(r >= 0x1F1E0 && r <= 0x1F1FF) || // flags
+		(r >= 0x200D && r <= 0x200D)       // zero-width joiner
 }
 
 func ParseCategory(value string) (GoalCategory, error) {
@@ -121,6 +154,10 @@ type SavingsGoal struct {
 	Currency      string          `json:"currency"`
 	Deadline      time.Time       `json:"deadline"`
 	Description   string          `json:"description,omitempty"`
+	// Name is a user-supplied display label (#738). Defaults to first 50 chars of Description.
+	Name  string `json:"name,omitempty"`
+	// Emoji is a single Unicode emoji icon (#738).
+	Emoji string `json:"emoji,omitempty"`
 	Category      GoalCategory    `json:"category"`
 	// Status is one of "active", "paused", "completed" (#718, #716).
 	Status             string          `json:"status"`

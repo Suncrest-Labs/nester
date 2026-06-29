@@ -51,8 +51,9 @@ type Vault struct {
 	Status          VaultStatus     `json:"status"`
 	YieldEarned     decimal.Decimal `json:"yield_earned"`
 	FeesPaid        decimal.Decimal `json:"fees_paid"`
-	LastSyncedAt    *time.Time      `json:"last_synced_at,omitempty"`
-	DeletedAt       *time.Time      `json:"deleted_at,omitempty"`
+	LastSyncedAt       *time.Time      `json:"last_synced_at,omitempty"`
+	LastAPYAlertSentAt *time.Time      `json:"last_apy_alert_sent_at,omitempty"`
+	DeletedAt          *time.Time      `json:"deleted_at,omitempty"`
 	Allocations     []Allocation    `json:"allocations,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`

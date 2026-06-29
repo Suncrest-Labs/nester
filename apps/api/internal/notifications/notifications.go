@@ -70,7 +70,7 @@ var eventChannelMatrix = map[EventType][]ChannelKind{
 	EventSettlementFailed:    {ChannelEmail, ChannelWebSocket, ChannelPush},
 	EventDepositConfirmed:    {ChannelEmail, ChannelWebSocket, ChannelPush},
 	EventYieldMilestone:      {ChannelPush},
-	EventVaultAPYDrop:        {ChannelEmail},
+	EventVaultAPYDrop:        {ChannelEmail, ChannelPush},
 	EventVaultPaused:         {ChannelEmail, ChannelWebSocket},
 	EventRebalanceExecuted:   {ChannelWebSocket},
 	EventKYCApproved:               {ChannelEmail},
