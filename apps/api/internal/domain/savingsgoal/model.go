@@ -166,6 +166,12 @@ type SavingsGoal struct {
 	// Emoji is a single Unicode emoji icon (#738).
 	Emoji string `json:"emoji,omitempty"`
 	Category      GoalCategory    `json:"category"`
+	// Icon is an optional icon identifier (e.g. lucide icon name) displayed in the UI.
+	// When blank the UI falls back to the category default via DefaultIconForCategory.
+	Icon string `json:"icon,omitempty"`
+	// Color is an optional UI color hint (e.g. "emerald", "blue", "#3b82f6").
+	// When blank the UI falls back to the category default.
+	Color string `json:"color,omitempty"`
 	// Status is one of "active", "paused", "completed" (#718, #716).
 	Status             string          `json:"status"`
 	CurrentAmount      decimal.Decimal `json:"current_amount"`
@@ -233,4 +239,35 @@ type Repository interface {
 	ClearShareToken(ctx context.Context, goalID, userID uuid.UUID) error
 	// GetByShareToken returns the goal whose share_token matches. Returns ErrGoalNotFound if none.
 	GetByShareToken(ctx context.Context, token uuid.UUID) (*SavingsGoal, error)
+}
+
+// categoryIconDefaults maps each GoalCategory to a default icon name and color
+// that the UI can use when the user has not supplied a custom icon or color.
+var categoryIconDefaults = map[GoalCategory][2]string{
+	CategoryEmergencyFund: {"shield-check", "emerald"},
+	CategoryEducation:     {"graduation-cap", "blue"},
+	CategoryHousing:       {"home", "orange"},
+	CategoryTravel:        {"plane", "sky"},
+	CategoryBusiness:      {"briefcase", "violet"},
+	CategoryHealth:        {"heart-pulse", "rose"},
+	CategoryRetirement:    {"landmark", "amber"},
+	CategoryOther:         {"piggy-bank", "slate"},
+}
+
+// DefaultIconForCategory returns the default icon name for the given category.
+// Returns "piggy-bank" when the category is unknown.
+func DefaultIconForCategory(cat GoalCategory) string {
+	if v, ok := categoryIconDefaults[cat]; ok {
+		return v[0]
+	}
+	return "piggy-bank"
+}
+
+// DefaultColorForCategory returns the default tailwind color name for the given category.
+// Returns "slate" when the category is unknown.
+func DefaultColorForCategory(cat GoalCategory) string {
+	if v, ok := categoryIconDefaults[cat]; ok {
+		return v[1]
+	}
+	return "slate"
 }

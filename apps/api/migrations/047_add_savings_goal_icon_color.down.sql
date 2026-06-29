@@ -1,0 +1,3 @@
+ALTER TABLE savings_goals
+    DROP COLUMN IF EXISTS icon,
+    DROP COLUMN IF EXISTS color;
