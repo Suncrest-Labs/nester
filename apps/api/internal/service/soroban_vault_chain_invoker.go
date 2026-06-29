@@ -143,3 +143,10 @@ func (s *SorobanVaultChainInvoker) PreviewWithdraw(ctx context.Context, contract
 	}
 	return int64(val.I128.Lo), nil
 }
+
+// EmergencyWithdrawAll invokes the vault contract's emergency_withdraw_all
+// function with the operator as the authorizing user, exiting every active
+// position in a single transaction.
+func (s *SorobanVaultChainInvoker) EmergencyWithdrawAll(ctx context.Context, contractAddress string) error {
+	return s.invoker.InvokeVoidFunction(ctx, contractAddress, "emergency_withdraw_all")
+}

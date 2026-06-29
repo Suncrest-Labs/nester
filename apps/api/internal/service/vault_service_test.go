@@ -173,6 +173,55 @@ func TestVaultServiceGetMyPositionEmpty(t *testing.T) {
 	}
 }
 
+func TestVaultServiceEmergencyWithdrawReportsActivePositions(t *testing.T) {
+	userID := uuid.New()
+	repository := newMemoryVaultRepository(userID)
+	service := NewVaultService(repository)
+
+	created, err := service.CreateVault(context.Background(), CreateVaultInput{
+		UserID:          userID,
+		ContractAddress: "CA123",
+		Currency:        "usdc",
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	if _, err := service.UpdateAllocations(context.Background(), UpdateAllocationsInput{
+		VaultID: created.ID,
+		Allocations: []vault.Allocation{
+			{Protocol: "AAVE", Amount: decimal.RequireFromString("40"), APY: decimal.RequireFromString("4.5")},
+			{Protocol: "Blend", Amount: decimal.RequireFromString("60"), APY: decimal.RequireFromString("6.2")},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateAllocations() error = %v", err)
+	}
+
+	result, err := service.EmergencyWithdraw(context.Background(), EmergencyWithdrawInput{VaultID: created.ID})
+	if err != nil {
+		t.Fatalf("EmergencyWithdraw() error = %v", err)
+	}
+
+	if result.VaultID != created.ID {
+		t.Fatalf("expected vault id %s, got %s", created.ID, result.VaultID)
+	}
+	if len(result.Succeeded) != 2 {
+		t.Fatalf("expected 2 succeeded positions, got %d", len(result.Succeeded))
+	}
+	if result.Failed == nil {
+		t.Fatalf("expected non-nil failed slice")
+	}
+}
+
+func TestVaultServiceEmergencyWithdrawRejectsNilVault(t *testing.T) {
+	service := NewVaultService(newMemoryVaultRepository())
+
+	_, err := service.EmergencyWithdraw(context.Background(), EmergencyWithdrawInput{VaultID: uuid.Nil})
+	if err != vault.ErrInvalidVault {
+		t.Fatalf("expected ErrInvalidVault, got %v", err)
+	}
+}
+
 type memoryVaultRepository struct {
 	users        map[uuid.UUID]struct{}
 	vaults       map[uuid.UUID]vault.Vault

@@ -74,6 +74,7 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/vaults/{id}/withdraw", h.withdrawFromVault)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/rebalance-suggestion", h.getRebalanceSuggestion)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/rebalance", h.rebalanceVault)
+	mux.HandleFunc("POST /api/v1/vaults/{id}/emergency-withdraw", h.emergencyWithdraw)
 }
 
 type harvestVaultRequest struct {
@@ -382,6 +383,41 @@ func (h *VaultHandler) rebalanceVault(w http.ResponseWriter, r *http.Request) {
 		h.writeDomainError(w, r, err)
 		return
 	}
+	response.WriteJSON(w, http.StatusOK, response.OK(result))
+}
+
+// emergencyWithdraw triggers an on-chain emergency exit from all of the vault's
+// active positions. Only the vault owner may invoke it.
+func (h *VaultHandler) emergencyWithdraw(w http.ResponseWriter, r *http.Request) {
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	authUser, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
+	existing, err := h.service.GetVault(r.Context(), vaultID)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	if existing.UserID.String() != authUser.ID {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		return
+	}
+
+	result, err := h.service.EmergencyWithdraw(r.Context(), service.EmergencyWithdrawInput{VaultID: vaultID})
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
 	response.WriteJSON(w, http.StatusOK, response.OK(result))
 }
 
