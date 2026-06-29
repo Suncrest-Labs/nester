@@ -16,6 +16,8 @@ export interface SavingsGoal {
   status?: "active" | "completed" | "paused" | "archived";
   current_amount: string | number;
   progress_pct: number;
+  /** Whether yield is automatically reinvested toward the goal. */
+  auto_compound?: boolean;
   /** Vault this goal is linked to, when set (see #688). */
   vault_id?: string;
   /** Velocity stats (#714). */
@@ -27,17 +29,33 @@ export interface SavingsGoal {
   completion_action?: string;
 }
 
+/** A single contribution toward a savings goal (#732). */
+export interface SavingsGoalContribution {
+  id: string;
+  amount: string | number;
+  currency: string;
+  /** Where the contribution came from, e.g. "deposit" or "yield". */
+  source?: string;
+  tx_hash?: string;
+  created_at: string;
+}
+
 export interface CreateSavingsGoalInput {
   target_amount: number;
   currency: string;
   deadline: string;
   description?: string;
   category?: string;
+  auto_compound?: boolean;
 }
 
 export const savingsGoals = {
   list: () => apiRequest<SavingsGoal[]>("/users/savings-goals"),
   get: (id: string) => apiRequest<SavingsGoal>(`/users/savings-goals/${id}`),
+  contributions: (id: string) =>
+    apiRequest<SavingsGoalContribution[]>(
+      `/users/savings-goals/${id}/contributions`
+    ),
   create: (input: CreateSavingsGoalInput) =>
     apiRequest<SavingsGoal>("/users/savings-goals", {
       method: "POST",
@@ -59,6 +77,8 @@ export const savingsGoals = {
     apiRequest<SavingsGoal>(`/users/savings-goals/${id}/pause`, { method: "PATCH" }),
   resume: (id: string) =>
     apiRequest<SavingsGoal>(`/users/savings-goals/${id}/resume`, { method: "PATCH" }),
+  archive: (id: string) =>
+    apiRequest<SavingsGoal>(`/users/savings-goals/${id}/archive`, { method: "PATCH" }),
   complete: (id: string, action: "reinvest" | "withdraw") =>
     apiRequest<SavingsGoal>(`/users/savings-goals/${id}/complete`, {
       method: "POST",

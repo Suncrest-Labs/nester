@@ -12,6 +12,7 @@ import {
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import type { SavingsGoal } from "@/lib/api/savings-goals";
@@ -215,7 +216,14 @@ export function SavingsGoalsSection({ onCreateGoal }: { onCreateGoal?: () => voi
       ) : (
         <div className={cn("grid gap-3", goals.length > 1 && "sm:grid-cols-2")}>
           {goals.map((goal) => (
-            <GoalCard key={goal.id} goal={goal} />
+            <Link
+              key={goal.id}
+              href={`/savings/${goal.id}`}
+              aria-label={`View ${goalDisplayName(goal)} details`}
+              className="block rounded-2xl transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black"
+            >
+              <GoalCard goal={goal} />
+            </Link>
           ))}
         </div>
       )}
