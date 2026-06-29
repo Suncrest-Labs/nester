@@ -60,7 +60,7 @@ describe("useSavingsChartData", () => {
         getApyHistory.mockResolvedValue({ vault_id: "v1", period: "90d", points: [] });
         const { rerender } = renderHook(
             ({ p }: { p: "7d" | "30d" | "90d" }) => useSavingsChartData("v1", p),
-            { wrapper, initialProps: { p: "30d" as const } }
+            { wrapper, initialProps: { p: "30d" as "7d" | "30d" | "90d" } }
         );
         await waitFor(() => expect(getApyHistory).toHaveBeenCalledWith("v1", "30d"));
 

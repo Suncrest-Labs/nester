@@ -12,6 +12,7 @@ import {
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
+import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import type { SavingsGoal } from "@/lib/api/savings-goals";
 import { useSavingsGoals } from "@/hooks/useSavingsGoals";
