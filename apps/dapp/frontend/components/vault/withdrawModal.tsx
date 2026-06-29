@@ -29,7 +29,7 @@ import {
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
 import type { Vault as VaultDefinition } from "@/lib/types/vault";
-import { getVaultById } from "@/lib/vault-data";
+import { getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

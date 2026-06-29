@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import type { Vault, MarketType } from "@/lib/types/vault";
-import { useVaults } from "@/hooks/useVaults";
+import { useVaultMarkets } from "@/hooks/useVaultMarkets";
 
 export type SortKey = "apy" | "tvl" | "utilization";
 export type FilterType = MarketType | "all";
@@ -14,8 +14,8 @@ export function useVaultFilters() {
   const sortBy = (searchParams.get("sort") as SortKey) ?? "tvl";
   const filterType = (searchParams.get("filter") as FilterType) ?? "all";
 
-  // Fetch all vaults from live API
-  const { vaults: apiVaults, isLoading } = useVaults(undefined);
+  // Fetch all vaults from live yield-opportunities API
+  const { data: markets = [], isLoading } = useVaultMarkets();
 
   function setSort(key: SortKey) {
     const params = new URLSearchParams(searchParams.toString());
@@ -34,36 +34,35 @@ export function useVaultFilters() {
   }
 
   const vaults: Vault[] = useMemo(() => {
-    return apiVaults.map((v) => {
-      const apy = v.performance?.apy_30d ? v.performance.apy_30d * 100 : 0;
-      const tvl = parseFloat(v.total_deposited) || 0;
-      
-      // We map the backend API vaults to the catalog structure.
-      // If currency contains "-", assume it's a pair, otherwise single.
-      const isPair = v.currency.includes("-");
+    return markets.map((m) => {
+      const apy = m.apy ?? 0;
+      const tvl = m.tvlUsd ?? 0;
+
+      // Infer market type from symbol: "A-B" → pair, otherwise single
+      const isPair = m.symbol.includes("-");
       const marketType: MarketType = isPair ? "pair" : "single";
-      const tokens = isPair ? v.currency.split("-") : [v.currency];
+      const tokens = isPair ? m.symbol.split("-") : [m.symbol];
 
       return {
-        id: v.id,
-        name: `${v.currency} Market`,
-        description: `Automated yield strategies for ${v.currency}.`,
+        id: m.id,
+        name: `${m.symbol} Market`,
+        description: `Automated yield strategies for ${m.symbol} on ${m.protocol}.`,
         marketType,
         tokens,
-        currentApy: apy,
-        apyRange: `${(apy * 0.8).toFixed(1)}-${(apy * 1.2).toFixed(1)}%`,
+        currentApy: apy * 100,
+        apyRange: `${(apy * 80).toFixed(1)}-${(apy * 120).toFixed(1)}%`,
         tvl,
         utilization: 0, // Not provided by current API
         allocations: [],
         supportedAssets: tokens,
         maturityTerms: "Flexible - withdraw anytime",
         earlyWithdrawalPenalty: "None",
-        contractAddress: v.contract_address,
+        contractAddress: undefined,
         apyHistory: [],
         strategies: [],
       };
     });
-  }, [apiVaults]);
+  }, [markets]);
 
   const filteredAndSorted = useMemo(() => {
     const filtered =

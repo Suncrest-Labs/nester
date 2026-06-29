@@ -35,7 +35,7 @@ import {
     TransactionTimeoutError,
 } from "@/lib/stellar/transaction";
 import { cn } from "@/lib/utils";
-import { type VaultDefinition, type SupportedAsset, vaultDefinitions, getVaultById } from "@/lib/vault-data";
+import { type VaultContract as VaultDefinition, type SupportedAsset, vaultContracts as vaultDefinitions, getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 import { useWallet } from "@/components/wallet-provider";
 import { useNetwork } from "@/hooks/useNetwork";
 
