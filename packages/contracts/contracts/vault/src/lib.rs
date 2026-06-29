@@ -1046,7 +1046,10 @@ impl VaultContract {
         require_active(&env);
         user.require_auth();
 
-        let gross_yield = get_user_yield(&env, &user);
+        let shares = get_shares(&env, &user);
+        let redeemable = vault_token_client(&env).amount_for_shares(&shares);
+        let principal = get_user_principal(&env, &user);
+        let gross_yield = redeemable.saturating_sub(principal);
         let now = env.ledger().timestamp();
 
         if gross_yield == 0 {
@@ -1108,6 +1111,11 @@ impl VaultContract {
         // Reset per-user pending yield to zero and record harvest timestamp.
         set_user_yield(&env, &user, 0);
         set_last_harvest_at(&env, &user, now);
+        
+        // Add compounded yield to principal to prevent double-charging on future harvests
+        if net_yield > 0 {
+            set_user_principal(&env, &user, principal + net_yield);
+        }
 
         let new_share_balance = get_shares(&env, &user);
 

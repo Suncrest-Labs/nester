@@ -1438,6 +1438,31 @@ fn test_harvest_resets_user_yield_to_zero() {
 }
 
 #[test]
+fn test_harvest_impairment_zero_fee() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+
+    // Simulate impairment: Reduce total assets below principal.
+    vault.report_yield(&admin, &(-(200 * XLM)));
+
+    // Try harvesting
+    let result = vault.harvest(&user);
+
+    assert_eq!(result.gross_yield, 0);
+    assert_eq!(result.performance_fee, 0);
+    assert_eq!(result.net_yield, 0);
+
+    // Ensure principal hasn't been reduced by fees
+    let principal = vault.get_principal(&user);
+    assert_eq!(principal, deposit);
+}
+
+#[test]
 fn test_harvest_impairment_no_fee_charged() {
     // When yield is negative (impairment), no performance fee should be charged
     // and user's pending yield should be reduced (floored at zero).
