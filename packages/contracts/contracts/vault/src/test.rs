@@ -3,7 +3,7 @@
 extern crate std;
 
 use soroban_sdk::{
-    contract, contractimpl,
+    contract, contractimpl, symbol_short,
     testutils::{Address as _, Ledger, LedgerInfo},
     token, Address, Env, String, Symbol,
 };
@@ -1641,4 +1641,87 @@ fn get_min_deposit_returns_configured_value() {
     let (_env, admin, _token, vault, _treasury) = setup();
     vault.set_min_deposit(&admin, &(10 * XLM));
     assert_eq!(vault.get_min_deposit(), 10 * XLM);
+}
+
+// ---------------------------------------------------------------------------
+// Emergency Withdraw All Positions Tests (issue #736)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emergency_withdraw_all_exits_all_active_positions() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let aave = symbol_short!("aave");
+    let blend = symbol_short!("blend");
+    vault.record_source_allocation(&admin, &aave, &(600 * XLM));
+    vault.record_source_allocation(&admin, &blend, &(400 * XLM));
+
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(result.succeeded.len(), 2, "both positions should be exited");
+    assert_eq!(result.failed.len(), 0, "no positions should fail");
+
+    // Allocations are cleared after a successful emergency exit.
+    let allocations = vault.get_current_allocations();
+    for view in allocations.iter() {
+        assert_eq!(view.amount, 0, "position should be unwound to zero");
+    }
+}
+
+#[test]
+fn emergency_withdraw_all_skips_inactive_positions() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let aave = symbol_short!("aave");
+    let blend = symbol_short!("blend");
+    vault.record_source_allocation(&admin, &aave, &(500 * XLM));
+    // Inactive position: zero allocation.
+    vault.record_source_allocation(&admin, &blend, &0);
+
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(result.succeeded.len(), 1, "only the active position is exited");
+    assert_eq!(result.failed.len(), 0);
+    assert_eq!(result.succeeded.get(0).unwrap().protocol, aave);
+}
+
+#[test]
+fn emergency_withdraw_all_allows_partial_success() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let aave = symbol_short!("aave");
+    let blend = symbol_short!("blend");
+    // Unwinding `aave` would overflow the vault's reserves, so it must fail
+    // while `blend` still completes — partial success.
+    vault.record_source_allocation(&admin, &aave, &i128::MAX);
+    vault.record_source_allocation(&admin, &blend, &(400 * XLM));
+
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(result.failed.len(), 1, "overflowing position should fail");
+    assert_eq!(result.failed.get(0).unwrap().protocol, aave);
+    assert_eq!(result.succeeded.len(), 1, "healthy position should still exit");
+    assert_eq!(result.succeeded.get(0).unwrap().protocol, blend);
+}
+
+#[test]
+fn emergency_withdraw_all_with_no_positions_returns_empty() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(result.succeeded.len(), 0);
+    assert_eq!(result.failed.len(), 0);
 }

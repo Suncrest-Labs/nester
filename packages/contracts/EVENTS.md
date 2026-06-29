@@ -36,6 +36,18 @@ Emitted when a user withdraws funds.
     }
     ```
 
+### EMRG_WD
+Emitted once per position when a user emergency-exits all active positions via `emergency_withdraw_all`.
+- **Topics**: `(VAULT, EMRG_WD, user: Address)`
+- **Data**:
+    ```rust
+    {
+        user: Address,
+        protocol: Symbol,
+        amount: i128
+    }
+    ```
+
 ### PAUSE
 Emitted when the vault is paused.
 - **Topics**: `(VAULT, PAUSE, admin: Address)`

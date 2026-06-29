@@ -213,6 +213,32 @@ pub struct EmergencyRequest {
     pub amount: i128,
 }
 
+/// A single yield-source position unwound by an emergency exit.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PositionWithdrawal {
+    pub protocol: Symbol,
+    pub amount: i128,
+}
+
+/// Outcome of [`VaultContract::emergency_withdraw_all`]: positions that were
+/// successfully unwound and those that could not be (failures are logged, not
+/// fatal, so a single bad position can't block the rest from exiting).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyWithdrawAllResult {
+    pub succeeded: Vec<PositionWithdrawal>,
+    pub failed: Vec<PositionWithdrawal>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PositionEmergencyWithdrawEventData {
+    pub user: Address,
+    pub protocol: Symbol,
+    pub amount: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct EmergencyPreview {
@@ -1778,6 +1804,74 @@ impl VaultContract {
 
             Ok(return_amount)
         }
+    }
+
+    /// Emergency exit from **all** active yield-source positions in a single
+    /// transaction.
+    ///
+    /// Iterates every source that currently holds a live allocation, pulls the
+    /// deployed funds back into the vault's liquid reserves, and emits an
+    /// `EmergencyWithdraw` event per position carrying the amount and protocol.
+    /// Inactive positions (zero allocation) are skipped.
+    ///
+    /// Partial success is allowed: if unwinding a position fails it is recorded
+    /// in `failed` and iteration continues, so one bad position cannot block the
+    /// rest from exiting. The returned [`EmergencyWithdrawAllResult`] lists both
+    /// the succeeded and failed withdrawals.
+    ///
+    /// Authorization: callable only by the position owner (`user`).
+    pub fn emergency_withdraw_all(env: Env, user: Address) -> EmergencyWithdrawAllResult {
+        require_initialized(&env);
+        user.require_auth();
+
+        let sources = get_allocated_sources(&env);
+        let mut succeeded = Vec::new(&env);
+        let mut failed = Vec::new(&env);
+
+        for source_id in sources.iter() {
+            let amount = get_source_allocation(&env, &source_id);
+            // Only active positions have something to unwind.
+            if amount <= 0 {
+                continue;
+            }
+
+            let reserves = get_vault_liquid_reserves(&env);
+            match reserves.checked_add(amount) {
+                Some(new_reserves) => {
+                    // Move the deployed funds back into liquid reserves so they
+                    // become available for withdrawal, and clear the position.
+                    set_source_allocation(&env, &source_id, 0);
+                    set_vault_liquid_reserves(&env, new_reserves);
+
+                    emit_event(
+                        &env,
+                        VAULT,
+                        symbol_short!("EMRG_WD"),
+                        user.clone(),
+                        PositionEmergencyWithdrawEventData {
+                            user: user.clone(),
+                            protocol: source_id.clone(),
+                            amount,
+                        },
+                    );
+
+                    succeeded.push_back(PositionWithdrawal {
+                        protocol: source_id.clone(),
+                        amount,
+                    });
+                }
+                None => {
+                    // Unwinding this position would overflow the vault's
+                    // reserves — log it as failed and keep going.
+                    failed.push_back(PositionWithdrawal {
+                        protocol: source_id.clone(),
+                        amount,
+                    });
+                }
+            }
+        }
+
+        EmergencyWithdrawAllResult { succeeded, failed }
     }
 
     // -----------------------------------------------------------------------

@@ -21,6 +21,9 @@ type VaultDepositInvoker interface {
 	PreviewDeposit(ctx context.Context, contractAddress string, amountStroops int64) (int64, error)
 	PreviewWithdraw(ctx context.Context, contractAddress string, sharesStroops int64) (int64, error)
 	HarvestVault(ctx context.Context, contractAddress, userAddress string, compound bool) (string, error)
+	// EmergencyWithdrawAll triggers the vault contract's emergency_withdraw_all
+	// function, exiting every active position in a single transaction.
+	EmergencyWithdrawAll(ctx context.Context, contractAddress string) error
 }
 
 // NoopVaultDepositInvoker satisfies VaultDepositInvoker without making any
@@ -40,6 +43,7 @@ func (NoopVaultDepositInvoker) PreviewWithdraw(_ context.Context, _ string, _ in
 func (NoopVaultDepositInvoker) HarvestVault(_ context.Context, _, _ string, _ bool) (string, error) {
 	return "", nil
 }
+func (NoopVaultDepositInvoker) EmergencyWithdrawAll(_ context.Context, _ string) error { return nil }
 
 // Default performance fee (10%) applied when estimating harvest proceeds off-chain.
 const defaultHarvestPerformanceFeeBPS = 1000
@@ -707,6 +711,64 @@ func (s *VaultService) GetProjection(ctx context.Context, vaultID uuid.UUID) (va
 		CurrentAPY: avgAPY,
 		Timeline:   timeline,
 	}, nil
+}
+
+// EmergencyWithdrawInput identifies the vault to emergency-exit.
+type EmergencyWithdrawInput struct {
+	VaultID uuid.UUID
+}
+
+// PositionResult is a single position touched by an emergency withdrawal.
+type PositionResult struct {
+	Protocol string          `json:"protocol"`
+	Amount   decimal.Decimal `json:"amount"`
+}
+
+// EmergencyWithdrawResult reports the outcome of an emergency exit: which
+// positions were successfully withdrawn and which failed.
+type EmergencyWithdrawResult struct {
+	VaultID   uuid.UUID        `json:"vault_id"`
+	Succeeded []PositionResult `json:"succeeded"`
+	Failed    []PositionResult `json:"failed"`
+}
+
+// EmergencyWithdraw triggers an on-chain emergency exit from all of the vault's
+// active positions in a single transaction and returns the per-position
+// outcome. Failures are reported alongside successes rather than aborting the
+// whole call.
+func (s *VaultService) EmergencyWithdraw(ctx context.Context, input EmergencyWithdrawInput) (EmergencyWithdrawResult, error) {
+	if input.VaultID == uuid.Nil {
+		return EmergencyWithdrawResult{}, vault.ErrInvalidVault
+	}
+
+	existing, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return EmergencyWithdrawResult{}, err
+	}
+
+	result := EmergencyWithdrawResult{
+		VaultID:   input.VaultID,
+		Succeeded: []PositionResult{},
+		Failed:    []PositionResult{},
+	}
+
+	if s.depositInvoker != nil {
+		if err := s.depositInvoker.EmergencyWithdrawAll(ctx, existing.ContractAddress); err != nil {
+			return EmergencyWithdrawResult{}, fmt.Errorf("on-chain emergency withdraw failed: %w", err)
+		}
+	}
+
+	for _, allocation := range existing.Allocations {
+		if allocation.Amount.Cmp(decimal.Zero) <= 0 {
+			continue
+		}
+		result.Succeeded = append(result.Succeeded, PositionResult{
+			Protocol: allocation.Protocol,
+			Amount:   allocation.Amount,
+		})
+	}
+
+	return result, nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
