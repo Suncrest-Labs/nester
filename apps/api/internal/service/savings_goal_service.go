@@ -98,7 +98,7 @@ func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) 
 	return s.enrichProgress(ctx, *goal)
 }
 
-func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category, status string) ([]savingsgoal.SavingsGoal, error) {
+func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
 	filterCategory := ""
 	if strings.TrimSpace(category) != "" {
 		parsed, err := savingsgoal.ParseCategory(category)
@@ -126,7 +126,11 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		if err != nil {
 			return nil, err
 		}
-		if filterStatus != "" && enriched.Status != filterStatus {
+		if filterStatus != "" {
+			if enriched.Status != filterStatus {
+				continue
+			}
+		} else if !includeArchived && enriched.Status == savingsgoal.GoalStatusArchived {
 			continue
 		}
 		out = append(out, enriched)
@@ -413,6 +417,24 @@ func (s *SavingsGoalService) Archive(ctx context.Context, userID, goalID uuid.UU
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusArchived
+	return s.enrichProgress(ctx, *goal)
+}
+
+func (s *SavingsGoalService) Unarchive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.Status != savingsgoal.GoalStatusArchived {
+		return s.enrichProgress(ctx, *goal)
+	}
+	if err := s.repo.UpdateStatus(ctx, goalID, userID, savingsgoal.GoalStatusActive); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.Status = savingsgoal.GoalStatusActive
 	return s.enrichProgress(ctx, *goal)
 }
 

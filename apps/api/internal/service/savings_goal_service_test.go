@@ -99,7 +99,11 @@ func (m *memorySavingsGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.
 func (m *memorySavingsGoalRepo) SumRecentDeposits(context.Context, uuid.UUID, string, time.Time) (decimal.Decimal, error) {
 	return decimal.Zero, nil
 }
-func (m *memorySavingsGoalRepo) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, string) error {
+func (m *memorySavingsGoalRepo) UpdateStatus(_ context.Context, goalID, _ uuid.UUID, status string) error {
+	if g, ok := m.goals[goalID]; ok {
+		g.Status = status
+		m.goals[goalID] = g
+	}
 	return nil
 }
 func (m *memorySavingsGoalRepo) MarkCompleted(context.Context, uuid.UUID, uuid.UUID, string) error {
@@ -319,7 +323,7 @@ func TestSavingsGoalService_List_FilterByCategory(t *testing.T) {
 	}
 	svc := NewSavingsGoalService(repo, nil)
 
-	goals, err := svc.List(ctx, userID, "education", "")
+	goals, err := svc.List(ctx, userID, "education", "", false)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -336,7 +340,7 @@ func TestSavingsGoalService_List_InvalidCategoryFilter(t *testing.T) {
 	userID := uuid.New()
 	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
 
-	_, err := svc.List(ctx, userID, "invalid", "")
+	_, err := svc.List(ctx, userID, "invalid", "", false)
 	if err == nil {
 		t.Fatal("List() error = nil, want invalid category")
 	}
@@ -379,7 +383,7 @@ func TestSavingsGoalService_List_StatusFilter(t *testing.T) {
 		savingsgoal.GoalStatusArchived:  archivedID,
 	}
 	for status, wantID := range cases {
-		goals, err := svc.List(ctx, userID, "", status)
+		goals, err := svc.List(ctx, userID, "", status, false)
 		if err != nil {
 			t.Fatalf("List(status=%q) error = %v", status, err)
 		}
@@ -394,19 +398,28 @@ func TestSavingsGoalService_List_StatusFilter(t *testing.T) {
 		}
 	}
 
-	// No filter returns all three.
-	all, err := svc.List(ctx, userID, "", "")
+	// No filter excludes archived by default.
+	all, err := svc.List(ctx, userID, "", "", false)
 	if err != nil {
 		t.Fatalf("List(no filter) error = %v", err)
 	}
-	if len(all) != 3 {
-		t.Fatalf("List(no filter) returned %d goals, want 3", len(all))
+	if len(all) != 2 {
+		t.Fatalf("List(no filter) returned %d goals, want 2 (archived excluded)", len(all))
+	}
+
+	// include_archived=true returns all three.
+	allWithArchived, err := svc.List(ctx, userID, "", "", true)
+	if err != nil {
+		t.Fatalf("List(includeArchived=true) error = %v", err)
+	}
+	if len(allWithArchived) != 3 {
+		t.Fatalf("List(includeArchived=true) returned %d goals, want 3", len(allWithArchived))
 	}
 }
 
 func TestSavingsGoalService_List_InvalidStatusFilter(t *testing.T) {
 	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
-	if _, err := svc.List(context.Background(), uuid.New(), "", "bogus"); err == nil {
+	if _, err := svc.List(context.Background(), uuid.New(), "", "bogus", false); err == nil {
 		t.Fatal("List() error = nil, want invalid status")
 	}
 }
@@ -725,5 +738,45 @@ func TestSavingsGoalService_Update_DeadlineOnCompletedGoalConflicts(t *testing.T
 	_, err := svc.Update(ctx, userID, goalID, UpdateSavingsGoalInput{Deadline: &newDeadline})
 	if !errors.Is(err, savingsgoal.ErrGoalCompleted) {
 		t.Fatalf("Update() error = %v, want ErrGoalCompleted", err)
+	}
+}
+
+func TestSavingsGoalService_Unarchive(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	goalID := uuid.New()
+	repo.goals[goalID] = savingsgoal.SavingsGoal{
+		ID: goalID, UserID: userID, TargetAmount: decimal.NewFromInt(1000),
+		Currency: "USDC", Deadline: testDeadline(), Category: savingsgoal.CategoryEducation,
+		Status: savingsgoal.GoalStatusArchived,
+	}
+	svc := NewSavingsGoalService(repo, nil)
+
+	goal, err := svc.Unarchive(ctx, userID, goalID)
+	if err != nil {
+		t.Fatalf("Unarchive() error = %v", err)
+	}
+	if goal.Status != savingsgoal.GoalStatusActive {
+		t.Fatalf("status = %q, want active", goal.Status)
+	}
+
+	// Unarchiving someone else's goal is not found.
+	if _, err := svc.Unarchive(ctx, uuid.New(), goalID); err != savingsgoal.ErrGoalNotFound {
+		t.Fatalf("Unarchive(other user) error = %v, want ErrGoalNotFound", err)
+	}
+
+	// Unarchiving a non-archived goal returns it unchanged (idempotent).
+	repo.goals[goalID] = savingsgoal.SavingsGoal{
+		ID: goalID, UserID: userID, TargetAmount: decimal.NewFromInt(1000),
+		Currency: "USDC", Deadline: testDeadline(), Category: savingsgoal.CategoryEducation,
+		Status: savingsgoal.GoalStatusActive,
+	}
+	active, err := svc.Unarchive(ctx, userID, goalID)
+	if err != nil {
+		t.Fatalf("Unarchive(active goal) error = %v", err)
+	}
+	if active.Status != savingsgoal.GoalStatusActive {
+		t.Fatalf("status = %q, want active", active.Status)
 	}
 }

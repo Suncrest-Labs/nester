@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -105,7 +106,6 @@ func (m *memoryGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.UUID, m
 	m.goals[goalID] = g
 	return nil
 }
-
 type memoryVaultRepo struct {
 	vaults map[uuid.UUID]vault.Vault
 }
@@ -235,6 +235,31 @@ func TestSavingsScheduleService_Create_ConflictOnSecondActive(t *testing.T) {
 	}
 	if _, err := svc.Create(context.Background(), userID, goalID, in); err != savingsschedule.ErrActiveScheduleExists {
 		t.Fatalf("second Create() error = %v, want ErrActiveScheduleExists", err)
+	}
+}
+
+func TestSavingsScheduleService_Create_RejectsArchivedGoal(t *testing.T) {
+	userID := uuid.New()
+	goalID := uuid.New()
+	vaultID := uuid.New()
+
+	svc := NewSavingsScheduleService(
+		&memoryScheduleRepo{schedules: map[uuid.UUID]savingsschedule.SavingsSchedule{}},
+		&memoryGoalRepo{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+			goalID: {ID: goalID, UserID: userID, Status: savingsgoal.GoalStatusArchived},
+		}},
+		&memoryVaultRepo{vaults: map[uuid.UUID]vault.Vault{
+			vaultID: {ID: vaultID, UserID: userID},
+		}},
+		decimal.Zero,
+	)
+	_, err := svc.Create(context.Background(), userID, goalID, CreateSavingsScheduleInput{
+		Amount:    decimal.RequireFromString("10"),
+		Frequency: "monthly",
+		VaultID:   vaultID,
+	})
+	if !errors.Is(err, savingsgoal.ErrGoalArchived) {
+		t.Fatalf("Create() error = %v, want ErrGoalArchived", err)
 	}
 }
 

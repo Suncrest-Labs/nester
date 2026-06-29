@@ -61,7 +61,7 @@ func (m *mockSavingsGoalService) Get(_ context.Context, userID, goalID uuid.UUID
 	return g, nil
 }
 
-func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, category, status string) ([]savingsgoal.SavingsGoal, error) {
+func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
 	if category != "" {
 		if _, err := savingsgoal.ParseCategory(category); err != nil {
 			return nil, err
@@ -79,7 +79,11 @@ func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, categ
 		if category != "" && string(g.Category) != category {
 			continue
 		}
-		if filterStatus != "" && g.Status != filterStatus {
+		if filterStatus != "" {
+			if g.Status != filterStatus {
+				continue
+			}
+		} else if !includeArchived && g.Status == savingsgoal.GoalStatusArchived {
 			continue
 		}
 		out = append(out, g)
@@ -160,6 +164,16 @@ func (m *mockSavingsGoalService) Archive(_ context.Context, userID, goalID uuid.
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
 	g.Status = savingsgoal.GoalStatusArchived
+	m.goals[goalID] = g
+	return g, nil
+}
+
+func (m *mockSavingsGoalService) Unarchive(_ context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	g.Status = savingsgoal.GoalStatusActive
 	m.goals[goalID] = g
 	return g, nil
 }
@@ -424,6 +438,82 @@ func TestSavingsGoalHandler_Archive(t *testing.T) {
 	}
 	if goal.Status != savingsgoal.GoalStatusArchived {
 		t.Fatalf("archived goal status = %q, want archived", goal.Status)
+	}
+}
+
+func TestSavingsGoalHandler_Unarchive(t *testing.T) {
+	userID := uuid.New()
+	goalID := uuid.New()
+	svc := &mockSavingsGoalService{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+		goalID: {ID: goalID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
+			Currency: "USDC", Category: savingsgoal.CategoryOther, Status: savingsgoal.GoalStatusArchived},
+	}}
+	h := NewSavingsGoalHandler(svc)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	req, _ := http.NewRequest(http.MethodPatch,
+		server.URL+"/api/v1/users/savings-goals/"+goalID.String()+"/unarchive", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unarchive status = %d, want 200", resp.StatusCode)
+	}
+
+	var envelope response.Response
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(envelope.Data)
+	var goal savingsgoal.SavingsGoal
+	if err := json.Unmarshal(data, &goal); err != nil {
+		t.Fatal(err)
+	}
+	if goal.Status != savingsgoal.GoalStatusActive {
+		t.Fatalf("unarchived goal status = %q, want active", goal.Status)
+	}
+}
+
+func TestSavingsGoalHandler_List_ExcludesArchivedByDefault(t *testing.T) {
+	userID := uuid.New()
+	activeID, archivedID := uuid.New(), uuid.New()
+	svc := &mockSavingsGoalService{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+		activeID: {ID: activeID, UserID: userID, TargetAmount: decimal.NewFromInt(1000),
+			Currency: "USDC", Category: savingsgoal.CategoryEducation, Status: savingsgoal.GoalStatusActive},
+		archivedID: {ID: archivedID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
+			Currency: "USDC", Category: savingsgoal.CategoryOther, Status: savingsgoal.GoalStatusArchived},
+	}}
+	h := NewSavingsGoalHandler(svc)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	// Default list must exclude archived.
+	resp, err := http.Get(server.URL + "/api/v1/users/savings-goals")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	goals := decodeGoalList(t, resp)
+	if len(goals) != 1 || goals[0].ID != activeID {
+		t.Fatalf("default list = %+v, want only the active goal", goals)
+	}
+
+	// include_archived=true must return both.
+	resp2, err := http.Get(server.URL + "/api/v1/users/savings-goals?include_archived=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	all := decodeGoalList(t, resp2)
+	if len(all) != 2 {
+		t.Fatalf("include_archived list = %d goals, want 2", len(all))
 	}
 }
 

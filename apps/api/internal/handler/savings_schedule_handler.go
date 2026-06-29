@@ -147,6 +147,8 @@ func (h *SavingsScheduleHandler) writeError(w http.ResponseWriter, r *http.Reque
 	switch {
 	case errors.Is(err, savingsgoal.ErrGoalNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("savings goal"))
+	case errors.Is(err, savingsgoal.ErrGoalArchived):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_ARCHIVED", err.Error()))
 	case errors.Is(err, savingsschedule.ErrScheduleNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("savings schedule"))
 	case errors.Is(err, savingsschedule.ErrActiveScheduleExists):

@@ -21,6 +21,9 @@ var (
 	ErrGoalCompleted = errors.New("savings goal already completed")
 	// ErrGoalPaused is returned when an action requires the goal to be active.
 	ErrGoalPaused = errors.New("savings goal is paused")
+	// ErrGoalArchived is returned when an operation is not allowed on an archived goal
+	// (e.g. adding a new contribution schedule).
+	ErrGoalArchived = errors.New("savings goal is archived")
 )
 
 const (

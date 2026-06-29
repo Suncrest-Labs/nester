@@ -52,13 +52,16 @@ func (s *GoalProgressService) IsGoalCompleted(ctx context.Context, goalID, userI
 	if goal.UserID != userID {
 		return false, "", savingsgoal.ErrGoalNotFound
 	}
-	balance, err := s.goals.SumVaultBalance(ctx, userID, goal.Currency)
-	if err != nil {
-		return false, "", err
-	}
 	name := goal.Description
 	if name == "" {
 		name = "your goal"
+	}
+	if goal.Status == savingsgoal.GoalStatusArchived || goal.Status == savingsgoal.GoalStatusCompleted {
+		return true, name, nil
+	}
+	balance, err := s.goals.SumVaultBalance(ctx, userID, goal.Currency)
+	if err != nil {
+		return false, "", err
 	}
 	return balance.GreaterThanOrEqual(goal.TargetAmount), name, nil
 }

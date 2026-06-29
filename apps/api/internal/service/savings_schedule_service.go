@@ -60,6 +60,9 @@ func (s *SavingsScheduleService) Create(
 	if goal.UserID != userID {
 		return savingsschedule.SavingsSchedule{}, savingsgoal.ErrGoalNotFound
 	}
+	if goal.Status == savingsgoal.GoalStatusArchived {
+		return savingsschedule.SavingsSchedule{}, fmt.Errorf("%w: cannot add contributions to an archived goal", savingsgoal.ErrGoalArchived)
+	}
 
 	frequency, err := savingsschedule.ParseFrequency(in.Frequency)
 	if err != nil {
