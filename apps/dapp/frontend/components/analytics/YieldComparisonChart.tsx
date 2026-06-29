@@ -136,14 +136,14 @@ export function YieldComparisonChart({
               <XAxis
                 dataKey="date"
                 tick={{ fontSize: 11, fill: "rgba(0,0,0,0.35)" }}
-                tickFormatter={(v: string) => {
-                  const d = new Date(v);
+                tickFormatter={(v) => {
+                  const d = new Date(String(v));
                   return `${d.getMonth() + 1}/${d.getDate()}`;
                 }}
               />
               <YAxis
                 tick={{ fontSize: 11, fill: "rgba(0,0,0,0.35)" }}
-                tickFormatter={(v: number) => `${v.toFixed(1)}%`}
+                tickFormatter={(v) => `${Number(v).toFixed(1)}%`}
                 width={42}
               />
               <Tooltip

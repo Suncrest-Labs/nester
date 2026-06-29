@@ -251,7 +251,7 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
                             : String(value ?? ""),
                           String(name) === "total" ? "Total Balance" : String(name) === "principal" ? "Principal" : "Yield"
                         ]}
-                        labelFormatter={(month: number) => `Month ${month}`}
+                        labelFormatter={(month) => `Month ${month}`}
                         contentStyle={{
                           backgroundColor: "white",
                           border: "1px solid #e5e7eb",
