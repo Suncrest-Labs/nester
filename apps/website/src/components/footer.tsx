@@ -21,7 +21,8 @@ const NAV_COMMANDS = [
       { name: "Documentation", href: "#" },
       { name: "GitHub", href: "#" },
       { name: "API Reference", href: "#" },
-      { name: "Bug Bounty", href: "#" },
+      { name: "Security", href: "/security" },
+      { name: "Bug Bounty", href: "/security#bug-bounty" },
     ],
   },
   {
