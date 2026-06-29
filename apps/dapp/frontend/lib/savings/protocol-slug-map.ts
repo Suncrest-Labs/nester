@@ -6,7 +6,7 @@ import type { SavingsVaultType } from "@/lib/savings/vault-definitions";
  */
 export const VAULT_PROTOCOL_SLUGS: Record<SavingsVaultType, string[]> = {
   flexible: ["blend"],
-  "auto-compound": ["blend", "lobstr"],
-  "stablecoin-yield": ["blend", "aquarius", "soroswap"],
-  custom: ["blend"],
+  "auto-compound": ["aqua"],
+  "stablecoin-yield": ["ultrastellar"],
+  custom: [],
 };

@@ -21,7 +21,7 @@ const mockPools: YieldPool[] = [
   },
   {
     pool: "p2",
-    project: "lobstr",
+    project: "aqua",
     symbol: "USDC",
     apy: 8.5,
     apyBase: 8.0,
@@ -33,7 +33,7 @@ const mockPools: YieldPool[] = [
   },
   {
     pool: "p3",
-    project: "aquarius",
+    project: "ultrastellar",
     symbol: "USDC",
     apy: 10.0,
     apyBase: 9.5,

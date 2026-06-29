@@ -267,11 +267,13 @@ function SavingsVaultCard({
     index,
     onDeposit,
     isApyLoading,
+    isStale,
 }: {
     vault: SavingsVault;
     index: number;
     onDeposit: (v: SavingsVault) => void;
     isApyLoading?: boolean;
+    isStale?: boolean;
 }) {
     const Icon = TYPE_ICONS[vault.type];
 
@@ -300,7 +302,10 @@ function SavingsVaultCard({
                         {isApyLoading ? (
                             <div className="ml-auto h-8 w-16 animate-pulse rounded bg-black/10" aria-label="Loading APY" />
                         ) : (
-                            <p className="font-mono text-2xl text-black leading-none">{vault.apyLabel}</p>
+                            <div className="flex items-center justify-end gap-1.5">
+                                <p className="font-mono text-2xl text-black leading-none">{vault.apyLabel}</p>
+                                {isStale && <InfoTooltip text="Data may be a few minutes old" />}
+                            </div>
                         )}
                         <p className="text-[10px] text-black/60 font-medium uppercase tracking-wide mt-1">APY</p>
                     </div>
@@ -898,11 +903,14 @@ export default function SavingsPage() {
     const [planModalOpen, setPlanModalOpen] = useState(false);
     const [goalModalOpen, setGoalModalOpen] = useState(false);
 
-     const { data: yieldPools, isLoading: yieldLoading, isError: yieldError } = useYieldOpportunities();
-     const savingsVaults = useMemo(
-         () => buildSavingsVaults(SAVINGS_VAULT_DEFINITIONS, yieldPools, yieldError),
-         [yieldPools, yieldError]
-     );
+    const { data: yieldData, isLoading: yieldLoading, isError: yieldError } = useYieldOpportunities();
+    const yieldPools = yieldData?.pools;
+    const isStale = yieldData?.meta?.stale;
+
+    const savingsVaults = useMemo(
+        () => buildSavingsVaults(SAVINGS_VAULT_DEFINITIONS, yieldPools, yieldError),
+        [yieldPools, yieldError]
+    );
 
      const filtered =
          filter === "all"
@@ -1065,6 +1073,7 @@ export default function SavingsPage() {
                                 index={i}
                                 onDeposit={setSelectedVault}
                                 isApyLoading={yieldLoading}
+                                isStale={isStale}
                             />
                         ))}
                     </div>

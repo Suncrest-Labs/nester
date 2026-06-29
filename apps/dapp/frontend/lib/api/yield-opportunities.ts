@@ -17,17 +17,18 @@ type ApiEnvelope<T> = {
   success: boolean;
   data: T;
   error?: { message: string };
+  meta?: { stale?: boolean };
 };
 
 export async function fetchYieldOpportunities(
   chain = "Stellar",
   limit = 50
-): Promise<YieldPool[]> {
+): Promise<{ pools: YieldPool[], meta?: { stale?: boolean } }> {
   const params = new URLSearchParams({ chain, limit: String(limit) });
   const res = await fetch(`${config.apiUrl}/yield-opportunities?${params}`);
   const json = (await res.json()) as ApiEnvelope<YieldPool[]>;
   if (!res.ok || !json.success) {
     throw new Error(json.error?.message ?? `yield-opportunities: ${res.status}`);
   }
-  return json.data ?? [];
+  return { pools: json.data ?? [], meta: json.meta };
 }
