@@ -476,7 +476,7 @@ func TestSavingsGoalHandler_Unarchive(t *testing.T) {
 		goalID: {ID: goalID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
 			Currency: "USDC", Category: savingsgoal.CategoryOther, Status: savingsgoal.GoalStatusArchived},
 	}}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	server := httptest.NewServer(withAuthUser(mux, userID))
@@ -516,7 +516,7 @@ func TestSavingsGoalHandler_List_ExcludesArchivedByDefault(t *testing.T) {
 		archivedID: {ID: archivedID, UserID: userID, TargetAmount: decimal.NewFromInt(500),
 			Currency: "USDC", Category: savingsgoal.CategoryOther, Status: savingsgoal.GoalStatusArchived},
 	}}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	server := httptest.NewServer(withAuthUser(mux, userID))
@@ -548,7 +548,7 @@ func TestSavingsGoalHandler_List_ExcludesArchivedByDefault(t *testing.T) {
 func TestSavingsGoalHandler_SplitDeposit(t *testing.T) {
 	userID := uuid.New()
 	svc := &mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	handler := withAuthUser(mux, userID)

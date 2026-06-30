@@ -64,6 +64,48 @@ func (m *mockSavingsScheduleService) Cancel(_ context.Context, userID, goalID, s
 	return nil
 }
 
+func (m *mockSavingsScheduleService) GetActive(_ context.Context, userID, goalID uuid.UUID) (*savingsschedule.SavingsSchedule, error) {
+	for _, s := range m.schedules {
+		if s.UserID == userID && s.GoalID == goalID && s.IsActive {
+			return &s, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockSavingsScheduleService) Update(_ context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsScheduleInput) (savingsschedule.SavingsSchedule, error) {
+	for id, s := range m.schedules {
+		if s.UserID == userID && s.GoalID == goalID && s.IsActive {
+			if in.Amount != nil {
+				s.Amount = *in.Amount
+			}
+			if in.Currency != nil {
+				s.Currency = *in.Currency
+			}
+			if in.Frequency != nil {
+				s.Frequency = savingsschedule.Frequency(*in.Frequency)
+			}
+			if in.VaultID != nil {
+				s.VaultID = *in.VaultID
+			}
+			m.schedules[id] = s
+			return s, nil
+		}
+	}
+	return savingsschedule.SavingsSchedule{}, savingsschedule.ErrScheduleNotFound
+}
+
+func (m *mockSavingsScheduleService) DeleteActive(_ context.Context, userID, goalID uuid.UUID) error {
+	for id, s := range m.schedules {
+		if s.UserID == userID && s.GoalID == goalID && s.IsActive {
+			s.IsActive = false
+			m.schedules[id] = s
+			return nil
+		}
+	}
+	return savingsschedule.ErrScheduleNotFound
+}
+
 func TestSavingsScheduleHandler_CreateListCancel(t *testing.T) {
 	userID := uuid.New()
 	goalID := uuid.New()

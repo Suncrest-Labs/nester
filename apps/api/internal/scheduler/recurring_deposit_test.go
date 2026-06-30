@@ -64,6 +64,10 @@ func (f fakeGoalChecker) IsGoalCompleted(context.Context, uuid.UUID, uuid.UUID) 
 	return f.completed, f.name, nil
 }
 
+func (f fakeGoalChecker) IsGoalPausedOrArchived(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 type recordingDepositNotifier struct {
 	mu    sync.Mutex
 	calls []notifyCall

@@ -56,6 +56,34 @@ func (m *memoryScheduleRepo) Cancel(_ context.Context, scheduleID, goalID, userI
 	return nil
 }
 
+func (m *memoryScheduleRepo) GetActiveByGoal(_ context.Context, goalID, userID uuid.UUID) (*savingsschedule.SavingsSchedule, error) {
+	for _, s := range m.schedules {
+		if s.GoalID == goalID && s.UserID == userID && s.IsActive {
+			return &s, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *memoryScheduleRepo) CancelActiveByGoal(_ context.Context, goalID, userID uuid.UUID) error {
+	for id, s := range m.schedules {
+		if s.GoalID == goalID && s.UserID == userID && s.IsActive {
+			s.IsActive = false
+			m.schedules[id] = s
+			return nil
+		}
+	}
+	return savingsschedule.ErrScheduleNotFound
+}
+
+func (m *memoryScheduleRepo) Update(_ context.Context, schedule *savingsschedule.SavingsSchedule) error {
+	if _, ok := m.schedules[schedule.ID]; !ok {
+		return savingsschedule.ErrScheduleNotFound
+	}
+	m.schedules[schedule.ID] = *schedule
+	return nil
+}
+
 func (m *memoryScheduleRepo) ListDue(context.Context, time.Time) ([]savingsschedule.SavingsSchedule, error) {
 	return nil, nil
 }

@@ -62,7 +62,7 @@ func (d *directGoalProgressChecker) IsGoalPausedOrArchived(ctx context.Context, 
 	if goal.UserID != userID {
 		return false, savingsgoal.ErrGoalNotFound
 	}
-	return goal.Status == savingsgoal.StatusPaused || goal.Status == savingsgoal.StatusArchived, nil
+	return goal.Status == savingsgoal.GoalStatusPaused || goal.Status == savingsgoal.GoalStatusArchived, nil
 }
 
 func applySavingsScheduleMigrations(t *testing.T, db *sql.DB) {
