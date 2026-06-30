@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Briefcase,
   GraduationCap,
@@ -19,6 +20,7 @@ import type { SavingsGoal } from "@/lib/api/savings-goals";
 import { useSavingsGoals } from "@/hooks/useSavingsGoals";
 import { useWallet } from "@/components/wallet-provider";
 import { DeadlineBadge } from "@/components/savings/DeadlineBadge";
+import { SavingsOnboardingWizard } from "@/components/savings/SavingsOnboardingWizard";
 
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   emergency_fund: Shield,
@@ -143,6 +145,7 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
 export function SavingsGoalsSection({ onCreateGoal }: { onCreateGoal?: () => void }) {
   const { isConnected } = useWallet();
   const { data: goals, isLoading, isError, refetch, isFetching } = useSavingsGoals();
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   if (!isConnected) {
     return (
@@ -195,27 +198,34 @@ export function SavingsGoalsSection({ onCreateGoal }: { onCreateGoal?: () => voi
           </button>
         </div>
       ) : !goals?.length ? (
-        <div
-          className="rounded-3xl border border-black/8 bg-white p-10 text-center"
-          data-testid="savings-goals-empty"
-        >
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-black/5">
-            <Target className="h-6 w-6 text-black/40" aria-hidden="true" />
-          </div>
-          <p className="text-sm font-semibold text-black">No savings goals yet</p>
-          <p className="mx-auto mt-1 max-w-xs text-xs text-black/60 font-medium">
-            Set a target amount and deadline to start tracking your progress.
-          </p>
-          {onCreateGoal && (
+        <>
+          <div
+            className="rounded-3xl border border-black/8 bg-white p-10 text-center"
+            data-testid="savings-goals-empty"
+          >
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-black/5">
+              <Target className="h-6 w-6 text-black/40" aria-hidden="true" />
+            </div>
+            <p className="text-sm font-semibold text-black">No savings goals yet</p>
+            <p className="mx-auto mt-1 max-w-xs text-xs text-black/60 font-medium">
+              Set a target amount and deadline to start tracking your progress.
+            </p>
             <button
               type="button"
-              onClick={onCreateGoal}
+              onClick={() => setShowOnboarding(true)}
               className="mt-5 rounded-xl bg-black px-6 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-75"
+              data-testid="savings-goals-start-onboarding"
             >
-              Create a Goal
+              Set up your first goal
             </button>
+          </div>
+          {showOnboarding && (
+            <SavingsOnboardingWizard
+              onComplete={() => setShowOnboarding(false)}
+              onDismiss={() => setShowOnboarding(false)}
+            />
           )}
-        </div>
+        </>
       ) : (
         <div className={cn("grid gap-3", goals.length > 1 && "sm:grid-cols-2")}>
           {goals.map((goal) => (

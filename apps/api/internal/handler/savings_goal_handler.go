@@ -33,6 +33,9 @@ type SavingsGoalManager interface {
 	Archive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Unarchive(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	DepositSplit(ctx context.Context, userID uuid.UUID, in service.DepositSplitInput) (service.SplitDepositResult, error)
+	Share(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
+	Unshare(ctx context.Context, userID, goalID uuid.UUID) error
+	GetShared(ctx context.Context, token uuid.UUID) (savingsgoal.SharedGoalView, error)
 }
 
 type SavingsGoalHandler struct {
@@ -65,6 +68,10 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/unarchive", h.unarchive)
 	// #719 multi-goal deposit split
 	mux.HandleFunc("POST /api/v1/users/savings-goals/deposit", h.splitDeposit)
+	// Goal sharing — unauthenticated read is public; share/unshare require auth.
+	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/share", h.share)
+	mux.HandleFunc("DELETE /api/v1/users/savings-goals/{id}/share", h.unshare)
+	mux.HandleFunc("GET /api/v1/savings-goals/shared/{token}", h.getShared)
 }
 
 type createSavingsGoalRequest struct {
@@ -486,4 +493,59 @@ func parseTargetAmount(n json.Number) (decimal.Decimal, error) {
 
 func readJSONBody(r *http.Request) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r.Body, 8*1024))
+}
+
+func (h *SavingsGoalHandler) share(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	goal, err := h.svc.Share(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(goal))
+}
+
+func (h *SavingsGoalHandler) unshare(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	if err := h.svc.Unshare(r.Context(), userID, goalID); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *SavingsGoalHandler) getShared(w http.ResponseWriter, r *http.Request) {
+	rawToken := r.PathValue("token")
+	token, err := uuid.Parse(rawToken)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("share token must be a valid UUID"))
+		return
+	}
+	view, err := h.svc.GetShared(r.Context(), token)
+	if err != nil {
+		if errors.Is(err, savingsgoal.ErrGoalNotFound) {
+			response.WriteJSON(w, http.StatusNotFound, response.NotFound("shared goal"))
+			return
+		}
+		logpkg.FromContext(r.Context()).Error("get shared goal failed", "error", err.Error())
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(view))
 }

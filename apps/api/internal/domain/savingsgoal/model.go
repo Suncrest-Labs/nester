@@ -98,6 +98,10 @@ type SavingsGoalsSummary struct {
 	// NextDeadline is the nearest future deadline across active goals, or nil.
 	// No omitempty so it serializes as JSON null when absent.
 	NextDeadline *time.Time `json:"next_deadline"`
+	// CurrentStreak is the number of consecutive weeks the user made at least one deposit.
+	CurrentStreak int `json:"current_streak"`
+	// LongestStreak is the user's all-time best consecutive-week streak.
+	LongestStreak int `json:"longest_streak"`
 }
 
 // ValidateEmoji checks that s is a single emoji character (or empty).
@@ -176,6 +180,24 @@ type SavingsGoal struct {
 	AvgWeeklyDeposit       decimal.Decimal `json:"avg_weekly_deposit"`
 	ProjectedDaysToComplete *int            `json:"projected_days_to_completion,omitempty"`
 	OnTrack                bool            `json:"on_track"`
+	// Sharing fields.
+	ShareToken      *uuid.UUID `json:"share_token,omitempty"`
+	ShareEnabledAt  *time.Time `json:"share_enabled_at,omitempty"`
+	IsShared        bool       `json:"is_shared"`
+}
+
+// SharedGoalView is the read-only public projection of a savings goal exposed
+// via the unauthenticated share link. It deliberately omits user PII.
+type SharedGoalView struct {
+	Name        string          `json:"name"`
+	Emoji       string          `json:"emoji,omitempty"`
+	TargetAmount decimal.Decimal `json:"target_amount"`
+	Currency    string          `json:"currency"`
+	CurrentAmount decimal.Decimal `json:"current_amount"`
+	ProgressPct float64         `json:"progress_pct"`
+	Deadline    time.Time       `json:"deadline"`
+	Category    GoalCategory    `json:"category"`
+	Status      string          `json:"status"`
 }
 
 // GoalDeposit records a single allocation in a multi-goal deposit split (#719).
@@ -205,4 +227,10 @@ type Repository interface {
 	RecordGoalDeposits(ctx context.Context, deposits []GoalDeposit) error
 	// SumGoalDeposits returns the total deposited to a specific goal via deposit-split (#719).
 	SumGoalDeposits(ctx context.Context, goalID uuid.UUID) (decimal.Decimal, error)
+	// SetShareToken enables public sharing by persisting a UUID token on the goal.
+	SetShareToken(ctx context.Context, goalID, userID uuid.UUID, token uuid.UUID) error
+	// ClearShareToken removes the share token, revoking public access.
+	ClearShareToken(ctx context.Context, goalID, userID uuid.UUID) error
+	// GetByShareToken returns the goal whose share_token matches. Returns ErrGoalNotFound if none.
+	GetByShareToken(ctx context.Context, token uuid.UUID) (*SavingsGoal, error)
 }

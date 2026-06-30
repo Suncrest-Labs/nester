@@ -297,6 +297,50 @@ func summarizeProtocol(name string, pools []YieldPool) ProtocolSummary {
 	}
 }
 
+// ProtocolTVL returns the current aggregate TVL (USD) for a protocol by summing
+// all pools matching the slug. It satisfies the scheduler.ProtocolTVLFetcher interface.
+func (s *YieldService) ProtocolTVL(ctx context.Context, protocolSlug string) (float64, error) {
+	resp, err := s.GetYieldOpportunities(ctx, "Stellar", 0)
+	if err != nil {
+		return 0, err
+	}
+	key := strings.ToLower(strings.TrimSpace(protocolSlug))
+	var total float64
+	for _, p := range resp.Pools {
+		if strings.ToLower(p.Project) == key {
+			total += p.TVLUsd
+		}
+	}
+	return total, nil
+}
+
+// ProtocolDetail is an enriched summary of a single protocol with a 24h TVL change field.
+type ProtocolDetail struct {
+	ProtocolSummary
+	TVLChange24hPct *float64 `json:"tvl_change_24h"`
+}
+
+// GetProtocol returns detail for a single protocol slug, without requiring comparison of
+// multiple protocols (unlike CompareProtocols which needs 2–5).
+func (s *YieldService) GetProtocol(ctx context.Context, slug string) (*ProtocolDetail, error) {
+	resp, err := s.GetYieldOpportunities(ctx, "Stellar", 0)
+	if err != nil {
+		return nil, err
+	}
+	key := strings.ToLower(strings.TrimSpace(slug))
+	var pools []YieldPool
+	for _, p := range resp.Pools {
+		if strings.ToLower(p.Project) == key {
+			pools = append(pools, p)
+		}
+	}
+	if len(pools) == 0 {
+		return nil, fmt.Errorf("protocol %q not found", slug)
+	}
+	summary := summarizeProtocol(slug, pools)
+	return &ProtocolDetail{ProtocolSummary: summary}, nil
+}
+
 // fetchFromUpstream retrieves and processes yield data from DeFiLlama
 func (s *YieldService) fetchFromUpstream(ctx context.Context, chain string, limit int) ([]YieldPool, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", s.defiLlamaURL+"/pools", nil)

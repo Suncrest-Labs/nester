@@ -51,6 +51,8 @@ const (
 	EventKYCRejected               EventType = "kyc_rejected"
 	EventGoalMilestone             EventType = "goal_milestone"
 	EventScheduledDepositCompleted EventType = "scheduled_deposit_completed"
+	EventSavingsStreak             EventType = "savings_streak_milestone"
+	EventProtocolHealthAlert       EventType = "protocol_health_alert"
 )
 
 // ChannelKind is the transport a notification is delivered over.
@@ -77,6 +79,8 @@ var eventChannelMatrix = map[EventType][]ChannelKind{
 	EventKYCRejected:               {ChannelEmail},
 	EventGoalMilestone:             {ChannelPush},
 	EventScheduledDepositCompleted: {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventSavingsStreak:             {ChannelPush},
+	EventProtocolHealthAlert:       {ChannelEmail, ChannelPush, ChannelWebSocket},
 }
 
 // ChannelsFor returns the channels configured to deliver the given event,

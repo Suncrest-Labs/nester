@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/protocoltvl"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
@@ -19,6 +21,8 @@ import (
 type YieldOpportunitiesProvider interface {
 	GetYieldOpportunitiesByTier(ctx context.Context, chain string, limit int, tier string) (*service.YieldOpportunitiesResponse, error)
 	CompareProtocols(ctx context.Context, protocols []string) ([]service.ProtocolSummary, error)
+	GetProtocol(ctx context.Context, slug string) (*service.ProtocolDetail, error)
+	ProtocolTVL(ctx context.Context, protocolSlug string) (float64, error)
 }
 
 // YieldBookmarkSlugLister lists bookmark slugs for sorting.
@@ -31,16 +35,24 @@ type YieldBookmarkSlugLister interface {
 type YieldHandler struct {
 	svc       YieldOpportunitiesProvider
 	bookmarks YieldBookmarkSlugLister
+	tvlRepo   protocoltvl.Repository
 }
 
 func NewYieldHandler(svc YieldOpportunitiesProvider, bookmarks YieldBookmarkSlugLister) *YieldHandler {
 	return &YieldHandler{svc: svc, bookmarks: bookmarks}
 }
 
+// SetTVLRepository wires in the protocol TVL snapshot store so the per-protocol
+// endpoint can include tvl_change_24h.
+func (h *YieldHandler) SetTVLRepository(repo protocoltvl.Repository) {
+	h.tvlRepo = repo
+}
+
 func (h *YieldHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/yield-opportunities", h.list)
 	mux.HandleFunc("GET /api/v1/yield-opportunities/compare", h.compare)
 	mux.HandleFunc("GET /api/v1/yields", h.list)
+	mux.HandleFunc("GET /api/v1/yields/{protocol_slug}", h.getProtocol)
 }
 
 func (h *YieldHandler) compare(w http.ResponseWriter, r *http.Request) {
@@ -120,4 +132,31 @@ func (h *YieldHandler) list(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Data:    responseData,
 	})
+}
+
+func (h *YieldHandler) getProtocol(w http.ResponseWriter, r *http.Request) {
+	slug := strings.TrimSpace(r.PathValue("protocol_slug"))
+	if slug == "" {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("protocol_slug is required"))
+		return
+	}
+
+	detail, err := h.svc.GetProtocol(r.Context(), slug)
+	if err != nil {
+		logpkg.FromContext(r.Context()).Error("yield get protocol failed", "slug", slug, "error", err.Error())
+		response.WriteJSON(w, http.StatusNotFound, response.Err(http.StatusNotFound, "PROTOCOL_NOT_FOUND", "protocol not found"))
+		return
+	}
+
+	// Enrich with tvl_change_24h when the snapshot repository is wired in.
+	if h.tvlRepo != nil {
+		ago24h := time.Now().Add(-24 * time.Hour)
+		prev, err := h.tvlRepo.SnapshotAt(r.Context(), strings.ToLower(slug), ago24h)
+		if err == nil && prev != nil && prev.TVLUSD > 0 {
+			change := (detail.TVLUsd - prev.TVLUSD) / prev.TVLUSD * 100
+			detail.TVLChange24hPct = &change
+		}
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(detail))
 }

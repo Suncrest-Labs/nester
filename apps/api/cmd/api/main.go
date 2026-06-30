@@ -377,10 +377,28 @@ func run() error {
 	// Yield opportunities (DeFiLlama Stellar pools)
 	yieldSvc := service.NewYieldService("")
 	yieldBookmarkSvc := service.NewYieldBookmarkService(db, yieldSvc)
+	protocolTVLRepo := postgres.NewProtocolTVLRepository(db)
 	yieldHandler := handler.NewYieldHandler(yieldSvc, yieldBookmarkSvc)
+	yieldHandler.SetTVLRepository(protocolTVLRepo)
 	yieldHandler.Register(mux)
 	yieldBookmarkHandler := handler.NewYieldBookmarkHandler(yieldBookmarkSvc)
 	yieldBookmarkHandler.Register(mux)
+
+	// Protocol health checker — alerts users when a protocol's TVL drops >20% in 24h.
+	protocolHealthChecker := scheduler.NewProtocolHealthChecker(
+		scheduler.ProtocolHealthConfig{
+			Enabled:  true,
+			Interval: 30 * time.Minute,
+		},
+		vaultRepository,
+		yieldSvc,
+		protocolTVLRepo,
+		scheduler.DispatcherProtocolHealthNotifier{Dispatcher: notificationDispatcher},
+		baseLogger.WithGroup("protocol-health"),
+	)
+	protocolHealthCtx, cancelProtocolHealth := context.WithCancel(context.Background())
+	defer cancelProtocolHealth()
+	go protocolHealthChecker.Run(protocolHealthCtx)
 
 	// User watchlist
 	watchlistSvc := service.NewWatchlistService(db)
@@ -409,6 +427,9 @@ func run() error {
 			},
 		},
 	)
+	savingsStreakRepo := postgres.NewSavingsStreakRepository(db)
+	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
+	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
 
 	minDeposit, _ := decimal.NewFromString(cfg.RecurringDeposit().MinDepositAmount())
 	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)
@@ -485,6 +506,7 @@ func run() error {
 		{PathPrefix: "/api/v1/auth/", Public: true},
 		{PathPrefix: "/api/v1/banks/", Public: true},
 		{PathPrefix: "/api/v1/yields/", Public: true},
+		{PathPrefix: "/api/v1/savings-goals/shared/", Public: true},
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}

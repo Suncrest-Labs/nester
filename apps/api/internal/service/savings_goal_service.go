@@ -11,18 +11,40 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsstreak"
 )
 
 type SavingsGoalService struct {
-	repo     savingsgoal.Repository
-	notifier GoalMilestoneNotifier
+	repo           savingsgoal.Repository
+	notifier       GoalMilestoneNotifier
+	streakRepo     savingsstreak.Repository
+	streakNotifier StreakMilestoneNotifier
 }
 
 func NewSavingsGoalService(repo savingsgoal.Repository, notifier GoalMilestoneNotifier) *SavingsGoalService {
 	if notifier == nil {
 		notifier = noopGoalMilestoneNotifier{}
 	}
-	return &SavingsGoalService{repo: repo, notifier: notifier}
+	return &SavingsGoalService{
+		repo:           repo,
+		notifier:       notifier,
+		streakNotifier: noopStreakMilestoneNotifier{},
+	}
+}
+
+// SetStreakRepository attaches the streak persistence layer. When set, Summary()
+// computes and persists the user's deposit streak alongside the goal totals.
+func (s *SavingsGoalService) SetStreakRepository(repo savingsstreak.Repository) {
+	s.streakRepo = repo
+}
+
+// SetStreakNotifier attaches a notifier for streak badge milestones.
+func (s *SavingsGoalService) SetStreakNotifier(n StreakMilestoneNotifier) {
+	if n == nil {
+		s.streakNotifier = noopStreakMilestoneNotifier{}
+		return
+	}
+	s.streakNotifier = n
 }
 
 type CreateSavingsGoalInput struct {
@@ -261,6 +283,15 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 		summary.OverallProgressPct = pct
 	}
 
+	// Streak — only computed when a streak repository is wired in.
+	if s.streakRepo != nil {
+		current, longest, err := s.updateStreak(ctx, userID)
+		if err == nil {
+			summary.CurrentStreak = current
+			summary.LongestStreak = longest
+		}
+	}
+
 	return summary, nil
 }
 
@@ -399,6 +430,64 @@ func (s *SavingsGoalService) Complete(ctx context.Context, userID, goalID uuid.U
 	return s.enrichProgress(ctx, *goal)
 }
 
+// Share generates a unique share token for the goal, enabling read-only public access.
+// If the goal already has a token, the existing token is returned unchanged.
+func (s *SavingsGoalService) Share(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.ShareToken == nil {
+		token := uuid.New()
+		if err := s.repo.SetShareToken(ctx, goalID, userID, token); err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		goal.ShareToken = &token
+		goal.IsShared = true
+	}
+	return s.enrichProgress(ctx, *goal)
+}
+
+// Unshare revokes the share token, making the goal private again.
+func (s *SavingsGoalService) Unshare(ctx context.Context, userID, goalID uuid.UUID) error {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return s.repo.ClearShareToken(ctx, goalID, userID)
+}
+
+// GetShared returns a public read-only view of a goal by its share token.
+// No user authentication is required.
+func (s *SavingsGoalService) GetShared(ctx context.Context, token uuid.UUID) (savingsgoal.SharedGoalView, error) {
+	goal, err := s.repo.GetByShareToken(ctx, token)
+	if err != nil {
+		return savingsgoal.SharedGoalView{}, err
+	}
+	enriched, err := s.enrichProgress(ctx, *goal)
+	if err != nil {
+		return savingsgoal.SharedGoalView{}, err
+	}
+	displayName := savingsgoal.GoalDisplayName(enriched)
+	return savingsgoal.SharedGoalView{
+		Name:          displayName,
+		Emoji:         enriched.Emoji,
+		TargetAmount:  enriched.TargetAmount,
+		Currency:      enriched.Currency,
+		CurrentAmount: enriched.CurrentAmount,
+		ProgressPct:   enriched.ProgressPct,
+		Deadline:      enriched.Deadline,
+		Category:      enriched.Category,
+		Status:        enriched.Status,
+	}, nil
+}
+
 // Archive moves a goal into the terminal "archived" state, hiding it without
 // deleting it. This is the only mutation allowed on a completed goal (#684);
 // already-archived goals are returned unchanged.
@@ -437,6 +526,84 @@ func (s *SavingsGoalService) Unarchive(ctx context.Context, userID, goalID uuid.
 	}
 	goal.Status = savingsgoal.GoalStatusActive
 	return s.enrichProgress(ctx, *goal)
+}
+
+// isoWeekKey returns an "YYYY-Www" string uniquely identifying the ISO calendar week of t.
+func isoWeekKey(t time.Time) string {
+	year, week := t.ISOWeek()
+	return fmt.Sprintf("%d-W%02d", year, week)
+}
+
+// updateStreak refreshes the user's savings streak based on whether a deposit
+// occurred in the current calendar week and returns (current, longest).
+func (s *SavingsGoalService) updateStreak(ctx context.Context, userID uuid.UUID) (int, int, error) {
+	now := time.Now().UTC()
+	currentWeek := isoWeekKey(now)
+
+	// Start of current ISO week (Monday 00:00 UTC).
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7 // Sunday → 7
+	}
+	weekStart := now.AddDate(0, 0, -(weekday - 1)).Truncate(24 * time.Hour)
+
+	// Any deposit amount > 0 in any supported currency counts.
+	var hasDepositThisWeek bool
+	for _, currency := range []string{"USDC", "XLM"} {
+		total, err := s.repo.SumRecentDeposits(ctx, userID, currency, weekStart)
+		if err != nil {
+			return 0, 0, err
+		}
+		if total.IsPositive() {
+			hasDepositThisWeek = true
+			break
+		}
+	}
+
+	streak, err := s.streakRepo.Get(ctx, userID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if streak == nil {
+		streak = &savingsstreak.SavingsStreak{UserID: userID}
+	}
+
+	// Determine previous week key for consecutive-week detection.
+	prevWeekStart := weekStart.AddDate(0, 0, -7)
+	prevWeek := isoWeekKey(prevWeekStart)
+
+	if hasDepositThisWeek && streak.LastDepositWeek != currentWeek {
+		if streak.LastDepositWeek == prevWeek {
+			streak.CurrentStreak++
+		} else {
+			// Gap detected — restart streak.
+			streak.CurrentStreak = 1
+		}
+		streak.LastDepositWeek = currentWeek
+		if streak.CurrentStreak > streak.LongestStreak {
+			streak.LongestStreak = streak.CurrentStreak
+		}
+	} else if !hasDepositThisWeek && streak.LastDepositWeek != "" && streak.LastDepositWeek < prevWeek {
+		// A full calendar week with no deposit: reset.
+		streak.CurrentStreak = 0
+	}
+
+	if err := s.streakRepo.Upsert(ctx, streak); err != nil {
+		return 0, 0, err
+	}
+
+	// Fire milestone notification asynchronously if applicable.
+	if hasDepositThisWeek && streak.IsNewMilestone(streak.CurrentStreak) {
+		milestone := streak.CurrentStreak
+		streak.NotifiedMilestones = append(streak.NotifiedMilestones, milestone)
+		_ = s.streakRepo.Upsert(ctx, streak)
+		uid := userID
+		go func() {
+			s.streakNotifier.SendStreakMilestone(context.Background(), uid, milestone)
+		}()
+	}
+
+	return streak.CurrentStreak, streak.LongestStreak, nil
 }
 
 func (s *SavingsGoalService) notifyMilestonesAsync(goal savingsgoal.SavingsGoal, milestones []int) {

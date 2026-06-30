@@ -178,6 +178,48 @@ func (m *mockSavingsGoalService) Unarchive(_ context.Context, userID, goalID uui
 	return g, nil
 }
 
+func (m *mockSavingsGoalService) Share(_ context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if g.ShareToken == nil {
+		token := uuid.New()
+		g.ShareToken = &token
+		g.IsShared = true
+	}
+	m.goals[goalID] = g
+	return g, nil
+}
+
+func (m *mockSavingsGoalService) Unshare(_ context.Context, userID, goalID uuid.UUID) error {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.ShareToken = nil
+	g.IsShared = false
+	m.goals[goalID] = g
+	return nil
+}
+
+func (m *mockSavingsGoalService) GetShared(_ context.Context, token uuid.UUID) (savingsgoal.SharedGoalView, error) {
+	for _, g := range m.goals {
+		if g.ShareToken != nil && *g.ShareToken == token {
+			return savingsgoal.SharedGoalView{
+				Name:          g.Description,
+				Emoji:         g.Emoji,
+				TargetAmount:  g.TargetAmount,
+				Currency:      g.Currency,
+				Deadline:      g.Deadline,
+				Category:      g.Category,
+				Status:        string(g.Status),
+			}, nil
+		}
+	}
+	return savingsgoal.SharedGoalView{}, savingsgoal.ErrGoalNotFound
+}
+
 func (m *mockSavingsGoalService) DepositSplit(_ context.Context, userID uuid.UUID, in service.DepositSplitInput) (service.SplitDepositResult, error) {
 	results := make([]service.GoalDepositResult, 0, len(in.Allocations))
 	for _, a := range in.Allocations {

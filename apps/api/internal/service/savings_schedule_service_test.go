@@ -140,6 +140,34 @@ func (m *memoryGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.UUID, m
 	m.goals[goalID] = g
 	return nil
 }
+func (m *memoryGoalRepo) SetShareToken(_ context.Context, goalID, userID uuid.UUID, token uuid.UUID) error {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.ShareToken = &token
+	g.IsShared = true
+	m.goals[goalID] = g
+	return nil
+}
+func (m *memoryGoalRepo) ClearShareToken(_ context.Context, goalID, userID uuid.UUID) error {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.ShareToken = nil
+	g.IsShared = false
+	m.goals[goalID] = g
+	return nil
+}
+func (m *memoryGoalRepo) GetByShareToken(_ context.Context, token uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	for _, g := range m.goals {
+		if g.ShareToken != nil && *g.ShareToken == token {
+			return &g, nil
+		}
+	}
+	return nil, savingsgoal.ErrGoalNotFound
+}
 type memoryVaultRepo struct {
 	vaults map[uuid.UUID]vault.Vault
 }

@@ -36,6 +36,21 @@ export interface SavingsGoal {
     next_run_at: string;
     status: string;
   };
+  /** Sharing. */
+  share_token?: string;
+  is_shared?: boolean;
+}
+
+export interface SharedGoalView {
+  name: string;
+  emoji?: string;
+  target_amount: string | number;
+  currency: string;
+  current_amount: string | number;
+  progress_pct: number;
+  deadline: string;
+  category?: string;
+  status?: string;
 }
 
 /** A single contribution toward a savings goal (#732). */
@@ -93,4 +108,15 @@ export const savingsGoals = {
       method: "POST",
       body: JSON.stringify({ action }),
     }),
+  share: (id: string) =>
+    apiRequest<SavingsGoal>(`/users/savings-goals/${id}/share`, { method: "POST" }),
+  unshare: (id: string) =>
+    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1"}/users/savings-goals/${id}/share`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("nester_token") ?? "" : ""}`,
+      },
+    }),
+  getShared: (token: string) =>
+    apiRequest<SharedGoalView>(`/savings-goals/shared/${token}`),
 };

@@ -35,11 +35,62 @@ func (r *SavingsGoalRepository) Create(ctx context.Context, goal *savingsgoal.Sa
 	).Scan(&goal.CreatedAt, &goal.UpdatedAt, &goal.Status)
 }
 
+func (r *SavingsGoalRepository) SetShareToken(ctx context.Context, goalID, userID uuid.UUID, token uuid.UUID) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET share_token = $1, share_enabled_at = NOW(), updated_at = NOW()
+		WHERE id = $2 AND user_id = $3
+	`, token, goalID, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
+}
+
+func (r *SavingsGoalRepository) ClearShareToken(ctx context.Context, goalID, userID uuid.UUID) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET share_token = NULL, share_enabled_at = NULL, updated_at = NOW()
+		WHERE id = $1 AND user_id = $2
+	`, goalID, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
+}
+
+func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, target_amount, currency, deadline, description, category,
+		       notified_milestones, created_at, updated_at,
+		       status, completed_at, completion_action, name, emoji,
+		       share_token, share_enabled_at
+		FROM savings_goals WHERE share_token = $1
+	`, token)
+	g, err := scanSavingsGoalWithShare(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, savingsgoal.ErrGoalNotFound
+		}
+		return nil, err
+	}
+	return &g, nil
+}
+
 func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
 	query := `
 		SELECT id, user_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, created_at, updated_at,
-		       status, completed_at, completion_action, name, emoji
+		       status, completed_at, completion_action, name, emoji,
+		       share_token, share_enabled_at
 		FROM savings_goals
 		WHERE user_id = $1
 	`
@@ -58,7 +109,7 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 
 	var goals []savingsgoal.SavingsGoal
 	for rows.Next() {
-		g, err := scanSavingsGoal(rows)
+		g, err := scanSavingsGoalWithShare(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -71,10 +122,11 @@ func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*sav
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, created_at, updated_at,
-		       status, completed_at, completion_action, name, emoji
+		       status, completed_at, completion_action, name, emoji,
+		       share_token, share_enabled_at
 		FROM savings_goals WHERE id = $1
 	`, id)
-	g, err := scanSavingsGoal(row)
+	g, err := scanSavingsGoalWithShare(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, savingsgoal.ErrGoalNotFound
@@ -207,7 +259,8 @@ type savingsGoalScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
+// scanSavingsGoalWithShare scans a row that includes the share_token and share_enabled_at columns.
+func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 	var (
 		id, userID, targetStr, currency, category string
 		deadline, createdAt, updatedAt            time.Time
@@ -217,11 +270,14 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 		completedAt                               sql.NullTime
 		completionAction                          sql.NullString
 		name, emoji                               sql.NullString
+		shareToken                                sql.NullString
+		shareEnabledAt                            sql.NullTime
 	)
 	if err := row.Scan(
 		&id, &userID, &targetStr, &currency, &deadline, &description, &category,
 		&notifiedMilestones, &createdAt, &updatedAt,
 		&status, &completedAt, &completionAction, &name, &emoji,
+		&shareToken, &shareEnabledAt,
 	); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -245,6 +301,18 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 		t := completedAt.Time
 		completedAtPtr = &t
 	}
+	var shareTokenPtr *uuid.UUID
+	var shareEnabledAtPtr *time.Time
+	if shareToken.Valid && shareToken.String != "" {
+		parsed, err := uuid.Parse(shareToken.String)
+		if err == nil {
+			shareTokenPtr = &parsed
+		}
+	}
+	if shareEnabledAt.Valid {
+		t := shareEnabledAt.Time
+		shareEnabledAtPtr = &t
+	}
 	return savingsgoal.SavingsGoal{
 		ID:               parsedID,
 		UserID:           parsedUserID,
@@ -261,6 +329,9 @@ func scanSavingsGoal(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 		UpdatedAt:        updatedAt,
 		CompletedAt:      completedAtPtr,
 		CompletionAction: completionAction.String,
+		ShareToken:       shareTokenPtr,
+		ShareEnabledAt:   shareEnabledAtPtr,
+		IsShared:         shareTokenPtr != nil,
 	}, nil
 }
 
