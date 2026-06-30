@@ -65,6 +65,10 @@ func (s *stubVaultRepository) ListUserVaultTransactions(_ context.Context, userI
 	return nil, errors.New("not implemented")
 }
 
+func (s *stubVaultRepository) RecordRebalance(_ context.Context, _ vault.RebalanceRecordInput, _, _ vault.TransactionRecord) error {
+	return errors.New("not implemented")
+}
+
 func (s *stubVaultRepository) ListVaults(_ context.Context, _ vault.ListFilter) ([]vault.Vault, int, error) {
 	return nil, 0, errors.New("not implemented")
 }
@@ -127,6 +131,10 @@ func (s *stubVaultRepositoryWithCount) ListUserVaultTransactions(_ context.Conte
 	return nil, errors.New("not implemented")
 }
 
+func (s *stubVaultRepositoryWithCount) RecordRebalance(_ context.Context, _ vault.RebalanceRecordInput, _, _ vault.TransactionRecord) error {
+	return errors.New("not implemented")
+}
+
 func (s *stubVaultRepositoryWithCount) ListVaults(_ context.Context, _ vault.ListFilter) ([]vault.Vault, int, error) {
 	return nil, 0, errors.New("not implemented")
 }
@@ -151,14 +159,14 @@ func TestRiskService_SingleProtocolVault_HighRisk(t *testing.T) {
 			},
 		},
 	}
-	
+
 	repo := &stubVaultRepository{vault: vault, err: nil}
 	service := NewRiskService(repo)
-	
+
 	// Act
 	ctx := context.Background()
 	score, err := service.Score(ctx, vaultID)
-	
+
 	// Assert
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -166,12 +174,12 @@ func TestRiskService_SingleProtocolVault_HighRisk(t *testing.T) {
 	if score == nil {
 		t.Fatalf("expected score, got nil")
 	}
-	
+
 	// Concentration risk should be 1.0 (100%) for single protocol
 	if score.ConcentrationRisk != 100.0 {
 		t.Errorf("expected concentration risk 100.0 for single protocol, got %.2f", score.ConcentrationRisk)
 	}
-	
+
 	// Single Aave vault: high concentration but low protocol risk → medium overall
 	if score.Tier != "medium" {
 		t.Errorf("expected tier 'medium' for score %.2f, got '%s'", score.Overall, score.Tier)
@@ -219,14 +227,14 @@ func TestRiskService_PerfectlyEqualFourWaySplit_LowConcentrationRisk(t *testing.
 			},
 		},
 	}
-	
+
 	repo := &stubVaultRepository{vault: vault, err: nil}
 	service := NewRiskService(repo)
-	
+
 	// Act
 	ctx := context.Background()
 	score, err := service.Score(ctx, vaultID)
-	
+
 	// Assert
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -234,14 +242,14 @@ func TestRiskService_PerfectlyEqualFourWaySplit_LowConcentrationRisk(t *testing.
 	if score == nil {
 		t.Fatalf("expected score, got nil")
 	}
-	
+
 	// With 4 equal allocations, HHI = 4 * (0.25^2) = 4 * 0.0625 = 0.25
 	// So concentration risk should be 0.25 * 100 = 25.0
 	expectedConcentration := 25.0
 	if score.ConcentrationRisk < expectedConcentration-1 || score.ConcentrationRisk > expectedConcentration+1 {
 		t.Errorf("expected concentration risk ~25.0 for equal 4-way split, got %.2f", score.ConcentrationRisk)
 	}
-	
+
 	// Should be low or medium tier depending on other risk factors
 	if score.Tier != "low" && score.Tier != "medium" {
 		t.Errorf("expected tier 'low' or 'medium', got '%s'", score.Tier)
@@ -260,14 +268,14 @@ func TestRiskService_EmptyVault_ReturnsError(t *testing.T) {
 		Currency: "USD",
 		Allocations: []vault.Allocation{}, // empty
 	}
-	
+
 	repo := &stubVaultRepository{vault: vault, err: nil}
 	service := NewRiskService(repo)
-	
+
 	// Act
 	ctx := context.Background()
 	score, err := service.Score(ctx, vaultID)
-	
+
 	// Assert
 	if err == nil {
 		t.Fatalf("expected error for empty vault, got nil")
@@ -288,11 +296,11 @@ func TestRiskService_VaultNotFound_ReturnsError(t *testing.T) {
 	vaultID := uuid.New()
 	repo := &stubVaultRepository{vault: vault.Vault{}, err: vault.ErrVaultNotFound}
 	service := NewRiskService(repo)
-	
+
 	// Act
 	ctx := context.Background()
 	score, err := service.Score(ctx, vaultID)
-	
+
 	// Assert
 	if err == nil {
 		t.Fatalf("expected error for vault not found, got nil")
@@ -332,7 +340,7 @@ func TestRiskService_Caching(t *testing.T) {
 			},
 		},
 	}
-	
+
 	callCount := 0
 	repo := &stubVaultRepositoryWithCount{
 		vault: v,
@@ -342,22 +350,22 @@ func TestRiskService_Caching(t *testing.T) {
 		},
 	}
 	service := NewRiskService(repo)
-	
+
 	// Act
 	ctx := context.Background()
-	
+
 	// First call
 	score1, err1 := service.Score(ctx, vaultID)
 	if err1 != nil {
 		t.Fatalf("first call failed: %v", err1)
 	}
-	
+
 	// Second call (should use cache)
 	score2, err2 := service.Score(ctx, vaultID)
 	if err2 != nil {
 		t.Fatalf("second call failed: %v", err2)
 	}
-	
+
 	// Assert
 	if callCount != 1 {
 		t.Fatalf("expected GetVault called once due to caching, got %d calls", callCount)

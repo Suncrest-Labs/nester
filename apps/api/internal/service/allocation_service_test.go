@@ -94,6 +94,10 @@ func (r *allocationVaultRepository) SoftDeleteVault(context.Context, uuid.UUID) 
 func (r *allocationVaultRepository) ListDeposits(context.Context, uuid.UUID) ([]vault.VaultTransaction, error) {
 	return nil, nil
 }
+func (r *allocationVaultRepository) RecordRebalance(context.Context, vault.RebalanceRecordInput, vault.TransactionRecord, vault.TransactionRecord) error {
+	return nil
+}
+
 func (r *allocationVaultRepository) ListUserVaultTransactions(context.Context, uuid.UUID, uuid.UUID) ([]vault.VaultTransaction, error) {
 	return nil, nil
 }

@@ -450,6 +450,62 @@ func (r *memoryVaultRepository) ListVaults(_ context.Context, filter vault.ListF
 	return out, total, nil
 }
 
+func (r *memoryVaultRepository) RecordRebalance(_ context.Context, input vault.RebalanceRecordInput, withdrawRecord, depositRecord vault.TransactionRecord) error {
+	model, ok := r.vaults[input.VaultID]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+
+	// Apply withdrawal
+	model.CurrentBalance = model.CurrentBalance.Sub(withdrawRecord.Amount)
+	// Apply deposit
+	model.CurrentBalance = model.CurrentBalance.Add(depositRecord.Amount)
+	model.TotalDeposited = model.TotalDeposited.Add(depositRecord.Amount)
+	model.UpdatedAt = time.Now().UTC()
+	r.vaults[input.VaultID] = cloneVault(model)
+
+	// Add withdrawal transaction
+	withdrawUserID := withdrawRecord.UserID
+	r.transactions = append(r.transactions, vault.VaultTransaction{
+		ID:                   uuid.New(),
+		VaultID:              input.VaultID,
+		UserID:               &withdrawUserID,
+		Type:                 "withdrawal",
+		Amount:               withdrawRecord.Amount,
+		TransactionHash:      withdrawRecord.TransactionHash,
+		SharesMintedOrBurned: &withdrawRecord.SharesMintedOrBurned,
+		SharePriceAtTime:     &withdrawRecord.SharePriceAtTime,
+		CreatedAt:            time.Now().UTC(),
+	})
+
+	// Add deposit transaction
+	depositUserID := depositRecord.UserID
+	r.transactions = append(r.transactions, vault.VaultTransaction{
+		ID:                   uuid.New(),
+		VaultID:              input.VaultID,
+		UserID:               &depositUserID,
+		Type:                 "deposit",
+		Amount:               depositRecord.Amount,
+		TransactionHash:      depositRecord.TransactionHash,
+		SharesMintedOrBurned: &depositRecord.SharesMintedOrBurned,
+		SharePriceAtTime:     &depositRecord.SharePriceAtTime,
+		CreatedAt:            time.Now().UTC(),
+	})
+
+	// Add rebalance transaction
+	r.transactions = append(r.transactions, vault.VaultTransaction{
+		ID:              uuid.New(),
+		VaultID:         input.VaultID,
+		UserID:          &input.UserID,
+		Type:            "rebalance",
+		Amount:          input.Amount,
+		TransactionHash: input.TransactionHash,
+		CreatedAt:       time.Now().UTC(),
+	})
+
+	return nil
+}
+
 func (r *memoryVaultRepository) ListUserVaultTransactions(_ context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
 	result := make([]vault.VaultTransaction, 0)
 	for _, txn := range r.transactions {

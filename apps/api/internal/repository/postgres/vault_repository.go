@@ -684,6 +684,88 @@ func (r *VaultRepository) ListDeposits(ctx context.Context, vaultID uuid.UUID) (
 }
 
 // ListUserVaultTransactions returns all deposit and withdrawal rows for a user in a vault.
+func (r *VaultRepository) RecordRebalance(ctx context.Context, input vault.RebalanceRecordInput, withdrawRecord, depositRecord vault.TransactionRecord) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET current_balance = current_balance - $2::numeric,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		input.VaultID.String(),
+		withdrawRecord.Amount.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'withdrawal', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
+		input.VaultID.String(),
+		withdrawRecord.UserID.String(),
+		withdrawRecord.Amount.String(),
+		withdrawRecord.TransactionHash,
+		withdrawRecord.SharesMintedOrBurned.String(),
+		withdrawRecord.SharePriceAtTime.String(),
+		withdrawRecord.FeeCharged.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET current_balance = current_balance + $2::numeric,
+		     total_deposited = total_deposited + $2::numeric,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		input.VaultID.String(),
+		depositRecord.Amount.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'deposit', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
+		input.VaultID.String(),
+		depositRecord.UserID.String(),
+		depositRecord.Amount.String(),
+		depositRecord.TransactionHash,
+		depositRecord.SharesMintedOrBurned.String(),
+		depositRecord.SharePriceAtTime.String(),
+		depositRecord.FeeCharged.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash
+		) VALUES ($1, $2, 'rebalance', $3::numeric, NULLIF($4, ''))`,
+		input.VaultID.String(),
+		input.UserID.String(),
+		input.Amount.String(),
+		input.TransactionHash,
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	return tx.Commit()
+}
+
 func (r *VaultRepository) ListUserVaultTransactions(ctx context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
 	rows, err := r.db.QueryContext(
 		ctx,

@@ -107,6 +107,22 @@ type RecordWithdrawalInput struct {
 	SlippageBps int // optional; 0 uses configured default
 }
 
+type RebalancePositionInput struct {
+	VaultID     uuid.UUID
+	UserID      uuid.UUID
+	FromProtocol string
+	ToProtocol   string
+	Amount      decimal.Decimal
+	Currency    string
+	TxHash      string
+}
+
+type RebalancePositionResult struct {
+	Vault              vault.Vault
+	FromProtocolBalance decimal.Decimal
+	ToProtocolBalance   decimal.Decimal
+}
+
 // ── Constructor ──────────────────────────────────────────────────────────────
 
 func NewVaultService(repository vault.Repository) *VaultService {
@@ -769,6 +785,90 @@ func (s *VaultService) EmergencyWithdraw(ctx context.Context, input EmergencyWit
 	}
 
 	return result, nil
+}
+
+func (s *VaultService) RebalancePosition(ctx context.Context, input RebalancePositionInput) (RebalancePositionResult, error) {
+	if input.VaultID == uuid.Nil || input.UserID == uuid.Nil {
+		return RebalancePositionResult{}, vault.ErrInvalidVault
+	}
+	if input.Amount.Cmp(decimal.Zero) <= 0 {
+		return RebalancePositionResult{}, vault.ErrInvalidAmount
+	}
+	if input.FromProtocol == "" || input.ToProtocol == "" {
+		return RebalancePositionResult{}, vault.ErrInvalidVault
+	}
+	if input.FromProtocol == input.ToProtocol {
+		return RebalancePositionResult{}, vault.ErrInvalidVault
+	}
+
+	existing, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return RebalancePositionResult{}, err
+	}
+	if existing.UserID != input.UserID {
+		return RebalancePositionResult{}, vault.ErrVaultForbidden
+	}
+	if existing.Status != vault.StatusActive {
+		return RebalancePositionResult{}, vault.ErrVaultNotActive
+	}
+	if existing.CurrentBalance.Cmp(input.Amount) < 0 {
+		return RebalancePositionResult{}, vault.ErrInsufficientBalance
+	}
+
+	sharePrice := vault.ComputeSharePrice(existing)
+	shares := input.Amount.Div(sharePrice).Round(6)
+
+	withdrawRecord := vault.TransactionRecord{
+		UserID:               input.UserID,
+		Amount:               input.Amount,
+		TransactionHash:      input.TxHash,
+		SharesMintedOrBurned: shares,
+		SharePriceAtTime:     sharePrice,
+		FeeCharged:           decimal.Zero,
+	}
+
+	depositRecord := vault.TransactionRecord{
+		UserID:               input.UserID,
+		Amount:               input.Amount,
+		TransactionHash:      input.TxHash,
+		SharesMintedOrBurned: shares,
+		SharePriceAtTime:     sharePrice,
+		FeeCharged:           decimal.Zero,
+	}
+
+	err = s.repository.RecordRebalance(ctx, vault.RebalanceRecordInput{
+		VaultID:              input.VaultID,
+		UserID:               input.UserID,
+		FromProtocol:         input.FromProtocol,
+		ToProtocol:           input.ToProtocol,
+		Amount:               input.Amount,
+		TransactionHash:      input.TxHash,
+	}, withdrawRecord, depositRecord)
+	if err != nil {
+		return RebalancePositionResult{}, err
+	}
+
+	updatedVault, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return RebalancePositionResult{}, err
+	}
+
+	fromBalance := decimal.Zero
+	toBalance := decimal.Zero
+	for _, allocation := range updatedVault.Allocations {
+		if allocation.Protocol == input.FromProtocol {
+			fromBalance = allocation.Amount
+		}
+		if allocation.Protocol == input.ToProtocol {
+			toBalance = allocation.Amount
+		}
+	}
+
+	return RebalancePositionResult{
+		Vault:              updatedVault,
+		FromProtocolBalance: fromBalance,
+		ToProtocolBalance:   toBalance,
+	}, nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

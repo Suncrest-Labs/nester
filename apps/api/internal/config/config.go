@@ -114,12 +114,14 @@ type AuthConfig struct {
 }
 
 type RateLimitConfig struct {
-	globalLimit  int
-	globalWindow time.Duration
-	writeLimit   int
-	writeWindow  time.Duration
-	walletLimit  int
-	walletWindow time.Duration
+	globalLimit    int
+	globalWindow   time.Duration
+	writeLimit     int
+	writeWindow    time.Duration
+	walletLimit    int
+	walletWindow   time.Duration
+	rebalanceLimit int
+	rebalanceWindow time.Duration
 }
 
 type LogConfig struct {
@@ -199,12 +201,14 @@ func Load() (*Config, error) {
 			challengeExpiry: loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
 		},
 		rateLimit: RateLimitConfig{
-			globalLimit:  loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
-			globalWindow: loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
-			writeLimit:   loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
-			writeWindow:  loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
-			walletLimit:  loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
-			walletWindow: loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
+			globalLimit:    loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
+			globalWindow:   loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
+			writeLimit:     loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
+			writeWindow:    loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
+			walletLimit:    loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
+			walletWindow:   loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
+			rebalanceLimit: loader.intDefault("RATELIMIT_REBALANCE_LIMIT", 3),
+			rebalanceWindow: loader.durationDefault("RATELIMIT_REBALANCE_WINDOW", 1*time.Hour),
 		},
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
@@ -516,6 +520,12 @@ func (c *Config) validate(loader *envLoader) {
 	if c.rateLimit.walletWindow <= 0 {
 		loader.addError("RATELIMIT_WALLET_WINDOW must be greater than 0")
 	}
+	if c.rateLimit.rebalanceLimit <= 0 {
+		loader.addError("RATELIMIT_REBALANCE_LIMIT must be greater than 0")
+	}
+	if c.rateLimit.rebalanceWindow <= 0 {
+		loader.addError("RATELIMIT_REBALANCE_WINDOW must be greater than 0")
+	}
 
 	if !isOneOf(c.log.level, "debug", "info", "warn", "error") {
 		loader.addError("LOG_LEVEL must be one of debug, info, warn, error")
@@ -723,6 +733,14 @@ func (r RateLimitConfig) WalletLimit() int {
 
 func (r RateLimitConfig) WalletWindow() time.Duration {
 	return r.walletWindow
+}
+
+func (r RateLimitConfig) RebalanceLimit() int {
+	return r.rebalanceLimit
+}
+
+func (r RateLimitConfig) RebalanceWindow() time.Duration {
+	return r.rebalanceWindow
 }
 
 type envLoader struct {

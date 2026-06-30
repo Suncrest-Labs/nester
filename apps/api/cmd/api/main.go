@@ -441,6 +441,14 @@ func run() error {
 	vaultRebalanceSvc := service.NewVaultRebalanceService(vaultRepository, adminService)
 	vaultHandler.SetRebalanceService(vaultRebalanceSvc)
 
+	// Rebalance rate limiter (3 per hour per user)
+	rebalanceRateLimiter := middleware.WalletRateLimiter(
+		cfg.RateLimit().RebalanceLimit(),
+		cfg.RateLimit().RebalanceWindow(),
+		walletKeyFromContext,
+	)
+	vaultHandler.SetRebalanceRateLimiter(rebalanceRateLimiter)
+
 	// Intelligence proxy (forwards to Python service)
 	intelURL := cfg.Intelligence().ServiceURL()
 	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())

@@ -200,6 +200,10 @@ func (m *memoryVaultRepo) SoftDeleteVault(_ context.Context, id uuid.UUID) error
 func (m *memoryVaultRepo) ListDeposits(context.Context, uuid.UUID) ([]vault.VaultTransaction, error) {
 	return nil, nil
 }
+func (m *memoryVaultRepo) RecordRebalance(context.Context, vault.RebalanceRecordInput, vault.TransactionRecord, vault.TransactionRecord) error {
+	return nil
+}
+
 func (m *memoryVaultRepo) ListUserVaultTransactions(context.Context, uuid.UUID, uuid.UUID) ([]vault.VaultTransaction, error) {
 	return nil, nil
 }

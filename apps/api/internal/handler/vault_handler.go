@@ -23,9 +23,10 @@ import (
 const maxRequestBodyBytes int64 = 1 << 20
 
 type VaultHandler struct {
-	service      *service.VaultService
-	rebalanceSvc *service.VaultRebalanceService
-	wsHub        *ws.Hub
+	service            *service.VaultService
+	rebalanceSvc       *service.VaultRebalanceService
+	wsHub              *ws.Hub
+	rebalanceRateLimiter func(http.Handler) http.Handler
 }
 
 type createVaultRequest struct {
@@ -44,6 +45,14 @@ type withdrawRequest struct {
 	Asset  string `json:"asset"`
 }
 
+type rebalanceRequest struct {
+	VaultID      string `json:"vault_id"`
+	FromProtocol string `json:"from_protocol"`
+	ToProtocol   string `json:"to_protocol"`
+	Amount       string `json:"amount"`
+	Currency     string `json:"currency"`
+}
+
 func NewVaultHandler(service *service.VaultService) *VaultHandler {
 	return &VaultHandler{service: service}
 }
@@ -56,6 +65,11 @@ func (h *VaultHandler) SetWSHub(hub *ws.Hub) {
 // SetRebalanceService wires user-facing rebalance suggestion and execution.
 func (h *VaultHandler) SetRebalanceService(svc *service.VaultRebalanceService) {
 	h.rebalanceSvc = svc
+}
+
+// SetRebalanceRateLimiter wires the rate limiter for rebalance endpoints.
+func (h *VaultHandler) SetRebalanceRateLimiter(rl func(http.Handler) http.Handler) {
+	h.rebalanceRateLimiter = rl
 }
 
 func (h *VaultHandler) Register(mux *http.ServeMux) {
@@ -74,6 +88,11 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/vaults/{id}/withdraw", h.withdrawFromVault)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/rebalance-suggestion", h.getRebalanceSuggestion)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/rebalance", h.rebalanceVault)
+	var rebalanceHandler http.Handler = http.HandlerFunc(h.rebalancePosition)
+	if h.rebalanceRateLimiter != nil {
+		rebalanceHandler = h.rebalanceRateLimiter(rebalanceHandler)
+	}
+	mux.Handle("POST /api/v1/vault/rebalance", rebalanceHandler)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/emergency-withdraw", h.emergencyWithdraw)
 }
 
@@ -419,6 +438,69 @@ func (h *VaultHandler) emergencyWithdraw(w http.ResponseWriter, r *http.Request)
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(result))
+}
+
+func (h *VaultHandler) rebalancePosition(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
+	var req rebalanceRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+
+	userID, err := uuid.Parse(authUser.ID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "invalid token subject"))
+		return
+	}
+
+	vaultID, err := uuid.Parse(req.VaultID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault_id must be a valid UUID"))
+		return
+	}
+
+	amount, err := stringToDecimal(req.Amount)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid amount: must be a valid decimal number"))
+		return
+	}
+
+	if err := validateCurrencyCode(req.Currency); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid currency: " + err.Error()))
+		return
+	}
+
+	result, err := h.service.RebalancePosition(r.Context(), service.RebalancePositionInput{
+		VaultID:     vaultID,
+		UserID:      userID,
+		FromProtocol: req.FromProtocol,
+		ToProtocol:   req.ToProtocol,
+		Amount:      amount,
+		Currency:    req.Currency,
+		TxHash:      "",
+	})
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	type rebalanceResponse struct {
+		Vault              vault.Vault          `json:"vault"`
+		FromProtocolBalance decimal.Decimal      `json:"from_protocol_balance"`
+		ToProtocolBalance   decimal.Decimal      `json:"to_protocol_balance"`
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(rebalanceResponse{
+		Vault:              result.Vault,
+		FromProtocolBalance: result.FromProtocolBalance,
+		ToProtocolBalance:   result.ToProtocolBalance,
+	}))
 }
 
 func (h *VaultHandler) authenticatedUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, error) {

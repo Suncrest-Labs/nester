@@ -95,6 +95,16 @@ type HarvestRecordInput struct {
 	TransactionHash      string
 }
 
+// RebalanceRecordInput captures the details of a rebalance transaction
+type RebalanceRecordInput struct {
+	VaultID              uuid.UUID
+	UserID               uuid.UUID
+	FromProtocol         string
+	ToProtocol           string
+	Amount               decimal.Decimal
+	TransactionHash      string
+}
+
 type VaultTransaction struct {
 	ID                   uuid.UUID        `json:"id"`
 	VaultID              uuid.UUID        `json:"vault_id"`
@@ -119,6 +129,7 @@ type Repository interface {
 	UpdateVault(ctx context.Context, id uuid.UUID, contractAddress string, status VaultStatus) error
 	RecordWithdrawal(ctx context.Context, vaultID uuid.UUID, record TransactionRecord) error
 	RecordHarvest(ctx context.Context, input HarvestRecordInput) error
+	RecordRebalance(ctx context.Context, input RebalanceRecordInput, withdrawRecord, depositRecord TransactionRecord) error
 	SoftDeleteVault(ctx context.Context, id uuid.UUID) error
 	ListDeposits(ctx context.Context, vaultID uuid.UUID) ([]VaultTransaction, error)
 	ListUserVaultTransactions(ctx context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]VaultTransaction, error)
