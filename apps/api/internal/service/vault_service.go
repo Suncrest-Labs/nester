@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,69 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
+
+type sharePriceCache struct {
+	mu    sync.RWMutex
+	cache map[uuid.UUID]struct {
+		data      SharePriceResponse
+		timestamp time.Time
+	}
+	ttl time.Duration
+}
+
+func newSharePriceCache() *sharePriceCache {
+	return &sharePriceCache{
+		cache: make(map[uuid.UUID]struct {
+			data      SharePriceResponse
+			timestamp time.Time
+		}),
+		ttl: 30 * time.Second,
+	}
+}
+
+func (c *sharePriceCache) get(id uuid.UUID) (SharePriceResponse, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.cache[id]
+	if !ok || time.Since(entry.timestamp) > c.ttl {
+		return SharePriceResponse{}, false
+	}
+	return entry.data, true
+}
+
+func (c *sharePriceCache) set(id uuid.UUID, data SharePriceResponse) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cache[id] = struct {
+		data      SharePriceResponse
+		timestamp time.Time
+	}{data, time.Now()}
+}
+
+func (c *sharePriceCache) invalidate(id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.cache, id)
+}
+
+type SharePriceResponse struct {
+	VaultID       string `json:"vault_id"`
+	SharesPerUSDC string `json:"shares_per_usdc"`
+	USDCPerShare  string `json:"usdc_per_share"`
+	TotalShares   string `json:"total_shares"`
+	TotalAssetsUSDC string `json:"total_assets_usdc"`
+	AsOfLedger    int64  `json:"as_of_ledger"`
+}
+
+type ConvertRequest struct {
+	Shares string
+	USDC   string
+}
+
+type ConvertResponse struct {
+	Shares string `json:"shares"`
+	USDC   string `json:"usdc"`
+}
 
 // VaultDepositInvoker handles on-chain deposit, withdrawal, and harvest operations.
 // Implementations invoke the Soroban vault contract; the noop is used when
@@ -63,6 +127,7 @@ type VaultService struct {
 	depositInvoker         VaultDepositInvoker
 	defaultHarvestCompound bool
 	yieldRecorder          YieldHarvestRecorder
+	sharePriceCache        *sharePriceCache
 }
 
 // ── Input types ──────────────────────────────────────────────────────────────
@@ -110,7 +175,10 @@ type RecordWithdrawalInput struct {
 // ── Constructor ──────────────────────────────────────────────────────────────
 
 func NewVaultService(repository vault.Repository) *VaultService {
-	return &VaultService{repository: repository}
+	return &VaultService{
+		repository:      repository,
+		sharePriceCache: newSharePriceCache(),
+	}
 }
 
 // SetDepositInvoker wires an optional on-chain invoker into the vault service.
@@ -847,6 +915,88 @@ func (s *VaultService) PreviewHarvest(ctx context.Context, input PreviewHarvestI
 	}
 
 	return preview, nil
+}
+
+// GetSharePrice returns the current share price information for a vault
+func (s *VaultService) GetSharePrice(ctx context.Context, vaultID uuid.UUID) (SharePriceResponse, error) {
+	if cached, ok := s.sharePriceCache.get(vaultID); ok {
+		return cached, nil
+	}
+
+	v, err := s.repository.GetVault(ctx, vaultID)
+	if err != nil {
+		return SharePriceResponse{}, err
+	}
+
+	usdcPerShare := vault.ComputeSharePrice(v)
+	var sharesPerUSDC decimal.Decimal
+	if usdcPerShare.IsZero() {
+		sharesPerUSDC = decimal.NewFromInt(1)
+	} else {
+		sharesPerUSDC = decimal.NewFromInt(1).Div(usdcPerShare)
+	}
+
+	totalShares := v.TotalDeposited
+	if !usdcPerShare.IsZero() && !usdcPerShare.Equal(decimal.NewFromInt(1)) {
+		totalShares = v.CurrentBalance.Div(usdcPerShare)
+	}
+
+	response := SharePriceResponse{
+		VaultID:         v.ID.String(),
+		SharesPerUSDC:   sharesPerUSDC.Round(6).StringFixed(6),
+		USDCPerShare:    usdcPerShare.Round(6).StringFixed(6),
+		TotalShares:     totalShares.Round(6).StringFixed(6),
+		TotalAssetsUSDC: v.CurrentBalance.Round(6).StringFixed(6),
+		AsOfLedger:      0,
+	}
+
+	s.sharePriceCache.set(vaultID, response)
+	return response, nil
+}
+
+// Convert converts between USDC and shares for a vault
+func (s *VaultService) Convert(ctx context.Context, vaultID uuid.UUID, req ConvertRequest) (ConvertResponse, error) {
+	sharePrice, err := s.GetSharePrice(ctx, vaultID)
+	if err != nil {
+		return ConvertResponse{}, err
+	}
+
+	usdcPerShare, err := decimal.NewFromString(sharePrice.USDCPerShare)
+	if err != nil {
+		return ConvertResponse{}, err
+	}
+
+	var shares, usdc decimal.Decimal
+	if req.Shares != "" && req.USDC != "" {
+		return ConvertResponse{}, fmt.Errorf("must provide either shares or usdc, not both")
+	}
+	if req.Shares == "" && req.USDC == "" {
+		return ConvertResponse{}, fmt.Errorf("must provide either shares or usdc")
+	}
+
+	if req.Shares != "" {
+		shares, err = decimal.NewFromString(req.Shares)
+		if err != nil {
+			return ConvertResponse{}, err
+		}
+		usdc = shares.Mul(usdcPerShare)
+	} else {
+		usdc, err = decimal.NewFromString(req.USDC)
+		if err != nil {
+			return ConvertResponse{}, err
+		}
+		shares = usdc.Div(usdcPerShare)
+	}
+
+	return ConvertResponse{
+		Shares: shares.Round(6).StringFixed(6),
+		USDC:   usdc.Round(6).StringFixed(6),
+	}, nil
+}
+
+// InvalidateSharePriceCache invalidates the share price cache for a vault
+func (s *VaultService) InvalidateSharePriceCache(vaultID uuid.UUID) {
+	s.sharePriceCache.invalidate(vaultID)
 }
 
 // ── Preview endpoints ─────────────────────────────────────────────────────────

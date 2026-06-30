@@ -75,6 +75,8 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/vaults/{id}/rebalance-suggestion", h.getRebalanceSuggestion)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/rebalance", h.rebalanceVault)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/emergency-withdraw", h.emergencyWithdraw)
+	mux.HandleFunc("GET /api/v1/vaults/{id}/share-price", h.getSharePrice)
+	mux.HandleFunc("GET /api/v1/vaults/{id}/convert", h.convert)
 }
 
 type harvestVaultRequest struct {
@@ -746,4 +748,51 @@ func (h *VaultHandler) previewWithdraw(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(out))
+}
+
+func (h *VaultHandler) getSharePrice(w http.ResponseWriter, r *http.Request) {
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	sharePrice, err := h.service.GetSharePrice(r.Context(), vaultID)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(sharePrice))
+}
+
+func (h *VaultHandler) convert(w http.ResponseWriter, r *http.Request) {
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	sharesParam := r.URL.Query().Get("shares")
+	usdcParam := r.URL.Query().Get("usdc")
+
+	if sharesParam != "" && usdcParam != "" {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("must provide either shares or usdc, not both"))
+		return
+	}
+	if sharesParam == "" && usdcParam == "" {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("must provide either shares or usdc"))
+		return
+	}
+
+	resp, err := h.service.Convert(r.Context(), vaultID, service.ConvertRequest{
+		Shares: sharesParam,
+		USDC:   usdcParam,
+	})
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(resp))
 }
