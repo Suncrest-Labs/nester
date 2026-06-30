@@ -32,6 +32,22 @@ export interface YieldBookmark {
   created_at: string;
 }
 
+export interface YieldHarvest {
+  id: string;
+  user_id: string;
+  vault_id: string;
+  amount: string;
+  currency: string;
+  protocol?: string;
+  harvested_at: string;
+  tx_hash?: string;
+}
+
+export interface ListYieldHarvestsResponse {
+  items: YieldHarvest[];
+  next_cursor: string;
+}
+
 type ApiEnvelope<T> = {
   success: boolean;
   data: T;
@@ -100,4 +116,24 @@ export async function removeYieldBookmark(protocolSlug: string): Promise<void> {
     const json = (await res.json()) as ApiEnvelope<unknown>;
     throw new Error(json.error?.message ?? `remove bookmark: ${res.status}`);
   }
+}
+
+export async function fetchYieldHarvests(
+  cursor?: string,
+  limit = 20
+): Promise<ListYieldHarvestsResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+  });
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+  const res = await fetch(`${config.apiUrl}/yields/harvests?${params}`, {
+    headers: { Authorization: `Bearer ${getStoredToken()}` },
+  });
+  const json = (await res.json()) as ApiEnvelope<ListYieldHarvestsResponse>;
+  if (!res.ok || !json.success) {
+    throw new Error(json.error?.message ?? `yield harvests: ${res.status}`);
+  }
+  return json.data ?? { items: [], next_cursor: "" };
 }

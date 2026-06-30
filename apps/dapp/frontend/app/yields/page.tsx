@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
+import Link from "next/link";
 import {
   AlertTriangle,
   Bookmark,
@@ -206,15 +207,24 @@ export default function YieldsPage() {
               Browse DeFi protocols on Stellar and deposit into your savings goals.
             </p>
           </div>
-          {isStale && (
-            <div
-              className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
-              data-testid="yield-stale-indicator"
-            >
-              <Clock className="h-3.5 w-3.5 shrink-0" />
-              Cached data — live rates may differ
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {isConnected && getStoredToken() && (
+              <Link href="/yields/history">
+                <button className="text-xs font-semibold text-black hover:underline transition-colors">
+                  Harvest History
+                </button>
+              </Link>
+            )}
+            {isStale && (
+              <div
+                className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
+                data-testid="yield-stale-indicator"
+              >
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                Cached data — live rates may differ
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="mb-6 flex flex-wrap items-center gap-2">
