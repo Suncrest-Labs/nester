@@ -123,12 +123,15 @@ export default function HistoryPage() {
   }, [transactions]);
 
   // Handlers for export buttons
+  const toExportTx = (txs: typeof filteredTransactions) =>
+    txs.map((tx) => ({ ...tx, amount: tx.amount.toFixed(2) }));
+
   const handleCsvExport = () => {
-    exportCsv(filteredTransactions, "transactions.csv");
+    exportCsv(toExportTx(filteredTransactions), "transactions.csv");
   };
   const handlePdfExport = () => {
     exportPdf({
-      transactions: filteredTransactions,
+      transactions: toExportTx(filteredTransactions),
       summary,
       title: "Nester Transaction Statement",
     });
