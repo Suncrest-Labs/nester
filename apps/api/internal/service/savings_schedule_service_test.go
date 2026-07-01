@@ -131,6 +131,9 @@ func (m *memoryGoalRepo) RecordGoalDeposits(context.Context, []savingsgoal.GoalD
 func (m *memoryGoalRepo) SumGoalDeposits(context.Context, uuid.UUID) (decimal.Decimal, error) {
 	return decimal.Zero, nil
 }
+func (m *memoryGoalRepo) ListContributions(_ context.Context, _, _ uuid.UUID, _ interface{}) ([]savingsgoal.GoalContribution, int, string, error) {
+	return nil, 0, "", nil
+}
 func (m *memoryGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.UUID, milestones []int) error {
 	g, ok := m.goals[goalID]
 	if !ok {
