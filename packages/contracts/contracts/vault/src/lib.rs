@@ -1052,11 +1052,11 @@ impl VaultContract {
         let gross_yield = redeemable.saturating_sub(principal);
         let now = env.ledger().timestamp();
 
-        if gross_yield == 0 {
+        if gross_yield <= 0 {
             set_last_harvest_at(&env, &user, now);
             let new_share_balance = get_shares(&env, &user);
             return HarvestResult {
-                gross_yield: 0,
+                gross_yield,
                 performance_fee: 0,
                 net_yield: 0,
                 compounded: false,
@@ -1102,7 +1102,11 @@ impl VaultContract {
         // The gross yield was already added to TotalAssets by report_yield, so
         // only the fee reduction above affects TotalAssets here.
         let new_shares = if net_yield > 0 {
-            vault_token_client(&env).mint_for_deposit(&user, &net_yield)
+            let s = vault_token_client(&env).mint_for_deposit(&user, &net_yield);
+            // mint_for_deposit increments vault token's total_assets by net_yield, but
+            // that amount was already tracked by report_yield — sync back to the correct value.
+            sync_vault_token_total_assets(&env);
+            s
         } else {
             0
         };
@@ -1959,6 +1963,11 @@ impl VaultContract {
     pub fn get_shares(env: Env, user: Address) -> i128 {
         require_initialized(&env);
         get_shares(&env, &user)
+    }
+
+    pub fn get_principal(env: Env, user: Address) -> i128 {
+        require_initialized(&env);
+        get_user_principal(&env, &user)
     }
 
     pub fn get_total_deposits(env: Env) -> i128 {

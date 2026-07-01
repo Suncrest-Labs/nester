@@ -1263,17 +1263,16 @@ fn test_harvest_basic() {
     advance_time(&env, DAY);
     let harvest_time = env.ledger().timestamp();
 
-    let shares_before = vault.get_shares(&admin);
+    let shares_before = vault.get_shares(&user);
 
-    // Harvest the yield accumulated by the admin (Manager) address
-    let result = vault.harvest(&admin);
+    let result = vault.harvest(&user);
 
     assert_eq!(result.gross_yield, yield_amount);
     // performance_fee_bps = 1000 (10%)
     assert_eq!(result.performance_fee, 20 * XLM);
     assert_eq!(result.net_yield, 180 * XLM);
     assert!(result.compounded);
-    assert_eq!(result.user, admin);
+    assert_eq!(result.user, user);
 
     // new_share_balance must be >= shares before harvest (net yield minted new shares)
     assert!(result.new_share_balance >= shares_before,
@@ -1286,7 +1285,7 @@ fn test_harvest_basic() {
         "treasury should have received the performance fee");
 
     // last_harvest_at timestamp must be set to current ledger time
-    let harvested_at = vault.get_last_harvest_at(&admin);
+    let harvested_at = vault.get_last_harvest_at(&user);
     assert_eq!(harvested_at, harvest_time, "last_harvest_at should match ledger timestamp at harvest");
 }
 
@@ -1398,7 +1397,7 @@ fn test_harvest_fee_calculation() {
     let yield_amount = 1_000 * XLM;
     vault.report_yield(&admin, &yield_amount);
 
-    let result = vault.harvest(&admin);
+    let result = vault.harvest(&user);
 
     assert_eq!(result.gross_yield, yield_amount);
     // 20% of 1000 = 200
@@ -1422,17 +1421,15 @@ fn test_harvest_resets_user_yield_to_zero() {
     mint(&token, &user, deposit);
     vault.deposit(&user, &deposit, &0);
 
-    mint(&token, &vault.address, 500 * XLM);
-
     vault.grant_role(&admin, &admin, &Role::Manager);
     vault.report_yield(&admin, &(300 * XLM));
 
-    let first = vault.harvest(&admin);
+    let first = vault.harvest(&user);
     assert_eq!(first.gross_yield, 300 * XLM);
     assert!(first.compounded);
 
     // Second harvest on the same user should return zeros
-    let second = vault.harvest(&admin);
+    let second = vault.harvest(&user);
     assert_eq!(second.gross_yield, 0);
     assert!(!second.compounded);
 }
@@ -1453,7 +1450,7 @@ fn test_harvest_impairment_zero_fee() {
     // Try harvesting
     let result = vault.harvest(&user);
 
-    assert_eq!(result.gross_yield, 0);
+    assert_eq!(result.gross_yield, -(200 * XLM));
     assert_eq!(result.performance_fee, 0);
     assert_eq!(result.net_yield, 0);
 
