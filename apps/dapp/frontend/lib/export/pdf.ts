@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 export interface Transaction {
   date: string;
@@ -57,9 +57,7 @@ export const exportPdf = ({
     tx.txHash ?? '-',
   ]);
 
-  // @ts-ignore – jsPDF type definitions may not include autotable by default
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-  (doc as any).autoTable({
+  autoTable(doc, {
     startY: 85,
     head: [['Date', 'Type', 'Vault', 'Amount', 'Status', 'TX Hash']],
     body: tableBody,

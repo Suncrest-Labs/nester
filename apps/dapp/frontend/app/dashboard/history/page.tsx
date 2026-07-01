@@ -64,7 +64,7 @@ export default function HistoryPage() {
   // Build query string for API based on filters
   const buildQuery = () => {
     const params = new URLSearchParams();
-    if (user?.id) params.append("userId", user.id);
+    if (user?.address) params.append("userId", user.address);
     if (typeFilters.length) params.append("type", typeFilters.join(","));
     if (dateFrom) params.append("from", dateFrom);
     if (dateTo) params.append("to", dateTo);
@@ -88,8 +88,8 @@ export default function HistoryPage() {
         setTransactions(json.data);
         setNextCursor(json.nextCursor ?? null);
         setPrevCursor(json.prevCursor ?? null);
-      } catch (e: any) {
-        setError(e.message || "Unexpected error");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unexpected error");
       } finally {
         setLoading(false);
       }
