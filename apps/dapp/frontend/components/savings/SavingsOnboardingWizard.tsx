@@ -211,7 +211,8 @@ function StepDetails({
 // ── Step 3: Choose yield protocol ─────────────────────────────────────────────
 
 function StepYield({ onSkip }: { onSkip: () => void }) {
-  const { data: pools = [], isLoading } = useYieldOpportunities("Stellar", 6);
+  const { data: yieldData, isLoading } = useYieldOpportunities("Stellar", 6);
+  const pools = yieldData?.pools ?? [];
 
   return (
     <div>
