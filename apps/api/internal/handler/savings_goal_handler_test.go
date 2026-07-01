@@ -440,7 +440,7 @@ func TestSavingsGoalHandler_Create_WithVaultLink(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
 	svc := &mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -479,7 +479,7 @@ func TestSavingsGoalHandler_Create_ForeignVaultForbidden(t *testing.T) {
 		goals:          make(map[uuid.UUID]savingsgoal.SavingsGoal),
 		foreignVaultID: &vaultID,
 	}
-	h := NewSavingsGoalHandler(svc)
+	h := NewSavingsGoalHandler(svc, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -500,7 +500,7 @@ func TestSavingsGoalHandler_Create_ForeignVaultForbidden(t *testing.T) {
 
 func TestSavingsGoalHandler_Create_InvalidVaultID(t *testing.T) {
 	userID := uuid.New()
-	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)})
+	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}, nil)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
