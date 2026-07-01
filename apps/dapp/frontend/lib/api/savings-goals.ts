@@ -12,6 +12,7 @@ export interface SavingsGoal {
   currency: string;
   deadline: string;
   description?: string;
+  name?: string;
   category?: string;
   status?: "active" | "completed" | "paused" | "archived";
   current_amount: string | number;

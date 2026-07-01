@@ -1055,11 +1055,6 @@ export default function SavingsPage() {
                 {viewMode === "goals" ? (
                     <SavingsGoalsSection
                         onCreateGoal={() => setPlanModalOpen(true)}
-                        onDepositGoal={(goal) => {
-                            if (!goal.vault_id) return;
-                            const matched = savingsVaults.find((v) => v.id === goal.vault_id);
-                            if (matched) setSelectedVault(matched);
-                        }}
                     />
                 ) : (
                     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">

@@ -20,7 +20,7 @@ export function SavingsGoalCard({
 
   const deadlineDate = goal.deadline ? new Date(goal.deadline) : null;
   const daysLeft = deadlineDate ? (isBefore(deadlineDate, new Date()) ? 0 : Math.max(0, Math.ceil((deadlineDate.getTime() - Date.now()) / 86400000))) : null;
-  const deadlineLabel = deadlineDate ? (daysLeft === 0 ? "Due today" : `${daysLeft} day${daysLeft > 1 ? "s" : ""} left`) : "—";
+  const deadlineLabel = deadlineDate ? (daysLeft === 0 ? "Due today" : `${daysLeft} day${(daysLeft ?? 0) > 1 ? "s" : ""} left`) : "—";
 
   return (
     <div className="rounded-2xl border border-black/8 bg-white p-5" data-testid="savings-goal-card">
