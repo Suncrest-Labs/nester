@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import FilterBar from "@/components/history/FilterBar";
+import FilterBar, { FilterState } from "@/components/history/FilterBar";
 import TransactionTable from "@/components/history/TransactionTable";
 import { exportCsv } from "@/lib/export/csv";
 import { exportPdf } from "@/lib/export/pdf";
@@ -43,13 +43,11 @@ export default function HistoryPage() {
     if (!isConnected) router.push("/");
   }, [isConnected, router]);
 
-  // Filter & search state
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
-  const [typeFilters, setTypeFilters] = useState<string[]>([]);
-  const [vaultFilter, setVaultFilter] = useState<string>("");
-  const [statusFilter, setStatusFilter] = useState<string>("");
-  const [searchTerm, setSearchTerm] = useState<string>("");
+  const [filters, setFilters] = useState<FilterState>({
+    types: {},
+    status: "All",
+    searchTerm: "",
+  });
 
   // Pagination cursors
   const [cursor, setCursor] = useState<string | null>(null);
@@ -65,11 +63,12 @@ export default function HistoryPage() {
   const buildQuery = () => {
     const params = new URLSearchParams();
     if (user?.address) params.append("userId", user.address);
-    if (typeFilters.length) params.append("type", typeFilters.join(","));
-    if (dateFrom) params.append("from", dateFrom);
-    if (dateTo) params.append("to", dateTo);
-    if (vaultFilter) params.append("vault", vaultFilter);
-    if (statusFilter) params.append("status", statusFilter);
+    const activeTypes = Object.keys(filters.types).filter((k) => filters.types[k]);
+    if (activeTypes.length) params.append("type", activeTypes.join(","));
+    if (filters.fromDate) params.append("from", filters.fromDate);
+    if (filters.toDate) params.append("to", filters.toDate);
+    if (filters.vaultId) params.append("vault", filters.vaultId);
+    if (filters.status && filters.status !== "All") params.append("status", filters.status);
     if (cursor) params.append("cursor", cursor);
     params.append("limit", "25");
     return params.toString();
@@ -95,18 +94,18 @@ export default function HistoryPage() {
       }
     };
     if (isConnected) fetchData();
-  }, [isConnected, dateFrom, dateTo, typeFilters, vaultFilter, statusFilter, cursor]);
+  }, [isConnected, filters, cursor]);
 
-  // Search filtering (client‑side) – debounced for performance
+  // Search filtering (client‑side)
   const filteredTransactions = useMemo(() => {
-    if (!searchTerm) return transactions;
-    const term = searchTerm.toLowerCase();
+    if (!filters.searchTerm) return transactions;
+    const term = filters.searchTerm.toLowerCase();
     return transactions.filter((tx) => {
       const hashMatch = tx.txHash?.toLowerCase().includes(term) ?? false;
       const amountMatch = tx.amount.toString().includes(term);
       return hashMatch || amountMatch;
     });
-  }, [transactions, searchTerm]);
+  }, [transactions, filters.searchTerm]);
 
   // Yield summary calculations (respecting date range)
   const summary = useMemo(() => {
@@ -193,18 +192,8 @@ export default function HistoryPage() {
 
       {/* Filter Bar */}
       <FilterBar
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        onDateFromChange={setDateFrom}
-        onDateToChange={setDateTo}
-        typeFilters={typeFilters}
-        onTypeFiltersChange={setTypeFilters}
-        vaultFilter={vaultFilter}
-        onVaultFilterChange={setVaultFilter}
-        statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
-        searchTerm={searchTerm}
-        onSearchTermChange={setSearchTerm}
+        vaultOptions={[]}
+        onChange={setFilters}
       />
 
       {/* Table / Loading / Error */}
