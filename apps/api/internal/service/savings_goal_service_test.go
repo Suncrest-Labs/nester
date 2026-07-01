@@ -1137,7 +1137,7 @@ func TestSavingsGoalService_Create_LinksVaultAndReflectsBalance(t *testing.T) {
 		Currency:       "USDC",
 		CurrentBalance: decimal.NewFromInt(300),
 	})
-	svc := NewSavingsGoalService(repo, vaults, nil, nil)
+	svc := NewSavingsGoalService(repo, vaults, nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -1167,7 +1167,7 @@ func TestSavingsGoalService_Create_ForeignVaultReturnsUnauthorized(t *testing.T)
 		Currency:       "USDC",
 		CurrentBalance: decimal.NewFromInt(300),
 	})
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), vaults, nil, nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), vaults, nil)
 
 	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -1190,7 +1190,7 @@ func TestSavingsGoalService_Create_VaultCurrencyMismatch(t *testing.T) {
 		Currency:       "XLM",
 		CurrentBalance: decimal.NewFromInt(300),
 	})
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), vaults, nil, nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), vaults, nil)
 
 	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -1210,7 +1210,7 @@ func TestSavingsGoalService_Create_VaultNotFound(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	missing := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), newVaultReader(), nil, nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), newVaultReader(), nil)
 
 	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -1239,7 +1239,7 @@ func TestSavingsGoalService_PerVaultIsolation(t *testing.T) {
 		vault.Vault{ID: vaultA, UserID: userID, Currency: "USDC", CurrentBalance: decimal.NewFromInt(200)},
 		vault.Vault{ID: vaultB, UserID: userID, Currency: "USDC", CurrentBalance: decimal.NewFromInt(800)},
 	)
-	svc := NewSavingsGoalService(repo, vaults, nil, nil)
+	svc := NewSavingsGoalService(repo, vaults, nil)
 
 	goalA, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -1289,7 +1289,7 @@ func TestSavingsGoalService_NoVaultFallsBackToSum(t *testing.T) {
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
 	repo.setBalance(userID, "USDC", decimal.NewFromInt(450))
-	svc := NewSavingsGoalService(repo, newVaultReader(), nil, nil)
+	svc := NewSavingsGoalService(repo, newVaultReader(), nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
