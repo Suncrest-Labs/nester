@@ -1,8 +1,3 @@
-/*
-  Transaction History Page
-  Implements full transaction history UI with filtering, searching, CSV/PDF export, pagination, and yield summary.
-*/
-
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
@@ -16,7 +11,6 @@ import { useWallet } from "@/components/wallet-provider";
 import { AppShell } from "@/components/app-shell";
 import { motion } from "framer-motion";
 
-// Types for activity API response
 interface ActivityResponse {
   data: Transaction[];
   nextCursor?: string | null;
@@ -25,9 +19,9 @@ interface ActivityResponse {
 
 interface Transaction {
   id: string;
-  date: string; // ISO string
+  timestamp: string;
   type: "Deposit" | "Withdrawal" | "Rebalance" | "Settlement" | "Yield Earned";
-  vault: string;
+  vaultName: string;
   amount: number;
   asset: string;
   status: "Confirmed" | "Pending" | "Failed";
@@ -38,7 +32,6 @@ export default function HistoryPage() {
   const { isConnected, user } = useWallet();
   const router = useRouter();
 
-  // Redirect if not connected
   useEffect(() => {
     if (!isConnected) router.push("/");
   }, [isConnected, router]);
@@ -49,17 +42,14 @@ export default function HistoryPage() {
     searchTerm: "",
   });
 
-  // Pagination cursors
   const [cursor, setCursor] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [prevCursor, setPrevCursor] = useState<string | null>(null);
 
-  // Data loading
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Build query string for API based on filters
   const buildQuery = () => {
     const params = new URLSearchParams();
     if (user?.address) params.append("userId", user.address);
@@ -74,7 +64,6 @@ export default function HistoryPage() {
     return params.toString();
   };
 
-  // Fetch data when filters / cursor change
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -96,7 +85,6 @@ export default function HistoryPage() {
     if (isConnected) fetchData();
   }, [isConnected, filters, cursor]);
 
-  // Search filtering (client‑side)
   const filteredTransactions = useMemo(() => {
     if (!filters.searchTerm) return transactions;
     const term = filters.searchTerm.toLowerCase();
@@ -107,7 +95,6 @@ export default function HistoryPage() {
     });
   }, [transactions, filters.searchTerm]);
 
-  // Yield summary calculations (respecting date range)
   const summary = useMemo(() => {
     const totalDeposited = transactions
       .filter((t) => t.type === "Deposit")
@@ -121,9 +108,15 @@ export default function HistoryPage() {
     return { totalDeposited, totalWithdrawn, totalYield };
   }, [transactions]);
 
-  // Handlers for export buttons
   const toExportTx = (txs: typeof filteredTransactions) =>
-    txs.map((tx) => ({ ...tx, amount: tx.amount.toFixed(2) }));
+    txs.map((tx) => ({
+      date: tx.timestamp,
+      type: tx.type,
+      vault: tx.vaultName,
+      amount: tx.amount.toFixed(2),
+      status: tx.status,
+      txHash: tx.txHash,
+    }));
 
   const handleCsvExport = () => {
     exportCsv(toExportTx(filteredTransactions), "transactions.csv");
@@ -136,7 +129,6 @@ export default function HistoryPage() {
     });
   };
 
-  // Pagination controls
   const goNext = () => setCursor(nextCursor);
   const goPrev = () => setCursor(prevCursor);
 
@@ -144,7 +136,6 @@ export default function HistoryPage() {
 
   return (
     <AppShell>
-      {/* Header with summary */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
@@ -152,20 +143,6 @@ export default function HistoryPage() {
         className="my-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"
       >
         <div className="text-[28px] font-semibold text-black">Transaction History</div>
-        <div className="flex gap-4">
-          <button
-            onClick={handleCsvExport}
-            className="rounded-md bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
-          >
-            Export CSV
-          </button>
-          <button
-            onClick={handlePdfExport}
-            className="rounded-md bg-gray-600 px-4 py-2 text-white hover:bg-gray-700"
-          >
-            Export PDF
-          </button>
-        </div>
       </motion.div>
 
       {/* Yield Summary */}
@@ -190,26 +167,15 @@ export default function HistoryPage() {
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <FilterBar
-        vaultOptions={[]}
-        onChange={setFilters}
-      />
+      <FilterBar vaultOptions={[]} onChange={setFilters} />
 
-      {/* Table / Loading / Error */}
-      {loading && (
-        <div className="flex justify-center py-8">
-          <span className="text-gray-600">Loading transactions…</span>
-        </div>
-      )}
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800">
-          {error}
-        </div>
-      )}
-      {!loading && !error && (
-        <TransactionTable transactions={filteredTransactions} />
-      )}
+      <TransactionTable
+        transactions={filteredTransactions}
+        loading={loading}
+        error={error ?? undefined}
+        onExportCsv={handleCsvExport}
+        onExportPdf={handlePdfExport}
+      />
 
       {/* Pagination Controls */}
       <div className="mt-6 flex justify-center gap-4">
