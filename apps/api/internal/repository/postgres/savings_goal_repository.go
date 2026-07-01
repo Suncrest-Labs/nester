@@ -27,13 +27,13 @@ func NewSavingsGoalRepository(db *sql.DB) *SavingsGoalRepository {
 
 func (r *SavingsGoalRepository) Create(ctx context.Context, goal *savingsgoal.SavingsGoal) error {
 	query := `
-		INSERT INTO savings_goals (id, user_id, target_amount, currency, deadline, description, category, name, emoji)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO savings_goals (id, user_id, vault_id, target_amount, currency, deadline, description, category, name, emoji)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING created_at, updated_at, status
 	`
 	return r.db.QueryRowContext(
 		ctx, query,
-		goal.ID, goal.UserID, goal.TargetAmount.String(), goal.Currency, goal.Deadline,
+		goal.ID, goal.UserID, nullUUID(goal.VaultID), goal.TargetAmount.String(), goal.Currency, goal.Deadline,
 		nullSQLString(goal.Description), string(goal.Category),
 		nullSQLString(goal.Name), nullSQLString(goal.Emoji),
 	).Scan(&goal.CreatedAt, &goal.UpdatedAt, &goal.Status)
@@ -73,7 +73,7 @@ func (r *SavingsGoalRepository) ClearShareToken(ctx context.Context, goalID, use
 
 func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.UUID) (*savingsgoal.SavingsGoal, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, target_amount, currency, deadline, description, category,
+		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at
@@ -91,7 +91,7 @@ func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.
 
 func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
 	query := `
-		SELECT id, user_id, target_amount, currency, deadline, description, category,
+		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at
@@ -124,7 +124,7 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 
 func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, target_amount, currency, deadline, description, category,
+		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at
@@ -144,10 +144,10 @@ func (r *SavingsGoalRepository) Update(ctx context.Context, goal *savingsgoal.Sa
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE savings_goals
 		SET target_amount = $1, currency = $2, deadline = $3, description = $4, category = $5,
-		    name = $6, emoji = $7, updated_at = NOW()
-		WHERE id = $8 AND user_id = $9
+		    vault_id = $6, name = $7, emoji = $8, updated_at = NOW()
+		WHERE id = $9 AND user_id = $10
 	`, goal.TargetAmount.String(), goal.Currency, goal.Deadline, nullSQLString(goal.Description),
-		string(goal.Category), nullSQLString(goal.Name), nullSQLString(goal.Emoji),
+		string(goal.Category), nullUUID(goal.VaultID), nullSQLString(goal.Name), nullSQLString(goal.Emoji),
 		goal.ID, goal.UserID)
 	if err != nil {
 		return err
@@ -359,6 +359,7 @@ type savingsGoalScanner interface {
 func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, error) {
 	var (
 		id, userID, targetStr, currency, category string
+		vaultID                                   sql.NullString
 		deadline, createdAt, updatedAt            time.Time
 		description                               sql.NullString
 		notifiedMilestones                        pq.Int32Array
@@ -370,7 +371,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		shareEnabledAt                            sql.NullTime
 	)
 	if err := row.Scan(
-		&id, &userID, &targetStr, &currency, &deadline, &description, &category,
+		&id, &userID, &vaultID, &targetStr, &currency, &deadline, &description, &category,
 		&notifiedMilestones, &createdAt, &updatedAt,
 		&status, &completedAt, &completionAction, &name, &emoji,
 		&shareToken, &shareEnabledAt,
@@ -379,6 +380,12 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 	}
 	parsedID, _ := uuid.Parse(id)
 	parsedUserID, _ := uuid.Parse(userID)
+	var parsedVaultID *uuid.UUID
+	if vaultID.Valid {
+		if v, err := uuid.Parse(vaultID.String); err == nil {
+			parsedVaultID = &v
+		}
+	}
 	target, _ := decimal.NewFromString(targetStr)
 	desc := ""
 	if description.Valid {
@@ -410,16 +417,17 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		shareEnabledAtPtr = &t
 	}
 	return savingsgoal.SavingsGoal{
-		ID:               parsedID,
-		UserID:           parsedUserID,
-		TargetAmount:     target,
-		Currency:         currency,
-		Deadline:         deadline,
-		Description:      desc,
-		Name:             name.String,
-		Emoji:            emoji.String,
-		Category:         savingsgoal.GoalCategory(category),
-		Status:           goalStatus,
+		ID:                 parsedID,
+		UserID:             parsedUserID,
+		VaultID:            parsedVaultID,
+		TargetAmount:       target,
+		Currency:           currency,
+		Deadline:           deadline,
+		Description:        desc,
+		Name:               name.String,
+		Emoji:              emoji.String,
+		Category:           savingsgoal.GoalCategory(category),
+		Status:             goalStatus,
 		NotifiedMilestones: milestones,
 		CreatedAt:        createdAt,
 		UpdatedAt:        updatedAt,
@@ -436,6 +444,15 @@ func nullSQLString(s string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+// nullUUID renders an optional vault link as a nullable SQL parameter so a nil
+// pointer is persisted as NULL rather than the zero UUID.
+func nullUUID(id *uuid.UUID) any {
+	if id == nil {
+		return nil
+	}
+	return id.String()
 }
 
 // RecordGoalDeposits atomically inserts all per-goal deposit rows (#719).

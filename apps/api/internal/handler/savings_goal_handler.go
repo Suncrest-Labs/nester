@@ -85,6 +85,7 @@ type createSavingsGoalRequest struct {
 	Category     string      `json:"category"`
 	Name         string      `json:"name"`
 	Emoji        string      `json:"emoji"`
+	VaultID      *string     `json:"vault_id,omitempty"`
 }
 
 type updateSavingsGoalRequest struct {
@@ -122,6 +123,11 @@ func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("deadline must be RFC3339"))
 		return
 	}
+	vaultID, err := parseOptionalUUID(req.VaultID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault_id must be a valid UUID"))
+		return
+	}
 	goal, err := h.svc.Create(r.Context(), userID, service.CreateSavingsGoalInput{
 		TargetAmount: target,
 		Currency:     req.Currency,
@@ -130,6 +136,7 @@ func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
 		Category:     req.Category,
 		Name:         req.Name,
 		Emoji:        req.Emoji,
+		VaultID:      vaultID,
 	})
 	if err != nil {
 		h.writeError(w, r, err)
@@ -501,12 +508,27 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_PAUSED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrGoalArchived):
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_ARCHIVED", err.Error()))
+	case errors.Is(err, savingsgoal.ErrUnauthorized):
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "vault does not belong to you"))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:
 		logpkg.FromContext(r.Context()).Error("savings goal handler failed", "error", err.Error())
 		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
 	}
+}
+
+// parseOptionalUUID parses an optional UUID field, treating an absent or blank
+// value as "not provided" rather than an error.
+func parseOptionalUUID(raw *string) (*uuid.UUID, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(strings.TrimSpace(*raw))
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
 }
 
 func parseTargetAmount(n json.Number) (decimal.Decimal, error) {

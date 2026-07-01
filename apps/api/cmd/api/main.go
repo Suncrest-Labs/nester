@@ -420,6 +420,7 @@ func run() error {
 	webhookHandler.Register(mux)
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
+		vaultRepository,
 		service.CompositeGoalMilestoneNotifier{
 			Notifiers: []service.GoalMilestoneNotifier{
 				service.DispatcherGoalMilestoneNotifier{Dispatcher: notificationDispatcher2},

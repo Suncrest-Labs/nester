@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -12,29 +13,38 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsstreak"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
 
+// VaultReader exposes the single read the savings goal service needs from the
+// vault store: looking up a vault to validate ownership/currency at link time
+// and to read its live balance when computing goal progress.
+type VaultReader interface {
+	GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error)
+}
+
 type SavingsGoalService struct {
 	repo           savingsgoal.Repository
+	vaultRepo      VaultReader
 	notifier       GoalMilestoneNotifier
 	streakRepo     savingsstreak.Repository
 	streakNotifier StreakMilestoneNotifier
 }
 
-func NewSavingsGoalService(repo savingsgoal.Repository, notifier GoalMilestoneNotifier) *SavingsGoalService {
+func NewSavingsGoalService(repo savingsgoal.Repository, vaultRepo VaultReader, notifier GoalMilestoneNotifier) *SavingsGoalService {
 	if notifier == nil {
 		notifier = noopGoalMilestoneNotifier{}
 	}
 	return &SavingsGoalService{
 		repo:           repo,
+		vaultRepo:      vaultRepo,
 		notifier:       notifier,
 		streakNotifier: noopStreakMilestoneNotifier{},
 	}
 }
 
-// SetStreakRepository attaches the streak persistence layer. When set, Summary()
-// computes and persists the user's deposit streak alongside the goal totals.
+// SetStreakRepository attaches the streak persistence layer.
 func (s *SavingsGoalService) SetStreakRepository(repo savingsstreak.Repository) {
 	s.streakRepo = repo
 }
@@ -56,6 +66,7 @@ type CreateSavingsGoalInput struct {
 	Category     string          `json:"category"`
 	Name         string          `json:"name"`
 	Emoji        string          `json:"emoji"`
+	VaultID      *uuid.UUID      `json:"vault_id,omitempty"`
 }
 
 type UpdateSavingsGoalInput struct {
@@ -103,6 +114,12 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 		Name:         name,
 		Emoji:        emoji,
 		Category:     category,
+	}
+	if in.VaultID != nil {
+		if err := s.validateGoalVault(ctx, userID, *in.VaultID, goal.Currency); err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		goal.VaultID = in.VaultID
 	}
 	if err := s.repo.Create(ctx, goal); err != nil {
 		return savingsgoal.SavingsGoal{}, err
@@ -307,8 +324,30 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 	return summary, nil
 }
 
+// validateGoalVault ensures a vault may be linked to a goal: it must exist,
+// belong to the authenticated user, and share the goal's currency.
+func (s *SavingsGoalService) validateGoalVault(ctx context.Context, userID, vaultID uuid.UUID, currency string) error {
+	if s.vaultRepo == nil {
+		return fmt.Errorf("%w: vault linking is not available", savingsgoal.ErrInvalidGoal)
+	}
+	v, err := s.vaultRepo.GetVault(ctx, vaultID)
+	if err != nil {
+		if errors.Is(err, vault.ErrVaultNotFound) {
+			return fmt.Errorf("%w: vault not found", savingsgoal.ErrInvalidGoal)
+		}
+		return err
+	}
+	if v.UserID != userID {
+		return savingsgoal.ErrUnauthorized
+	}
+	if savingsgoal.NormalizeCurrency(v.Currency) != currency {
+		return fmt.Errorf("%w: vault currency (%s) does not match goal currency (%s)", savingsgoal.ErrInvalidGoal, v.Currency, currency)
+	}
+	return nil
+}
+
 func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoal.SavingsGoal) (savingsgoal.SavingsGoal, error) {
-	balance, err := s.repo.SumVaultBalance(ctx, goal.UserID, goal.Currency)
+	balance, err := s.currentAmount(ctx, goal)
 	if err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -367,6 +406,24 @@ func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoa
 	}
 
 	return goal, nil
+}
+
+// currentAmount resolves the balance backing a goal. A goal linked to a
+// specific vault reflects only that vault's balance; goals created before vault
+// linking (vault_id IS NULL) fall back to summing every vault in the goal's
+// currency. The same fallback covers a linked vault that has since been
+// soft-deleted, so progress never errors out for an orphaned link.
+func (s *SavingsGoalService) currentAmount(ctx context.Context, goal savingsgoal.SavingsGoal) (decimal.Decimal, error) {
+	if goal.VaultID != nil && s.vaultRepo != nil {
+		v, err := s.vaultRepo.GetVault(ctx, *goal.VaultID)
+		if err == nil {
+			return v.CurrentBalance, nil
+		}
+		if !errors.Is(err, vault.ErrVaultNotFound) {
+			return decimal.Zero, err
+		}
+	}
+	return s.repo.SumVaultBalance(ctx, goal.UserID, goal.Currency)
 }
 
 // Pause suspends deposits and notifications for a goal (#718).

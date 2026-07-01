@@ -72,6 +72,7 @@ func applySavingsScheduleMigrations(t *testing.T, db *sql.DB) {
 		"026_create_savings_goals.up.sql",
 		"037_add_savings_goal_category.up.sql",
 		"039_create_savings_schedules.up.sql",
+		"040_add_savings_goal_vault_id.up.sql",
 	} {
 		applyMigrationFile(t, db, name)
 	}

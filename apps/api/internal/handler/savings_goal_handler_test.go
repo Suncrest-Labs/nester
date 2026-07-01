@@ -24,12 +24,16 @@ import (
 )
 
 type mockSavingsGoalService struct {
-	goals map[uuid.UUID]savingsgoal.SavingsGoal
+	goals          map[uuid.UUID]savingsgoal.SavingsGoal
+	foreignVaultID *uuid.UUID
 }
 
 func (m *mockSavingsGoalService) Create(_ context.Context, userID uuid.UUID, in service.CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
 	if !savingsgoal.IsSupportedCurrency(in.Currency) {
 		return savingsgoal.SavingsGoal{}, fmt.Errorf("%w: unsupported currency %q (supported: USDC, XLM)", savingsgoal.ErrInvalidGoal, in.Currency)
+	}
+	if in.VaultID != nil && m.foreignVaultID != nil && *in.VaultID == *m.foreignVaultID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrUnauthorized
 	}
 	category := savingsgoal.CategoryOther
 	if in.Category != "" {
@@ -42,6 +46,7 @@ func (m *mockSavingsGoalService) Create(_ context.Context, userID uuid.UUID, in 
 	g := savingsgoal.SavingsGoal{
 		ID:            uuid.New(),
 		UserID:        userID,
+		VaultID:       in.VaultID,
 		TargetAmount:  in.TargetAmount,
 		Currency:      savingsgoal.NormalizeCurrency(in.Currency),
 		Deadline:      in.Deadline,
@@ -428,6 +433,89 @@ func TestSavingsGoalHandler_Create_ValidXLM(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+}
+
+func TestSavingsGoalHandler_Create_WithVaultLink(t *testing.T) {
+	userID := uuid.New()
+	vaultID := uuid.New()
+	svc := &mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)}
+	h := NewSavingsGoalHandler(svc)
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	deadline := time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	createBody := fmt.Sprintf(`{"target_amount":1000,"currency":"USDC","deadline":"%s","vault_id":"%s"}`, deadline, vaultID)
+	resp, err := http.Post(server.URL+"/api/v1/users/savings-goals", "application/json", bytes.NewBufferString(createBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+
+	var envelope response.Response
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(envelope.Data)
+	var goal savingsgoal.SavingsGoal
+	if err := json.Unmarshal(data, &goal); err != nil {
+		t.Fatal(err)
+	}
+	if goal.VaultID == nil || *goal.VaultID != vaultID {
+		t.Fatalf("vault_id = %v, want %v", goal.VaultID, vaultID)
+	}
+}
+
+func TestSavingsGoalHandler_Create_ForeignVaultForbidden(t *testing.T) {
+	userID := uuid.New()
+	vaultID := uuid.New()
+	svc := &mockSavingsGoalService{
+		goals:          make(map[uuid.UUID]savingsgoal.SavingsGoal),
+		foreignVaultID: &vaultID,
+	}
+	h := NewSavingsGoalHandler(svc)
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	deadline := time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	createBody := fmt.Sprintf(`{"target_amount":1000,"currency":"USDC","deadline":"%s","vault_id":"%s"}`, deadline, vaultID)
+	resp, err := http.Post(server.URL+"/api/v1/users/savings-goals", "application/json", bytes.NewBufferString(createBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("create status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestSavingsGoalHandler_Create_InvalidVaultID(t *testing.T) {
+	userID := uuid.New()
+	h := NewSavingsGoalHandler(&mockSavingsGoalService{goals: make(map[uuid.UUID]savingsgoal.SavingsGoal)})
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	deadline := time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	createBody := `{"target_amount":1000,"currency":"USDC","deadline":"` + deadline + `","vault_id":"not-a-uuid"}`
+	resp, err := http.Post(server.URL+"/api/v1/users/savings-goals", "application/json", bytes.NewBufferString(createBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create status = %d, want 400", resp.StatusCode)
 	}
 }
 

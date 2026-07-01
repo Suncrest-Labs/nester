@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
 type memorySavingsGoalRepo struct {
@@ -165,6 +167,16 @@ func (m *memorySavingsGoalRepo) GetByShareToken(_ context.Context, token uuid.UU
 	return nil, savingsgoal.ErrGoalNotFound
 }
 
+// newVaultReader builds an in-memory VaultReader seeded with the given vaults,
+// reusing the shared memoryVaultRepo fake.
+func newVaultReader(vaults ...vault.Vault) *memoryVaultRepo {
+	repo := &memoryVaultRepo{vaults: make(map[uuid.UUID]vault.Vault, len(vaults))}
+	for _, v := range vaults {
+		repo.vaults[v.ID] = v
+	}
+	return repo
+}
+
 type recordingGoalMilestoneNotifier struct {
 	mu    sync.Mutex
 	calls []recordedGoalMilestone
@@ -221,7 +233,7 @@ func TestSavingsGoalService_MilestoneNotifications(t *testing.T) {
 		repo := newMemorySavingsGoalRepo()
 		repo.setBalance(userID, "USDC", decimal.NewFromInt(24))
 		notifier := &recordingGoalMilestoneNotifier{}
-		svc := NewSavingsGoalService(repo, notifier)
+		svc := NewSavingsGoalService(repo, nil, notifier)
 
 		goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 			TargetAmount: target,
@@ -242,7 +254,7 @@ func TestSavingsGoalService_MilestoneNotifications(t *testing.T) {
 		repo := newMemorySavingsGoalRepo()
 		repo.setBalance(userID, "USDC", decimal.NewFromInt(25))
 		notifier := &recordingGoalMilestoneNotifier{}
-		svc := NewSavingsGoalService(repo, notifier)
+		svc := NewSavingsGoalService(repo, nil, notifier)
 
 		goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 			TargetAmount: target,
@@ -266,7 +278,7 @@ func TestSavingsGoalService_MilestoneNotifications(t *testing.T) {
 		repo := newMemorySavingsGoalRepo()
 		repo.setBalance(userID, "USDC", decimal.NewFromInt(25))
 		notifier := &recordingGoalMilestoneNotifier{}
-		svc := NewSavingsGoalService(repo, notifier)
+		svc := NewSavingsGoalService(repo, nil, notifier)
 
 		goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 			TargetAmount: target,
@@ -304,7 +316,7 @@ func TestSavingsGoalService_Create_ValidCategory(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -323,7 +335,7 @@ func TestSavingsGoalService_Create_ValidCategory(t *testing.T) {
 func TestSavingsGoalService_Create_InvalidCategory(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
 
 	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -339,7 +351,7 @@ func TestSavingsGoalService_Create_InvalidCategory(t *testing.T) {
 func TestSavingsGoalService_Create_MissingCategoryDefaultsToOther(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -376,7 +388,7 @@ func TestSavingsGoalService_List_FilterByCategory(t *testing.T) {
 		Deadline:     testDeadline(),
 		Category:     savingsgoal.CategoryTravel,
 	}
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	goals, err := svc.List(ctx, userID, "education", "", false)
 	if err != nil {
@@ -393,7 +405,7 @@ func TestSavingsGoalService_List_FilterByCategory(t *testing.T) {
 func TestSavingsGoalService_List_InvalidCategoryFilter(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
 
 	_, err := svc.List(ctx, userID, "invalid", "", false)
 	if err == nil {
@@ -430,7 +442,7 @@ func TestSavingsGoalService_List_StatusFilter(t *testing.T) {
 		Status: savingsgoal.GoalStatusArchived,
 	}
 
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	cases := map[string]uuid.UUID{
 		savingsgoal.GoalStatusActive:    activeID,
@@ -473,7 +485,7 @@ func TestSavingsGoalService_List_StatusFilter(t *testing.T) {
 }
 
 func TestSavingsGoalService_List_InvalidStatusFilter(t *testing.T) {
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
 	if _, err := svc.List(context.Background(), uuid.New(), "", "bogus", false); err == nil {
 		t.Fatal("List() error = nil, want invalid status")
 	}
@@ -489,7 +501,7 @@ func TestSavingsGoalService_Archive(t *testing.T) {
 		Currency: "USDC", Deadline: testDeadline(), Category: savingsgoal.CategoryEducation,
 		Status: savingsgoal.GoalStatusCompleted,
 	}
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	goal, err := svc.Archive(ctx, userID, goalID)
 	if err != nil {
@@ -532,7 +544,7 @@ func TestSavingsGoalService_Create_ValidXLMGoal(t *testing.T) {
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
 	repo.setBalance(userID, "XLM", decimal.NewFromInt(120))
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(500),
@@ -556,7 +568,7 @@ func TestSavingsGoalService_Create_ValidUSDCGoal(t *testing.T) {
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
 	repo.setBalance(userID, "USDC", decimal.NewFromInt(250))
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -577,7 +589,7 @@ func TestSavingsGoalService_Create_ValidUSDCGoal(t *testing.T) {
 func TestSavingsGoalService_Create_InvalidCurrency(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
 
 	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
 		TargetAmount: decimal.NewFromInt(1000),
@@ -611,7 +623,7 @@ func TestSavingsGoalService_Summary_MixedCurrencies(t *testing.T) {
 		Currency:     savingsgoal.CurrencyXLM,
 		Deadline:     testDeadline(),
 	}
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	summary, err := svc.Summary(ctx, userID)
 	if err != nil {
@@ -646,7 +658,7 @@ func TestSavingsGoalService_Summary_MixedCurrencies(t *testing.T) {
 
 func TestSavingsGoalService_Summary_NoGoals(t *testing.T) {
 	ctx := context.Background()
-	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
 
 	summary, err := svc.Summary(ctx, uuid.New())
 	if err != nil {
@@ -676,7 +688,7 @@ func TestSavingsGoalService_Summary_CompletedAndProgressCap(t *testing.T) {
 		Currency:     savingsgoal.CurrencyUSDC,
 		Deadline:     testDeadline(),
 	}
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	summary, err := svc.Summary(ctx, userID)
 	if err != nil {
@@ -708,7 +720,7 @@ func TestSavingsGoalService_Create_DeadlineValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil)
+			svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
 			_, err := svc.Create(ctx, uuid.New(), CreateSavingsGoalInput{
 				TargetAmount: decimal.NewFromInt(1000),
 				Currency:     "USDC",
@@ -740,7 +752,7 @@ func TestSavingsGoalService_Update_DeadlineToPastRejected(t *testing.T) {
 		Currency:     savingsgoal.CurrencyUSDC,
 		Deadline:     time.Now().UTC().Add(30 * 24 * time.Hour),
 	}
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	past := time.Now().UTC().Add(-time.Hour)
 	_, err := svc.Update(ctx, userID, goalID, UpdateSavingsGoalInput{Deadline: &past})
@@ -762,7 +774,7 @@ func TestSavingsGoalService_Update_ExtendOverdueGoalSucceeds(t *testing.T) {
 		Currency:     savingsgoal.CurrencyUSDC,
 		Deadline:     time.Now().UTC().Add(-48 * time.Hour), // already overdue
 	}
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	newDeadline := time.Now().UTC().Add(14 * 24 * time.Hour)
 	updated, err := svc.Update(ctx, userID, goalID, UpdateSavingsGoalInput{Deadline: &newDeadline})
@@ -787,7 +799,7 @@ func TestSavingsGoalService_Update_DeadlineOnCompletedGoalConflicts(t *testing.T
 		Currency:     savingsgoal.CurrencyUSDC,
 		Deadline:     time.Now().UTC().Add(30 * 24 * time.Hour),
 	}
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	newDeadline := time.Now().UTC().Add(60 * 24 * time.Hour)
 	_, err := svc.Update(ctx, userID, goalID, UpdateSavingsGoalInput{Deadline: &newDeadline})
@@ -806,7 +818,7 @@ func TestSavingsGoalService_Unarchive(t *testing.T) {
 		Currency: "USDC", Deadline: testDeadline(), Category: savingsgoal.CategoryEducation,
 		Status: savingsgoal.GoalStatusArchived,
 	}
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	goal, err := svc.Unarchive(ctx, userID, goalID)
 	if err != nil {
@@ -853,7 +865,7 @@ func TestSavingsGoalService_DepositSplit_AmountMode(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
 	g2 := makeActiveGoal(repo, userID, "USDC", 500)
@@ -891,7 +903,7 @@ func TestSavingsGoalService_DepositSplit_PercentageMode(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
 	g2 := makeActiveGoal(repo, userID, "USDC", 500)
@@ -919,7 +931,7 @@ func TestSavingsGoalService_DepositSplit_AmountMismatch(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
 
@@ -939,7 +951,7 @@ func TestSavingsGoalService_DepositSplit_PercentageMismatch(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
 
@@ -959,7 +971,7 @@ func TestSavingsGoalService_DepositSplit_DuplicateGoal(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
 
@@ -980,7 +992,7 @@ func TestSavingsGoalService_DepositSplit_GoalNotFound(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	_, err := svc.DepositSplit(ctx, userID, DepositSplitInput{
 		TotalAmount: decimal.NewFromInt(100),
@@ -998,7 +1010,7 @@ func TestSavingsGoalService_DepositSplit_GoalPaused(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
 	g := repo.goals[g1]
@@ -1021,7 +1033,7 @@ func TestSavingsGoalService_DepositSplit_GoalArchived(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
 	g := repo.goals[g1]
@@ -1044,7 +1056,7 @@ func TestSavingsGoalService_DepositSplit_CurrencyMismatch(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "XLM", 1000)
 
@@ -1065,7 +1077,7 @@ func TestSavingsGoalService_DepositSplit_WrongUser(t *testing.T) {
 	userID := uuid.New()
 	otherUser := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, otherUser, "USDC", 1000)
 
@@ -1085,7 +1097,7 @@ func TestSavingsGoalService_DepositSplit_Atomic_RecordsAll(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 	repo := newMemorySavingsGoalRepo()
-	svc := NewSavingsGoalService(repo, nil)
+	svc := NewSavingsGoalService(repo, nil, nil)
 
 	g1 := makeActiveGoal(repo, userID, "USDC", 1000)
 	g2 := makeActiveGoal(repo, userID, "USDC", 500)
@@ -1109,5 +1121,188 @@ func TestSavingsGoalService_DepositSplit_Atomic_RecordsAll(t *testing.T) {
 	}
 	if !sum2.Equal(decimal.NewFromInt(30)) {
 		t.Fatalf("goal2 deposits = %s, want 30", sum2)
+	}
+}
+
+func TestSavingsGoalService_Create_LinksVaultAndReflectsBalance(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	vaultID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	// Sum-all would report 999; a correctly linked goal must ignore it.
+	repo.setBalance(userID, "USDC", decimal.NewFromInt(999))
+	vaults := newVaultReader(vault.Vault{
+		ID:             vaultID,
+		UserID:         userID,
+		Currency:       "USDC",
+		CurrentBalance: decimal.NewFromInt(300),
+	})
+	svc := NewSavingsGoalService(repo, vaults, nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		VaultID:      &vaultID,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if goal.VaultID == nil || *goal.VaultID != vaultID {
+		t.Fatalf("vault_id = %v, want %v", goal.VaultID, vaultID)
+	}
+	if !goal.CurrentAmount.Equal(decimal.NewFromInt(300)) {
+		t.Fatalf("current_amount = %s, want 300 (linked vault balance)", goal.CurrentAmount)
+	}
+}
+
+func TestSavingsGoalService_Create_ForeignVaultReturnsUnauthorized(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	otherUser := uuid.New()
+	vaultID := uuid.New()
+	vaults := newVaultReader(vault.Vault{
+		ID:             vaultID,
+		UserID:         otherUser,
+		Currency:       "USDC",
+		CurrentBalance: decimal.NewFromInt(300),
+	})
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), vaults, nil, nil)
+
+	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		VaultID:      &vaultID,
+	})
+	if !errors.Is(err, savingsgoal.ErrUnauthorized) {
+		t.Fatalf("Create() error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestSavingsGoalService_Create_VaultCurrencyMismatch(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	vaultID := uuid.New()
+	vaults := newVaultReader(vault.Vault{
+		ID:             vaultID,
+		UserID:         userID,
+		Currency:       "XLM",
+		CurrentBalance: decimal.NewFromInt(300),
+	})
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), vaults, nil, nil)
+
+	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		VaultID:      &vaultID,
+	})
+	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
+		t.Fatalf("Create() error = %v, want ErrInvalidGoal", err)
+	}
+	if !strings.Contains(err.Error(), "vault currency (XLM) does not match goal currency (USDC)") {
+		t.Fatalf("error message = %q, want vault/goal currency mismatch detail", err.Error())
+	}
+}
+
+func TestSavingsGoalService_Create_VaultNotFound(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	missing := uuid.New()
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), newVaultReader(), nil, nil)
+
+	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		VaultID:      &missing,
+	})
+	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
+		t.Fatalf("Create() error = %v, want ErrInvalidGoal", err)
+	}
+}
+
+// TestSavingsGoalService_PerVaultIsolation is the core regression guard for
+// issue #688: two vaults in the same currency, two goals each linked to their
+// own vault, must each report only their own vault's balance — never the
+// combined sum.
+func TestSavingsGoalService_PerVaultIsolation(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	vaultA := uuid.New()
+	vaultB := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	// Legacy sum-all would inflate both goals to 1000.
+	repo.setBalance(userID, "USDC", decimal.NewFromInt(1000))
+	vaults := newVaultReader(
+		vault.Vault{ID: vaultA, UserID: userID, Currency: "USDC", CurrentBalance: decimal.NewFromInt(200)},
+		vault.Vault{ID: vaultB, UserID: userID, Currency: "USDC", CurrentBalance: decimal.NewFromInt(800)},
+	)
+	svc := NewSavingsGoalService(repo, vaults, nil, nil)
+
+	goalA, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		VaultID:      &vaultA,
+	})
+	if err != nil {
+		t.Fatalf("Create(goalA) error = %v", err)
+	}
+	goalB, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		VaultID:      &vaultB,
+	})
+	if err != nil {
+		t.Fatalf("Create(goalB) error = %v", err)
+	}
+
+	if !goalA.CurrentAmount.Equal(decimal.NewFromInt(200)) {
+		t.Fatalf("goalA current_amount = %s, want 200", goalA.CurrentAmount)
+	}
+	if !goalB.CurrentAmount.Equal(decimal.NewFromInt(800)) {
+		t.Fatalf("goalB current_amount = %s, want 800", goalB.CurrentAmount)
+	}
+
+	// Confirm the isolation survives a re-read through List.
+	goals, err := svc.List(ctx, userID, "", "", false)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	byID := map[uuid.UUID]decimal.Decimal{}
+	for _, g := range goals {
+		byID[g.ID] = g.CurrentAmount
+	}
+	if !byID[goalA.ID].Equal(decimal.NewFromInt(200)) {
+		t.Fatalf("listed goalA current_amount = %s, want 200", byID[goalA.ID])
+	}
+	if !byID[goalB.ID].Equal(decimal.NewFromInt(800)) {
+		t.Fatalf("listed goalB current_amount = %s, want 800", byID[goalB.ID])
+	}
+}
+
+func TestSavingsGoalService_NoVaultFallsBackToSum(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	repo.setBalance(userID, "USDC", decimal.NewFromInt(450))
+	svc := NewSavingsGoalService(repo, newVaultReader(), nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if goal.VaultID != nil {
+		t.Fatalf("vault_id = %v, want nil", goal.VaultID)
+	}
+	if !goal.CurrentAmount.Equal(decimal.NewFromInt(450)) {
+		t.Fatalf("current_amount = %s, want 450 (sum-all fallback)", goal.CurrentAmount)
 	}
 }

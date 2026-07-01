@@ -157,6 +157,7 @@ func ParseCategory(value string) (GoalCategory, error) {
 type SavingsGoal struct {
 	ID            uuid.UUID       `json:"id"`
 	UserID        uuid.UUID       `json:"user_id"`
+	VaultID       *uuid.UUID      `json:"vault_id,omitempty"`
 	TargetAmount  decimal.Decimal `json:"target_amount"`
 	Currency      string          `json:"currency"`
 	Deadline      time.Time       `json:"deadline"`
