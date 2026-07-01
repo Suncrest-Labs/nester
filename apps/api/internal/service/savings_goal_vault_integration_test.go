@@ -23,7 +23,7 @@ func applySavingsGoalVaultMigrations(t *testing.T, db *sql.DB) {
 		"026_create_savings_goals.up.sql",
 		"037_add_savings_goal_category.up.sql",
 		"038_add_savings_goal_notified_milestones.up.sql",
-		"040_add_savings_goal_vault_id.up.sql",
+		"053_add_savings_goal_vault_id.up.sql",
 	} {
 		path := filepath.Join("..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)
