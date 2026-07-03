@@ -178,6 +178,7 @@ type SavingsGoal struct {
 	CurrentAmount      decimal.Decimal `json:"current_amount"`
 	ProgressPct        float64         `json:"progress_pct"`
 	NotifiedMilestones []int           `json:"-"`
+	DeadlineRemindersSent []int        `json:"-"`
 	CreatedAt          time.Time       `json:"created_at"`
 	UpdatedAt          time.Time       `json:"updated_at"`
 	// Completion fields (#716).
@@ -235,6 +236,8 @@ type Repository interface {
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	SumVaultBalance(ctx context.Context, userID uuid.UUID, currency string) (decimal.Decimal, error)
 	UpdateMilestones(ctx context.Context, goalID uuid.UUID, milestones []int) error
+	UpdateDeadlineReminders(ctx context.Context, goalID uuid.UUID, reminders []int) error
+	ListActiveApproachingDeadline(ctx context.Context, maxDays int) ([]SavingsGoal, error)
 	ListContributions(ctx context.Context, goalID, userID uuid.UUID, params interface{}) ([]GoalContribution, int, string, error)
 	// SumRecentDeposits sums vault deposit amounts for the user in the given currency since `since` (#714).
 	SumRecentDeposits(ctx context.Context, userID uuid.UUID, currency string, since time.Time) (decimal.Decimal, error)

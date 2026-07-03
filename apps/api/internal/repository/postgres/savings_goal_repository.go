@@ -74,7 +74,7 @@ func (r *SavingsGoalRepository) ClearShareToken(ctx context.Context, goalID, use
 func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.UUID) (*savingsgoal.SavingsGoal, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
-		       notified_milestones, created_at, updated_at,
+		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at
 		FROM savings_goals WHERE share_token = $1
@@ -92,7 +92,7 @@ func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.
 func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
 	query := `
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
-		       notified_milestones, created_at, updated_at,
+		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at
 		FROM savings_goals
@@ -125,7 +125,7 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
-		       notified_milestones, created_at, updated_at,
+		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at
 		FROM savings_goals WHERE id = $1
@@ -205,6 +205,52 @@ func (r *SavingsGoalRepository) UpdateMilestones(ctx context.Context, goalID uui
 		return savingsgoal.ErrGoalNotFound
 	}
 	return nil
+}
+
+func (r *SavingsGoalRepository) UpdateDeadlineReminders(ctx context.Context, goalID uuid.UUID, reminders []int) error {
+	if reminders == nil {
+		reminders = []int{}
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET deadline_reminders_sent = $1, updated_at = NOW()
+		WHERE id = $2
+	`, pq.Array(reminders), goalID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
+}
+
+func (r *SavingsGoalRepository) ListActiveApproachingDeadline(ctx context.Context, maxDays int) ([]savingsgoal.SavingsGoal, error) {
+	query := `
+		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
+		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
+		       status, completed_at, completion_action, name, emoji,
+		       share_token, share_enabled_at
+		FROM savings_goals
+		WHERE status = 'active' OR status IS NULL OR status = ''
+		  AND deadline BETWEEN NOW() AND NOW() + ($1 || ' days')::INTERVAL
+	`
+	rows, err := r.db.QueryContext(ctx, query, maxDays)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goals []savingsgoal.SavingsGoal
+	for rows.Next() {
+		g, err := scanSavingsGoalWithShare(rows)
+		if err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, rows.Err()
 }
 
 func (r *SavingsGoalRepository) UpdateStatus(ctx context.Context, goalID, userID uuid.UUID, status string) error {
@@ -362,7 +408,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		vaultID                                   sql.NullString
 		deadline, createdAt, updatedAt            time.Time
 		description                               sql.NullString
-		notifiedMilestones                        pq.Int32Array
+		notifiedMilestones, deadlineReminders     pq.Int32Array
 		status                                    sql.NullString
 		completedAt                               sql.NullTime
 		completionAction                          sql.NullString
@@ -372,7 +418,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 	)
 	if err := row.Scan(
 		&id, &userID, &vaultID, &targetStr, &currency, &deadline, &description, &category,
-		&notifiedMilestones, &createdAt, &updatedAt,
+		&notifiedMilestones, &deadlineReminders, &createdAt, &updatedAt,
 		&status, &completedAt, &completionAction, &name, &emoji,
 		&shareToken, &shareEnabledAt,
 	); err != nil {
@@ -394,6 +440,10 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 	milestones := make([]int, 0, len(notifiedMilestones))
 	for _, m := range notifiedMilestones {
 		milestones = append(milestones, int(m))
+	}
+	reminders := make([]int, 0, len(deadlineReminders))
+	for _, m := range deadlineReminders {
+		reminders = append(reminders, int(m))
 	}
 	goalStatus := savingsgoal.GoalStatusActive
 	if status.Valid && status.String != "" {
@@ -429,6 +479,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		Category:           savingsgoal.GoalCategory(category),
 		Status:             goalStatus,
 		NotifiedMilestones: milestones,
+		DeadlineRemindersSent: reminders,
 		CreatedAt:        createdAt,
 		UpdatedAt:        updatedAt,
 		CompletedAt:      completedAtPtr,

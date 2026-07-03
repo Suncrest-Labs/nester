@@ -124,7 +124,7 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 	if err := s.repo.Create(ctx, goal); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
@@ -135,7 +135,7 @@ func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) 
 	if goal.UserID != userID {
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
@@ -160,9 +160,39 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 	if err != nil {
 		return nil, err
 	}
+	var goals []savingsgoal.SavingsGoal
+	for rows.Next() {
+		g, err := scanSavingsGoalWithShare(rows)
+		if err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, rows.Err()
+}
+
+func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
+	filterCategory := ""
+	if strings.TrimSpace(category) != "" {
+		parsed, err := savingsgoal.ParseCategory(category)
+		if err != nil {
+			return nil, err
+		}
+		filterCategory = string(parsed)
+	}
+
+	filterStatus, err := savingsgoal.ParseStatusFilter(status)
+	if err != nil {
+		return nil, err
+	}
+
+	goals, err := s.repo.ListByUser(ctx, userID, filterCategory)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]savingsgoal.SavingsGoal, 0, len(goals))
 	for _, g := range goals {
-		enriched, err := s.enrichProgress(ctx, g)
+		enriched, err := s.EnrichProgress(ctx, g)
 		if err != nil {
 			return nil, err
 		}
@@ -238,7 +268,7 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	if err := s.repo.Update(ctx, goal); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 func (s *SavingsGoalService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
@@ -266,7 +296,7 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 
 	now := time.Now().UTC()
 	for _, goal := range goals {
-		enriched, err := s.enrichProgress(ctx, goal)
+		enriched, err := s.EnrichProgress(ctx, goal)
 		if err != nil {
 			return savingsgoal.SavingsGoalsSummary{}, err
 		}
@@ -346,7 +376,7 @@ func (s *SavingsGoalService) validateGoalVault(ctx context.Context, userID, vaul
 	return nil
 }
 
-func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoal.SavingsGoal) (savingsgoal.SavingsGoal, error) {
+func (s *SavingsGoalService) EnrichProgress(ctx context.Context, goal savingsgoal.SavingsGoal) (savingsgoal.SavingsGoal, error) {
 	balance, err := s.currentAmount(ctx, goal)
 	if err != nil {
 		return savingsgoal.SavingsGoal{}, err
@@ -445,7 +475,7 @@ func (s *SavingsGoalService) Pause(ctx context.Context, userID, goalID uuid.UUID
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusPaused
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Resume reactivates a paused goal (#718).
@@ -496,7 +526,7 @@ func (s *SavingsGoalService) Complete(ctx context.Context, userID, goalID uuid.U
 	goal.CompletionAction = action
 	now := time.Now().UTC()
 	goal.CompletedAt = &now
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Share generates a unique share token for the goal, enabling read-only public access.
@@ -517,7 +547,7 @@ func (s *SavingsGoalService) Share(ctx context.Context, userID, goalID uuid.UUID
 		goal.ShareToken = &token
 		goal.IsShared = true
 	}
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Unshare revokes the share token, making the goal private again.
@@ -539,7 +569,7 @@ func (s *SavingsGoalService) GetShared(ctx context.Context, token uuid.UUID) (sa
 	if err != nil {
 		return savingsgoal.SharedGoalView{}, err
 	}
-	enriched, err := s.enrichProgress(ctx, *goal)
+	enriched, err := s.EnrichProgress(ctx, *goal)
 	if err != nil {
 		return savingsgoal.SharedGoalView{}, err
 	}
@@ -569,13 +599,13 @@ func (s *SavingsGoalService) Archive(ctx context.Context, userID, goalID uuid.UU
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
 	if goal.Status == savingsgoal.GoalStatusArchived {
-		return s.enrichProgress(ctx, *goal)
+		return s.EnrichProgress(ctx, *goal)
 	}
 	if err := s.repo.UpdateStatus(ctx, goalID, userID, savingsgoal.GoalStatusArchived); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusArchived
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Unarchive restores an archived goal to active status (#721).
@@ -588,13 +618,13 @@ func (s *SavingsGoalService) Unarchive(ctx context.Context, userID, goalID uuid.
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
 	if goal.Status != savingsgoal.GoalStatusArchived {
-		return s.enrichProgress(ctx, *goal)
+		return s.EnrichProgress(ctx, *goal)
 	}
 	if err := s.repo.UpdateStatus(ctx, goalID, userID, savingsgoal.GoalStatusActive); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusActive
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // isoWeekKey returns an "YYYY-Www" string uniquely identifying the ISO calendar week of t.
