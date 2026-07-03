@@ -200,39 +200,6 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		filterCategory = string(parsed)
 	}
 
-	// Status is filtered after enrichment so the dynamic auto-complete (#716) is
-	// reflected: a stored-active goal that has reached its target reads as
-	// "completed" here, matching ?status=completed and excluded by ?status=active.
-	filterStatus, err := savingsgoal.ParseStatusFilter(status)
-	if err != nil {
-		return nil, err
-	}
-
-	goals, err := s.repo.ListByUser(ctx, userID, filterCategory)
-	if err != nil {
-		return nil, err
-	}
-	var goals []savingsgoal.SavingsGoal
-	for rows.Next() {
-		g, err := scanSavingsGoalWithShare(rows)
-		if err != nil {
-			return nil, err
-		}
-		goals = append(goals, g)
-	}
-	return goals, rows.Err()
-}
-
-func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
-	filterCategory := ""
-	if strings.TrimSpace(category) != "" {
-		parsed, err := savingsgoal.ParseCategory(category)
-		if err != nil {
-			return nil, err
-		}
-		filterCategory = string(parsed)
-	}
-
 	filterStatus, err := savingsgoal.ParseStatusFilter(status)
 	if err != nil {
 		return nil, err
@@ -546,7 +513,7 @@ func (s *SavingsGoalService) Resume(ctx context.Context, userID, goalID uuid.UUI
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusActive
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Complete explicitly marks a goal as completed with a disposition action (#716).
