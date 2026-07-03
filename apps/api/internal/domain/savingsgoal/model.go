@@ -287,3 +287,20 @@ func DefaultColorForCategory(cat GoalCategory) string {
 	}
 	return "slate"
 }
+
+// GoalTemplate represents a pre-built savings goal configuration.
+type GoalTemplate struct {
+	ID              uuid.UUID       `json:"id"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description"`
+	Category        GoalCategory    `json:"category"`
+	SuggestedAmount decimal.Decimal `json:"suggested_amount"`
+	Currency        string          `json:"currency"`
+	SuggestedMonths int             `json:"suggested_months"`
+	Icon            string          `json:"icon"`
+}
+
+type TemplateRepository interface {
+	List(ctx context.Context) ([]GoalTemplate, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*GoalTemplate, error)
+}

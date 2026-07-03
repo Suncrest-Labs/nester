@@ -26,6 +26,7 @@ type VaultReader interface {
 
 type SavingsGoalService struct {
 	repo           savingsgoal.Repository
+	templateRepo   savingsgoal.TemplateRepository
 	vaultRepo      VaultReader
 	notifier       GoalMilestoneNotifier
 	streakRepo     savingsstreak.Repository
@@ -38,10 +39,16 @@ func NewSavingsGoalService(repo savingsgoal.Repository, vaultRepo VaultReader, n
 	}
 	return &SavingsGoalService{
 		repo:           repo,
+		templateRepo:   nil,
 		vaultRepo:      vaultRepo,
 		notifier:       notifier,
 		streakNotifier: noopStreakMilestoneNotifier{},
 	}
+}
+
+// SetTemplateRepository attaches the template repository.
+func (s *SavingsGoalService) SetTemplateRepository(repo savingsgoal.TemplateRepository) {
+	s.templateRepo = repo
 }
 
 // SetStreakRepository attaches the streak persistence layer.
@@ -125,6 +132,51 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 		return savingsgoal.SavingsGoal{}, err
 	}
 	return s.EnrichProgress(ctx, *goal)
+}
+
+type CreateFromTemplateInput struct {
+	TemplateID     uuid.UUID
+	OverrideAmount *decimal.Decimal
+	OverrideMonths *int
+	VaultID        *uuid.UUID
+}
+
+func (s *SavingsGoalService) ListTemplates(ctx context.Context) ([]savingsgoal.GoalTemplate, error) {
+	if s.templateRepo == nil {
+		return nil, fmt.Errorf("goal templates not configured")
+	}
+	return s.templateRepo.List(ctx)
+}
+
+func (s *SavingsGoalService) CreateFromTemplate(ctx context.Context, userID uuid.UUID, in CreateFromTemplateInput) (savingsgoal.SavingsGoal, error) {
+	if s.templateRepo == nil {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("goal templates not configured")
+	}
+	template, err := s.templateRepo.GetByID(ctx, in.TemplateID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	amount := template.SuggestedAmount
+	if in.OverrideAmount != nil {
+		amount = *in.OverrideAmount
+	}
+	months := template.SuggestedMonths
+	if in.OverrideMonths != nil {
+		months = *in.OverrideMonths
+	}
+	deadline := time.Now().UTC().AddDate(0, months, 0)
+
+	createIn := CreateSavingsGoalInput{
+		TargetAmount: amount,
+		Currency:     template.Currency,
+		Deadline:     deadline,
+		Description:  template.Description,
+		Category:     string(template.Category),
+		Name:         template.Name,
+		Emoji:        "", // Optional: could map template.Icon to emoji if needed
+		VaultID:      in.VaultID,
+	}
+	return s.Create(ctx, userID, createIn)
 }
 
 func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {

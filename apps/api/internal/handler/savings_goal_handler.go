@@ -38,6 +38,8 @@ type SavingsGoalManager interface {
 	Unshare(ctx context.Context, userID, goalID uuid.UUID) error
 	GetShared(ctx context.Context, token uuid.UUID) (savingsgoal.SharedGoalView, error)
 	ListContributions(ctx context.Context, userID, goalID uuid.UUID, params listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error)
+	ListTemplates(ctx context.Context) ([]savingsgoal.GoalTemplate, error)
+	CreateFromTemplate(ctx context.Context, userID uuid.UUID, in service.CreateFromTemplateInput) (savingsgoal.SavingsGoal, error)
 }
 
 type SavingsGoalHandler struct {
@@ -75,6 +77,10 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/share", h.share)
 	mux.HandleFunc("DELETE /api/v1/users/savings-goals/{id}/share", h.unshare)
 	mux.HandleFunc("GET /api/v1/savings-goals/shared/{token}", h.getShared)
+
+	// #7xx templates
+	mux.HandleFunc("GET /api/v1/savings-goal-templates", h.listTemplates)
+	mux.HandleFunc("POST /api/v1/users/savings-goals/from-template", h.createFromTemplate)
 }
 
 type createSavingsGoalRequest struct {
@@ -138,6 +144,73 @@ func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
 		Emoji:        req.Emoji,
 		VaultID:      vaultID,
 	})
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusCreated, response.Created(goal))
+}
+
+func (h *SavingsGoalHandler) listTemplates(w http.ResponseWriter, r *http.Request) {
+	templates, err := h.svc.ListTemplates(r.Context())
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(templates))
+}
+
+type createFromTemplateRequest struct {
+	TemplateID     string       `json:"template_id"`
+	OverrideAmount *json.Number `json:"override_amount"`
+	OverrideMonths *int         `json:"override_months"`
+	VaultID        *string      `json:"vault_id,omitempty"`
+}
+
+func (h *SavingsGoalHandler) createFromTemplate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	body, err := readJSONBody(r)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	var req createFromTemplateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid JSON"))
+		return
+	}
+
+	templateID, err := uuid.Parse(req.TemplateID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("template_id must be a valid UUID"))
+		return
+	}
+
+	in := service.CreateFromTemplateInput{
+		TemplateID: templateID,
+	}
+	if req.OverrideAmount != nil {
+		amount, err := parseTargetAmount(*req.OverrideAmount)
+		if err != nil {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+			return
+		}
+		in.OverrideAmount = &amount
+	}
+	if req.OverrideMonths != nil {
+		in.OverrideMonths = req.OverrideMonths
+	}
+	vaultID, err := parseOptionalUUID(req.VaultID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault_id must be a valid UUID"))
+		return
+	}
+	in.VaultID = vaultID
+
+	goal, err := h.svc.CreateFromTemplate(r.Context(), userID, in)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
