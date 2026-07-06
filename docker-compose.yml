@@ -19,7 +19,6 @@ services:
       POSTGRES_PASSWORD: nester_dev_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/seed.sql:/docker-entrypoint-initdb.d/seed.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nester"]
       interval: 5s

@@ -75,8 +75,13 @@ func run() error {
 	if cfg.Startup().EnableAutoMigrate() {
 		baseLogger.Info("running database migrations", "dir", cfg.Startup().MigrationsDir())
 
-		driver, err := migratedb.WithInstance(db, &migratedb.Config{})
+		// Dedicated *sql.DB for the migrator: m.Close() closes the instance
+		// passed to WithInstance, so it must not be the one repositories use.
+		migDB := stdlib.OpenDBFromPool(pgPool.Pool)
+
+		driver, err := migratedb.WithInstance(migDB, &migratedb.Config{})
 		if err != nil {
+			_ = migDB.Close()
 			return fmt.Errorf("auto-migrate: init driver: %w", err)
 		}
 
@@ -84,11 +89,17 @@ func run() error {
 			"file://"+cfg.Startup().MigrationsDir(),
 			"postgres", driver)
 		if err != nil {
+			_ = migDB.Close()
 			return fmt.Errorf("auto-migrate: new migrate instance: %w", err)
 		}
 
 		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+			_, _ = m.Close()
 			return fmt.Errorf("auto-migrate: up: %w", err)
+		}
+
+		if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
+			return fmt.Errorf("auto-migrate: close: source=%v db=%v", srcErr, dbErr)
 		}
 
 		baseLogger.Info("database migrations complete")

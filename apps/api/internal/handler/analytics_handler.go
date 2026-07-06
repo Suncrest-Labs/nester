@@ -78,7 +78,9 @@ func NewAnalyticsHandler(performanceService *performance.Service) *AnalyticsHand
 
 // Register registers the analytics routes on the given ServeMux
 func (h *AnalyticsHandler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/users/{id}/analytics", h.getUserAnalytics)
+	// Registered under /analytics to avoid ServeMux conflicts with literal
+	// /api/v1/users/... routes (wallet, kyc, savings-goals).
+	mux.HandleFunc("GET /api/v1/analytics/users/{id}", h.getUserAnalytics)
 }
 
 // getUserAnalytics handles GET /api/v1/users/{id}/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD
