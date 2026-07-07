@@ -233,7 +233,7 @@ func (r *SavingsGoalRepository) ListActiveApproachingDeadline(ctx context.Contex
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at
 		FROM savings_goals
-		WHERE status = 'active' OR status IS NULL OR status = ''
+		WHERE (status = 'active' OR status IS NULL OR status = '')
 		  AND deadline BETWEEN NOW() AND NOW() + ($1 || ' days')::INTERVAL
 	`
 	rows, err := r.db.QueryContext(ctx, query, maxDays)
@@ -467,26 +467,26 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		shareEnabledAtPtr = &t
 	}
 	return savingsgoal.SavingsGoal{
-		ID:                 parsedID,
-		UserID:             parsedUserID,
-		VaultID:            parsedVaultID,
-		TargetAmount:       target,
-		Currency:           currency,
-		Deadline:           deadline,
-		Description:        desc,
-		Name:               name.String,
-		Emoji:              emoji.String,
-		Category:           savingsgoal.GoalCategory(category),
-		Status:             goalStatus,
-		NotifiedMilestones: milestones,
+		ID:                    parsedID,
+		UserID:                parsedUserID,
+		VaultID:               parsedVaultID,
+		TargetAmount:          target,
+		Currency:              currency,
+		Deadline:              deadline,
+		Description:           desc,
+		Name:                  name.String,
+		Emoji:                 emoji.String,
+		Category:              savingsgoal.GoalCategory(category),
+		Status:                goalStatus,
+		NotifiedMilestones:    milestones,
 		DeadlineRemindersSent: reminders,
-		CreatedAt:        createdAt,
-		UpdatedAt:        updatedAt,
-		CompletedAt:      completedAtPtr,
-		CompletionAction: completionAction.String,
-		ShareToken:       shareTokenPtr,
-		ShareEnabledAt:   shareEnabledAtPtr,
-		IsShared:         shareTokenPtr != nil,
+		CreatedAt:             createdAt,
+		UpdatedAt:             updatedAt,
+		CompletedAt:           completedAtPtr,
+		CompletionAction:      completionAction.String,
+		ShareToken:            shareTokenPtr,
+		ShareEnabledAt:        shareEnabledAtPtr,
+		IsShared:              shareTokenPtr != nil,
 	}, nil
 }
 

@@ -105,6 +105,32 @@ func (m *memorySavingsGoalRepo) ListContributions(context.Context, uuid.UUID, uu
 	return nil, 0, "", nil
 }
 
+func (m *memorySavingsGoalRepo) UpdateDeadlineReminders(_ context.Context, goalID uuid.UUID, reminders []int) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.DeadlineRemindersSent = append([]int(nil), reminders...)
+	m.goals[goalID] = g
+	return nil
+}
+
+func (m *memorySavingsGoalRepo) ListActiveApproachingDeadline(_ context.Context, maxDays int) ([]savingsgoal.SavingsGoal, error) {
+	now := time.Now().UTC()
+	cutoff := now.AddDate(0, 0, maxDays)
+	var out []savingsgoal.SavingsGoal
+	for _, g := range m.goals {
+		if g.Status != "" && g.Status != savingsgoal.GoalStatusActive {
+			continue
+		}
+		if g.Deadline.Before(now) || g.Deadline.After(cutoff) {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out, nil
+}
+
 func (m *memorySavingsGoalRepo) SumRecentDeposits(context.Context, uuid.UUID, string, time.Time) (decimal.Decimal, error) {
 	return decimal.Zero, nil
 }

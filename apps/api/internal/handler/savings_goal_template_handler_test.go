@@ -132,7 +132,7 @@ func TestGoalTemplateHandler(t *testing.T) {
 	h.Register(mux)
 
 	authedClient := func(req *http.Request) *http.Request {
-		return req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{ID: userID.String()}))
+		return req.WithContext(auth.NewContext(req.Context(), auth.User{ID: userID.String()}))
 	}
 
 	t.Run("list templates", func(t *testing.T) {

@@ -143,6 +143,18 @@ func (m *memoryGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.UUID, m
 	m.goals[goalID] = g
 	return nil
 }
+func (m *memoryGoalRepo) UpdateDeadlineReminders(_ context.Context, goalID uuid.UUID, reminders []int) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.DeadlineRemindersSent = append([]int(nil), reminders...)
+	m.goals[goalID] = g
+	return nil
+}
+func (m *memoryGoalRepo) ListActiveApproachingDeadline(context.Context, int) ([]savingsgoal.SavingsGoal, error) {
+	return nil, nil
+}
 func (m *memoryGoalRepo) SetShareToken(_ context.Context, goalID, userID uuid.UUID, token uuid.UUID) error {
 	g, ok := m.goals[goalID]
 	if !ok || g.UserID != userID {
@@ -171,6 +183,7 @@ func (m *memoryGoalRepo) GetByShareToken(_ context.Context, token uuid.UUID) (*s
 	}
 	return nil, savingsgoal.ErrGoalNotFound
 }
+
 type memoryVaultRepo struct {
 	vaults map[uuid.UUID]vault.Vault
 }

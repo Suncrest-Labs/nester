@@ -230,13 +230,13 @@ func (m *mockSavingsGoalService) GetShared(_ context.Context, token uuid.UUID) (
 	for _, g := range m.goals {
 		if g.ShareToken != nil && *g.ShareToken == token {
 			return savingsgoal.SharedGoalView{
-				Name:          g.Description,
-				Emoji:         g.Emoji,
-				TargetAmount:  g.TargetAmount,
-				Currency:      g.Currency,
-				Deadline:      g.Deadline,
-				Category:      g.Category,
-				Status:        string(g.Status),
+				Name:         g.Description,
+				Emoji:        g.Emoji,
+				TargetAmount: g.TargetAmount,
+				Currency:     g.Currency,
+				Deadline:     g.Deadline,
+				Category:     g.Category,
+				Status:       string(g.Status),
 			}, nil
 		}
 	}
@@ -269,6 +269,14 @@ func (m *mockSavingsGoalService) DepositSplit(_ context.Context, userID uuid.UUI
 		Currency:       in.Currency,
 		Goals:          results,
 	}, nil
+}
+
+func (m *mockSavingsGoalService) ListTemplates(_ context.Context) ([]savingsgoal.GoalTemplate, error) {
+	return nil, nil
+}
+
+func (m *mockSavingsGoalService) CreateFromTemplate(_ context.Context, _ uuid.UUID, _ service.CreateFromTemplateInput) (savingsgoal.SavingsGoal, error) {
+	return savingsgoal.SavingsGoal{}, nil
 }
 
 func withAuthUser(next http.Handler, userID uuid.UUID) http.Handler {
