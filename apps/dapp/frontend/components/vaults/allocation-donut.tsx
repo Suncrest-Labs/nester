@@ -20,7 +20,7 @@ function AllocationTooltip({
   if (!active || !payload?.length) return null;
   const d = payload[0].payload as VaultAllocation;
   return (
-    <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm text-xs">
+    <div className="rounded-xl border border-border bg-white dark:bg-[#100F0F] p-2.5 shadow-sm text-xs">
       <p className="font-medium text-foreground">{d.protocol}</p>
       <p className="text-muted-foreground">{d.percentage}% allocation</p>
       <p className="text-muted-foreground">{d.apy.toFixed(1)}% APY</p>
@@ -34,7 +34,7 @@ export function AllocationDonut({
   allocations: VaultAllocation[];
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-white p-6">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-6">
       <h2 id="allocation-title" className="font-heading text-lg font-light text-foreground mb-6">
         Allocation Breakdown
       </h2>

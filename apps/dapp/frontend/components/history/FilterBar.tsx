@@ -55,7 +55,7 @@ export default function FilterBar({ initialFilters = {}, vaultOptions, onChange 
   };
 
   return (
-    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 p-4 bg-white rounded-lg shadow-sm">
+    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 p-4 bg-white dark:bg-[#100F0F] rounded-lg shadow-sm">
       {/* Date Range */}
       <div className="flex items-center gap-2">
         <label className="text-sm font-medium text-gray-700">From</label>

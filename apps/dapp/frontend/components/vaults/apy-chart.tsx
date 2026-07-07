@@ -27,7 +27,7 @@ function ApyTooltip({
 }: TooltipContentProps<TooltipValueType, TooltipNameType>) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm text-xs">
+    <div className="rounded-xl border border-border bg-white dark:bg-[#100F0F] p-2.5 shadow-sm text-xs">
       <p className="text-muted-foreground mb-0.5">{label as string}</p>
       <p className="font-medium text-foreground">
         {(payload[0].value as number)?.toFixed(2)}% APY
@@ -41,7 +41,7 @@ export function APYChart({ data }: { data: ApyDataPoint[] }) {
   const slice = data.slice(-TAB_DAYS[tab]);
 
   return (
-    <div className="rounded-2xl border border-border bg-white p-6">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-6">
       <div className="flex items-center justify-between mb-6">
         <h2 id="apy-chart-title" className="font-heading text-lg font-light text-foreground">
           APY History

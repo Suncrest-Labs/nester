@@ -64,18 +64,18 @@ export function EmptyState({
     )}>
       {illustration || (Icon && (
         <div className={cn(
-          "flex items-center justify-center rounded-full bg-black/[0.04] mb-4",
+          "flex items-center justify-center rounded-full bg-black/[0.04] dark:bg-white/[0.04] mb-4",
           classes.iconContainer
         )}>
-          <Icon className={cn("text-black/40", classes.iconSize)} />
+          <Icon className={cn("text-black/40 dark:text-white/40", classes.iconSize)} />
         </div>
       ))}
-      
-      <h3 className={cn("font-medium text-black mb-2", classes.title)}>
+
+      <h3 className={cn("font-medium text-black dark:text-white mb-2", classes.title)}>
         {title}
       </h3>
-      
-      <p className={cn("text-black/60 max-w-sm mb-6", classes.description)}>
+
+      <p className={cn("text-black/60 dark:text-white/60 max-w-sm mb-6", classes.description)}>
         {description}
       </p>
       
@@ -86,8 +86,8 @@ export function EmptyState({
             "rounded-lg font-medium transition-all",
             classes.button,
             action.variant === "primary" 
-              ? "bg-black text-white hover:bg-black/90"
-              : "border border-black/[0.08] bg-white text-black hover:border-black/20 hover:bg-black/[0.02]"
+              ? "bg-black dark:bg-blue-600 text-white hover:bg-black/90 dark:hover:bg-blue-700"
+              : "border border-black/[0.08] dark:border-white/[0.08] bg-white dark:bg-[#100F0F] text-black dark:text-white hover:border-black/20 dark:hover:border-white/20 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
           )}
         >
           {action.label}

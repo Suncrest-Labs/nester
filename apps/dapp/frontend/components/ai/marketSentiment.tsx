@@ -75,7 +75,7 @@ export function MarketSentimentWidget() {
 
   if (error || !data) {
     return (
-      <div className="rounded-2xl border border-border bg-white p-4">
+      <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium text-foreground/60">Market Sentiment</p>
           <button
@@ -98,7 +98,7 @@ export function MarketSentimentWidget() {
   const confidencePct = Math.round(data.confidence * 100)
 
   return (
-    <div className="rounded-2xl border border-border bg-white p-4 transition-all hover:border-black/15 hover:shadow-sm">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 transition-all hover:border-black/15 dark:hover:border-white/15 hover:shadow-sm">
       {/* Header */}
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -145,7 +145,7 @@ export function MarketSentimentWidget() {
 
 export function MarketSentimentSkeleton() {
   return (
-    <div className="rounded-2xl border border-border bg-white p-4 animate-pulse">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 animate-pulse">
       <div className="mb-3 flex items-center gap-2">
         <div className="h-2 w-2 rounded-full bg-secondary" />
         <div className="h-3 w-28 rounded bg-secondary" />

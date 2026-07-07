@@ -78,18 +78,18 @@ export function BankAccountsSection() {
   };
 
   return (
-    <section className="rounded-2xl border border-black/[0.06] bg-white p-6">
+    <section className="rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] p-6">
       <div className="flex items-center justify-between gap-4 mb-6">
         <div>
-          <h2 className="text-lg font-semibold text-black">Bank accounts</h2>
-          <p className="text-sm text-black/50 mt-1">
+          <h2 className="text-lg font-semibold text-black dark:text-white">Bank accounts</h2>
+          <p className="text-sm text-black/50 dark:text-white/50 mt-1">
             Save accounts for faster monthly offramps.
           </p>
         </div>
         <button
           type="button"
           onClick={() => setShowAdd((v) => !v)}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/90"
+          className="rounded-xl bg-black dark:bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-black/90 dark:hover:bg-blue-700"
         >
           {showAdd ? "Cancel" : "Add account"}
         </button>
@@ -113,12 +113,12 @@ export function BankAccountsSection() {
           {accounts.map((acct) => (
             <li
               key={acct.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-black/[0.06] px-4 py-3"
+              className="flex items-center justify-between gap-3 rounded-xl border border-black/[0.06] dark:border-white/[0.06] px-4 py-3"
             >
               <div className="flex items-start gap-3 min-w-0">
-                <Building2 className="h-5 w-5 text-black/30 shrink-0 mt-0.5" />
+                <Building2 className="h-5 w-5 text-black/30 dark:text-white/30 shrink-0 mt-0.5" />
                 <div className="min-w-0">
-                  <p className="font-medium text-black truncate">
+                  <p className="font-medium text-black dark:text-white truncate">
                     {CURRENCY_FLAGS[acct.currency] ?? ""} {acct.bank_name}
                     {acct.is_default && (
                       <span className="ml-2 inline-flex items-center gap-0.5 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
@@ -126,7 +126,7 @@ export function BankAccountsSection() {
                       </span>
                     )}
                   </p>
-                  <p className="text-sm text-black/50 truncate">
+                  <p className="text-sm text-black/50 dark:text-white/50 truncate">
                     {acct.account_name} · ••••{acct.account_last4}
                   </p>
                 </div>
@@ -135,7 +135,7 @@ export function BankAccountsSection() {
                 {!acct.is_default && (
                   <button
                     type="button"
-                    className="text-xs font-medium text-black/50 hover:text-black"
+                    className="text-xs font-medium text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white"
                     onClick={() => void setDefaultBankAccount(acct.id).then(refresh)}
                   >
                     Set default
@@ -144,7 +144,7 @@ export function BankAccountsSection() {
                 <button
                   type="button"
                   aria-label="Remove account"
-                  className="p-2 text-black/30 hover:text-red-600"
+                  className="p-2 text-black/30 dark:text-white/30 hover:text-red-600"
                   onClick={() => void removeBankAccount(acct.id).then(refresh)}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -156,9 +156,9 @@ export function BankAccountsSection() {
       )}
 
       {showAdd && (
-        <div className="mt-6 pt-6 border-t border-black/[0.06] space-y-4">
+        <div className="mt-6 pt-6 border-t border-black/[0.06] dark:border-white/[0.06] space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <label className="text-xs font-medium text-black/50">
+            <label className="text-xs font-medium text-black/50 dark:text-white/50">
               Currency
               <select
                 value={currency}
@@ -166,7 +166,7 @@ export function BankAccountsSection() {
                   setCurrency(e.target.value);
                   setCountry(e.target.value === "NGN" ? "NG" : e.target.value === "GHS" ? "GH" : "KE");
                 }}
-                className="mt-1 w-full rounded-xl border border-black/10 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-xl border border-black/10 dark:border-white/10 px-3 py-2 text-sm"
               >
                 <option value="NGN">NGN</option>
                 <option value="GHS">GHS</option>
@@ -175,11 +175,11 @@ export function BankAccountsSection() {
             </label>
           </div>
           <div>
-            <label className="text-xs font-medium text-black/50">Account number</label>
+            <label className="text-xs font-medium text-black/50 dark:text-white/50">Account number</label>
             <input
               value={accountNumber}
               onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, "").slice(0, 10))}
-              className="mt-1 w-full rounded-xl border border-black/10 px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-xl border border-black/10 dark:border-white/10 px-3 py-2 text-sm"
               placeholder="10-digit account number"
             />
           </div>
@@ -197,7 +197,7 @@ export function BankAccountsSection() {
             onClick={() => void handleAdd()}
             className={cn(
               "w-full rounded-xl py-3 text-sm font-medium text-white",
-              saving || resolveState !== "success" ? "bg-black/30" : "bg-black hover:bg-black/90",
+              saving || resolveState !== "success" ? "bg-black/30 dark:bg-blue-600/30" : "bg-black dark:bg-blue-600 hover:bg-black/90 dark:hover:bg-blue-700",
             )}
           >
             {saving ? "Saving…" : "Save account"}

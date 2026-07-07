@@ -62,23 +62,23 @@ function ProgressBar({ step }: { step: StepIndex }) {
               className={cn(
                 "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-colors",
                 i < step
-                  ? "bg-black text-white"
+                  ? "bg-black dark:bg-blue-600 text-white"
                   : i === step
-                  ? "bg-black text-white ring-4 ring-black/10"
-                  : "bg-black/8 text-black/30"
+                  ? "bg-black dark:bg-blue-600 text-white ring-4 ring-black/10"
+                  : "bg-black/8 dark:bg-white/8 text-black/30 dark:text-white/30"
               )}
             >
               {i < step ? <Check className="h-3.5 w-3.5" /> : i + 1}
             </div>
-            <span className={cn("text-[10px] font-semibold hidden sm:block", i === step ? "text-black" : "text-black/30")}>
+            <span className={cn("text-[10px] font-semibold hidden sm:block", i === step ? "text-black dark:text-white" : "text-black/30 dark:text-white/30")}>
               {label}
             </span>
           </div>
         ))}
       </div>
-      <div className="h-1 w-full overflow-hidden rounded-full bg-black/8">
+      <div className="h-1 w-full overflow-hidden rounded-full bg-black/8 dark:bg-white/8">
         <div
-          className="h-full rounded-full bg-black transition-all duration-300"
+          className="h-full rounded-full bg-black dark:bg-white transition-all duration-300"
           style={{ width: `${((step) / (STEPS.length - 1)) * 100}%` }}
         />
       </div>
@@ -91,18 +91,18 @@ function ProgressBar({ step }: { step: StepIndex }) {
 function StepTemplate({ onSelect }: { onSelect: (t: GoalTemplate) => void }) {
   return (
     <div>
-      <h2 className="mb-1 text-lg font-semibold text-black">What are you saving for?</h2>
-      <p className="mb-6 text-sm text-black/60">Pick a template to get started or create your own.</p>
+      <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">What are you saving for?</h2>
+      <p className="mb-6 text-sm text-black/60 dark:text-white/60">Pick a template to get started or create your own.</p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {GOAL_TEMPLATES.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => onSelect(t)}
-            className="flex flex-col items-center gap-2 rounded-2xl border border-black/8 bg-white p-4 text-center transition-all hover:border-black/20 hover:shadow-sm active:scale-95"
+            className="flex flex-col items-center gap-2 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-4 text-center transition-all hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm active:scale-95"
           >
             <span className="text-2xl" aria-hidden="true">{t.emoji}</span>
-            <span className="text-xs font-semibold text-black">{t.label}</span>
+            <span className="text-xs font-semibold text-black dark:text-white">{t.label}</span>
           </button>
         ))}
       </div>
@@ -134,13 +134,13 @@ function StepDetails({
       <div className="mb-5 flex items-center gap-3">
         <span className="text-3xl" aria-hidden="true">{template.emoji}</span>
         <div>
-          <h2 className="text-lg font-semibold text-black">{template.label}</h2>
-          <p className="text-sm text-black/60">Set your goal details</p>
+          <h2 className="text-lg font-semibold text-black dark:text-white">{template.label}</h2>
+          <p className="text-sm text-black/60 dark:text-white/60">Set your goal details</p>
         </div>
       </div>
       <div className="space-y-4">
         <div>
-          <label htmlFor="onboarding-name" className="mb-1.5 block text-xs font-medium text-black/60">
+          <label htmlFor="onboarding-name" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
             Goal name
           </label>
           <input
@@ -150,12 +150,12 @@ function StepDetails({
             onChange={(e) => onChange({ ...details, name: e.target.value })}
             placeholder={template.descriptionPlaceholder}
             maxLength={100}
-            className="h-11 w-full rounded-xl border border-black/10 bg-black/[0.02] px-4 text-sm text-black outline-none transition-colors focus:border-black/25"
+            className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
           />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label htmlFor="onboarding-amount" className="mb-1.5 block text-xs font-medium text-black/60">
+            <label htmlFor="onboarding-amount" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
               Target amount
             </label>
             <input
@@ -166,13 +166,13 @@ function StepDetails({
               value={details.targetAmount}
               onChange={(e) => onChange({ ...details, targetAmount: e.target.value })}
               placeholder="0.00"
-              className="h-11 w-full rounded-xl border border-black/10 bg-black/[0.02] px-4 font-mono text-sm text-black outline-none transition-colors focus:border-black/25
+              className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 font-mono text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25
                          [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-black/60">Currency</label>
-            <div className="flex h-11 rounded-xl border border-black/10 bg-black/[0.02] p-1" role="group" aria-label="Select currency">
+            <label className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">Currency</label>
+            <div className="flex h-11 rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-1" role="group" aria-label="Select currency">
               {(["USDC", "XLM"] as const).map((c) => (
                 <button
                   key={c}
@@ -180,7 +180,7 @@ function StepDetails({
                   onClick={() => onChange({ ...details, currency: c })}
                   className={cn(
                     "flex-1 rounded-lg text-xs font-semibold transition-colors",
-                    details.currency === c ? "bg-black text-white" : "text-black/60 hover:text-black"
+                    details.currency === c ? "bg-black dark:bg-blue-600 text-white" : "text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white"
                   )}
                   aria-pressed={details.currency === c}
                 >
@@ -191,7 +191,7 @@ function StepDetails({
           </div>
         </div>
         <div>
-          <label htmlFor="onboarding-deadline" className="mb-1.5 block text-xs font-medium text-black/60">
+          <label htmlFor="onboarding-deadline" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
             Target deadline
           </label>
           <input
@@ -200,7 +200,7 @@ function StepDetails({
             value={details.deadline}
             min={minDate}
             onChange={(e) => onChange({ ...details, deadline: e.target.value })}
-            className="h-11 w-full rounded-xl border border-black/10 bg-black/[0.02] px-4 text-sm text-black outline-none transition-colors focus:border-black/25"
+            className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
           />
         </div>
       </div>
@@ -216,15 +216,15 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
 
   return (
     <div>
-      <h2 className="mb-1 text-lg font-semibold text-black">Earn while you save</h2>
-      <p className="mb-5 text-sm text-black/60">
+      <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">Earn while you save</h2>
+      <p className="mb-5 text-sm text-black/60 dark:text-white/60">
         Link your goal to a yield protocol and watch your savings grow automatically.
       </p>
 
       {isLoading ? (
         <div className="space-y-2">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="h-14 animate-pulse rounded-2xl bg-black/5" />
+            <div key={i} className="h-14 animate-pulse rounded-2xl bg-black/5 dark:bg-white/5" />
           ))}
         </div>
       ) : pools.length > 0 ? (
@@ -232,15 +232,15 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
           {pools.slice(0, 4).map((pool) => (
             <div
               key={pool.pool}
-              className="flex items-center justify-between rounded-2xl border border-black/8 bg-white px-4 py-3"
+              className="flex items-center justify-between rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-4 py-3"
             >
               <div>
-                <p className="text-sm font-semibold text-black capitalize">{pool.project}</p>
-                <p className="text-xs text-black/50">{pool.symbol} · Risk {pool.riskScore.toFixed(1)}</p>
+                <p className="text-sm font-semibold text-black dark:text-white capitalize">{pool.project}</p>
+                <p className="text-xs text-black/50 dark:text-white/50">{pool.symbol} · Risk {pool.riskScore.toFixed(1)}</p>
               </div>
               <div className="text-right">
                 <p className="font-mono text-sm font-semibold text-emerald-600">{pool.apy.toFixed(2)}%</p>
-                <p className="text-[10px] text-black/40 uppercase font-bold">APY</p>
+                <p className="text-[10px] text-black/40 dark:text-white/40 uppercase font-bold">APY</p>
               </div>
             </div>
           ))}
@@ -249,14 +249,14 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
 
       <a
         href="/vaults"
-        className="flex items-center justify-center gap-2 rounded-xl border border-black/10 py-3 text-xs font-semibold text-black transition-colors hover:bg-black/5"
+        className="flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-semibold text-black dark:text-white transition-colors hover:bg-black/5 dark:hover:bg-white/5"
       >
         <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
         Explore all yield opportunities
       </a>
-      <p className="mt-3 text-center text-[11px] text-black/40">
+      <p className="mt-3 text-center text-[11px] text-black/40 dark:text-white/40">
         You can always link a vault later.{" "}
-        <button type="button" onClick={onSkip} className="underline hover:text-black">
+        <button type="button" onClick={onSkip} className="underline hover:text-black dark:hover:text-white">
           Skip this step
         </button>
       </p>
@@ -269,16 +269,16 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
 function StepDeposit({ currency, onSkip }: { currency: "USDC" | "XLM"; onSkip: () => void }) {
   return (
     <div className="text-center">
-      <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-black/5 text-3xl">
+      <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5 text-3xl">
         💰
       </div>
-      <h2 className="mb-1 text-lg font-semibold text-black">Make your first deposit</h2>
-      <p className="mb-6 text-sm text-black/60">
+      <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">Make your first deposit</h2>
+      <p className="mb-6 text-sm text-black/60 dark:text-white/60">
         Kick-start your goal with an initial deposit in {currency}. You can deposit more at any time.
       </p>
       <a
         href="/vaults"
-        className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-black py-3.5 text-sm font-semibold text-white transition-opacity hover:opacity-75"
+        className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3.5 text-sm font-semibold text-white transition-opacity hover:opacity-75"
       >
         Go to Vaults to deposit
         <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -286,7 +286,7 @@ function StepDeposit({ currency, onSkip }: { currency: "USDC" | "XLM"; onSkip: (
       <button
         type="button"
         onClick={onSkip}
-        className="text-xs font-medium text-black/50 underline hover:text-black"
+        className="text-xs font-medium text-black/50 dark:text-white/50 underline hover:text-black dark:hover:text-white"
       >
         Skip for now — I'll deposit later
       </button>
@@ -367,21 +367,21 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
         aria-hidden="true"
       />
       <div
-        className="fixed inset-x-4 top-12 z-50 mx-auto max-w-xl rounded-3xl bg-white p-8 shadow-2xl
+        className="fixed inset-x-4 top-12 z-50 mx-auto max-w-xl rounded-3xl bg-white dark:bg-[#100F0F] p-8 shadow-2xl
                    sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2"
         role="dialog"
         aria-modal="true"
         aria-label="Savings goal setup"
       >
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-semibold text-black/40 uppercase tracking-widest">
+          <span className="text-xs font-semibold text-black/40 dark:text-white/40 uppercase tracking-widest">
             Set up your savings
           </span>
           <button
             type="button"
             onClick={onDismiss}
             aria-label="Close onboarding"
-            className="flex h-8 w-8 items-center justify-center rounded-xl border border-black/10 text-black/40 hover:text-black transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-xl border border-black/10 dark:border-white/10 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors"
           >
             <X className="h-4 w-4" />
           </button>
@@ -403,7 +403,7 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
               <button
                 type="button"
                 onClick={handleBack}
-                className="flex items-center gap-1.5 rounded-xl border border-black/10 px-4 py-3 text-xs font-semibold text-black/60 hover:bg-black/5 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 px-4 py-3 text-xs font-semibold text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
                 Back
@@ -412,7 +412,7 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
                 type="button"
                 onClick={handleDetailsNext}
                 disabled={submitting}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-black py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
               >
                 {submitting ? "Creating goal…" : "Create goal & continue"}
                 {!submitting && <ArrowRight className="h-3.5 w-3.5" />}
@@ -428,7 +428,7 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
               <button
                 type="button"
                 onClick={() => setStep(3)}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-black py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75"
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75"
               >
                 Continue
                 <ArrowRight className="h-3.5 w-3.5" />

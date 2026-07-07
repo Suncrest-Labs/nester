@@ -174,7 +174,7 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
                   value={goalText}
                   onChange={(e) => setGoalText(e.target.value)}
                   placeholder="e.g. Emergency fund for 6 months of expenses"
-                  className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none focus:border-black/20"
+                  className="w-full rounded-2xl border border-border bg-white dark:bg-[#100F0F] px-4 py-3 text-sm outline-none focus:border-black/20 dark:focus:border-white/20"
                   rows={3}
                 />
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -183,7 +183,7 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
                       key={chip}
                       type="button"
                       onClick={() => setGoalText(chip)}
-                      className="rounded-full border border-border bg-white px-3 py-1.5 text-xs font-medium hover:border-black/20"
+                      className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-1.5 text-xs font-medium hover:border-black/20 dark:hover:border-white/20"
                     >
                       {chip}
                     </button>
@@ -207,7 +207,7 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
                             "w-full rounded-xl border px-3 py-2.5 text-left text-sm transition-colors",
                             riskAnswers[qi] === opt.value
                               ? "border-foreground bg-foreground text-background"
-                              : "border-border bg-white hover:border-black/15"
+                              : "border-border bg-white dark:bg-[#100F0F] hover:border-black/15 dark:hover:border-white/15"
                           )}
                         >
                           {opt.label}
@@ -229,7 +229,7 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
                 )}
                 {error && <p className="text-sm text-amber-700">{error}</p>}
                 {recommendation && (
-                  <div className="rounded-2xl border border-border bg-white p-4 text-sm">
+                  <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 text-sm">
                     <p className="text-xs uppercase tracking-widest text-muted-foreground">
                       Risk profile: {riskProfile}
                     </p>
@@ -315,7 +315,7 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
         </motion.div>
       </AnimatePresence>
       {showCreateVault && (
-        <div className="fixed inset-0 z-[130] overflow-y-auto bg-white">
+        <div className="fixed inset-0 z-[130] overflow-y-auto bg-white dark:bg-[#100F0F]">
           <div className="mx-auto max-w-3xl p-6">
             <CreateVaultWizard />
           </div>

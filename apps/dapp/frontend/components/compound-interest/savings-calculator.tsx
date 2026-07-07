@@ -91,14 +91,14 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
 
   return (
     <WidgetErrorBoundary>
-      <div className={`rounded-2xl border border-black/[0.06] bg-white p-8 ${className}`}>
+      <div className={`rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] p-8 ${className}`}>
         <div className="flex items-center gap-3 mb-6">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50">
             <Calculator className="h-5 w-5 text-blue-600" />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-black">Savings Calculator</h3>
-            <p className="text-sm text-black/60">Plan your compound interest growth</p>
+            <h3 className="text-lg font-semibold text-black dark:text-white">Savings Calculator</h3>
+            <p className="text-sm text-black/60 dark:text-white/60">Plan your compound interest growth</p>
           </div>
         </div>
 
@@ -106,14 +106,14 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
           {/* Input Form */}
           <div className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-black mb-2">
+              <label className="block text-sm font-medium text-black dark:text-white mb-2">
                 Initial Deposit ($)
               </label>
               <input
                 type="number"
                 value={formData.initialDeposit}
                 onChange={(e) => handleInputChange('initialDeposit', e.target.value)}
-                className="w-full px-4 py-3 rounded-lg border border-black/[0.08] focus:border-black/20 focus:outline-none"
+                className="w-full px-4 py-3 rounded-lg border border-black/[0.08] dark:border-white/[0.08] focus:border-black/20 dark:focus:border-white/20 focus:outline-none"
                 placeholder="1000"
                 min="0"
                 step="0.01"
@@ -121,14 +121,14 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-black mb-2">
+              <label className="block text-sm font-medium text-black dark:text-white mb-2">
                 Monthly Contribution ($)
               </label>
               <input
                 type="number"
                 value={formData.monthlyContribution}
                 onChange={(e) => handleInputChange('monthlyContribution', e.target.value)}
-                className="w-full px-4 py-3 rounded-lg border border-black/[0.08] focus:border-black/20 focus:outline-none"
+                className="w-full px-4 py-3 rounded-lg border border-black/[0.08] dark:border-white/[0.08] focus:border-black/20 dark:focus:border-white/20 focus:outline-none"
                 placeholder="200"
                 min="0"
                 step="0.01"
@@ -136,7 +136,7 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-black mb-2">
+              <label className="block text-sm font-medium text-black dark:text-white mb-2">
                 Annual Percentage Yield (APY)
               </label>
               <div className="relative">
@@ -144,25 +144,25 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
                   type="number"
                   value={(parseFloat(formData.apy) * 100).toString()}
                   onChange={(e) => handleInputChange('apy', (parseFloat(e.target.value) / 100).toString())}
-                  className="w-full px-4 py-3 rounded-lg border border-black/[0.08] focus:border-black/20 focus:outline-none pr-8"
+                  className="w-full px-4 py-3 rounded-lg border border-black/[0.08] dark:border-white/[0.08] focus:border-black/20 dark:focus:border-white/20 focus:outline-none pr-8"
                   placeholder="8"
                   min="0"
                   max="100"
                   step="0.1"
                 />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-black/60">%</span>
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-black/60 dark:text-white/60">%</span>
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-black mb-2">
+              <label className="block text-sm font-medium text-black dark:text-white mb-2">
                 Time Period (Months)
               </label>
               <input
                 type="number"
                 value={formData.periodMonths}
                 onChange={(e) => handleInputChange('periodMonths', parseInt(e.target.value))}
-                className="w-full px-4 py-3 rounded-lg border border-black/[0.08] focus:border-black/20 focus:outline-none"
+                className="w-full px-4 py-3 rounded-lg border border-black/[0.08] dark:border-white/[0.08] focus:border-black/20 dark:focus:border-white/20 focus:outline-none"
                 placeholder="12"
                 min="1"
                 max="360"
@@ -170,13 +170,13 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-black mb-2">
+              <label className="block text-sm font-medium text-black dark:text-white mb-2">
                 Compound Frequency
               </label>
               <select
                 value={formData.compoundFrequency}
                 onChange={(e) => handleInputChange('compoundFrequency', e.target.value)}
-                className="w-full px-4 py-3 rounded-lg border border-black/[0.08] focus:border-black/20 focus:outline-none"
+                className="w-full px-4 py-3 rounded-lg border border-black/[0.08] dark:border-white/[0.08] focus:border-black/20 dark:focus:border-white/20 focus:outline-none"
               >
                 <option value="monthly">Monthly</option>
                 <option value="daily">Daily</option>
@@ -186,7 +186,7 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
             <button
               onClick={handleCalculate}
               disabled={projectionQuery.isLoading}
-              className="w-full bg-black text-white py-3 rounded-lg font-medium hover:bg-black/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-black dark:bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-black/90 dark:hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {projectionQuery.isLoading ? "Calculating..." : "Calculate Projection"}
             </button>
@@ -283,13 +283,13 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
 
             {!projectionQuery.data && !projectionQuery.isLoading && (
               <div className="flex flex-col items-center justify-center py-12 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/[0.04] mb-4">
-                  <TrendingUp className="h-8 w-8 text-black/40" />
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/[0.04] dark:bg-white/[0.04] mb-4">
+                  <TrendingUp className="h-8 w-8 text-black/40 dark:text-white/40" />
                 </div>
-                <h4 className="text-base font-medium text-black mb-2">
+                <h4 className="text-base font-medium text-black dark:text-white mb-2">
                   Ready to Calculate
                 </h4>
-                <p className="text-sm text-black/60">
+                <p className="text-sm text-black/60 dark:text-white/60">
                   Enter your savings details and click "Calculate Projection" to see your growth potential.
                 </p>
               </div>

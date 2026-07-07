@@ -142,26 +142,26 @@ export default function HistoryPage() {
         transition={{ duration: 0.3 }}
         className="my-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"
       >
-        <div className="text-[28px] font-semibold text-black">Transaction History</div>
+        <div className="text-[28px] font-semibold text-black dark:text-white">Transaction History</div>
       </motion.div>
 
       {/* Yield Summary */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3 mb-6">
-        <div className="rounded-xl border p-4 bg-white">
+        <div className="rounded-xl border p-4 bg-white dark:bg-[#100F0F]">
           <p className="text-sm text-gray-500">Total Deposited</p>
-          <p className="mt-1 text-lg font-medium text-black">
+          <p className="mt-1 text-lg font-medium text-black dark:text-white">
             {summary.totalDeposited.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
         </div>
-        <div className="rounded-xl border p-4 bg-white">
+        <div className="rounded-xl border p-4 bg-white dark:bg-[#100F0F]">
           <p className="text-sm text-gray-500">Total Withdrawn</p>
-          <p className="mt-1 text-lg font-medium text-black">
+          <p className="mt-1 text-lg font-medium text-black dark:text-white">
             {summary.totalWithdrawn.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
         </div>
-        <div className="rounded-xl border p-4 bg-white">
+        <div className="rounded-xl border p-4 bg-white dark:bg-[#100F0F]">
           <p className="text-sm text-gray-500">Total Yield Earned</p>
-          <p className="mt-1 text-lg font-medium text-black">
+          <p className="mt-1 text-lg font-medium text-black dark:text-white">
             {summary.totalYield.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
         </div>
@@ -184,7 +184,7 @@ export default function HistoryPage() {
           disabled={!prevCursor}
           className={cn(
             "rounded-md px-4 py-2 border",
-            prevCursor ? "bg-white hover:bg-gray-100" : "bg-gray-100 text-gray-400 cursor-not-allowed"
+            prevCursor ? "bg-white dark:bg-[#100F0F] hover:bg-gray-100" : "bg-gray-100 text-gray-400 cursor-not-allowed"
           )}
         >
           Previous
@@ -194,7 +194,7 @@ export default function HistoryPage() {
           disabled={!nextCursor}
           className={cn(
             "rounded-md px-4 py-2 border",
-            nextCursor ? "bg-white hover:bg-gray-100" : "bg-gray-100 text-gray-400 cursor-not-allowed"
+            nextCursor ? "bg-white dark:bg-[#100F0F] hover:bg-gray-100" : "bg-gray-100 text-gray-400 cursor-not-allowed"
           )}
         >
           Next

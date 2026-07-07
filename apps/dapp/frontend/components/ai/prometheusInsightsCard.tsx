@@ -42,48 +42,48 @@ export function PrometheusInsightsCard() {
 
   if (loading) {
     return (
-      <div className="rounded-2xl border border-black/[0.06] bg-white p-6 animate-pulse">
-        <div className="h-4 w-36 rounded bg-black/[0.07]" />
-        <div className="mt-4 h-3 w-full rounded bg-black/[0.05]" />
-        <div className="mt-2 h-3 w-4/5 rounded bg-black/[0.05]" />
+      <div className="rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] p-6 animate-pulse">
+        <div className="h-4 w-36 rounded bg-black/[0.07] dark:bg-white/[0.07]" />
+        <div className="mt-4 h-3 w-full rounded bg-black/[0.05] dark:bg-white/[0.05]" />
+        <div className="mt-2 h-3 w-4/5 rounded bg-black/[0.05] dark:bg-white/[0.05]" />
       </div>
     )
   }
 
   return (
-    <section className="rounded-2xl border border-black/[0.06] bg-white p-6">
+    <section className="rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] p-6">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-black/[0.05] text-black/60">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-black/[0.05] dark:bg-white/[0.05] text-black/60 dark:text-white/60">
             <Sparkles className="h-4 w-4" />
           </div>
           <div>
-            <p className="text-[13px] font-semibold text-black">Prometheus Insight</p>
-            <p className="text-[11px] text-black/40">AI Intelligence Layer</p>
+            <p className="text-[13px] font-semibold text-black dark:text-white">Prometheus Insight</p>
+            <p className="text-[11px] text-black/40 dark:text-white/40">AI Intelligence Layer</p>
           </div>
         </div>
         <button
           type="button"
           onClick={() => openChat('Which vault should I use for $5,000 with low risk?')}
-          className="rounded-full border border-black/[0.12] bg-white px-3 py-1.5 text-[11px] font-medium text-black/70 transition-colors hover:border-black/20 hover:text-black"
+          className="rounded-full border border-black/[0.12] dark:border-white/[0.12] bg-white dark:bg-[#100F0F] px-3 py-1.5 text-[11px] font-medium text-black/70 dark:text-white/70 transition-colors hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white"
         >
           Ask Prometheus
         </button>
       </div>
 
       {latest ? (
-        <div className="rounded-xl border border-black/[0.06] bg-black/[0.015] p-4">
-          <p className="text-[12px] font-medium text-black">{latest.title}</p>
-          <p className="mt-1.5 text-[12px] leading-relaxed text-black/60">{latest.body}</p>
-          <p className="mt-2 text-[10px] text-black/45">Confidence: {Math.round(latest.confidence * 100)}%</p>
+        <div className="rounded-xl border border-black/[0.06] dark:border-white/[0.06] bg-black/[0.015] dark:bg-white/[0.015] p-4">
+          <p className="text-[12px] font-medium text-black dark:text-white">{latest.title}</p>
+          <p className="mt-1.5 text-[12px] leading-relaxed text-black/60 dark:text-white/60">{latest.body}</p>
+          <p className="mt-2 text-[10px] text-black/45 dark:text-white/45">Confidence: {Math.round(latest.confidence * 100)}%</p>
         </div>
       ) : (
-        <p className="text-[12px] text-black/50">No insight available yet. Ask Prometheus to generate one.</p>
+        <p className="text-[12px] text-black/50 dark:text-white/50">No insight available yet. Ask Prometheus to generate one.</p>
       )}
 
-      <div className="mt-4 rounded-xl border border-black/[0.06] bg-white p-4">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-black/45">Weekly market summary</p>
-        <p className="mt-2 text-[12px] leading-relaxed text-black/60">
+      <div className="mt-4 rounded-xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] p-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-black/45 dark:text-white/45">Weekly market summary</p>
+        <p className="mt-2 text-[12px] leading-relaxed text-black/60 dark:text-white/60">
           {weeklySummary?.body ?? 'Market data is being prepared. Ask Prometheus for a current market read.'}
         </p>
       </div>

@@ -30,7 +30,7 @@ export default function SharedGoalPage() {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-black border-t-transparent" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-black dark:border-white border-t-transparent" />
       </div>
     );
   }
@@ -38,7 +38,7 @@ export default function SharedGoalPage() {
   if (error || !goal) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
-        <div className="rounded-3xl border border-red-100 bg-white p-10 text-center shadow-sm">
+        <div className="rounded-3xl border border-red-100 bg-white dark:bg-[#100F0F] p-10 text-center shadow-sm">
           <p className="text-sm font-semibold text-red-700">{error || "Goal not found."}</p>
         </div>
       </div>
@@ -56,25 +56,25 @@ export default function SharedGoalPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-black/40">
+          <p className="text-xs font-semibold uppercase tracking-widest text-black/40 dark:text-white/40">
             Shared Savings Goal
           </p>
         </div>
 
         <div
           className={cn(
-            "rounded-3xl border bg-white p-8 shadow-sm",
-            isCompleted ? "border-emerald-200" : "border-black/8"
+            "rounded-3xl border bg-white dark:bg-[#100F0F] p-8 shadow-sm",
+            isCompleted ? "border-emerald-200" : "border-black/8 dark:border-white/8"
           )}
         >
           <div className="mb-6 flex items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-black/5 text-3xl">
-              {goal.emoji ? <span aria-hidden="true">{goal.emoji}</span> : <Target className="h-7 w-7 text-black/40" />}
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5 text-3xl">
+              {goal.emoji ? <span aria-hidden="true">{goal.emoji}</span> : <Target className="h-7 w-7 text-black/40 dark:text-white/40" />}
             </div>
             <div>
-              <h1 className="text-xl font-bold text-black">{displayName}</h1>
+              <h1 className="text-xl font-bold text-black dark:text-white">{displayName}</h1>
               {goal.category && (
-                <p className="text-sm text-black/50 capitalize">
+                <p className="text-sm text-black/50 dark:text-white/50 capitalize">
                   {goal.category.replace(/_/g, " ")}
                 </p>
               )}
@@ -84,10 +84,10 @@ export default function SharedGoalPage() {
           <div className="mb-6">
             <div className="mb-2 flex items-end justify-between">
               <div>
-                <p className="font-mono text-2xl font-bold text-black">
+                <p className="font-mono text-2xl font-bold text-black dark:text-white">
                   {current.toLocaleString()}
                 </p>
-                <p className="text-xs text-black/50">
+                <p className="text-xs text-black/50 dark:text-white/50">
                   of {target.toLocaleString()} {goal.currency}
                 </p>
               </div>
@@ -95,19 +95,19 @@ export default function SharedGoalPage() {
                 <p
                   className={cn(
                     "text-2xl font-bold",
-                    isCompleted ? "text-emerald-600" : "text-black"
+                    isCompleted ? "text-emerald-600" : "text-black dark:text-white"
                   )}
                 >
                   {progress.toFixed(0)}%
                 </p>
-                <p className="text-xs text-black/50">progress</p>
+                <p className="text-xs text-black/50 dark:text-white/50">progress</p>
               </div>
             </div>
-            <div className="h-3 overflow-hidden rounded-full bg-black/8">
+            <div className="h-3 overflow-hidden rounded-full bg-black/8 dark:bg-white/8">
               <div
                 className={cn(
                   "h-full rounded-full transition-all duration-500",
-                  isCompleted ? "bg-emerald-500" : "bg-black"
+                  isCompleted ? "bg-emerald-500" : "bg-black dark:bg-white"
                 )}
                 style={{ width: `${progress}%` }}
                 role="progressbar"
@@ -118,14 +118,14 @@ export default function SharedGoalPage() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between rounded-2xl bg-black/[0.03] px-4 py-3">
+          <div className="flex items-center justify-between rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] px-4 py-3">
             <div className="text-center">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-black/40">Deadline</p>
-              <p className="mt-0.5 text-sm font-semibold text-black">{deadline}</p>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-black/40 dark:text-white/40">Deadline</p>
+              <p className="mt-0.5 text-sm font-semibold text-black dark:text-white">{deadline}</p>
             </div>
             <div className="text-center">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-black/40">Status</p>
-              <p className={cn("mt-0.5 text-sm font-semibold capitalize", isCompleted ? "text-emerald-600" : "text-black")}>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-black/40 dark:text-white/40">Status</p>
+              <p className={cn("mt-0.5 text-sm font-semibold capitalize", isCompleted ? "text-emerald-600" : "text-black dark:text-white")}>
                 {goal.status ?? "active"}
               </p>
             </div>
@@ -138,9 +138,9 @@ export default function SharedGoalPage() {
           )}
         </div>
 
-        <p className="mt-6 text-center text-xs text-black/30">
+        <p className="mt-6 text-center text-xs text-black/30 dark:text-white/30">
           Powered by{" "}
-          <a href="/" className="underline hover:text-black">
+          <a href="/" className="underline hover:text-black dark:hover:text-white">
             Nester
           </a>
         </p>

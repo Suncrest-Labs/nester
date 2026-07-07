@@ -39,9 +39,9 @@ function ApyTooltip({
     if (!active || !payload?.length) return null;
     const point = payload[0].payload as SavingsChartPoint;
     return (
-        <div className="rounded-xl border border-black/8 bg-white px-3.5 py-2.5 shadow-lg shadow-black/10">
-            <p className="text-xs font-medium text-black">
-                APY: {point.apy}% <span className="text-black/40">on {point.date}</span>
+        <div className="rounded-xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-3.5 py-2.5 shadow-lg shadow-black/10">
+            <p className="text-xs font-medium text-black dark:text-white">
+                APY: {point.apy}% <span className="text-black/40 dark:text-white/40">on {point.date}</span>
             </p>
         </div>
     );
@@ -51,7 +51,7 @@ export default function SavingsChart({ data, isLoading = false }: SavingsChartPr
     if (isLoading) {
         return (
             <div
-                className="h-[320px] w-full animate-pulse rounded-2xl bg-black/[0.03]"
+                className="h-[320px] w-full animate-pulse rounded-2xl bg-black/[0.03] dark:bg-white/[0.03]"
                 aria-busy="true"
                 aria-label="Loading chart data"
             />
@@ -60,7 +60,7 @@ export default function SavingsChart({ data, isLoading = false }: SavingsChartPr
 
     if (!data || data.length === 0) {
         return (
-            <div className="h-[320px] flex flex-col items-center justify-center text-center text-black/40 bg-black/[0.02] rounded-2xl border border-dashed border-black/10 px-6">
+            <div className="h-[320px] flex flex-col items-center justify-center text-center text-black/40 dark:text-white/40 bg-black/[0.02] dark:bg-white/[0.02] rounded-2xl border border-dashed border-black/10 dark:border-white/10 px-6">
                 <svg
                     width="40"
                     height="40"
@@ -70,7 +70,7 @@ export default function SavingsChart({ data, isLoading = false }: SavingsChartPr
                     strokeWidth="1.5"
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    className="mb-3 text-black/25"
+                    className="mb-3 text-black/25 dark:text-white/25"
                     aria-hidden="true"
                 >
                     <path d="M3 3v18h18" />

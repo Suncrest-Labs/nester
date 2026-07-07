@@ -55,8 +55,8 @@ function applyThemeClass(theme: Theme) {
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const [currency, setCurrencyState] = useState<Currency>("USD");
-    const [theme, setThemeState] = useState<Theme>("dark");
-    const [isDarkMode, setIsDarkMode] = useState(true);
+    const [theme, setThemeState] = useState<Theme>("light");
+    const [isDarkMode, setIsDarkMode] = useState(false);
 
     useEffect(() => {
         const savedCurrency = localStorage.getItem("nester_currency") as Currency;
@@ -72,9 +72,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         const saved =
             (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) ??
             (localStorage.getItem(LEGACY_THEME_KEY) as Theme | null) ??
-            "dark";
+            "light";
         const resolved: Theme =
-            saved === "light" || saved === "dark" || saved === "system" ? saved : "dark";
+            saved === "light" || saved === "dark" || saved === "system" ? saved : "light";
 
         const timer = setTimeout(() => {
             setThemeState(resolved);

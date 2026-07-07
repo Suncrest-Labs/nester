@@ -30,7 +30,7 @@ export function InsightCard({
         : 'bg-red-100 text-red-700'
 
   return (
-    <div className="rounded-2xl border border-border bg-white p-4 transition-all hover:border-black/15 hover:shadow-sm">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 transition-all hover:border-black/15 dark:hover:border-white/15 hover:shadow-sm">
       {/* Header */}
       <div className="mb-2 flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -76,7 +76,7 @@ export function InsightCard({
         <div className="mt-3 pl-9">
           <Link
             href={action.href}
-            className="inline-flex items-center rounded-full border border-black/10 bg-white px-3 py-1.5 text-[11px] font-medium text-foreground shadow-sm transition-colors hover:border-black/20"
+            className="inline-flex items-center rounded-full border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] px-3 py-1.5 text-[11px] font-medium text-foreground shadow-sm transition-colors hover:border-black/20 dark:hover:border-white/20"
           >
             {action.label}
           </Link>
@@ -90,7 +90,7 @@ export function InsightCard({
 
 export function InsightCardSkeleton() {
   return (
-    <div className="rounded-2xl border border-border bg-white p-4 animate-pulse">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 animate-pulse">
       <div className="mb-2 flex items-center gap-2">
         <div className="h-7 w-7 rounded-xl bg-secondary" />
         <div className="h-3.5 w-36 rounded bg-secondary" />

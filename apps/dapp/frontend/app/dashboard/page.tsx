@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useWallet } from "@/components/wallet-provider";
 import { useAuth } from "@/components/auth-provider";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
 import {
     ArrowDownToLine,
@@ -39,7 +39,7 @@ import {
     SkeletonPositionsTable,
     SkeletonActivityItem,
 } from "@/components/ui/skeletons";
-import { usePortfolio } from "@/components/portfolio-provider";
+// import { usePortfolio } from "@/components/portfolio-provider"; // unused — wallet balance section commented out
 import type { PortfolioPosition } from "@/components/portfolio-provider";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -226,8 +226,8 @@ function PositionsTable({
     if (vaults.length === 0) {
         return (
             <div className="flex flex-col items-center justify-center py-14 text-center">
-                <p className="text-[14px] font-medium text-black/50">No Positions</p>
-                <p className="mt-1.5 text-[13px] text-black/30">
+                <p className="text-[14px] font-medium text-black/50 dark:text-white/50">No Positions</p>
+                <p className="mt-1.5 text-[13px] text-black/30 dark:text-white/30">
                     Create a position by depositing an asset from your wallet.
                 </p>
             </div>
@@ -238,7 +238,7 @@ function PositionsTable({
         <div className="overflow-x-auto">
             <table className="w-full text-left">
                 <thead>
-                    <tr className="border-b border-black/[0.05] text-[11px] text-black/35">
+                    <tr className="border-b border-black/[0.05] dark:border-white/[0.05] text-[11px] text-black/35 dark:text-white/35">
                         <th className="pb-3.5 pr-6 font-medium">Vault</th>
                         <th className="pb-3.5 pr-6 font-medium">Balance</th>
                         <th className="pb-3.5 pr-6 font-medium">APY (30d)</th>
@@ -253,27 +253,27 @@ function PositionsTable({
                         const yieldEarned = parseFloat(v.yield_earned) || 0;
                         const apy = (v.performance?.apy_30d ?? 0) * 100;
                         return (
-                            <tr key={v.id} className="border-b border-black/[0.04] last:border-0">
+                            <tr key={v.id} className="border-b border-black/[0.04] dark:border-white/[0.04] last:border-0">
                                 <td className="py-4 pr-6">
                                     <div className="flex items-center gap-3">
-                                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/[0.04] text-black/40">
+                                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/[0.04] dark:bg-white/[0.04] text-black/40 dark:text-white/40">
                                             {getVaultIcon(v.currency)}
                                         </div>
                                         <div>
-                                            <p className="text-[14px] text-black">{v.currency} Vault</p>
-                                            <p className="mt-0.5 text-[11px] text-black/30 font-mono">
+                                            <p className="text-[14px] text-black dark:text-white">{v.currency} Vault</p>
+                                            <p className="mt-0.5 text-[11px] text-black/30 dark:text-white/30 font-mono">
                                                 {v.contract_address.slice(0, 8)}…
                                             </p>
                                         </div>
                                     </div>
                                 </td>
-                                <td className="py-4 pr-6 font-mono text-[14px] text-black">
+                                <td className="py-4 pr-6 font-mono text-[14px] text-black dark:text-white">
                                     {fmtUsd(balance)}
                                 </td>
-                                <td className="py-4 pr-6 text-[14px] text-black">
+                                <td className="py-4 pr-6 text-[14px] text-black dark:text-white">
                                     {apy.toFixed(1)}%
                                 </td>
-                                <td className="py-4 pr-6 font-mono text-[14px] text-black/60">
+                                <td className="py-4 pr-6 font-mono text-[14px] text-black/60 dark:text-white/60">
                                     +{fmtUsd(yieldEarned)}
                                 </td>
                                 <td className="py-4 pr-6">
@@ -284,7 +284,7 @@ function PositionsTable({
                                                 ? "bg-emerald-50 text-emerald-600"
                                                 : v.status === "paused"
                                                 ? "bg-amber-50 text-amber-600"
-                                                : "bg-black/[0.04] text-black/50"
+                                                : "bg-black/[0.04] dark:bg-white/[0.04] text-black/50 dark:text-white/50"
                                         )}
                                     >
                                         {v.status.charAt(0).toUpperCase() + v.status.slice(1)}
@@ -293,7 +293,7 @@ function PositionsTable({
                                 <td className="py-4">
                                     <button
                                         onClick={() => onWithdraw(v)}
-                                        className="rounded-lg border border-black/[0.08] px-3.5 py-1.5 text-[12px] text-black/50 transition-colors hover:border-black/20 hover:text-black"
+                                        className="rounded-lg border border-black/[0.08] dark:border-white/[0.08] px-3.5 py-1.5 text-[12px] text-black/50 dark:text-white/50 transition-colors hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white"
                                     >
                                         Withdraw
                                     </button>
@@ -342,29 +342,29 @@ function ActivityFeed({
             {settlements.slice(0, 5).map((s) => (
                 <div
                     key={s.id}
-                    className="flex items-center justify-between rounded-xl bg-black/[0.015] px-5 py-3.5"
+                    className="flex items-center justify-between rounded-xl bg-black/[0.015] dark:bg-white/[0.015] px-5 py-3.5"
                 >
                     <div className="flex items-center gap-3">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/[0.04] text-black/40">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/[0.04] dark:bg-white/[0.04] text-black/40 dark:text-white/40">
                             <ArrowUpRight className="h-4 w-4" />
                         </div>
                         <div>
-                            <p className="text-[14px] text-black">Off-ramp</p>
-                            <p className="mt-0.5 text-[11px] text-black/30">
+                            <p className="text-[14px] text-black dark:text-white">Off-ramp</p>
+                            <p className="mt-0.5 text-[11px] text-black/30 dark:text-white/30">
                                 {s.fiat_currency} · {new Date(s.created_at).toLocaleString()}
                             </p>
                         </div>
                     </div>
                     <div className="flex items-center gap-4">
                         <div className="text-right">
-                            <p className="font-mono text-[14px] text-black">
+                            <p className="font-mono text-[14px] text-black dark:text-white">
                                 {s.amount} {s.currency}
                             </p>
                             <span
                                 className={cn(
                                     "inline-block mt-0.5 text-[11px] font-medium",
                                     s.status === "confirmed"
-                                        ? "text-black/40"
+                                        ? "text-black/40 dark:text-white/40"
                                         : s.status === "failed"
                                         ? "text-red-400/70"
                                         : "text-amber-500/70"
@@ -399,8 +399,8 @@ function WalletBalanceTable({
     if (!hasBalance) {
         return (
             <div className="flex flex-col items-center justify-center py-14 text-center">
-                <p className="text-[14px] font-medium text-black/50">No Wallet Balance</p>
-                <p className="mt-1.5 text-[13px] text-black/30">
+                <p className="text-[14px] font-medium text-black/50 dark:text-white/50">No Wallet Balance</p>
+                <p className="mt-1.5 text-[13px] text-black/30 dark:text-white/30">
                     Fund your wallet to start depositing into vaults.
                 </p>
             </div>
@@ -410,7 +410,7 @@ function WalletBalanceTable({
     return (
         <table className="w-full text-left">
             <thead>
-                <tr className="border-b border-black/[0.05] text-[11px] text-black/35">
+                <tr className="border-b border-black/[0.05] dark:border-white/[0.05] text-[11px] text-black/35 dark:text-white/35">
                     <th className="pb-3.5 pr-6 font-medium">Asset</th>
                     <th className="pb-3.5 pr-6 font-medium text-right">Balance</th>
                     <th className="pb-3.5 pr-6 font-medium text-right">Price</th>
@@ -419,23 +419,23 @@ function WalletBalanceTable({
             </thead>
             <tbody>
                 {assets.map((asset) => (
-                    <tr key={asset.code} className="border-b border-black/[0.04] last:border-0">
+                    <tr key={asset.code} className="border-b border-black/[0.04] dark:border-white/[0.04] last:border-0">
                         <td className="py-4 pr-6">
                             <div className="flex items-center gap-3">
                                 <Image src={asset.logo} alt={asset.code} width={32} height={32} className="rounded-full" />
                                 <div>
-                                    <p className="text-[14px] text-black">{asset.code}</p>
-                                    <p className="text-[11px] text-black/30 mt-0.5">{asset.name}</p>
+                                    <p className="text-[14px] text-black dark:text-white">{asset.code}</p>
+                                    <p className="text-[11px] text-black/30 dark:text-white/30 mt-0.5">{asset.name}</p>
                                 </div>
                             </div>
                         </td>
-                        <td className="py-4 pr-6 text-right font-mono text-[14px] text-black">
+                        <td className="py-4 pr-6 text-right font-mono text-[14px] text-black dark:text-white">
                             {asset.balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 7 })}
                         </td>
-                        <td className="py-4 pr-6 text-right text-[13px] text-black/40">
+                        <td className="py-4 pr-6 text-right text-[13px] text-black/40 dark:text-white/40">
                             ${asset.price.toFixed(4)}
                         </td>
-                        <td className="py-4 text-right font-mono text-[14px] text-black">
+                        <td className="py-4 text-right font-mono text-[14px] text-black dark:text-white">
                             ${fmtUsd(asset.balance * asset.price)}
                         </td>
                     </tr>
@@ -462,7 +462,8 @@ export default function Dashboard() {
     const { settlements, isLoading: settlementsLoading } = useSettlements(userId);
 
     // Wallet balances still come from portfolio-provider (Horizon direct)
-    const { balances } = usePortfolio();
+    // Wallet balance section commented out — unused for now
+    // const { balances } = usePortfolio();
 
     const positions = useMemo(() => vaults.map(vaultToPosition), [vaults]);
 
@@ -480,11 +481,20 @@ export default function Dashboard() {
         if (!isConnected) router.push("/");
     }, [isConnected, router]);
 
-    // Auto sign-in when wallet connects and we have no token yet
+    // Auto sign-in when wallet connects and we have no token yet.
+    // Fires at most once per connected address — a failure (rejected signature,
+    // network error) must not re-trigger the wallet's sign prompt in a loop.
+    // The banner's manual "Sign in" button is the retry path after that.
+    const autoSignInAttempted = useRef<string | null>(null);
     useEffect(() => {
-        if (isConnected && address && !isAuthenticated && !isSigningIn) {
-            signIn().catch(() => {}); // non-blocking — banner shows on failure
+        if (!isConnected || !address) {
+            autoSignInAttempted.current = null;
+            return;
         }
+        if (isAuthenticated || isSigningIn) return;
+        if (autoSignInAttempted.current === address) return;
+        autoSignInAttempted.current = address;
+        signIn().catch(() => {}); // non-blocking — banner shows on failure
     }, [isConnected, address, isAuthenticated, isSigningIn, signIn]);
 
     // Aggregate portfolio metrics from live vaults
@@ -530,20 +540,20 @@ export default function Dashboard() {
                 transition={{ duration: 0.3 }}
                 className="my-4 flex flex-wrap items-center justify-between gap-4"
             >
-                <h1 className="text-[30px] font-semibold text-black tracking-[-0.02em]">
+                <h1 className="text-[30px] font-semibold text-black dark:text-white tracking-[-0.02em]">
                     {greeting}
                 </h1>
                 <div className="flex items-center gap-2.5">
                     <Link
                         href="/vaults"
-                        className="flex items-center gap-2 rounded-full border border-black/[0.1] bg-white px-5 py-2.5 text-[13px] font-medium text-black/65 transition-all hover:border-black/20 hover:shadow-sm"
+                        className="flex items-center gap-2 rounded-full border border-black/[0.1] dark:border-white/[0.1] bg-white dark:bg-[#100F0F] px-5 py-2.5 text-[13px] font-medium text-black/65 dark:text-white/65 transition-all hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm"
                     >
                         <ArrowDownToLine className="h-3.5 w-3.5" />
                         Deposit
                     </Link>
                     <Link
                         href="/savings"
-                        className="flex items-center gap-2 rounded-full border border-black/[0.1] bg-white px-5 py-2.5 text-[13px] font-medium text-black/65 transition-all hover:border-black/20 hover:shadow-sm"
+                        className="flex items-center gap-2 rounded-full border border-black/[0.1] dark:border-white/[0.1] bg-white dark:bg-[#100F0F] px-5 py-2.5 text-[13px] font-medium text-black/65 dark:text-white/65 transition-all hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm"
                     >
                         <PiggyBank className="h-3.5 w-3.5" />
                         Save
@@ -561,23 +571,23 @@ export default function Dashboard() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: 0.05 }}
-                className="mb-10 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-0 rounded-2xl border border-black/[0.06] bg-white overflow-hidden"
+                className="mb-10 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-0 rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] overflow-hidden"
             >
                 {/* Left — balance + stats */}
                 <div className="p-8 lg:p-10 flex flex-col justify-between">
                     {vaultsLoading ? (
                         <div className="space-y-3">
-                            <div className="h-10 w-40 animate-pulse rounded-md bg-black/[0.06]" />
-                            <div className="h-3 w-24 animate-pulse rounded-md bg-black/[0.06]" />
+                            <div className="h-10 w-40 animate-pulse rounded-md bg-black/[0.06] dark:bg-white/[0.06]" />
+                            <div className="h-3 w-24 animate-pulse rounded-md bg-black/[0.06] dark:bg-white/[0.06]" />
                         </div>
                     ) : (
                         <div>
-                            <p className="text-[42px] font-light leading-none text-black tracking-[-0.02em]" aria-live="polite">
+                            <p className="text-[42px] font-light leading-none text-black dark:text-white tracking-[-0.02em]" aria-live="polite">
                                 ${fmtUsd(totalBalanceUsd)}
                             </p>
-                            <p className="mt-2 text-[12px] text-black/35 tracking-wide">Protocol Balance</p>
+                            <p className="mt-2 text-[12px] text-black/35 dark:text-white/35 tracking-wide">Protocol Balance</p>
                             {lastSynced && (
-                                <p className="mt-1.5 text-[11px] text-black/25">
+                                <p className="mt-1.5 text-[11px] text-black/25 dark:text-white/25">
                                     Last updated {formatDistanceToNow(lastSynced)} ago
                                 </p>
                             )}
@@ -585,21 +595,21 @@ export default function Dashboard() {
                     )}
                     <div className="mt-8 space-y-5">
                         <div className="flex items-center justify-between">
-                            <span className="text-[13px] text-black/60">Position APY</span>
+                            <span className="text-[13px] text-black/60 dark:text-white/60">Position APY</span>
                             {vaultsLoading ? (
-                                <div className="h-4 w-12 animate-pulse rounded bg-black/[0.06]" />
+                                <div className="h-4 w-12 animate-pulse rounded bg-black/[0.06] dark:bg-white/[0.06]" />
                             ) : (
-                                <span className="text-[13px] font-medium text-black">
+                                <span className="text-[13px] font-medium text-black dark:text-white">
                                     {(avgApy * 100).toFixed(2)}%
                                 </span>
                             )}
                         </div>
                         <div className="flex items-center justify-between">
-                            <span className="text-[13px] text-black/40">Total earnings</span>
+                            <span className="text-[13px] text-black/40 dark:text-white/40">Total earnings</span>
                             {vaultsLoading ? (
-                                <div className="h-4 w-16 animate-pulse rounded bg-black/[0.06]" />
+                                <div className="h-4 w-16 animate-pulse rounded bg-black/[0.06] dark:bg-white/[0.06]" />
                             ) : (
-                                <span className="text-[13px] font-medium text-black">
+                                <span className="text-[13px] font-medium text-black dark:text-white">
                                     ${fmtUsd(totalYield)}
                                 </span>
                             )}
@@ -608,7 +618,7 @@ export default function Dashboard() {
                 </div>
 
                 {/* Right — chart */}
-                <div className="border-t lg:border-t-0 lg:border-l border-black/[0.06] p-8 lg:p-10 flex flex-col">
+                <div className="border-t lg:border-t-0 lg:border-l border-black/[0.06] dark:border-white/[0.06] p-8 lg:p-10 flex flex-col">
                     <div className="flex items-center justify-end gap-0.5 mb-6" role="tablist" aria-label="Chart period">
                         {CHART_PERIODS.map((p) => (
                             <button
@@ -619,8 +629,8 @@ export default function Dashboard() {
                                 className={cn(
                                     "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
                                     chartPeriod === p
-                                        ? "bg-black/[0.06] text-black"
-                                        : "text-black/60 hover:text-black/80"
+                                        ? "bg-black/[0.06] dark:bg-white/[0.06] text-black dark:text-white"
+                                        : "text-black/60 dark:text-white/60 hover:text-black/80 dark:hover:text-white/80"
                                 )}
                             >
                                 {p}
@@ -632,7 +642,7 @@ export default function Dashboard() {
                     </div>
                     <div className="flex items-center gap-2 mt-4">
                         <span className="h-2 w-2 rounded-full bg-indigo-600" aria-hidden="true" />
-                        <span className="text-[11px] text-black/60">Balance</span>
+                        <span className="text-[11px] text-black/60 dark:text-white/60">Balance</span>
                     </div>
                 </div>
             </motion.div>
@@ -655,14 +665,14 @@ export default function Dashboard() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: 0.1 }}
-                className="mb-8 rounded-2xl dash-border bg-white"
+                className="mb-8 rounded-2xl dash-border bg-white dark:bg-[#100F0F]"
             >
                 <div className="flex items-center justify-between px-8 pt-7 pb-0">
-                    <h2 className="text-[16px] font-semibold text-black">Positions</h2>
+                    <h2 className="text-[16px] font-semibold text-black dark:text-white">Positions</h2>
                     <Link
                         href="/vaults"
                         data-tour="deposit-cta"
-                        className="text-[12px] text-black/60 transition-colors hover:text-black"
+                        className="text-[12px] text-black/60 dark:text-white/60 transition-colors hover:text-black dark:hover:text-white"
                     >
                         + New Position
                     </Link>
@@ -676,30 +686,31 @@ export default function Dashboard() {
                 </div>
             </motion.div>
 
-            {/* ── Wallet balance ── */}
+            {/* ── Wallet balance ──
             <motion.div
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: 0.15 }}
-                className="rounded-2xl dash-border bg-white"
+                className="rounded-2xl dash-border bg-white dark:bg-[#100F0F]"
             >
                 <div className="px-8 pt-7">
-                    <h2 className="text-[16px] font-semibold text-black">Wallet balance</h2>
+                    <h2 className="text-[16px] font-semibold text-black dark:text-white">Wallet balance</h2>
                 </div>
                 <div className="px-8 pb-8 pt-6">
                     <WalletBalanceTable balances={balances} tokenPrices={tokenPrices} />
                 </div>
             </motion.div>
+            */}
 
             {/* ── Recent Activity (settlements) ── */}
             <motion.div
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: 0.2 }}
-                className="mt-8 rounded-2xl dash-border bg-white"
+                className="mt-8 rounded-2xl dash-border bg-white dark:bg-[#100F0F]"
             >
                 <div className="px-8 pt-7">
-                    <h2 className="text-[16px] font-semibold text-black">Recent Activity</h2>
+                    <h2 className="text-[16px] font-semibold text-black dark:text-white">Recent Activity</h2>
                 </div>
                 <div className="px-8 pb-8 pt-6">
                     <ActivityFeed
@@ -708,8 +719,8 @@ export default function Dashboard() {
                     />
                     {!settlementsLoading && settlements.length === 0 && (
                         <div className="flex flex-col items-center justify-center py-10 text-center">
-                            <p className="text-[14px] font-medium text-black/50">No recent activity</p>
-                            <p className="mt-1.5 text-[13px] text-black/30">
+                            <p className="text-[14px] font-medium text-black/50 dark:text-white/50">No recent activity</p>
+                            <p className="mt-1.5 text-[13px] text-black/30 dark:text-white/30">
                                 Off-ramp settlements will appear here once you initiate a withdrawal.
                             </p>
                         </div>

@@ -21,7 +21,7 @@ export function VaultPositionsTable({ positions }: VaultPositionsTableProps) {
     const { formatValue } = useSettings();
 
     return (
-        <div className="rounded-2xl border border-border bg-white overflow-hidden shadow-sm hover:border-black/15 transition-all">
+        <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] overflow-hidden shadow-sm hover:border-black/15 dark:hover:border-white/15 transition-all">
             <div className="px-6 py-5 border-b border-border bg-secondary/10 flex items-center justify-between">
                 <h2 className="font-heading text-lg font-light text-foreground">
                     Your Vaults
@@ -93,10 +93,10 @@ export function VaultPositionsTable({ positions }: VaultPositionsTableProps) {
                                     </td>
                                     <td className="px-6 py-5 text-right">
                                         <div className="flex items-center justify-end gap-2">
-                                            <button className="h-8 w-8 rounded-lg border border-border bg-white flex items-center justify-center hover:bg-secondary transition-all" title="Deposit More">
+                                            <button className="h-8 w-8 rounded-lg border border-border bg-white dark:bg-[#100F0F] flex items-center justify-center hover:bg-secondary transition-all" title="Deposit More">
                                                 <Plus className="h-3.5 w-3.5" />
                                             </button>
-                                            <button className="h-8 w-8 rounded-lg border border-border bg-white flex items-center justify-center hover:bg-secondary transition-all" title="Withdraw">
+                                            <button className="h-8 w-8 rounded-lg border border-border bg-white dark:bg-[#100F0F] flex items-center justify-center hover:bg-secondary transition-all" title="Withdraw">
                                                 <Minus className="h-3.5 w-3.5" />
                                             </button>
                                         </div>

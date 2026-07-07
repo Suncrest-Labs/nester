@@ -10,7 +10,7 @@ export function Skeleton({ className, animate = true, ...props }: SkeletonProps)
   return (
     <div
       className={cn(
-        "rounded-lg bg-black/[0.04]",
+        "rounded-lg bg-black/[0.04] dark:bg-white/[0.04]",
         animate && "animate-pulse",
         className
       )}
@@ -53,7 +53,7 @@ export function SkeletonCard({
 }: SkeletonCardProps) {
   return (
     <Skeleton 
-      className={cn("rounded-2xl border border-black/[0.06] bg-white p-6", className)}
+      className={cn("rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] p-6", className)}
       style={{ width, height }}
     >
       {children}
@@ -71,7 +71,7 @@ export function SkeletonTable({ rows = 3, columns = 4, className }: SkeletonTabl
   return (
     <div className={cn("w-full", className)}>
       {/* Table header */}
-      <div className="flex gap-4 border-b border-black/[0.05] pb-3.5 mb-4">
+      <div className="flex gap-4 border-b border-black/[0.05] dark:border-white/[0.05] pb-3.5 mb-4">
         {Array.from({ length: columns }).map((_, i) => (
           <SkeletonLine 
             key={`header-${i}`} 
@@ -84,7 +84,7 @@ export function SkeletonTable({ rows = 3, columns = 4, className }: SkeletonTabl
       
       {/* Table rows */}
       {Array.from({ length: rows }).map((_, rowIndex) => (
-        <div key={`row-${rowIndex}`} className="flex gap-4 py-4 border-b border-black/[0.04] last:border-0">
+        <div key={`row-${rowIndex}`} className="flex gap-4 py-4 border-b border-black/[0.04] dark:border-white/[0.04] last:border-0">
           {Array.from({ length: columns }).map((_, colIndex) => (
             <SkeletonLine 
               key={`cell-${rowIndex}-${colIndex}`}
@@ -120,7 +120,7 @@ export function SkeletonChart({
         {Array.from({ length: 8 }).map((_, i) => (
           <div
             key={i}
-            className="bg-black/[0.08] rounded-t-sm animate-pulse"
+            className="bg-black/[0.08] dark:bg-white/[0.08] rounded-t-sm animate-pulse"
             style={{
               width: '8px',
               height: `${30 + Math.random() * 60}%`,

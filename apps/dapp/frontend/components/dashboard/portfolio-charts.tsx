@@ -71,7 +71,7 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
     return (
         <div className="grid gap-6 lg:grid-cols-3">
             {/* Allocation Donut */}
-            <div className="rounded-2xl border border-border bg-white p-6 shadow-sm flex flex-col items-center justify-between min-h-[400px]">
+            <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-6 shadow-sm flex flex-col items-center justify-between min-h-[400px]">
                 <div className="w-full flex items-center justify-between mb-2">
                    <h3 className="font-heading text-lg font-light text-foreground text-left">Allocation</h3>
                    <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-medium">By Vault</span>
@@ -119,7 +119,7 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
             </div>
 
             {/* Performance Chart */}
-            <div className="lg:col-span-2 rounded-2xl border border-border bg-white p-6 shadow-sm flex flex-col min-h-[400px]">
+            <div className="lg:col-span-2 rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-6 shadow-sm flex flex-col min-h-[400px]">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
                     <div className="flex flex-col">
                         <h3 className="font-heading text-lg font-light text-foreground">Yield Performance</h3>
@@ -133,8 +133,8 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
                                 onClick={() => setTimeframe(t)}
                                 className={cn(
                                     "px-3 py-1 rounded-lg text-[10px] font-medium uppercase tracking-wider transition-all",
-                                    timeframe === t 
-                                        ? "bg-white text-primary shadow-sm border border-border/50" 
+                                    timeframe === t
+                                        ? "bg-white dark:bg-[#100F0F] text-primary shadow-sm border border-border/50"
                                         : "text-muted-foreground hover:text-foreground"
                                 )}
                             >

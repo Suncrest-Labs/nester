@@ -38,8 +38,10 @@ const themeInitScript = `
   try {
     var key = 'nester-theme';
     var legacy = 'nester_theme';
-    var stored = localStorage.getItem(key) || localStorage.getItem(legacy) || 'dark';
-    if (stored === 'system') stored = 'dark';
+    var stored = localStorage.getItem(key) || localStorage.getItem(legacy) || 'light';
+    if (stored === 'system') {
+      stored = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
     if (stored === 'dark') {
       document.documentElement.classList.add('dark');
     } else {
@@ -73,20 +75,22 @@ export default function RootLayout({
                             <NetworkProvider>
                                 <SettingsProvider>
                                     <WalletProvider>
-                                        <NotificationsProvider>
-                                            <OfflineBanner />
-                                            <NetworkBanner />
-                                            <PortfolioProvider>
-                                                <WebSocketProvider>
-                                                    <OnboardingProvider>
-                                                        {children}
-                                                        <NotificationsToaster />
-                                                        <ConsentGatedPrometheus />
-                                                        <CookieConsentBanner />
-                                                    </OnboardingProvider>
-                                                </WebSocketProvider>
-                                            </PortfolioProvider>
-                                        </NotificationsProvider>
+                                        <AuthProvider>
+                                            <NotificationsProvider>
+                                                <OfflineBanner />
+                                                <NetworkBanner />
+                                                <PortfolioProvider>
+                                                    <WebSocketProvider>
+                                                        <OnboardingProvider>
+                                                            {children}
+                                                            <NotificationsToaster />
+                                                            <ConsentGatedPrometheus />
+                                                            <CookieConsentBanner />
+                                                        </OnboardingProvider>
+                                                    </WebSocketProvider>
+                                                </PortfolioProvider>
+                                            </NotificationsProvider>
+                                        </AuthProvider>
                                     </WalletProvider>
                                 </SettingsProvider>
                             </NetworkProvider>

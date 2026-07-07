@@ -10,7 +10,7 @@ export function VaultTerms({
   earlyWithdrawalPenalty,
 }: VaultTermsProps) {
   return (
-    <div className="rounded-2xl border border-border bg-white p-5">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-5">
       <p className="font-heading text-sm font-medium text-foreground mb-3">
         Terms
       </p>

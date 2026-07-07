@@ -56,16 +56,16 @@ function fmtTVL(usd: number): string {
 
 function CardSkeleton() {
   return (
-    <div className="animate-pulse rounded-2xl border border-black/8 bg-white p-5">
+    <div className="animate-pulse rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5">
       <div className="mb-4 flex justify-between">
-        <div className="h-10 w-10 rounded-xl bg-black/8" />
-        <div className="h-6 w-16 rounded-full bg-black/8" />
+        <div className="h-10 w-10 rounded-xl bg-black/8 dark:bg-white/8" />
+        <div className="h-6 w-16 rounded-full bg-black/8 dark:bg-white/8" />
       </div>
-      <div className="mb-2 h-4 w-32 rounded bg-black/8" />
-      <div className="mb-4 h-3 w-24 rounded bg-black/6" />
+      <div className="mb-2 h-4 w-32 rounded bg-black/8 dark:bg-white/8" />
+      <div className="mb-4 h-3 w-24 rounded bg-black/6 dark:bg-white/6" />
       <div className="grid grid-cols-2 gap-3">
-        <div className="h-12 rounded-xl bg-black/6" />
-        <div className="h-12 rounded-xl bg-black/6" />
+        <div className="h-12 rounded-xl bg-black/6 dark:bg-white/6" />
+        <div className="h-12 rounded-xl bg-black/6 dark:bg-white/6" />
       </div>
     </div>
   );
@@ -88,19 +88,19 @@ function YieldCard({
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col rounded-2xl border border-black/8 bg-white p-5 transition-all hover:border-black/18 hover:shadow-sm"
+      className="flex flex-col rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5 transition-all hover:border-black/18 dark:hover:border-white/18 hover:shadow-sm"
       data-testid="yield-card"
     >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-black/[0.04]">
-            <span className="text-xs font-semibold uppercase text-black/60">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-black/[0.04] dark:bg-white/[0.04]">
+            <span className="text-xs font-semibold uppercase text-black/60 dark:text-white/60">
               {pool.symbol.slice(0, 2)}
             </span>
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold capitalize text-black">{pool.project}</p>
-            <p className="text-[11px] font-mono text-black/45">{pool.symbol}</p>
+            <p className="truncate text-sm font-semibold capitalize text-black dark:text-white">{pool.project}</p>
+            <p className="text-[11px] font-mono text-black/45 dark:text-white/45">{pool.symbol}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -111,10 +111,10 @@ function YieldCard({
             type="button"
             onClick={() => onBookmark(pool)}
             aria-label={bookmarked ? "Remove bookmark" : "Bookmark protocol"}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/8 text-black/40 hover:text-black transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/8 dark:border-white/8 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors"
           >
             {bookmarked ? (
-              <BookmarkCheck className="h-4 w-4 text-black" />
+              <BookmarkCheck className="h-4 w-4 text-black dark:text-white" />
             ) : (
               <Bookmark className="h-4 w-4" />
             )}
@@ -123,24 +123,24 @@ function YieldCard({
       </div>
 
       <div className="mb-4 grid grid-cols-2 gap-3">
-        <div className="rounded-xl bg-black/[0.025] px-3 py-3 text-center">
-          <p className="font-mono text-lg text-black">{pool.apy.toFixed(2)}%</p>
-          <p className="mt-0.5 text-[10px] font-medium uppercase text-black/45">APY</p>
+        <div className="rounded-xl bg-black/[0.025] dark:bg-white/[0.025] px-3 py-3 text-center">
+          <p className="font-mono text-lg text-black dark:text-white">{pool.apy.toFixed(2)}%</p>
+          <p className="mt-0.5 text-[10px] font-medium uppercase text-black/45 dark:text-white/45">APY</p>
         </div>
-        <div className="rounded-xl bg-black/[0.025] px-3 py-3 text-center">
-          <p className="font-mono text-lg text-black">{fmtTVL(pool.tvlUsd)}</p>
-          <p className="mt-0.5 text-[10px] font-medium uppercase text-black/45">TVL</p>
+        <div className="rounded-xl bg-black/[0.025] dark:bg-white/[0.025] px-3 py-3 text-center">
+          <p className="font-mono text-lg text-black dark:text-white">{fmtTVL(pool.tvlUsd)}</p>
+          <p className="mt-0.5 text-[10px] font-medium uppercase text-black/45 dark:text-white/45">TVL</p>
         </div>
       </div>
 
-      <p className="mb-4 text-xs text-black/50">
-        Asset: <span className="font-mono text-black/70">{pool.symbol}</span>
+      <p className="mb-4 text-xs text-black/50 dark:text-white/50">
+        Asset: <span className="font-mono text-black/70 dark:text-white/70">{pool.symbol}</span>
       </p>
 
       <button
         type="button"
         onClick={() => onDeposit(pool)}
-        className="mt-auto w-full rounded-xl bg-black py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-80"
+        className="mt-auto w-full rounded-xl bg-black dark:bg-blue-600 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-80"
       >
         Deposit
       </button>
@@ -202,15 +202,15 @@ export default function YieldsPage() {
       <div className="mx-auto max-w-5xl px-5 py-8 sm:px-8">
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold text-black tracking-tight">Yield Opportunities</h1>
-            <p className="mt-1 text-sm text-black/55">
+            <h1 className="text-2xl font-semibold text-black dark:text-white tracking-tight">Yield Opportunities</h1>
+            <p className="mt-1 text-sm text-black/55 dark:text-white/55">
               Browse DeFi protocols on Stellar and deposit into your savings goals.
             </p>
           </div>
           <div className="flex items-center gap-3">
             {isConnected && getStoredToken() && (
               <Link href="/yields/history">
-                <button className="text-xs font-semibold text-black hover:underline transition-colors">
+                <button className="text-xs font-semibold text-black dark:text-white hover:underline transition-colors">
                   Harvest History
                 </button>
               </Link>
@@ -236,8 +236,8 @@ export default function YieldsPage() {
               className={cn(
                 "rounded-full px-4 py-2 text-xs font-semibold transition-colors",
                 riskFilter === tab.id
-                  ? "bg-black text-white"
-                  : "border border-black/10 text-black/55 hover:text-black"
+                  ? "bg-black dark:bg-blue-600 text-white"
+                  : "border border-black/10 dark:border-white/10 text-black/55 dark:text-white/55 hover:text-black dark:hover:text-white"
               )}
             >
               {tab.label}
@@ -252,14 +252,14 @@ export default function YieldsPage() {
             ))}
           </div>
         ) : isError ? (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-black/8 bg-white py-16 text-center">
-            <AlertTriangle className="h-6 w-6 text-black/25" />
-            <p className="text-sm text-black/50">Yield data unavailable right now.</p>
+          <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16 text-center">
+            <AlertTriangle className="h-6 w-6 text-black/25 dark:text-white/25" />
+            <p className="text-sm text-black/50 dark:text-white/50">Yield data unavailable right now.</p>
             <button
               type="button"
               onClick={() => refetch()}
               disabled={isFetching}
-              className="flex items-center gap-1.5 rounded-lg border border-black/10 px-3 py-1.5 text-xs text-black/50 hover:text-black"
+              className="flex items-center gap-1.5 rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white"
             >
               <RefreshCw className={cn("h-3 w-3", isFetching && "animate-spin")} />
               Retry
@@ -267,12 +267,12 @@ export default function YieldsPage() {
           </div>
         ) : filtered.length === 0 ? (
           <div
-            className="flex flex-col items-center justify-center rounded-2xl border border-black/8 bg-white py-16 text-center px-6"
+            className="flex flex-col items-center justify-center rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16 text-center px-6"
             data-testid="yields-empty-state"
           >
-            <TrendingUp className="mb-3 h-8 w-8 text-black/25" />
-            <p className="text-sm font-medium text-black">No protocols available</p>
-            <p className="mt-1 max-w-sm text-xs text-black/50">
+            <TrendingUp className="mb-3 h-8 w-8 text-black/25 dark:text-white/25" />
+            <p className="text-sm font-medium text-black dark:text-white">No protocols available</p>
+            <p className="mt-1 max-w-sm text-xs text-black/50 dark:text-white/50">
               {pools.length === 0
                 ? "Protocols below the minimum TVL threshold are hidden. Check back later as liquidity grows."
                 : "No protocols match the selected risk tier. Try a different filter."}

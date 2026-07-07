@@ -98,14 +98,14 @@ function CreatePlanModal({
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="fixed inset-x-4 top-20 z-50 mx-auto max-w-2xl rounded-3xl bg-white p-8 shadow-2xl sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2"
+                className="fixed inset-x-4 top-20 z-50 mx-auto max-w-2xl rounded-3xl bg-white dark:bg-[#100F0F] p-8 shadow-2xl sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="plan-modal-title"
             >
                 <div className="flex items-center justify-between mb-6">
-                    <h2 id="plan-modal-title" className="text-xl font-bold text-black">Create a Personalised Savings Plan</h2>
-                    <button onClick={onClose} aria-label="Close" className="rounded-full p-2 hover:bg-black/5">
+                    <h2 id="plan-modal-title" className="text-xl font-bold text-black dark:text-white">Create a Personalised Savings Plan</h2>
+                    <button onClick={onClose} aria-label="Close" className="rounded-full p-2 hover:bg-black/5 dark:hover:bg-white/5">
                         <X className="h-5 w-5" />
                     </button>
                 </div>
@@ -114,37 +114,37 @@ function CreatePlanModal({
                     <div className="space-y-6">
                         <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
                             <div>
-                                <label className="mb-2 block text-xs font-bold text-black/60 uppercase">Savings Goal (USDC)</label>
+                                <label className="mb-2 block text-xs font-bold text-black/60 dark:text-white/60 uppercase">Savings Goal (USDC)</label>
                                 <input
                                     type="number"
                                     value={goal}
                                     onChange={(e) => setGoal(e.target.value)}
-                                    className="w-full rounded-xl border border-black/10 bg-black/[0.02] p-3 text-sm outline-none focus:border-black/25 text-black"
+                                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 text-sm outline-none focus:border-black/25 dark:focus:border-white/25 text-black dark:text-white"
                                 />
                             </div>
                             <div>
-                                <label className="mb-2 block text-xs font-bold text-black/60 uppercase">Time Horizon (Months)</label>
+                                <label className="mb-2 block text-xs font-bold text-black/60 dark:text-white/60 uppercase">Time Horizon (Months)</label>
                                 <input
                                     type="number"
                                     value={months}
                                     onChange={(e) => setMonths(e.target.value)}
-                                    className="w-full rounded-xl border border-black/10 bg-black/[0.02] p-3 text-sm outline-none focus:border-black/25 text-black"
+                                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 text-sm outline-none focus:border-black/25 dark:focus:border-white/25 text-black dark:text-white"
                                 />
                             </div>
                             <div>
-                                <label className="mb-2 block text-xs font-bold text-black/60 uppercase">Max Monthly Contribution</label>
+                                <label className="mb-2 block text-xs font-bold text-black/60 dark:text-white/60 uppercase">Max Monthly Contribution</label>
                                 <input
                                     type="number"
                                     value={contribution}
                                     onChange={(e) => setContribution(e.target.value)}
-                                    className="w-full rounded-xl border border-black/10 bg-black/[0.02] p-3 text-sm outline-none focus:border-black/25 text-black"
+                                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 text-sm outline-none focus:border-black/25 dark:focus:border-white/25 text-black dark:text-white"
                                 />
                             </div>
                         </div>
                         <button
                             onClick={handleCreate}
                             disabled={loading}
-                            className="w-full rounded-xl bg-black py-4 text-sm font-bold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
+                            className="w-full rounded-xl bg-black dark:bg-blue-600 py-4 text-sm font-bold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
                         >
                             {loading ? "Generating Plan..." : "Generate Personalised Plan"}
                         </button>
@@ -164,33 +164,33 @@ function CreatePlanModal({
                         </div>
 
                         <div className="grid grid-cols-2 gap-4">
-                            <div className="rounded-2xl bg-black/[0.02] p-4">
-                                <p className="text-[10px] font-bold text-black/40 uppercase">Required Deposit</p>
-                                <p className="text-xl font-bold text-black">${plan.required_monthly_deposit}/mo</p>
+                            <div className="rounded-2xl bg-black/[0.02] dark:bg-white/[0.02] p-4">
+                                <p className="text-[10px] font-bold text-black/40 dark:text-white/40 uppercase">Required Deposit</p>
+                                <p className="text-xl font-bold text-black dark:text-white">${plan.required_monthly_deposit}/mo</p>
                             </div>
-                            <div className="rounded-2xl bg-black/[0.02] p-4">
-                                <p className="text-[10px] font-bold text-black/40 uppercase">Total Yield Earned</p>
-                                <p className="text-xl font-bold text-black text-emerald-600">+${plan.total_yield_earned}</p>
+                            <div className="rounded-2xl bg-black/[0.02] dark:bg-white/[0.02] p-4">
+                                <p className="text-[10px] font-bold text-black/40 dark:text-white/40 uppercase">Total Yield Earned</p>
+                                <p className="text-xl font-bold text-black dark:text-white text-emerald-600">+${plan.total_yield_earned}</p>
                             </div>
                         </div>
 
-                        <div className="max-h-48 overflow-y-auto rounded-2xl border border-black/5">
+                        <div className="max-h-48 overflow-y-auto rounded-2xl border border-black/5 dark:border-white/5">
                             <table className="w-full text-left text-[11px]">
-                                <thead className="sticky top-0 bg-white border-b border-black/5">
+                                <thead className="sticky top-0 bg-white dark:bg-[#100F0F] border-b border-black/5 dark:border-white/5">
                                     <tr>
-                                        <th className="px-4 py-2 font-bold text-black/40 uppercase">Month</th>
-                                        <th className="px-4 py-2 font-bold text-black/40 uppercase">Deposit</th>
-                                        <th className="px-4 py-2 font-bold text-black/40 uppercase">Yield</th>
-                                        <th className="px-4 py-2 font-bold text-black/40 uppercase">Balance</th>
+                                        <th className="px-4 py-2 font-bold text-black/40 dark:text-white/40 uppercase">Month</th>
+                                        <th className="px-4 py-2 font-bold text-black/40 dark:text-white/40 uppercase">Deposit</th>
+                                        <th className="px-4 py-2 font-bold text-black/40 dark:text-white/40 uppercase">Yield</th>
+                                        <th className="px-4 py-2 font-bold text-black/40 dark:text-white/40 uppercase">Balance</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-black/5">
                                     {plan.monthly_schedule.map((entry) => (
                                         <tr key={entry.month}>
-                                            <td className="px-4 py-2 font-medium text-black/60">{entry.month}</td>
-                                            <td className="px-4 py-2 text-black">${entry.deposit}</td>
+                                            <td className="px-4 py-2 font-medium text-black/60 dark:text-white/60">{entry.month}</td>
+                                            <td className="px-4 py-2 text-black dark:text-white">${entry.deposit}</td>
                                             <td className="px-4 py-2 text-emerald-600">+${entry.yield_earned}</td>
-                                            <td className="px-4 py-2 font-bold text-black">${entry.expected_balance}</td>
+                                            <td className="px-4 py-2 font-bold text-black dark:text-white">${entry.expected_balance}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -200,14 +200,14 @@ function CreatePlanModal({
                         <div className="flex gap-3">
                             <button
                                 onClick={() => setPlan(null)}
-                                className="flex-1 rounded-xl border border-black/10 py-3 text-xs font-bold text-black/60 hover:bg-black/5"
+                                className="flex-1 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-bold text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5"
                             >
                                 Adjust Parameters
                             </button>
                             {plan.achievable && (
                                 <button
                                     onClick={onClose}
-                                    className="flex-1 rounded-xl bg-black py-3 text-xs font-bold text-white hover:opacity-75"
+                                    className="flex-1 rounded-xl bg-black dark:bg-blue-600 py-3 text-xs font-bold text-white hover:opacity-75"
                                 >
                                     Activate This Plan
                                 </button>
@@ -234,7 +234,7 @@ function InfoTooltip({ text }: { text: string }) {
             onMouseLeave={() => setShow(false)}
         >
             <button
-                className="flex h-6 w-6 items-center justify-center rounded-full border border-black/12 text-black/40 hover:border-black/25 hover:text-black/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-black/12 dark:border-white/12 text-black/40 dark:text-white/40 hover:border-black/25 dark:hover:border-white/25 hover:text-black/70 dark:hover:text-white/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
                 tabIndex={0}
                 aria-label="More info"
                 onFocus={() => setShow(true)}
@@ -249,7 +249,7 @@ function InfoTooltip({ text }: { text: string }) {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 4 }}
                         transition={{ duration: 0.15 }}
-                        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-20 w-60 rounded-xl border border-black/8 bg-white px-3.5 py-3 shadow-lg shadow-black/6 text-xs text-black/60 leading-relaxed pointer-events-none"
+                        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-20 w-60 rounded-xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-3.5 py-3 shadow-lg shadow-black/6 text-xs text-black/60 dark:text-white/60 leading-relaxed pointer-events-none"
                     >
                         {text}
                         <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black/8" />
@@ -282,17 +282,17 @@ function SavingsVaultCard({
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.35, delay: index * 0.07 }}
-            className="group flex flex-col rounded-2xl border border-black/8 bg-white px-7 py-6 transition-all hover:border-black/18 hover:shadow-md"
+            className="group flex flex-col rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-7 py-6 transition-all hover:border-black/18 dark:hover:border-white/18 hover:shadow-md"
         >
             {/* Header */}
             <div className="mb-6 flex items-start justify-between gap-3">
                 <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/5 shrink-0">
-                        <Icon className="h-4 w-4 text-black/50" aria-hidden="true" />
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/5 dark:bg-white/5 shrink-0">
+                        <Icon className="h-4 w-4 text-black/50 dark:text-white/50" aria-hidden="true" />
                     </div>
                     <div>
-                        <h3 className="text-sm text-black font-semibold">{vault.name}</h3>
-                        <span className="text-[10px] bg-black/5 text-black/60 font-medium rounded-full px-2 py-0.5 mt-0.5 inline-block">
+                        <h3 className="text-sm text-black dark:text-white font-semibold">{vault.name}</h3>
+                        <span className="text-[10px] bg-black/5 dark:bg-white/5 text-black/60 dark:text-white/60 font-medium rounded-full px-2 py-0.5 mt-0.5 inline-block">
                             {vault.badge}
                         </span>
                     </div>
@@ -300,21 +300,21 @@ function SavingsVaultCard({
                 <div className="flex items-start gap-2 shrink-0">
                     <div className="text-right">
                         {isApyLoading ? (
-                            <div className="ml-auto h-8 w-16 animate-pulse rounded bg-black/10" aria-label="Loading APY" />
+                            <div className="ml-auto h-8 w-16 animate-pulse rounded bg-black/10 dark:bg-white/10" aria-label="Loading APY" />
                         ) : (
                             <div className="flex items-center justify-end gap-1.5">
-                                <p className="font-mono text-2xl text-black leading-none">{vault.apyLabel}</p>
+                                <p className="font-mono text-2xl text-black dark:text-white leading-none">{vault.apyLabel}</p>
                                 {isStale && <InfoTooltip text="Data may be a few minutes old" />}
                             </div>
                         )}
-                        <p className="text-[10px] text-black/60 font-medium uppercase tracking-wide mt-1">APY</p>
+                        <p className="text-[10px] text-black/60 dark:text-white/60 font-medium uppercase tracking-wide mt-1">APY</p>
                     </div>
                     <InfoTooltip text={vault.summary} />
                 </div>
             </div>
 
             {/* Description */}
-            <p className="mb-6 text-sm leading-relaxed text-black/60 flex-1">
+            <p className="mb-6 text-sm leading-relaxed text-black/60 dark:text-white/60 flex-1">
                 {vault.description}
             </p>
 
@@ -322,30 +322,30 @@ function SavingsVaultCard({
             <div className="mb-6 space-y-2">
                 {vault.features.map((f) => (
                     <div key={f} className="flex items-center gap-2.5">
-                        <div className="h-1 w-1 rounded-full bg-black/40 shrink-0" aria-hidden="true" />
-                        <span className="text-xs text-black/60">{f}</span>
+                        <div className="h-1 w-1 rounded-full bg-black/40 dark:bg-white/40 shrink-0" aria-hidden="true" />
+                        <span className="text-xs text-black/60 dark:text-white/60">{f}</span>
                     </div>
                 ))}
             </div>
 
             {/* Meta row */}
             <div className="mb-6 grid grid-cols-2 gap-2">
-                <div className="rounded-xl bg-black/[0.025] px-3 py-3 text-center">
-                    <p className="font-mono text-sm text-black">
+                <div className="rounded-xl bg-black/[0.025] dark:bg-white/[0.025] px-3 py-3 text-center">
+                    <p className="font-mono text-sm text-black dark:text-white">
                         {vault.lockDays ? `${vault.lockDays}d` : "None"}
                     </p>
-                    <p className="text-[10px] text-black/60 font-medium mt-0.5">Lock</p>
+                    <p className="text-[10px] text-black/60 dark:text-white/60 font-medium mt-0.5">Lock</p>
                 </div>
-                <div className="rounded-xl bg-black/[0.025] px-3 py-3 text-center">
-                    <p className="font-mono text-sm text-black">{vault.penaltyPct}%</p>
-                    <p className="text-[10px] text-black/60 font-medium mt-0.5">Exit fee</p>
+                <div className="rounded-xl bg-black/[0.025] dark:bg-white/[0.025] px-3 py-3 text-center">
+                    <p className="font-mono text-sm text-black dark:text-white">{vault.penaltyPct}%</p>
+                    <p className="text-[10px] text-black/60 dark:text-white/60 font-medium mt-0.5">Exit fee</p>
                 </div>
             </div>
 
             {/* CTA */}
             <button
                 onClick={() => onDeposit(vault)}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-black py-3 text-sm text-white font-medium transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3 text-sm text-white font-medium transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
             >
                 Start Saving
                 <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
@@ -429,7 +429,7 @@ function DepositModal({
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 32 }}
                         transition={{ duration: 0.22, ease: "easeOut" }}
-                        className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl bg-white shadow-2xl
+                        className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl bg-white dark:bg-[#100F0F] shadow-2xl
                                    sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2
                                    sm:rounded-3xl sm:w-[680px]"
                         role="dialog"
@@ -438,19 +438,19 @@ function DepositModal({
                     >
                         {/* Drag handle (mobile) */}
                         <div className="flex justify-center pt-4 pb-1 sm:hidden">
-                            <div className="h-1 w-10 rounded-full bg-black/10" aria-hidden="true" />
+                            <div className="h-1 w-10 rounded-full bg-black/10 dark:bg-white/10" aria-hidden="true" />
                         </div>
 
                         <div className="px-8 pb-8 pt-6 sm:px-10 sm:pb-10 sm:pt-8">
                             {/* Header */}
                             <div className="mb-8 flex items-start justify-between">
                                 <div className="flex items-center gap-4">
-                                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-black/5 shrink-0">
-                                        <Icon className="h-5 w-5 text-black/50" aria-hidden="true" />
+                                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-black/5 dark:bg-white/5 shrink-0">
+                                        <Icon className="h-5 w-5 text-black/50 dark:text-white/50" aria-hidden="true" />
                                     </div>
                                     <div>
-                                        <h2 id="deposit-title" className="text-lg text-black font-semibold">{vault.name}</h2>
-                                        <p className="text-xs text-black/60 font-medium mt-0.5">
+                                        <h2 id="deposit-title" className="text-lg text-black dark:text-white font-semibold">{vault.name}</h2>
+                                        <p className="text-xs text-black/60 dark:text-white/60 font-medium mt-0.5">
                                             <span className="font-mono">{vault.apyLabel}</span> APY
                                             {vault.lockDays
                                                 ? ` · ${vault.lockDays}-day lock`
@@ -461,7 +461,7 @@ function DepositModal({
                                 <button
                                     onClick={onClose}
                                     aria-label="Close modal"
-                                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 text-black/40 hover:text-black transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-black"
+                                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 dark:border-white/10 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-black"
                                 >
                                     <X className="h-4 w-4" aria-hidden="true" />
                                 </button>
@@ -474,11 +474,11 @@ function DepositModal({
                                     {/* Amount input */}
                                     <div>
                                         <div className="mb-2 flex items-center justify-between">
-                                            <label htmlFor="deposit-amount" className="text-xs text-black/60 font-medium">
+                                            <label htmlFor="deposit-amount" className="text-xs text-black/60 dark:text-white/60 font-medium">
                                                 Amount ({selectedAsset})
                                             </label>
                                             {supportedAssets.length > 1 && (
-                                                <div className="flex rounded-full border border-black/10 bg-black/[0.03] p-0.5" role="group" aria-label="Select asset">
+                                                <div className="flex rounded-full border border-black/10 dark:border-white/10 bg-black/[0.03] dark:bg-white/[0.03] p-0.5" role="group" aria-label="Select asset">
                                                     {supportedAssets.map((a) => (
                                                         <button
                                                             key={a}
@@ -490,8 +490,8 @@ function DepositModal({
                                                             className={cn(
                                                                 "rounded-full px-3 py-1 text-[11px] font-medium transition-colors",
                                                                 selectedAsset === a
-                                                                    ? "bg-black text-white"
-                                                                    : "text-black/60 hover:text-black"
+                                                                    ? "bg-black dark:bg-blue-600 text-white"
+                                                                    : "text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white"
                                                             )}
                                                             aria-current={selectedAsset === a ? "true" : "false"}
                                                         >
@@ -502,7 +502,7 @@ function DepositModal({
                                             )}
                                         </div>
                                         <div className="relative">
-                                            <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-sm text-black/40" aria-hidden="true">
+                                            <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-sm text-black/40 dark:text-white/40" aria-hidden="true">
                                                 {selectedAsset === "XLM" ? "✦" : "$"}
                                             </span>
                                             <input
@@ -511,18 +511,18 @@ function DepositModal({
                                                 value={amount}
                                                 onChange={(e) => setAmount(e.target.value)}
                                                 placeholder="0.00"
-                                                className="h-14 w-full rounded-xl border border-black/10 bg-black/[0.02] pl-8 pr-4
-                                                           font-mono text-xl text-black outline-none transition-colors
-                                                           focus:border-black/25 focus:bg-white
+                                                className="h-14 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] pl-8 pr-4
+                                                           font-mono text-xl text-black dark:text-white outline-none transition-colors
+                                                           focus:border-black/25 dark:focus:border-white/25 focus:bg-white
                                                            [appearance:textfield]
                                                            [&::-webkit-outer-spin-button]:appearance-none
                                                            [&::-webkit-inner-spin-button]:appearance-none"
                                             />
                                         </div>
-                                        <div className="mt-2 flex items-center justify-end text-xs text-black/60 font-medium">
+                                        <div className="mt-2 flex items-center justify-end text-xs text-black/60 dark:text-white/60 font-medium">
                                             <button
                                                 onClick={() => setAmount(String(available))}
-                                                className="hover:text-black transition-colors"
+                                                className="hover:text-black dark:hover:text-white transition-colors"
                                             >
                                                 Available: <span className="font-mono">{available.toFixed(2)}</span> {selectedAsset}
                                             </button>
@@ -536,7 +536,7 @@ function DepositModal({
 
                                     {/* Quick amounts */}
                                     <div>
-                                        <p className="mb-2 text-xs text-black/60 font-medium">Quick amounts</p>
+                                        <p className="mb-2 text-xs text-black/60 dark:text-white/60 font-medium">Quick amounts</p>
                                         <div className="flex gap-2 flex-wrap" role="group" aria-label="Quick amount selection">
                                             {[50, 100, 250, 500].map((v) => (
                                                 <button
@@ -545,8 +545,8 @@ function DepositModal({
                                                     className={cn(
                                                         "rounded-lg border px-3 py-1.5 font-mono text-xs transition-colors focus-visible:ring-2 focus-visible:ring-black",
                                                         amount === String(v)
-                                                            ? "border-black bg-black text-white"
-                                                            : "border-black/10 text-black/60 hover:border-black/20 hover:text-black"
+                                                            ? "border-black dark:border-white bg-black dark:bg-blue-600 text-white"
+                                                            : "border-black/10 dark:border-white/10 text-black/60 dark:text-white/60 hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white"
                                                     )}
                                                 >
                                                     ${v}
@@ -558,7 +558,7 @@ function DepositModal({
                                     {/* Goal name (custom only) */}
                                     {vault.type === "custom" && (
                                         <div>
-                                            <label htmlFor="goal-name" className="mb-2 block text-xs text-black/60 font-medium">
+                                            <label htmlFor="goal-name" className="mb-2 block text-xs text-black/60 dark:text-white/60 font-medium">
                                                 Goal name
                                             </label>
                                             <input
@@ -567,7 +567,7 @@ function DepositModal({
                                                 value={goalName}
                                                 onChange={(e) => setGoalName(e.target.value)}
                                                 placeholder="e.g. Holiday fund, House deposit…"
-                                                className="h-12 w-full rounded-xl border border-black/10 bg-black/[0.02] px-4 text-sm text-black outline-none transition-colors focus:border-black/25 text-black"
+                                                className="h-12 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25 text-black dark:text-white"
                                             />
                                         </div>
                                     )}
@@ -576,28 +576,28 @@ function DepositModal({
                                 {/* Right: projection + summary */}
                                 <div className="flex flex-col gap-4">
                                     {/* Projection block */}
-                                    <div className="rounded-2xl border border-black/8 bg-black/[0.018] p-5 flex-1" aria-label="Savings projection">
-                                        <p className="mb-4 text-xs text-black/60 font-semibold uppercase tracking-widest">
+                                    <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-black/[0.018] dark:bg-white/[0.018] p-5 flex-1" aria-label="Savings projection">
+                                        <p className="mb-4 text-xs text-black/60 dark:text-white/60 font-semibold uppercase tracking-widest">
                                             Projection
                                         </p>
                                         <div className="space-y-3">
                                             <div className="flex justify-between items-baseline">
-                                                <span className="text-xs text-black/60">Deposit</span>
-                                                <span className="font-mono text-sm text-black font-medium">
+                                                <span className="text-xs text-black/60 dark:text-white/60">Deposit</span>
+                                                <span className="font-mono text-sm text-black dark:text-white font-medium">
                                                     {parsedAmount > 0 ? parsedAmount.toFixed(2) : "—"}
                                                 </span>
                                             </div>
                                             <div className="flex justify-between items-baseline">
-                                                <span className="text-xs text-black/60">
+                                                <span className="text-xs text-black/60 dark:text-white/60">
                                                     Yield ({vault.lockDays ? `${vault.lockDays}d` : "1yr"})
                                                 </span>
-                                                <span className="font-mono text-sm text-black font-medium">
+                                                <span className="font-mono text-sm text-black dark:text-white font-medium">
                                                     {parsedAmount > 0 ? `+${projectedYield.toFixed(4)}` : "—"}
                                                 </span>
                                             </div>
-                                            <div className="border-t border-black/6 pt-3 flex justify-between items-baseline">
-                                                <span className="text-xs text-black/60 font-semibold">Total at maturity</span>
-                                                <span className="font-mono text-base text-black font-bold">
+                                            <div className="border-t border-black/6 dark:border-white/6 pt-3 flex justify-between items-baseline">
+                                                <span className="text-xs text-black/60 dark:text-white/60 font-semibold">Total at maturity</span>
+                                                <span className="font-mono text-base text-black dark:text-white font-bold">
                                                     {parsedAmount > 0
                                                         ? (parsedAmount + projectedYield).toFixed(2)
                                                         : "—"}
@@ -605,8 +605,8 @@ function DepositModal({
                                             </div>
                                             {maturityDate && parsedAmount > 0 && (
                                                 <div className="flex justify-between items-baseline pt-1">
-                                                    <span className="text-xs text-black/60">Matures</span>
-                                                    <span className="text-xs text-black/80 font-medium">{maturityDate}</span>
+                                                    <span className="text-xs text-black/60 dark:text-white/60">Matures</span>
+                                                    <span className="text-xs text-black/80 dark:text-white/80 font-medium">{maturityDate}</span>
                                                 </div>
                                             )}
                                         </div>
@@ -616,8 +616,8 @@ function DepositModal({
                                     <div className="space-y-2">
                                         {vault.features.map((f) => (
                                             <div key={f} className="flex items-center gap-2">
-                                                <div className="h-1 w-1 rounded-full bg-black/40 shrink-0" aria-hidden="true" />
-                                                <span className="text-xs text-black/60">{f}</span>
+                                                <div className="h-1 w-1 rounded-full bg-black/40 dark:bg-white/40 shrink-0" aria-hidden="true" />
+                                                <span className="text-xs text-black/60 dark:text-white/60">{f}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -691,7 +691,7 @@ function DepositModal({
                                         }
                                     }
                                 }}
-                                className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-black py-3.5 text-sm text-white font-semibold transition-opacity disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-black"
+                                className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3.5 text-sm text-white font-semibold transition-opacity disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-black"
                             >
                                 {txState === "building" && "Building transaction…"}
                                 {txState === "signing" && "Waiting for signature…"}
@@ -758,27 +758,31 @@ function SavingsOverview({ savingsVaults }: { savingsVaults: SavingsVault[] }) {
     );
 
     if (activeVaultPositions.length === 0) {
+        // "Start your savings journey" empty-state card — commented out per request
+        return null;
+        /*
         return (
             <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mb-10 p-12 text-center rounded-3xl border border-black/8 bg-white"
+                className="mb-10 p-12 text-center rounded-3xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]"
             >
-                <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-black/5">
-                    <TrendingUp className="h-8 w-8 text-black/40" aria-hidden="true" />
+                <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5">
+                    <TrendingUp className="h-8 w-8 text-black/40 dark:text-white/40" aria-hidden="true" />
                 </div>
-                <h2 className="text-xl text-black font-semibold">Start your savings journey</h2>
-                <p className="mx-auto mt-2 max-w-xs text-sm text-black/60 font-medium">
+                <h2 className="text-xl text-black dark:text-white font-semibold">Start your savings journey</h2>
+                <p className="mx-auto mt-2 max-w-xs text-sm text-black/60 dark:text-white/60 font-medium">
                     Earn up to 12% APY on your USDC. Make your first deposit to start tracking your growth.
                 </p>
-                <button 
+                <button
                     onClick={() => document.getElementById("vault-grid")?.scrollIntoView({ behavior: "smooth" })}
-                    className="mt-8 rounded-xl bg-black px-8 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
+                    className="mt-8 rounded-xl bg-black dark:bg-blue-600 px-8 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
                 >
                     View Savings Plans
                 </button>
             </motion.div>
         );
+        */
     }
 
     const totalBalance = activeVaultPositions.reduce((s, p) => s + p.currentValue, 0);
@@ -821,25 +825,25 @@ function SavingsOverview({ savingsVaults }: { savingsVaults: SavingsVault[] }) {
             {/* Stats Row */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {stats.map((s) => (
-                    <div key={s.label} className="rounded-2xl border border-black/8 bg-white p-5">
+                    <div key={s.label} className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5">
                         <div className="mb-3 flex items-center justify-between">
-                            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/5">
-                                <s.icon className="h-3.5 w-3.5 text-black/50" aria-hidden="true" />
+                            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/5 dark:bg-white/5">
+                                <s.icon className="h-3.5 w-3.5 text-black/50 dark:text-white/50" aria-hidden="true" />
                             </div>
-                            <span className="text-[10px] text-black/60 uppercase font-bold tracking-wider">{s.sub}</span>
+                            <span className="text-[10px] text-black/60 dark:text-white/60 uppercase font-bold tracking-wider">{s.sub}</span>
                         </div>
-                        <p className="text-xl font-light text-black truncate" aria-live="polite">{s.value}</p>
-                        <p className="mt-0.5 text-xs text-black/60 font-medium">{s.label}</p>
+                        <p className="text-xl font-light text-black dark:text-white truncate" aria-live="polite">{s.value}</p>
+                        <p className="mt-0.5 text-xs text-black/60 dark:text-white/60 font-medium">{s.label}</p>
                     </div>
                 ))}
             </div>
 
             {/* Chart Block */}
-            <div className="rounded-3xl border border-black/8 bg-white p-6 sm:p-8">
+            <div className="rounded-3xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-6 sm:p-8">
                 <div className="flex items-center justify-between gap-4 mb-8 flex-wrap">
                     <div>
-                        <h3 className="text-sm font-semibold text-black">APY Performance</h3>
-                        <p className="text-xs text-black/60 font-medium mt-0.5">Historical vault APY over time</p>
+                        <h3 className="text-sm font-semibold text-black dark:text-white">APY Performance</h3>
+                        <p className="text-xs text-black/60 dark:text-white/60 font-medium mt-0.5">Historical vault APY over time</p>
                     </div>
                     <div className="flex items-center gap-3">
                         {showVaultPicker && (
@@ -847,7 +851,7 @@ function SavingsOverview({ savingsVaults }: { savingsVaults: SavingsVault[] }) {
                                 value={primaryVaultId ?? ""}
                                 onChange={(e) => setSelectedVaultId(e.target.value)}
                                 aria-label="Select vault to chart"
-                                className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-[11px] font-medium text-black/70 outline-none focus-visible:ring-2 focus-visible:ring-black"
+                                className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] px-3 py-1.5 text-[11px] font-medium text-black/70 dark:text-white/70 outline-none focus-visible:ring-2 focus-visible:ring-black"
                             >
                                 {userVaults.map((v) => (
                                     <option key={v.id} value={v.id}>
@@ -856,7 +860,7 @@ function SavingsOverview({ savingsVaults }: { savingsVaults: SavingsVault[] }) {
                                 ))}
                             </select>
                         )}
-                        <div className="flex bg-black/[0.04] p-1 rounded-xl" role="tablist" aria-label="Chart period">
+                        <div className="flex bg-black/[0.04] dark:bg-white/[0.04] p-1 rounded-xl" role="tablist" aria-label="Chart period">
                             {CHART_PERIODS.map((p) => (
                                 <button
                                     key={p}
@@ -865,7 +869,7 @@ function SavingsOverview({ savingsVaults }: { savingsVaults: SavingsVault[] }) {
                                     onClick={() => setPeriod(p)}
                                     className={cn(
                                         "px-3 py-1.5 text-[11px] rounded-lg transition-all focus-visible:ring-2 focus-visible:ring-black",
-                                        period === p ? "bg-white text-black shadow-sm font-bold" : "text-black/60 hover:text-black/80 font-medium"
+                                        period === p ? "bg-white dark:bg-[#100F0F] text-black dark:text-white shadow-sm font-bold" : "text-black/60 dark:text-white/60 hover:text-black/80 dark:hover:text-white/80 font-medium"
                                     )}
                                 >
                                     {p.toUpperCase()}
@@ -928,22 +932,22 @@ export default function SavingsPage() {
                 >
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                         <div>
-                            <h1 className="text-2xl text-black sm:text-3xl font-semibold">Savings</h1>
-                            <p className="mt-1 text-sm text-black/60 font-medium">
+                            <h1 className="text-2xl text-black dark:text-white sm:text-3xl font-semibold">Savings</h1>
+                            <p className="mt-1 text-sm text-black/60 dark:text-white/60 font-medium">
                                 Choose a savings plan and start earning yield on your USDC.
                             </p>
                         </div>
                         <div className="flex items-center gap-2">
                             <button
                                 onClick={() => setPlanModalOpen(true)}
-                                className="flex items-center gap-2 rounded-xl bg-black px-5 py-2.5 text-xs font-bold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
+                                className="flex items-center gap-2 rounded-xl bg-black dark:bg-blue-600 px-5 py-2.5 text-xs font-bold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
                             >
                                 <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
                                 Create Plan
                             </button>
                             <button
                                 onClick={() => setShowHowItWorks(!showHowItWorks)}
-                                className="flex items-center gap-2 rounded-xl border border-black/10 px-4 py-2 text-xs text-black/60 hover:border-black/20 hover:text-black transition-all shrink-0 focus-visible:ring-2 focus-visible:ring-black"
+                                className="flex items-center gap-2 rounded-xl border border-black/10 dark:border-white/10 px-4 py-2 text-xs text-black/60 dark:text-white/60 hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white transition-all shrink-0 focus-visible:ring-2 focus-visible:ring-black"
                                 aria-expanded={showHowItWorks}
                                 aria-controls="how-it-works-panel"
                             >
@@ -965,7 +969,7 @@ export default function SavingsPage() {
                                 role="region"
                                 aria-label="How savings work"
                             >
-                                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3 rounded-2xl border border-black/8 p-5 bg-black/[0.015]">
+                                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3 rounded-2xl border border-black/8 dark:border-white/8 p-5 bg-black/[0.015] dark:bg-white/[0.015]">
                                     {[
                                         {
                                             icon: Shield,
@@ -984,12 +988,12 @@ export default function SavingsPage() {
                                         },
                                     ].map((s) => (
                                         <div key={s.title} className="flex gap-3">
-                                            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/6 shrink-0 mt-0.5">
-                                                <s.icon className="h-3.5 w-3.5 text-black/60" aria-hidden="true" />
+                                            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/6 dark:bg-white/6 shrink-0 mt-0.5">
+                                                <s.icon className="h-3.5 w-3.5 text-black/60 dark:text-white/60" aria-hidden="true" />
                                             </div>
                                             <div>
-                                                <p className="text-xs text-black/70 font-semibold">{s.title}</p>
-                                                <p className="mt-0.5 text-xs leading-relaxed text-black/60 font-medium">{s.body}</p>
+                                                <p className="text-xs text-black/70 dark:text-white/70 font-semibold">{s.title}</p>
+                                                <p className="mt-0.5 text-xs leading-relaxed text-black/60 dark:text-white/60 font-medium">{s.body}</p>
                                             </div>
                                         </div>
                                     ))}
@@ -1005,6 +1009,7 @@ export default function SavingsPage() {
 
                 {/* ── View switch + Filter tabs ────────────────────────────────── */}
                 <div className="mb-4 flex items-center justify-between gap-4">
+                    {/* Products / My Goals toggle — commented out per request
                     <div className="flex gap-2" role="tablist" aria-label="Savings view toggle">
                         <button
                             type="button"
@@ -1013,7 +1018,7 @@ export default function SavingsPage() {
                             onClick={() => setViewMode("products")}
                             className={cn(
                                 "rounded-full px-3 py-1.5 text-sm font-semibold",
-                                viewMode === "products" ? "bg-black text-white" : "bg-black/5 text-black/60 hover:bg-black/10"
+                                viewMode === "products" ? "bg-black dark:bg-blue-600 text-white" : "bg-black/5 dark:bg-white/5 text-black/60 dark:text-white/60 hover:bg-black/10 dark:hover:bg-white/10"
                             )}
                         >
                             Products
@@ -1025,14 +1030,16 @@ export default function SavingsPage() {
                             onClick={() => setViewMode("goals")}
                             className={cn(
                                 "rounded-full px-3 py-1.5 text-sm font-semibold",
-                                viewMode === "goals" ? "bg-black text-white" : "bg-black/5 text-black/60 hover:bg-black/10"
+                                viewMode === "goals" ? "bg-black dark:bg-blue-600 text-white" : "bg-black/5 dark:bg-white/5 text-black/60 dark:text-white/60 hover:bg-black/10 dark:hover:bg-white/10"
                             )}
                         >
                             My Goals
                         </button>
                     </div>
+                    */}
 
-                    <div id="vault-grid" className="mb-6 flex gap-1.5 border-b border-black/8 pb-px overflow-x-auto scrollbar-hide" role="tablist" aria-label="Savings plan filters">
+                    {/* Filter tabs (All / Flexible / Auto-Compound / Stablecoin Yield / Custom) — commented out per request
+                    <div id="vault-grid" className="mb-6 flex gap-1.5 border-b border-black/8 dark:border-white/8 pb-px overflow-x-auto scrollbar-hide" role="tablist" aria-label="Savings plan filters">
                         {FILTERS.map((f) => (
                             <button
                                 key={f.value}
@@ -1042,21 +1049,23 @@ export default function SavingsPage() {
                                 className={cn(
                                     "relative pb-3 px-1 mr-4 text-sm whitespace-nowrap transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2",
                                     filter === f.value
-                                        ? "text-black font-semibold"
-                                        : "text-black/60 hover:text-black/80 font-medium"
+                                        ? "text-black dark:text-white font-semibold"
+                                        : "text-black/60 dark:text-white/60 hover:text-black/80 dark:hover:text-white/80 font-medium"
                                 )}
                             >
                                 {f.label}
                                 {filter === f.value && (
                                     <motion.div
                                         layoutId="savings-tab"
-                                        className="absolute bottom-0 left-0 right-0 h-0.5 bg-black rounded-full"
+                                        className="absolute bottom-0 left-0 right-0 h-0.5 bg-black dark:bg-white rounded-full"
                                         aria-hidden="true"
                                     />
                                 )}
                             </button>
                         ))}
                     </div>
+                    */}
+                    <div id="vault-grid" />
                 </div>
 
                 {/* ── Goals view or Vault grid ───────────────────────────────── */}
@@ -1091,7 +1100,7 @@ export default function SavingsPage() {
                             transition={{ delay: 0.2 }}
                             className="mt-8"
                         >
-                            <h2 className="text-sm font-semibold text-black mb-3">Your Savings Positions</h2>
+                            <h2 className="text-sm font-semibold text-black dark:text-white mb-3">Your Savings Positions</h2>
                             <PositionCards positions={savingsPositions} />
                         </motion.div>
                     );

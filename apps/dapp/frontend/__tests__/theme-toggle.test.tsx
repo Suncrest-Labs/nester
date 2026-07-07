@@ -15,7 +15,7 @@ describe("ThemeToggle", () => {
         <ThemeToggle />
       </SettingsProvider>
     );
-    expect(screen.getByRole("button", { name: /switch to light mode/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /switch to dark mode/i })).toBeInTheDocument();
   });
 
   it("toggles theme without page reload", () => {
@@ -24,9 +24,9 @@ describe("ThemeToggle", () => {
         <ThemeToggle />
       </SettingsProvider>
     );
-    const btn = screen.getByRole("button", { name: /switch to light mode/i });
+    const btn = screen.getByRole("button", { name: /switch to dark mode/i });
     fireEvent.click(btn);
-    expect(localStorage.getItem("nester-theme")).toBe("light");
-    expect(screen.getByRole("button", { name: /switch to dark mode/i })).toBeInTheDocument();
+    expect(localStorage.getItem("nester-theme")).toBe("dark");
+    expect(screen.getByRole("button", { name: /switch to light mode/i })).toBeInTheDocument();
   });
 });

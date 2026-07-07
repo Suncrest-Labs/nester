@@ -114,7 +114,7 @@ function ModalShell({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="rounded-full border border-border bg-white p-2 text-muted-foreground transition-colors hover:text-foreground"
+                  className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
                   aria-label="Close harvest modal"
                 >
                   <X className="h-4 w-4" />
@@ -238,7 +238,7 @@ export function HarvestModal({
     >
       <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
         <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
-          <div className="rounded-3xl border border-border bg-white p-5">
+          <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
@@ -315,7 +315,7 @@ export function HarvestModal({
                   <button
                     type="button"
                     onClick={() => previewQuery.refetch()}
-                    className="rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15"
+                    className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
                   >
                     Retry Preview
                   </button>
@@ -368,7 +368,7 @@ export function HarvestModal({
         </div>
 
         <div className="p-6">
-          <div className="rounded-3xl border border-border bg-white p-5">
+          <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
             {step === "preview" && (
               <>
                 <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
@@ -456,7 +456,7 @@ export function HarvestModal({
                           <Link
                             href={getExplorerTxUrl(result.tx_hash)}
                             target="_blank"
-                            className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:shadow"
+                            className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:shadow"
                           >
                             View on Stellar Explorer
                             <ExternalLink className="h-3.5 w-3.5" />
@@ -474,7 +474,7 @@ export function HarvestModal({
                 type="button"
                 onClick={resetAndClose}
                 disabled={isSubmitting}
-                className="flex-1 rounded-full border border-border bg-white px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 disabled:opacity-40"
+                className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
               >
                 {executionState === "success" ? "Close" : "Cancel"}
               </button>

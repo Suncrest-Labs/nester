@@ -363,7 +363,7 @@ export default function OfframpPage() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.4, delay: 0.1 }}
-                    className="rounded-2xl border border-border bg-white shadow-sm overflow-hidden"
+                    className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] shadow-sm overflow-hidden"
                 >
                     <div className="p-4 sm:p-5">
                         <label className="text-xs text-muted-foreground font-medium mb-2 block">
@@ -419,7 +419,7 @@ export default function OfframpPage() {
                                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                                 </button>
                                 {showSendDropdown && (
-                                    <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-border bg-white shadow-lg py-1 z-10">
+                                    <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-border bg-white dark:bg-[#100F0F] shadow-lg py-1 z-10">
                                         {SEND_ASSETS.map((asset) => (
                                             <button
                                                 key={asset.symbol}
@@ -463,7 +463,7 @@ export default function OfframpPage() {
                     <div className="relative px-4 sm:px-5">
                         <div className="border-t border-border" />
                         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                            <div className="h-9 w-9 rounded-full border border-border bg-white flex items-center justify-center shadow-sm">
+                            <div className="h-9 w-9 rounded-full border border-border bg-white dark:bg-[#100F0F] flex items-center justify-center shadow-sm">
                                 <ArrowDownUp className="h-4 w-4 text-muted-foreground" />
                             </div>
                         </div>
@@ -510,7 +510,7 @@ export default function OfframpPage() {
                                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                                 </button>
                                 {showReceiveDropdown && (
-                                    <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-border bg-white shadow-lg py-1 z-10">
+                                    <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-border bg-white dark:bg-[#100F0F] shadow-lg py-1 z-10">
                                         {RECEIVE_CURRENCIES.map((currency) => (
                                             <button
                                                 key={currency.symbol}
@@ -599,7 +599,7 @@ export default function OfframpPage() {
                                                 setTimeout(() => { trigger("accountNumber"); }, 0);
                                             }}
                                             className={cn(
-                                                "w-full px-4 py-3 rounded-xl border border-border bg-white text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-foreground/20 transition-colors min-h-[52px]",
+                                                "w-full px-4 py-3 rounded-xl border border-border bg-white dark:bg-[#100F0F] text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-foreground/20 transition-colors min-h-[52px]",
                                                 errors.accountNumber && "border-red-500 focus:border-red-500"
                                             )}
                                         />
@@ -769,7 +769,7 @@ export default function OfframpPage() {
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: 8 }}
                             transition={{ duration: 0.35, delay: 0.05 }}
-                            className="mt-4 rounded-2xl border border-border bg-white shadow-sm overflow-hidden"
+                            className="mt-4 rounded-2xl border border-border bg-white dark:bg-[#100F0F] shadow-sm overflow-hidden"
                         >
                             {/* Quotes Header */}
                             <div className="px-4 sm:px-5 py-3.5 flex items-center justify-between border-b border-border gap-2">
@@ -957,7 +957,7 @@ export default function OfframpPage() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.4, delay: 0.4 }}
-                    className="mt-8 rounded-2xl border border-border bg-white p-5"
+                    className="mt-8 rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-5"
                 >
                     <h3 className="font-heading text-sm font-medium text-foreground mb-3">
                         Recent Offramps

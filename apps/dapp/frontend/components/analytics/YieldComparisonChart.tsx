@@ -58,10 +58,10 @@ function pickColor(protocol: string, index: number): string {
 function ChartSkeleton() {
   return (
     <div className="animate-pulse space-y-4">
-      <div className="h-[260px] rounded-2xl bg-black/[0.04]" />
+      <div className="h-[260px] rounded-2xl bg-black/[0.04] dark:bg-white/[0.04]" />
       <div className="space-y-2">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="h-10 rounded-xl bg-black/[0.04]" />
+          <div key={i} className="h-10 rounded-xl bg-black/[0.04] dark:bg-white/[0.04]" />
         ))}
       </div>
     </div>
@@ -107,8 +107,8 @@ export function YieldComparisonChart({
             className={cn(
               "rounded-md px-3 py-1 text-[12px] font-medium transition-colors",
               period === p
-                ? "bg-black/[0.06] text-black"
-                : "text-black/35 hover:text-black/60"
+                ? "bg-black/[0.06] dark:bg-white/[0.06] text-black dark:text-white"
+                : "text-black/35 dark:text-white/35 hover:text-black/60 dark:hover:text-white/60"
             )}
           >
             {p}
@@ -118,11 +118,11 @@ export function YieldComparisonChart({
 
       {/* Line chart */}
       {isEmpty ? (
-        <div className="flex h-[260px] items-center justify-center rounded-2xl border border-black/8 bg-white">
-          <p className="text-sm text-black/35">No APY history available for this period.</p>
+        <div className="flex h-[260px] items-center justify-center rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]">
+          <p className="text-sm text-black/35 dark:text-white/35">No APY history available for this period.</p>
         </div>
       ) : (
-        <div className="rounded-2xl border border-black/8 bg-white p-4">
+        <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-4">
           <ResponsiveContainer
             width="100%"
             height={260}
@@ -185,7 +185,7 @@ export function YieldComparisonChart({
         <div className="mt-5 overflow-x-auto">
           <table className="w-full text-left">
             <thead>
-              <tr className="border-b border-black/[0.05] text-[11px] text-black/35">
+              <tr className="border-b border-black/[0.05] dark:border-white/[0.05] text-[11px] text-black/35 dark:text-white/35">
                 <th className="pb-3 pr-4 font-medium">Protocol</th>
                 <th className="pb-3 pr-4 font-medium text-right">Current APY</th>
                 <th className="pb-3 pr-4 font-medium text-right">30d Avg</th>
@@ -195,7 +195,7 @@ export function YieldComparisonChart({
             </thead>
             <tbody>
               {snapshots.map((row, i) => (
-                <tr key={row.protocol} className="border-b border-black/[0.04] last:border-0">
+                <tr key={row.protocol} className="border-b border-black/[0.04] dark:border-white/[0.04] last:border-0">
                   <td className="py-3 pr-4">
                     <div className="flex items-center gap-2">
                       <span
@@ -205,17 +205,17 @@ export function YieldComparisonChart({
                       <span
                         className={cn(
                           "text-sm",
-                          row.protocol === "Nester" ? "font-medium text-black" : "text-black"
+                          row.protocol === "Nester" ? "font-medium text-black dark:text-white" : "text-black dark:text-white"
                         )}
                       >
                         {row.protocol}
                       </span>
                     </div>
                   </td>
-                  <td className="py-3 pr-4 text-right font-mono text-sm text-black">
+                  <td className="py-3 pr-4 text-right font-mono text-sm text-black dark:text-white">
                     {row.currentApy.toFixed(1)}%
                   </td>
-                  <td className="py-3 pr-4 text-right font-mono text-sm text-black/55">
+                  <td className="py-3 pr-4 text-right font-mono text-sm text-black/55 dark:text-white/55">
                     {row.avg30d.toFixed(1)}%
                   </td>
                   <td className="py-3 pr-4 text-right">
@@ -233,7 +233,7 @@ export function YieldComparisonChart({
                       {Math.abs(row.trend7d).toFixed(1)}%
                     </span>
                   </td>
-                  <td className="py-3 text-right text-sm text-black/55">
+                  <td className="py-3 text-right text-sm text-black/55 dark:text-white/55">
                     {row.allocationPct != null ? `${row.allocationPct.toFixed(0)}%` : "—"}
                   </td>
                 </tr>

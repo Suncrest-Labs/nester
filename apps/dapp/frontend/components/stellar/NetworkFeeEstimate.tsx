@@ -38,7 +38,7 @@ export function NetworkFeeDisplay({ estimate, loading, amount, xlmUsdPrice }: Pr
   const highFee = amount > 0 && feePct > 1;
 
   return (
-    <div className="mt-3 rounded-xl border border-border bg-white px-3 py-2.5 text-xs">
+    <div className="mt-3 rounded-xl border border-border bg-white dark:bg-[#100F0F] px-3 py-2.5 text-xs">
       <div className="flex items-center justify-between text-muted-foreground">
         <span>Estimated network fee</span>
         <span className="font-medium text-foreground">

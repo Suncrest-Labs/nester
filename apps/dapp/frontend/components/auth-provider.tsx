@@ -89,14 +89,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 1. Request challenge nonce
       const { challenge } = await api.auth.requestChallenge(address);
 
-      // 2. Sign with Freighter/StellarWalletsKit
+      // 2. Sign with Freighter
       const { signMessage } = await import("@stellar/freighter-api");
-      const raw = await signMessage(challenge, { address });
-      // v3 returns string directly; v6 (used in SWK) returns { signature }
+      const { signedMessage, error: signError } = await signMessage(challenge, { address });
+      if (signError || !signedMessage) {
+        throw new Error(signError?.message || "Wallet declined to sign the message");
+      }
+      // Freighter sends the signature across the extension bridge as a
+      // JSON-serialized Buffer ({ type: "Buffer", data: [...] }), a real
+      // Uint8Array, or (newer protocol) an already-encoded string — never
+      // assume a live Buffer instance survived serialization.
+      const bytes: number[] | string =
+        typeof signedMessage === "string"
+          ? signedMessage
+          : Array.isArray(signedMessage)
+            ? signedMessage
+            : signedMessage instanceof Uint8Array
+              ? Array.from(signedMessage)
+              : Array.isArray((signedMessage as { data?: number[] }).data)
+                ? (signedMessage as { data: number[] }).data
+                : null!;
+      if (bytes === null) {
+        throw new Error("Unexpected signed message format from wallet");
+      }
       const signature =
-        typeof raw === "string"
-          ? raw
-          : (raw as unknown as { signature: string }).signature;
+        typeof bytes === "string" ? bytes : btoa(String.fromCharCode(...bytes));
 
       // 3. Verify and receive JWT
       const { token: jwt } = await api.auth.verify(address, signature, challenge);

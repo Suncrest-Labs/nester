@@ -17,7 +17,7 @@ export function NotificationsToaster() {
                         animate={{ opacity: 1, x: 0, scale: 1 }}
                         exit={{ opacity: 0, x: 24, scale: 0.96 }}
                         transition={{ duration: 0.2 }}
-                        className="pointer-events-auto rounded-2xl border border-border bg-white p-4 shadow-xl shadow-black/8"
+                        className="pointer-events-auto rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 shadow-xl shadow-black/8"
                     >
                         <div className="flex items-start justify-between gap-3">
                             <div>

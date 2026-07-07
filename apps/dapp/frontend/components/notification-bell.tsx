@@ -45,7 +45,7 @@ export function NotificationBell() {
         <div className="relative" onClick={(e) => e.stopPropagation()}>
             <button
                 onClick={() => setOpen((prev) => !prev)}
-                className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-white transition-all hover:border-black/20 hover:shadow-sm"
+                className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-white dark:bg-[#100F0F] transition-all hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm"
                 aria-label="Notifications"
             >
                 <Bell className="h-4 w-4 text-foreground/70" />
@@ -63,7 +63,7 @@ export function NotificationBell() {
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 8, scale: 0.96 }}
                         transition={{ duration: 0.15 }}
-                        className="overflow-hidden rounded-2xl border border-border bg-white shadow-xl shadow-black/8 max-md:fixed max-md:left-3 max-md:right-3 max-md:top-18 max-md:w-auto md:absolute md:right-0 md:top-full md:mt-2 md:w-[min(92vw,26rem)]"
+                        className="overflow-hidden rounded-2xl border border-border bg-white dark:bg-[#100F0F] shadow-xl shadow-black/8 max-md:fixed max-md:left-3 max-md:right-3 max-md:top-18 max-md:w-auto md:absolute md:right-0 md:top-full md:mt-2 md:w-[min(92vw,26rem)]"
                     >
                         <div className="flex items-center justify-between border-b border-border px-4 py-3">
                             <div>

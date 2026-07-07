@@ -41,7 +41,7 @@ export function NetworkSelector() {
     <div className="relative inline-block text-left">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 rounded-full border border-border bg-white px-3 py-1.5 text-sm font-medium transition-colors hover:bg-secondary"
+        className="flex items-center gap-2 rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-1.5 text-sm font-medium transition-colors hover:bg-secondary"
       >
         <span className="relative flex h-2.5 w-2.5">
           {currentNetwork.id === 'testnet' ? (
@@ -65,7 +65,7 @@ export function NetworkSelector() {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
-              className="absolute right-0 z-50 mt-2 w-48 origin-top-right rounded-xl border border-border bg-white p-1 shadow-xl shadow-black/15 ring-1 ring-black/5" // Enhanced shadow and border
+              className="absolute right-0 z-50 mt-2 w-48 origin-top-right rounded-xl border border-border bg-white dark:bg-[#100F0F] p-1 shadow-xl shadow-black/15 ring-1 ring-black/5" // Enhanced shadow and border
             >
               <div className="flex flex-col space-y-1">
                 <button
