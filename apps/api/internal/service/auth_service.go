@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -11,6 +12,16 @@ import (
 	"github.com/stellar/go/keypair"
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 )
+
+// sep53MessagePrefix is the fixed prefix defined by SEP-53 ("Sign and Verify
+// Messages") to prevent a signed challenge from being confused with a raw
+// transaction. Wallets (Freighter, etc.) hash `prefix + message` with SHA-256
+// before signing, so verification must reconstruct the same payload.
+const sep53MessagePrefix = "Stellar Signed Message:\n"
+
+func sep53MessageHash(message string) [32]byte {
+	return sha256.Sum256([]byte(sep53MessagePrefix + message))
+}
 
 var (
 	ErrChallengeExpired = errors.New("challenge expired or invalid")
@@ -83,7 +94,8 @@ func (s *authService) VerifyAndIssue(ctx context.Context, walletAddress, signatu
 		return "", ErrSignatureInvalid
 	}
 
-	if err := kp.Verify([]byte(challenge), sigBytes); err != nil {
+	hash := sep53MessageHash(challenge)
+	if err := kp.Verify(hash[:], sigBytes); err != nil {
 		return "", ErrSignatureInvalid
 	}
 

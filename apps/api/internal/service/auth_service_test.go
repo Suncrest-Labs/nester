@@ -22,8 +22,8 @@ type mockAuthConfig struct {
 	challengeExpiry time.Duration
 }
 
-func (m mockAuthConfig) Secret() string             { return m.secret }
-func (m mockAuthConfig) TokenExpiry() time.Duration  { return m.tokenExpiry }
+func (m mockAuthConfig) Secret() string                 { return m.secret }
+func (m mockAuthConfig) TokenExpiry() time.Duration     { return m.tokenExpiry }
 func (m mockAuthConfig) ChallengeExpiry() time.Duration { return m.challengeExpiry }
 
 type mockAuthUserRepository struct {
@@ -112,7 +112,8 @@ func TestAuthService_VerifyAndIssue_Success(t *testing.T) {
 	challenge, err := svc.GenerateChallenge(context.Background(), kp.Address())
 	require.NoError(t, err)
 
-	sigBytes, err := kp.Sign([]byte(challenge))
+	hash := sep53MessageHash(challenge)
+	sigBytes, err := kp.Sign(hash[:])
 	require.NoError(t, err)
 	sigStr := base64.StdEncoding.EncodeToString(sigBytes)
 
@@ -133,7 +134,8 @@ func TestAuthService_VerifyAndIssue_InvalidSignature(t *testing.T) {
 
 	// Use another keypair's signature
 	randomKp, _ := keypair.Random()
-	sigBytes, _ := randomKp.Sign([]byte(challenge))
+	hash := sep53MessageHash(challenge)
+	sigBytes, _ := randomKp.Sign(hash[:])
 	sigStr := base64.StdEncoding.EncodeToString(sigBytes)
 
 	_, err = svc.VerifyAndIssue(context.Background(), kp.Address(), sigStr, challenge)
@@ -152,7 +154,8 @@ func TestAuthService_VerifyAndIssue_ExpiredChallenge(t *testing.T) {
 	kp, _ := keypair.Random()
 	challenge, _ := svc.GenerateChallenge(context.Background(), kp.Address())
 
-	sigBytes, _ := kp.Sign([]byte(challenge))
+	hash := sep53MessageHash(challenge)
+	sigBytes, _ := kp.Sign(hash[:])
 	sigStr := base64.StdEncoding.EncodeToString(sigBytes)
 
 	_, err := svc.VerifyAndIssue(context.Background(), kp.Address(), sigStr, challenge)
@@ -183,7 +186,8 @@ func TestAuthService_VerifyAndIssue_AdminRolePopulatedInToken(t *testing.T) {
 	challenge, err := svc.GenerateChallenge(context.Background(), kp.Address())
 	require.NoError(t, err)
 
-	sigBytes, err := kp.Sign([]byte(challenge))
+	hash := sep53MessageHash(challenge)
+	sigBytes, err := kp.Sign(hash[:])
 	require.NoError(t, err)
 
 	token, err := svc.VerifyAndIssue(context.Background(), kp.Address(), base64.StdEncoding.EncodeToString(sigBytes), challenge)
@@ -208,7 +212,8 @@ func TestAuthService_VerifyAndIssue_RegularUserHasEmptyRoles(t *testing.T) {
 	challenge, err := svc.GenerateChallenge(context.Background(), kp.Address())
 	require.NoError(t, err)
 
-	sigBytes, err := kp.Sign([]byte(challenge))
+	hash := sep53MessageHash(challenge)
+	sigBytes, err := kp.Sign(hash[:])
 	require.NoError(t, err)
 
 	token, err := svc.VerifyAndIssue(context.Background(), kp.Address(), base64.StdEncoding.EncodeToString(sigBytes), challenge)
