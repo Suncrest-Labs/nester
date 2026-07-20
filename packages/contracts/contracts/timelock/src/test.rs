@@ -2,6 +2,21 @@
 //!
 //! Like access-control, this is a plain Rust library so all storage access
 //! must run inside a contract execution context via `env.as_contract`.
+//!
+//! # Privileged-entrypoint authorization matrix
+//!
+//! | API | Authorized | Unauthorized role | Missing signature | Revoked role |
+//! | --- | --- | --- | --- | --- |
+//! | `propose` | `propose_creates_pending_operation` | `propose_fails_for_non_admin` | `propose_requires_caller_auth` | `propose_fails_for_revoked_admin` |
+//! | `execute` | `execute_after_delay_succeeds` | `execute_fails_for_non_admin` | `execute_requires_caller_auth` | `execute_fails_for_revoked_admin` |
+//! | `cancel` | `cancel_pending_operation` | `cancel_fails_for_non_admin` | `cancel_requires_caller_auth` | `cancel_fails_for_revoked_admin` |
+//! | `propose_set_delay` | `propose_set_delay_and_apply` | `propose_set_delay_fails_for_non_admin` | `propose_set_delay_requires_caller_auth` | `propose_set_delay_fails_for_revoked_admin` |
+//!
+//! Role-negative tests run with authentication mocked and otherwise-valid
+//! operations. Signature-negative tests retain the Admin role but clear all
+//! mocked auths. This makes each test sensitive to removal of its exact guard.
+//! `apply_delay` is a host-only helper with no caller argument, not a Soroban
+//! entrypoint, so caller authorization is intentionally N/A here.
 
 extern crate std;
 
@@ -52,6 +67,18 @@ fn advance_time(env: &Env, seconds: u64) {
 
 fn make_payload(env: &Env) -> Bytes {
     Bytes::from_slice(env, &[1, 2, 3, 4])
+}
+
+fn grant_admin(env: &Env, cid: &Address, grantor: &Address, grantee: &Address) {
+    invoke(env, cid, || {
+        AccessControl::grant_role(env, grantor, grantee, nester_access_control::Role::Admin);
+    });
+}
+
+fn revoke_admin(env: &Env, cid: &Address, revoker: &Address, target: &Address) {
+    invoke(env, cid, || {
+        AccessControl::revoke_role(env, revoker, target, nester_access_control::Role::Admin);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +162,44 @@ fn propose_fails_for_non_admin() {
 
     invoke(&env, &cid, || {
         Timelock::propose(&env, &outsider, symbol_short!("OP"), payload)
+    });
+}
+
+#[test]
+#[should_panic]
+fn propose_requires_caller_auth() {
+    let (env, admin, cid) = setup();
+    let payload = make_payload(&env);
+
+    // Admin role is present; only the signature is deliberately absent.
+    env.mock_auths(&[]);
+    invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
+    });
+}
+
+#[test]
+#[should_panic]
+fn propose_fails_for_revoked_admin() {
+    let (env, admin, cid) = setup();
+    let delegated_admin = Address::generate(&env);
+    let payload = make_payload(&env);
+    grant_admin(&env, &cid, &admin, &delegated_admin);
+
+    // Prove the delegated role works before it is revoked.
+    invoke(&env, &cid, || {
+        Timelock::propose(
+            &env,
+            &delegated_admin,
+            symbol_short!("BEFORE"),
+            payload.clone(),
+        )
+    });
+    revoke_admin(&env, &cid, &admin, &delegated_admin);
+
+    // Inputs remain valid, so only the revoked role can reject this call.
+    invoke(&env, &cid, || {
+        Timelock::propose(&env, &delegated_admin, symbol_short!("AFTER"), payload)
     });
 }
 
@@ -288,6 +353,38 @@ fn execute_fails_for_non_admin() {
     invoke(&env, &cid, || Timelock::execute(&env, &outsider, id));
 }
 
+#[test]
+#[should_panic]
+fn execute_requires_caller_auth() {
+    let (env, admin, cid) = setup();
+    let payload = make_payload(&env);
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
+    });
+    advance_time(&env, DEFAULT_DELAY);
+
+    // The operation is ready and `admin` still has the role; only auth is absent.
+    env.mock_auths(&[]);
+    invoke(&env, &cid, || Timelock::execute(&env, &admin, id));
+}
+
+#[test]
+#[should_panic]
+fn execute_fails_for_revoked_admin() {
+    let (env, admin, cid) = setup();
+    let delegated_admin = Address::generate(&env);
+    let payload = make_payload(&env);
+    grant_admin(&env, &cid, &admin, &delegated_admin);
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &delegated_admin, symbol_short!("OP"), payload)
+    });
+    advance_time(&env, DEFAULT_DELAY);
+    revoke_admin(&env, &cid, &admin, &delegated_admin);
+
+    // The operation is pending and ready; revocation must be the rejection.
+    invoke(&env, &cid, || Timelock::execute(&env, &delegated_admin, id));
+}
+
 // ---------------------------------------------------------------------------
 // Cancel
 // ---------------------------------------------------------------------------
@@ -349,6 +446,36 @@ fn cancel_fails_for_non_admin() {
     });
 
     invoke(&env, &cid, || Timelock::cancel(&env, &outsider, id));
+}
+
+#[test]
+#[should_panic]
+fn cancel_requires_caller_auth() {
+    let (env, admin, cid) = setup();
+    let payload = make_payload(&env);
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
+    });
+
+    // The operation is valid and pending; only the Admin signature is absent.
+    env.mock_auths(&[]);
+    invoke(&env, &cid, || Timelock::cancel(&env, &admin, id));
+}
+
+#[test]
+#[should_panic]
+fn cancel_fails_for_revoked_admin() {
+    let (env, admin, cid) = setup();
+    let delegated_admin = Address::generate(&env);
+    let payload = make_payload(&env);
+    grant_admin(&env, &cid, &admin, &delegated_admin);
+    let id = invoke(&env, &cid, || {
+        Timelock::propose(&env, &delegated_admin, symbol_short!("OP"), payload)
+    });
+    revoke_admin(&env, &cid, &admin, &delegated_admin);
+
+    // Still Pending, so the revoked role is the only rejection condition.
+    invoke(&env, &cid, || Timelock::cancel(&env, &delegated_admin, id));
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +575,48 @@ fn propose_set_delay_at_bounds() {
     // Max delay should work
     let _id_max = invoke(&env, &cid, || {
         Timelock::propose_set_delay(&env, &admin, MAX_DELAY)
+    });
+}
+
+#[test]
+#[should_panic]
+fn propose_set_delay_fails_for_non_admin() {
+    let (env, _admin, cid) = setup();
+    let outsider = Address::generate(&env);
+
+    // Two hours is valid, so the role check is the only rejection condition.
+    invoke(&env, &cid, || {
+        Timelock::propose_set_delay(&env, &outsider, 7_200)
+    });
+}
+
+#[test]
+#[should_panic]
+fn propose_set_delay_requires_caller_auth() {
+    let (env, admin, cid) = setup();
+
+    env.mock_auths(&[]);
+    invoke(&env, &cid, || {
+        Timelock::propose_set_delay(&env, &admin, 7_200)
+    });
+}
+
+#[test]
+#[should_panic]
+fn propose_set_delay_fails_for_revoked_admin() {
+    let (env, admin, cid) = setup();
+    let delegated_admin = Address::generate(&env);
+    grant_admin(&env, &cid, &admin, &delegated_admin);
+
+    // First prove the delegated Admin can propose a valid delay change.
+    invoke(&env, &cid, || {
+        Timelock::propose_set_delay(&env, &delegated_admin, 7_200)
+    });
+    revoke_admin(&env, &cid, &admin, &delegated_admin);
+
+    // This second delay is also valid; only the revoked role may reject it.
+    invoke(&env, &cid, || {
+        Timelock::propose_set_delay(&env, &delegated_admin, 10_800)
     });
 }
 

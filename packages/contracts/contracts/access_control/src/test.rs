@@ -10,6 +10,21 @@
 //!
 //! Read-only calls (`has_role`, `require_role`) do not call `require_auth` and
 //! can be freely mixed inside any frame.
+//!
+//! # Negative-authorization matrix
+//!
+//! | Protected API | Unauthorized / unsigned test | Authorized test | Revoked-role test |
+//! | --- | --- | --- | --- |
+//! | `initialize` | `initialize_without_admin_signature_panics` | `initialize_grants_admin_role` | n/a |
+//! | `grant_role` | `non_admin_cannot_grant_role`, `admin_without_signature_cannot_grant_role` | `admin_can_grant_operator_role` | `revoked_admin_cannot_grant_role` |
+//! | `revoke_role` | `non_admin_cannot_revoke_role`, `admin_without_signature_cannot_revoke_role` | `admin_can_revoke_operator_role` | `revoked_admin_cannot_revoke_role` |
+//! | `require_role` | `require_role_panics_when_role_is_absent` | `require_role_passes_for_authorised_account` | `require_role_panics_after_role_is_revoked` |
+//! | `transfer_admin` | `non_admin_cannot_propose_admin_transfer`, `admin_without_signature_cannot_transfer_admin` | `transfer_admin_two_step_happy_path` | `revoked_admin_cannot_transfer_admin` |
+//! | `accept_admin` | `wrong_address_cannot_accept_admin`, `accept_admin_without_signature_panics` | `transfer_admin_two_step_happy_path` | n/a |
+//!
+//! Role-negative tests run with mocked signatures so they exercise the role
+//! guard specifically. Signature-negative tests clear all mocked auths after
+//! setup so deleting a `require_auth` call makes the corresponding test fail.
 
 extern crate std;
 
@@ -57,6 +72,19 @@ fn invoke(env: &Env, cid: &Address, f: impl FnOnce()) {
     env.as_contract(cid, f)
 }
 
+/// Set up two admins, revoke the delegated admin again, and return both
+/// addresses. This is the canonical fixture for post-revocation checks.
+fn setup_with_revoked_admin() -> (Env, Address, Address, Address) {
+    let (env, active_admin, revoked_admin, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &active_admin, &revoked_admin, Role::Admin)
+    });
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &active_admin, &revoked_admin, Role::Admin)
+    });
+    (env, active_admin, revoked_admin, cid)
+}
+
 // ---------------------------------------------------------------------------
 // Initialisation
 // ---------------------------------------------------------------------------
@@ -85,6 +113,17 @@ fn initialize_does_not_grant_operator_to_admin() {
 #[should_panic]
 fn initialize_twice_panics() {
     let (env, admin, _, cid) = setup();
+    invoke(&env, &cid, || AccessControl::initialize(&env, &admin));
+}
+
+#[test]
+#[should_panic]
+fn initialize_without_admin_signature_panics() {
+    let env = Env::default();
+    env.mock_auths(&[]);
+    let admin = Address::generate(&env);
+    let cid = env.register_contract(None, TestAC);
+
     invoke(&env, &cid, || AccessControl::initialize(&env, &admin));
 }
 
@@ -241,12 +280,37 @@ fn revoking_absent_role_is_idempotent() {
 #[should_panic]
 fn non_admin_cannot_revoke_role() {
     let (env, admin, operator, cid) = setup();
+    let target = Address::generate(&env);
     invoke(&env, &cid, || {
         AccessControl::grant_role(&env, &admin, &operator, Role::Operator)
     });
     invoke(&env, &cid, || {
-        AccessControl::revoke_role(&env, &operator, &admin, Role::Admin)
+        AccessControl::grant_role(&env, &admin, &target, Role::Operator)
     });
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &operator, &target, Role::Operator)
+    });
+}
+
+#[test]
+fn double_revoke_operator_role_is_idempotent() {
+    let (env, admin, operator, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &operator, Role::Operator)
+    });
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &admin, &operator, Role::Operator)
+    });
+
+    // A second revoke must remain a no-op and must not restore the role.
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &admin, &operator, Role::Operator)
+    });
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &operator,
+        Role::Operator
+    )));
 }
 
 #[test]
@@ -315,6 +379,22 @@ fn require_admin_panics_for_operator() {
     });
     read(&env, &cid, || {
         AccessControl::require_role(&env, &operator, Role::Admin)
+    });
+}
+
+#[test]
+#[should_panic]
+fn require_role_panics_after_role_is_revoked() {
+    let (env, admin, operator, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &operator, Role::Operator)
+    });
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &admin, &operator, Role::Operator)
+    });
+
+    read(&env, &cid, || {
+        AccessControl::require_role(&env, &operator, Role::Operator)
     });
 }
 
@@ -432,6 +512,97 @@ fn admin_count_is_consistent_after_full_transfer() {
 }
 
 // ---------------------------------------------------------------------------
+// Signature and post-revocation enforcement
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic]
+fn admin_without_signature_cannot_grant_role() {
+    let (env, admin, _, cid) = setup();
+    let target = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &target, Role::Operator)
+    });
+}
+
+#[test]
+#[should_panic]
+fn admin_without_signature_cannot_revoke_role() {
+    let (env, admin, target, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &target, Role::Operator)
+    });
+    env.mock_auths(&[]);
+
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &admin, &target, Role::Operator)
+    });
+}
+
+#[test]
+#[should_panic]
+fn admin_without_signature_cannot_transfer_admin() {
+    let (env, admin, new_admin, cid) = setup();
+    env.mock_auths(&[]);
+
+    invoke(&env, &cid, || {
+        AccessControl::transfer_admin(&env, &admin, &new_admin)
+    });
+}
+
+#[test]
+#[should_panic]
+fn accept_admin_without_signature_panics() {
+    let (env, admin, new_admin, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::transfer_admin(&env, &admin, &new_admin)
+    });
+    env.mock_auths(&[]);
+
+    invoke(&env, &cid, || AccessControl::accept_admin(&env, &new_admin));
+}
+
+#[test]
+#[should_panic]
+fn revoked_admin_cannot_grant_role() {
+    let (env, _, revoked_admin, cid) = setup_with_revoked_admin();
+    let target = Address::generate(&env);
+
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &revoked_admin, &target, Role::Operator)
+    });
+}
+
+#[test]
+#[should_panic]
+fn revoked_admin_cannot_revoke_role() {
+    let (env, active_admin, revoked_admin, cid) = setup_with_revoked_admin();
+    let target = Address::generate(&env);
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &active_admin, &target, Role::Operator)
+    });
+
+    // Targeting Operator deliberately avoids the last-admin guard, so this
+    // test can only pass because the revoked caller is rejected.
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &revoked_admin, &target, Role::Operator)
+    });
+}
+
+#[test]
+#[should_panic]
+fn revoked_admin_cannot_transfer_admin() {
+    let (env, _, revoked_admin, cid) = setup_with_revoked_admin();
+    let successor = Address::generate(&env);
+
+    invoke(&env, &cid, || {
+        AccessControl::transfer_admin(&env, &revoked_admin, &successor)
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Operator role restrictions
 // ---------------------------------------------------------------------------
 
@@ -452,10 +623,14 @@ fn operator_cannot_grant_roles() {
 #[should_panic]
 fn operator_cannot_revoke_roles() {
     let (env, admin, operator, cid) = setup();
+    let target = Address::generate(&env);
     invoke(&env, &cid, || {
         AccessControl::grant_role(&env, &admin, &operator, Role::Operator)
     });
     invoke(&env, &cid, || {
-        AccessControl::revoke_role(&env, &operator, &admin, Role::Admin)
+        AccessControl::grant_role(&env, &admin, &target, Role::Operator)
+    });
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &operator, &target, Role::Operator)
     });
 }
