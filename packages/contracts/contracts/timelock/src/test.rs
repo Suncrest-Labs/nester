@@ -23,10 +23,12 @@ extern crate std;
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
     testutils::{Address as _, Events as _, Ledger as _},
-    Address, Bytes, Env,
+    xdr::{ScErrorCode, ScErrorType},
+    Address, Bytes, Env, Error, Symbol,
 };
 
 use nester_access_control::AccessControl;
+use nester_common::ContractError;
 
 use crate::{Timelock, TimelockStatus, DEFAULT_DELAY, EXPIRY_WINDOW, MAX_DELAY, MIN_DELAY};
 
@@ -38,7 +40,23 @@ use crate::{Timelock, TimelockStatus, DEFAULT_DELAY, EXPIRY_WINDOW, MAX_DELAY, M
 struct TestTL;
 
 #[contractimpl]
-impl TestTL {}
+impl TestTL {
+    pub fn propose(env: Env, caller: Address, op_type: Symbol, payload: Bytes) -> u64 {
+        Timelock::propose(&env, &caller, op_type, payload)
+    }
+
+    pub fn execute(env: Env, caller: Address, op_id: u64) -> Bytes {
+        Timelock::execute(&env, &caller, op_id)
+    }
+
+    pub fn cancel(env: Env, caller: Address, op_id: u64) {
+        Timelock::cancel(&env, &caller, op_id);
+    }
+
+    pub fn propose_set_delay(env: Env, caller: Address, new_delay: u64) -> u64 {
+        Timelock::propose_set_delay(&env, &caller, new_delay)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,6 +85,14 @@ fn advance_time(env: &Env, seconds: u64) {
 
 fn make_payload(env: &Env) -> Bytes {
     Bytes::from_slice(env, &[1, 2, 3, 4])
+}
+
+fn missing_auth_error() -> Error {
+    Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InvalidAction)
+}
+
+fn unauthorized_error() -> Error {
+    Error::from_contract_error(ContractError::Unauthorized as u32)
 }
 
 fn grant_admin(env: &Env, cid: &Address, grantor: &Address, grantee: &Address) {
@@ -154,32 +180,38 @@ fn propose_sets_correct_execute_after() {
 }
 
 #[test]
-#[should_panic]
 fn propose_fails_for_non_admin() {
     let (env, _, cid) = setup();
     let outsider = Address::generate(&env);
     let payload = make_payload(&env);
 
-    invoke(&env, &cid, || {
-        Timelock::propose(&env, &outsider, symbol_short!("OP"), payload)
-    });
+    // The operation type and payload are valid, so only the missing role rejects it.
+    let client = TestTLClient::new(&env, &cid);
+    let error = client
+        .try_propose(&outsider, &symbol_short!("OP"), &payload)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(error, unauthorized_error());
 }
 
 #[test]
-#[should_panic]
 fn propose_requires_caller_auth() {
     let (env, admin, cid) = setup();
     let payload = make_payload(&env);
+    let client = TestTLClient::new(&env, &cid);
 
     // Admin role is present; only the signature is deliberately absent.
     env.mock_auths(&[]);
-    invoke(&env, &cid, || {
-        Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
-    });
+    let error = client
+        .try_propose(&admin, &symbol_short!("OP"), &payload)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(error, missing_auth_error());
 }
 
 #[test]
-#[should_panic]
 fn propose_fails_for_revoked_admin() {
     let (env, admin, cid) = setup();
     let delegated_admin = Address::generate(&env);
@@ -198,9 +230,13 @@ fn propose_fails_for_revoked_admin() {
     revoke_admin(&env, &cid, &admin, &delegated_admin);
 
     // Inputs remain valid, so only the revoked role can reject this call.
-    invoke(&env, &cid, || {
-        Timelock::propose(&env, &delegated_admin, symbol_short!("AFTER"), payload)
-    });
+    let client = TestTLClient::new(&env, &cid);
+    let error = client
+        .try_propose(&delegated_admin, &symbol_short!("AFTER"), &payload)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(error, unauthorized_error());
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +374,6 @@ fn execute_nonexistent_op_panics() {
 }
 
 #[test]
-#[should_panic]
 fn execute_fails_for_non_admin() {
     let (env, admin, cid) = setup();
     let outsider = Address::generate(&env);
@@ -350,11 +385,14 @@ fn execute_fails_for_non_admin() {
 
     advance_time(&env, DEFAULT_DELAY);
 
-    invoke(&env, &cid, || Timelock::execute(&env, &outsider, id));
+    // The operation exists and is ready, so only the missing role rejects it.
+    let client = TestTLClient::new(&env, &cid);
+    let error = client.try_execute(&outsider, &id).unwrap_err().unwrap();
+
+    assert_eq!(error, unauthorized_error());
 }
 
 #[test]
-#[should_panic]
 fn execute_requires_caller_auth() {
     let (env, admin, cid) = setup();
     let payload = make_payload(&env);
@@ -365,11 +403,13 @@ fn execute_requires_caller_auth() {
 
     // The operation is ready and `admin` still has the role; only auth is absent.
     env.mock_auths(&[]);
-    invoke(&env, &cid, || Timelock::execute(&env, &admin, id));
+    let client = TestTLClient::new(&env, &cid);
+    let error = client.try_execute(&admin, &id).unwrap_err().unwrap();
+
+    assert_eq!(error, missing_auth_error());
 }
 
 #[test]
-#[should_panic]
 fn execute_fails_for_revoked_admin() {
     let (env, admin, cid) = setup();
     let delegated_admin = Address::generate(&env);
@@ -382,7 +422,13 @@ fn execute_fails_for_revoked_admin() {
     revoke_admin(&env, &cid, &admin, &delegated_admin);
 
     // The operation is pending and ready; revocation must be the rejection.
-    invoke(&env, &cid, || Timelock::execute(&env, &delegated_admin, id));
+    let client = TestTLClient::new(&env, &cid);
+    let error = client
+        .try_execute(&delegated_admin, &id)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(error, unauthorized_error());
 }
 
 // ---------------------------------------------------------------------------
@@ -435,7 +481,6 @@ fn cancel_already_cancelled_panics() {
 }
 
 #[test]
-#[should_panic]
 fn cancel_fails_for_non_admin() {
     let (env, admin, cid) = setup();
     let outsider = Address::generate(&env);
@@ -445,11 +490,14 @@ fn cancel_fails_for_non_admin() {
         Timelock::propose(&env, &admin, symbol_short!("OP"), payload)
     });
 
-    invoke(&env, &cid, || Timelock::cancel(&env, &outsider, id));
+    // The operation exists and is pending, so only the missing role rejects it.
+    let client = TestTLClient::new(&env, &cid);
+    let error = client.try_cancel(&outsider, &id).unwrap_err().unwrap();
+
+    assert_eq!(error, unauthorized_error());
 }
 
 #[test]
-#[should_panic]
 fn cancel_requires_caller_auth() {
     let (env, admin, cid) = setup();
     let payload = make_payload(&env);
@@ -459,11 +507,13 @@ fn cancel_requires_caller_auth() {
 
     // The operation is valid and pending; only the Admin signature is absent.
     env.mock_auths(&[]);
-    invoke(&env, &cid, || Timelock::cancel(&env, &admin, id));
+    let client = TestTLClient::new(&env, &cid);
+    let error = client.try_cancel(&admin, &id).unwrap_err().unwrap();
+
+    assert_eq!(error, missing_auth_error());
 }
 
 #[test]
-#[should_panic]
 fn cancel_fails_for_revoked_admin() {
     let (env, admin, cid) = setup();
     let delegated_admin = Address::generate(&env);
@@ -475,7 +525,13 @@ fn cancel_fails_for_revoked_admin() {
     revoke_admin(&env, &cid, &admin, &delegated_admin);
 
     // Still Pending, so the revoked role is the only rejection condition.
-    invoke(&env, &cid, || Timelock::cancel(&env, &delegated_admin, id));
+    let client = TestTLClient::new(&env, &cid);
+    let error = client
+        .try_cancel(&delegated_admin, &id)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(error, unauthorized_error());
 }
 
 // ---------------------------------------------------------------------------
@@ -579,30 +635,35 @@ fn propose_set_delay_at_bounds() {
 }
 
 #[test]
-#[should_panic]
 fn propose_set_delay_fails_for_non_admin() {
     let (env, _admin, cid) = setup();
     let outsider = Address::generate(&env);
 
     // Two hours is valid, so the role check is the only rejection condition.
-    invoke(&env, &cid, || {
-        Timelock::propose_set_delay(&env, &outsider, 7_200)
-    });
+    let client = TestTLClient::new(&env, &cid);
+    let error = client
+        .try_propose_set_delay(&outsider, &7_200)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(error, unauthorized_error());
 }
 
 #[test]
-#[should_panic]
 fn propose_set_delay_requires_caller_auth() {
     let (env, admin, cid) = setup();
 
     env.mock_auths(&[]);
-    invoke(&env, &cid, || {
-        Timelock::propose_set_delay(&env, &admin, 7_200)
-    });
+    let client = TestTLClient::new(&env, &cid);
+    let error = client
+        .try_propose_set_delay(&admin, &7_200)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(error, missing_auth_error());
 }
 
 #[test]
-#[should_panic]
 fn propose_set_delay_fails_for_revoked_admin() {
     let (env, admin, cid) = setup();
     let delegated_admin = Address::generate(&env);
@@ -615,9 +676,13 @@ fn propose_set_delay_fails_for_revoked_admin() {
     revoke_admin(&env, &cid, &admin, &delegated_admin);
 
     // This second delay is also valid; only the revoked role may reject it.
-    invoke(&env, &cid, || {
-        Timelock::propose_set_delay(&env, &delegated_admin, 10_800)
-    });
+    let client = TestTLClient::new(&env, &cid);
+    let error = client
+        .try_propose_set_delay(&delegated_admin, &10_800)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(error, unauthorized_error());
 }
 
 // ---------------------------------------------------------------------------
