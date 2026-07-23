@@ -240,6 +240,6 @@ Follow existing patterns and conventions in the codebase. Write tests for new fu
 
 ---
 
-**Built by [Suncrest Labs](https://suncrestlabs.com)**
+**Built by [Suncrest Labs](http://web.archive.org/web/20240402184348/https://www.suncrestlabs.com/)**
 
 *Nester is in active development. Features and specifications may change.*
