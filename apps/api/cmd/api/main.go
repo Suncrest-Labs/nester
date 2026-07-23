@@ -197,11 +197,18 @@ func run() error {
 		Logger:  baseLogger,
 	})
 
-	var challengeStore service.ChallengeStore
+	// A single shared Redis client (nil when REDIS_ADDR is unset) powers both the
+	// challenge store and the distributed rate limiters. When nil, both fall back
+	// to in-memory implementations suitable for single-instance deployments.
+	var redisClient *redis.Client
 	if addr := cfg.Redis().Addr(); addr != "" {
-		redisClient := redis.NewClient(&redis.Options{Addr: addr})
+		redisClient = redis.NewClient(&redis.Options{Addr: addr})
+	}
+
+	var challengeStore service.ChallengeStore
+	if redisClient != nil {
 		challengeStore = service.NewRedisChallengeStore(redisClient, cfg.Auth().ChallengeExpiry())
-		baseLogger.Info("challenge store: redis", "addr", addr)
+		baseLogger.Info("challenge store: redis", "addr", cfg.Redis().Addr())
 	} else {
 		challengeStore = service.NewInMemoryChallengeStore(cfg.Auth().ChallengeExpiry())
 		baseLogger.Info("challenge store: in-memory (single-instance only)")
@@ -335,7 +342,6 @@ func run() error {
 		notificationRepository,
 		nil,
 	)
-
 
 	var ready atomic.Bool
 	ready.Store(true)
@@ -531,7 +537,38 @@ func run() error {
 		{PathPrefix: "/api/v1/", Public: false},
 	}
 	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules)
-	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
+	// Tell the rate-limit client-IP extractor how many trusted proxies sit in
+	// front of the API so it derives the originating client IP from
+	// X-Forwarded-For instead of collapsing all traffic onto the proxy address.
+	middleware.ConfigureClientIP(cfg.RateLimit().TrustedProxyCount())
+
+	// globalLimiter bounds every request per client IP, but skips liveness /
+	// readiness / metrics endpoints so orchestrators can always reach them. It is
+	// distributed across instances when Redis is configured.
+	globalLimiter := middleware.GlobalRateLimiter(
+		middleware.NewLimiter(redisClient, "global", cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow()),
+		[]string{"/health", "/healthz", "/readyz", "/metrics"},
+	)
+	// authRouteLimiter applies a strict per-IP limit to the unauthenticated auth
+	// handshake to blunt credential-stuffing. Keyed by IP because no user exists
+	// yet at challenge/verify time.
+	authRouteLimiter := middleware.SensitiveRouteLimiter(
+		middleware.NewLimiter(redisClient, "auth", cfg.RateLimit().AuthLimit(), cfg.RateLimit().AuthWindow()),
+		[]middleware.RouteMatch{
+			{Method: http.MethodPost, Path: "/api/v1/auth/challenge"},
+			{Method: http.MethodPost, Path: "/api/v1/auth/verify"},
+		},
+		"authentication rate limit exceeded",
+	)
+	// settlementLimiter applies a strict per-user limit to settlement creation to
+	// prevent settlement spam. Placed after authentication so it keys by user ID.
+	settlementLimiter := middleware.SensitiveUserRouteLimiter(
+		middleware.NewLimiter(redisClient, "settlement", cfg.RateLimit().SettlementLimit(), cfg.RateLimit().SettlementWindow()),
+		[]middleware.RouteMatch{
+			{Method: http.MethodPost, Path: "/api/v1/settlements"},
+		},
+		"settlement rate limit exceeded",
+	)
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 	walletLimiter := middleware.WalletRateLimiter(
 		cfg.RateLimit().WalletLimit(),
@@ -542,15 +579,24 @@ func run() error {
 
 	server := &http.Server{
 		Addr: cfg.Server().Address(),
+		// cors is outermost of the request-processing middleware (after only
+		// SecurityHeaders/RecoverPanic) so that rate-limit 429 responses from
+		// globalLimiter and authRouteLimiter still carry CORS headers and remain
+		// readable to browser clients. OPTIONS preflights are short-circuited by
+		// cors and never reach the limiters.
 		Handler: middleware.SecurityHeaders(cfg.Environment())(
 			middleware.RecoverPanic(baseLogger)(
-				globalLimiter(
-					cors(
-						writeLimiter(
-							authenticator(
-								walletLimiter(
-									middleware.LimitRequestBody(1 * 1024 * 1024)(
-										middleware.Logging(baseLogger)(mux),
+				cors(
+					globalLimiter(
+						authRouteLimiter(
+							writeLimiter(
+								authenticator(
+									settlementLimiter(
+										walletLimiter(
+											middleware.LimitRequestBody(1 * 1024 * 1024)(
+												middleware.Logging(baseLogger)(mux),
+											),
+										),
 									),
 								),
 							),
