@@ -17,6 +17,10 @@ import (
 // enough to pass the length check, so it is rejected explicitly outside development.
 const defaultDevJWTSecret = "dev-nester-jwt-secret-change-in-production"
 
+// maxKeyVersionLen bounds an account cipher key version label so it fits the
+// bank_accounts.key_version VARCHAR(32) column.
+const maxKeyVersionLen = 32
+
 type Config struct {
 	environment           string
 	server                ServerConfig
@@ -36,8 +40,44 @@ type Config struct {
 	startup               StartupConfig
 	bank                  BankConfig
 	bankAccountCipherKey  string
+	accountCipher         AccountCipherConfig
 	transactionPoller     TransactionPollerConfig
 	recurringDeposit      RecurringDepositConfig
+}
+
+// AccountCipherConfig holds the versioned key set used to encrypt sensitive
+// account numbers at rest. It supports non-destructive rotation: one active key
+// seals new writes while every configured version remains available to decrypt
+// historical rows.
+type AccountCipherConfig struct {
+	activeVersion  string
+	keys           map[string]string
+	fingerprintKey string
+}
+
+// Configured reports whether at least one encryption key is available.
+func (a AccountCipherConfig) Configured() bool {
+	return len(a.keys) > 0
+}
+
+// ActiveVersion is the key version used for new encryptions.
+func (a AccountCipherConfig) ActiveVersion() string {
+	return a.activeVersion
+}
+
+// Keys returns a copy of the version -> base64 key map.
+func (a AccountCipherConfig) Keys() map[string]string {
+	out := make(map[string]string, len(a.keys))
+	for k, v := range a.keys {
+		out[k] = v
+	}
+	return out
+}
+
+// FingerprintKey is the optional stable pepper (base64) for uniqueness
+// fingerprints. An empty value lets the cipher default to the legacy key.
+func (a AccountCipherConfig) FingerprintKey() string {
+	return a.fingerprintKey
 }
 
 // TransactionPollerConfig governs the background loop that reconciles pending
@@ -255,6 +295,7 @@ func Load() (*Config, error) {
 		cfg.bankAccountCipherKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 	}
 
+	cfg.accountCipher = loader.accountCipherConfig(cfg.bankAccountCipherKey)
 
 	cfg.validate(&loader)
 
@@ -391,6 +432,11 @@ func (c Config) Bank() BankConfig {
 
 func (c Config) BankAccountEncryptionKey() string {
 	return c.bankAccountCipherKey
+}
+
+// AccountCipher returns the versioned key set used to encrypt account numbers.
+func (c Config) AccountCipher() AccountCipherConfig {
+	return c.accountCipher
 }
 
 func (c Config) TransactionPoller() TransactionPollerConfig {
@@ -838,6 +884,82 @@ func (l *envLoader) durationDefault(key string, fallback time.Duration) time.Dur
 		return fallback
 	}
 	return value
+}
+
+// accountCipherConfig parses the versioned encryption key set.
+//
+// When ACCOUNT_CIPHER_KEYS is set it takes precedence and must be a comma-
+// separated list of "version:base64key" pairs, with ACCOUNT_CIPHER_ACTIVE_KEY
+// naming one of those versions. Otherwise it falls back to the single legacy
+// BANK_ACCOUNT_ENCRYPTION_KEY registered as version "v1" (matching the
+// key_version column default), preserving existing single-key deployments.
+func (l *envLoader) accountCipherConfig(legacyKey string) AccountCipherConfig {
+	fingerprintKey := l.stringDefault("ACCOUNT_CIPHER_FINGERPRINT_KEY", "")
+	active := l.stringDefault("ACCOUNT_CIPHER_ACTIVE_KEY", "")
+
+	keysRaw, hasKeys := l.lookup("ACCOUNT_CIPHER_KEYS")
+	if hasKeys {
+		keys := make(map[string]string)
+		for _, pair := range strings.Split(keysRaw, ",") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			version, keyB64, ok := strings.Cut(pair, ":")
+			version = strings.TrimSpace(version)
+			keyB64 = strings.TrimSpace(keyB64)
+			if !ok || version == "" || keyB64 == "" {
+				l.addError(`ACCOUNT_CIPHER_KEYS entries must be "version:base64key"`)
+				continue
+			}
+			// key_version is persisted as VARCHAR(32); reject anything that would
+			// pass startup only to fail at the database boundary on write/rotation.
+			if len(version) > maxKeyVersionLen {
+				l.addError(fmt.Sprintf("ACCOUNT_CIPHER_KEYS version %q exceeds %d characters", version, maxKeyVersionLen))
+				continue
+			}
+			if _, dup := keys[version]; dup {
+				l.addError(fmt.Sprintf("ACCOUNT_CIPHER_KEYS has duplicate version %q", version))
+				continue
+			}
+			keys[version] = keyB64
+		}
+
+		// A non-empty setting that parses to zero usable entries (e.g. "," or
+		// ": ") must fail closed rather than silently disabling encryption.
+		if len(keys) == 0 {
+			l.addError("ACCOUNT_CIPHER_KEYS must contain at least one valid version:base64key entry")
+		}
+		if active == "" {
+			l.addError("ACCOUNT_CIPHER_ACTIVE_KEY is required when ACCOUNT_CIPHER_KEYS is set")
+		} else if _, ok := keys[active]; !ok && len(keys) > 0 {
+			l.addError("ACCOUNT_CIPHER_ACTIVE_KEY must match a version listed in ACCOUNT_CIPHER_KEYS")
+		}
+		// Without a v1 key, an empty fingerprint pepper would track the active key
+		// and shift the blind index on every rotation, permitting duplicate
+		// accounts. Require an explicit, rotation-independent pepper in that case.
+		if len(keys) > 0 && fingerprintKey == "" {
+			if _, hasV1 := keys["v1"]; !hasV1 {
+				l.addError("ACCOUNT_CIPHER_FINGERPRINT_KEY is required when ACCOUNT_CIPHER_KEYS has no v1 key")
+			}
+		}
+
+		return AccountCipherConfig{activeVersion: active, keys: keys, fingerprintKey: fingerprintKey}
+	}
+
+	// Backward compatibility: fall back to the single legacy key as version "v1".
+	if strings.TrimSpace(legacyKey) != "" {
+		return AccountCipherConfig{
+			activeVersion:  "v1",
+			keys:           map[string]string{"v1": legacyKey},
+			fingerprintKey: fingerprintKey,
+		}
+	}
+
+	if active != "" || fingerprintKey != "" {
+		l.addError("ACCOUNT_CIPHER_ACTIVE_KEY/ACCOUNT_CIPHER_FINGERPRINT_KEY set but no keys are configured (set ACCOUNT_CIPHER_KEYS or BANK_ACCOUNT_ENCRYPTION_KEY)")
+	}
+	return AccountCipherConfig{}
 }
 
 func (l *envLoader) lookup(key string) (string, bool) {

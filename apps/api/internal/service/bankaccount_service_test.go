@@ -18,23 +18,24 @@ type memBankAccountRepo struct {
 }
 
 type storedAccount struct {
-	account   bankaccount.BankAccount
-	encrypted []byte
-	print     string
+	account    bankaccount.BankAccount
+	encrypted  []byte
+	print      string
+	keyVersion string
 }
 
 func newMemBankAccountRepo() *memBankAccountRepo {
 	return &memBankAccountRepo{byID: make(map[uuid.UUID]storedAccount)}
 }
 
-func (m *memBankAccountRepo) Create(_ context.Context, account bankaccount.BankAccount, encrypted []byte, fingerprint string) (bankaccount.BankAccount, error) {
+func (m *memBankAccountRepo) Create(_ context.Context, account bankaccount.BankAccount, encrypted []byte, fingerprint, keyVersion string) (bankaccount.BankAccount, error) {
 	for _, s := range m.byID {
 		if s.account.UserID == account.UserID && s.print == fingerprint {
 			return bankaccount.BankAccount{}, bankaccount.ErrDuplicateAccount
 		}
 	}
 	account.CreatedAt = time.Now().UTC()
-	m.byID[account.ID] = storedAccount{account: account, encrypted: encrypted, print: fingerprint}
+	m.byID[account.ID] = storedAccount{account: account, encrypted: encrypted, print: fingerprint, keyVersion: keyVersion}
 	return account, nil
 }
 
@@ -48,12 +49,12 @@ func (m *memBankAccountRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]
 	return out, nil
 }
 
-func (m *memBankAccountRepo) GetByID(_ context.Context, id uuid.UUID) (bankaccount.BankAccount, []byte, error) {
+func (m *memBankAccountRepo) GetByID(_ context.Context, id uuid.UUID) (bankaccount.BankAccount, []byte, string, error) {
 	s, ok := m.byID[id]
 	if !ok {
-		return bankaccount.BankAccount{}, nil, bankaccount.ErrNotFound
+		return bankaccount.BankAccount{}, nil, "", bankaccount.ErrNotFound
 	}
-	return s.account, s.encrypted, nil
+	return s.account, s.encrypted, s.keyVersion, nil
 }
 
 func (m *memBankAccountRepo) Delete(_ context.Context, id uuid.UUID) error {
@@ -180,5 +181,86 @@ func TestBankAccountService_DuplicateRejected(t *testing.T) {
 	}
 	if _, err := svc.Add(ctx, userID, input); err != bankaccount.ErrDuplicateAccount {
 		t.Fatalf("expected duplicate error, got %v", err)
+	}
+}
+
+func b64Key(b byte) string {
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = b
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+// multiCipher builds a v1(all-zero)+v2 cipher. v1 matches testCipher's key so a
+// row written by testCipher decrypts here after v2 is added.
+func multiCipher(t *testing.T, active string) *crypto.AccountCipher {
+	t.Helper()
+	c, err := crypto.NewAccountCipherWithKeys(active, map[string]string{
+		"v1": b64Key(0),
+		"v2": b64Key(2),
+	}, "")
+	if err != nil {
+		t.Fatalf("multi cipher: %v", err)
+	}
+	return c
+}
+
+// TestBankAccountService_KeyVersioning covers, per scenario: the key version a
+// new write is stored under, and that the row is still decryptable through the
+// (possibly rotated) cipher the reader is configured with.
+func TestBankAccountService_KeyVersioning(t *testing.T) {
+	const accountNumber = "0123456789"
+
+	cases := []struct {
+		name        string
+		writeCipher func(*testing.T) *crypto.AccountCipher
+		readCipher  func(*testing.T) *crypto.AccountCipher // nil = reuse writeCipher
+		wantStored  string
+	}{
+		{
+			name:        "new writes use active key",
+			writeCipher: func(t *testing.T) *crypto.AccountCipher { return multiCipher(t, "v2") },
+			wantStored:  "v2",
+		},
+		{
+			name:        "legacy v1 row decrypts after v2 added and made active",
+			writeCipher: func(t *testing.T) *crypto.AccountCipher { return testCipher(t) },
+			readCipher:  func(t *testing.T) *crypto.AccountCipher { return multiCipher(t, "v2") },
+			wantStored:  "v1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			userID := uuid.New()
+			repo := newMemBankAccountRepo()
+
+			created, err := service.NewBankAccountService(repo, tc.writeCipher(t), nil).
+				Add(ctx, userID, bankaccount.AddInput{
+					BankName: "GTBank", BankCode: "058", AccountNumber: accountNumber,
+					AccountName: "A", Currency: "NGN", Country: "NG",
+				})
+			if err != nil {
+				t.Fatalf("add: %v", err)
+			}
+			if got := repo.byID[created.ID].keyVersion; got != tc.wantStored {
+				t.Fatalf("stored key version = %q, want %q", got, tc.wantStored)
+			}
+
+			readCipher := tc.writeCipher
+			if tc.readCipher != nil {
+				readCipher = tc.readCipher
+			}
+			account, err := service.NewBankAccountService(repo, readCipher(t), nil).
+				ResolveForSettlement(ctx, userID, created.ID)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if account.AccountNumber != accountNumber {
+				t.Fatalf("decrypted account = %q, want %q", account.AccountNumber, accountNumber)
+			}
+		})
 	}
 }

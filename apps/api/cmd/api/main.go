@@ -134,8 +134,8 @@ func run() error {
 
 	bankAccountRepository := postgres.NewBankAccountRepository(db)
 	var accountCipher *cryptopkg.AccountCipher
-	if key := cfg.BankAccountEncryptionKey(); key != "" {
-		cipher, cipherErr := cryptopkg.NewAccountCipher(key)
+	if ac := cfg.AccountCipher(); ac.Configured() {
+		cipher, cipherErr := cryptopkg.NewAccountCipherWithKeys(ac.ActiveVersion(), ac.Keys(), ac.FingerprintKey())
 		if cipherErr != nil {
 			return fmt.Errorf("bank account cipher: %w", cipherErr)
 		}
