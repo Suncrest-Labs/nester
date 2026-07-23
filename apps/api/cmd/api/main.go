@@ -131,6 +131,7 @@ func run() error {
 	// (issue #496); the vault repository applies it idempotently by tx hash.
 	transactionService.SetBalanceApplier(vaultRepository)
 	transactionHandler := handler.NewTransactionHandler(transactionService)
+	transactionHandler.SetVaultRepository(vaultRepository)
 
 	bankAccountRepository := postgres.NewBankAccountRepository(db)
 	var accountCipher *cryptopkg.AccountCipher
