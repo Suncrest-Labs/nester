@@ -35,7 +35,12 @@ def test_settings_rejects_empty_jwt_in_staging() -> None:
 def test_settings_accepts_jwt_in_production() -> None:
     with patch.dict(
         os.environ,
-        {"ENVIRONMENT": "production", "INTELLIGENCE_JWT_SECRET": "test-secret-key-32chars-long!!!!"},
+        {
+            "ENVIRONMENT": "production",
+            "INTELLIGENCE_JWT_SECRET": (
+                "test-secret-key-32chars-long!!!!"
+            ),
+        },
         clear=False,
     ):
         settings = Settings()
