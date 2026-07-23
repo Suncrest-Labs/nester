@@ -200,7 +200,12 @@ func (h *TransactionHandler) createTransaction(w http.ResponseWriter, r *http.Re
 	if h.vaultRepo != nil {
 		v, err := h.vaultRepo.GetVault(r.Context(), vaultID)
 		if err != nil {
-			h.writeDomainError(w, r, err)
+			if errors.Is(err, vault.ErrVaultNotFound) {
+				response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
+				return
+			}
+			logpkg.FromContext(r.Context()).Error("transaction handler: vault lookup failed", "error", err.Error())
+			response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
 			return
 		}
 		if v.UserID.String() != user.ID {
@@ -262,7 +267,12 @@ func (h *TransactionHandler) getTransactionByHash(w http.ResponseWriter, r *http
 	if h.vaultRepo != nil {
 		v, err := h.vaultRepo.GetVault(r.Context(), model.VaultID)
 		if err != nil {
-			h.writeDomainError(w, r, err)
+			if errors.Is(err, vault.ErrVaultNotFound) {
+				response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
+				return
+			}
+			logpkg.FromContext(r.Context()).Error("transaction handler: vault lookup failed", "error", err.Error())
+			response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
 			return
 		}
 		if v.UserID.String() != user.ID {
