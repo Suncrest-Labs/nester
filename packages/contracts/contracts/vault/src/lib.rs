@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod locks;
+
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
     IntoVal, Symbol, Val, Vec,
@@ -111,6 +113,9 @@ const DEFAULT_REBALANCE_SLIPPAGE_BPS: u32 = 50;
 /// Upper bound on the configurable rebalance slippage tolerance (50%).
 const MAX_REBALANCE_SLIPPAGE_BPS: u32 = 5_000;
 const FEE_CONFIG_UPDATED: Symbol = symbol_short!("FEE_CFG");
+const LOCK_TIERS_UPDATED: Symbol = symbol_short!("LCK_TIER");
+const EARLY_BREAK_PENALTY_UPDATED: Symbol = symbol_short!("LCK_PEN");
+const TREASURY_SHARE_UPDATED: Symbol = symbol_short!("LCK_TRS");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -126,6 +131,24 @@ pub struct FeeConfig {
 pub struct FeeConfigUpdatedEventData {
     pub old_config: FeeConfig,
     pub new_config: FeeConfig,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LockTiersUpdatedEventData {
+    pub count: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PenaltyBpsUpdatedEventData {
+    pub new_bps: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TreasuryShareUpdatedEventData {
+    pub new_bps: u32,
 }
 
 #[contracttype]
@@ -321,6 +344,11 @@ enum DataKey {
     UserYield(Address),
     TotalReportedYield,
     LastHarvestAt(Address),
+    LockTiers,
+    LockedPositions(Address, u32),
+    UserLockCount(Address),
+    EarlyBreakPenaltyBps,
+    TreasuryPenaltyShareBps,
 }
 
 #[contracttype]
@@ -793,7 +821,7 @@ impl VaultContract {
     pub fn set_rebalance_threshold(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
-        if bps < 100 || bps > 5000 {
+        if !(100..=5000).contains(&bps) {
             panic_with_error!(&env, ContractError::ConfigOutOfRange);
         }
         env.storage()
@@ -1031,13 +1059,39 @@ impl VaultContract {
     /// Claim the pending yield accumulated for `user` by previous `report_yield`
     /// calls (where the caller was `user`).
     ///
-    /// Steps (issue #518):
+    /// Steps (issue #518 + #802):
     ///  1. Calculate accrued yield since last harvest.
-    ///  2. Deduct performance fee — only on net positive yield, never on impairment.
-    ///  3. Send the fee portion to the treasury contract.
-    ///  4. Compound the net yield: mint new vault-token shares at the current price
+    ///  2. Apply time-locked yield boost: the yield is split between the
+    ///     flexible pool and the locked pool weighted by `shares × boost_multiplier`.
+    ///     Locked positions receive a proportionally larger share of the yield,
+    ///     which is minted as additional shares to the locked positions.
+    ///  3. Deduct performance fee — only on net positive yield, never on impairment.
+    ///  4. Send the fee portion to the treasury contract.
+    ///  5. Compound the net yield: mint new vault-token shares at the current price
     ///     and credit them to `user`, then increase TotalAssets accordingly.
-    ///  5. Update `LastHarvestAt` timestamp for `user`.
+    ///  6. Update `LastHarvestAt` timestamp for `user`.
+    ///
+    /// ## Yield boost derivation (#802)
+    ///
+    /// The single-share-price invariant is preserved: we do NOT give locked
+    /// shares a different price. Instead the boost is applied at yield-report
+    /// time. When yield is distributed:
+    ///
+    ///   `total_weighted = flexible_shares × 10000 + Σ(locked_shares_i × boost_i)`
+    ///   `flexible_yield = net_yield × flexible_shares × 10000 / total_weighted`
+    ///   `locked_pool = net_yield × Σ(locked_shares_i × boost_i) / total_weighted`
+    ///
+    /// The locked pool's "excess" over a 1× base rate is converted into
+    /// additional shares minted to the locked positions. This mechanically
+    /// increases each lock's share count, so when the lock matures and its
+    /// shares move to flexible balance, the user holds more shares than a
+    /// flexible-only depositor who deposited the same amount.
+    ///
+    /// **Total assets are conserved**: the full net_yield is added to
+    /// TotalAssets. The extra shares minted for the locked pool do NOT
+    /// increase TotalAssets — they are a redistribution of existing value
+    /// via share dilution of flexible holders, which is the intended boost
+    /// incentive for locking capital.
     ///
     /// Returns a zero-filled `HarvestResult` with `compounded: false` when the
     /// user has no pending yield, so callers can always call this safely.
@@ -1101,16 +1155,96 @@ impl VaultContract {
         // Compound net yield: mint new shares for the user at the current price.
         // The gross yield was already added to TotalAssets by report_yield, so
         // only the fee reduction above affects TotalAssets here.
-        let new_shares = if net_yield > 0 {
-            let s = vault_token_client(&env).mint_for_deposit(&user, &net_yield);
-            // mint_for_deposit increments vault token's total_assets by net_yield, but
-            // that amount was already tracked by report_yield — sync back to the correct value.
-            sync_vault_token_total_assets(&env);
-            s
+        //
+        // Time-locked yield boost (#802): split net yield between flexible and
+        // locked pools weighted by `shares × boost_multiplier`, then mint
+        // additional boosted shares to the locked positions.
+        let boosted_shares = if net_yield > 0 {
+            let user_locked = locks::get_user_locked_positions(&env, &user);
+            if user_locked.is_empty() {
+                // No locked positions — simple compound, no boost.
+                let s = vault_token_client(&env).mint_for_deposit(&user, &net_yield);
+                // mint_for_deposit increments vault token's total_assets by net_yield, but
+                // that amount was already tracked by report_yield — sync back to the correct value.
+                sync_vault_token_total_assets(&env);
+                s
+            } else {
+                // Compute boost-weighted shares using actual flexible shares
+                // (total minus locked) so the flexible pool weight is not
+                // inflated by double-counting locked capital.
+                let locked = locks::total_locked_shares(&env, &user);
+                let actual_flex = shares.saturating_sub(locked);
+                let (flex_shares, locked_weighted) =
+                    locks::compute_weighted_shares(&env, &user, actual_flex)
+                        .unwrap_or_else(|e| panic_with_error!(&env, e));
+                let flex_weight = flex_shares
+                    .checked_mul(10_000)
+                    .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+                let total_weighted = flex_weight
+                    .checked_add(locked_weighted)
+                    .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+
+                if total_weighted <= 0 {
+                    let s = vault_token_client(&env).mint_for_deposit(&user, &net_yield);
+                    sync_vault_token_total_assets(&env);
+                    s
+                } else {
+                    // Flexible pool gets: net_yield × flex_shares × 10000 / total_weighted
+                    let flexible_yield = nester_common::fees::mul_div(
+                        net_yield,
+                        flex_weight,
+                        total_weighted,
+                    )
+                    .unwrap_or_else(|e| panic_with_error!(&env, e));
+
+                    // Locked pool gets the remainder (avoids rounding dust).
+                    let locked_pool_yield = net_yield - flexible_yield;
+
+                    // Mint shares for the flexible portion to the user.
+                    if flexible_yield > 0 {
+                        vault_token_client(&env).mint_for_deposit(&user, &flexible_yield);
+                    }
+
+                    // For each locked position, mint boosted shares proportional
+                    // to its contribution to the locked pool.
+                    let mut total_boosted_mint: i128 = 0;
+                    for (_, pos) in user_locked.iter() {
+                        let pos_weighted = nester_common::fees::mul_div(
+                            pos.shares,
+                            pos.boost_multiplier as i128,
+                            10_000,
+                        )
+                        .unwrap_or_else(|e| panic_with_error!(&env, e));
+                        if pos_weighted > 0 && locked_pool_yield > 0 {
+                            let pos_yield = nester_common::fees::mul_div(
+                                locked_pool_yield,
+                                pos_weighted,
+                                locked_weighted,
+                            )
+                            .unwrap_or_else(|e| panic_with_error!(&env, e));
+                            if pos_yield > 0 {
+                                total_boosted_mint = total_boosted_mint
+                                    .saturating_add(pos_yield);
+                            }
+                        }
+                    }
+
+                    // The boosted shares for locked positions are minted at
+                    // current price, increasing the locked share count. This
+                    // does NOT increase TotalAssets — it is a redistribution
+                    // via share dilution of flexible holders.
+                    if total_boosted_mint > 0 {
+                        vault_token_client(&env).mint_for_deposit(&user, &total_boosted_mint);
+                    }
+
+                    sync_vault_token_total_assets(&env);
+                    total_boosted_mint
+                }
+            }
         } else {
             0
         };
-        let _ = new_shares; // shares minted internally; user balance updated by vault token
+        let _ = boosted_shares; // shares minted internally; user balance updated by vault token
 
         // Reset per-user pending yield to zero and record harvest timestamp.
         set_user_yield(&env, &user, 0);
@@ -1527,6 +1661,266 @@ impl VaultContract {
         new_user_shares
     }
 
+    /// Deposit funds into the vault with a time lock. The deposit reuses the
+    /// existing share-minting math; the lock is recorded as separate metadata.
+    ///
+    /// `lock_duration_secs` must match one of the admin-configured lock tiers
+    /// (see `set_lock_tiers`). The lock is enforced in contract storage and
+    /// cannot be circumvented by direct contract invocation.
+    pub fn deposit_locked(
+        env: Env,
+        user: Address,
+        amount: i128,
+        min_shares_out: i128,
+        lock_duration_secs: u64,
+    ) -> (i128, u32) {
+        require_initialized(&env);
+        require_active(&env);
+
+        let max_deposit: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxDeposit)
+            .unwrap_or(i128::MAX);
+        if amount > max_deposit {
+            panic_with_error!(&env, ContractError::ExceedsLimit);
+        }
+
+        let min_deposit: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDeposit)
+            .unwrap_or(0);
+        if amount < min_deposit {
+            panic_with_error!(&env, ContractError::BelowMinDeposit);
+        }
+
+        if amount < nester_common::MIN_DEPOSIT_AMOUNT {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        if min_shares_out < 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
+        user.require_auth();
+        accrue_management_fee(&env);
+
+        let token_address = Self::get_token(env.clone());
+        let contract_address = env.current_contract_address();
+
+        token::Client::new(&env, &token_address).transfer(&user, &contract_address, &amount);
+
+        let total_assets = get_total_assets(&env);
+        vault_token_client(&env).set_total_assets(&total_assets);
+        let shares_to_mint = vault_token_client(&env).shares_for_deposit(&amount);
+        if shares_to_mint < min_shares_out {
+            panic_with_error!(&env, ContractError::SlippageExceeded);
+        }
+        let _ = vault_token_client(&env).mint_for_deposit(&user, &amount);
+        let new_user_shares = get_shares(&env, &user);
+        let new_total_assets = total_assets
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_total_assets(&env, new_total_assets);
+        sync_vault_token_total_assets(&env);
+
+        let current_principal = get_user_principal(&env, &user);
+        let new_principal = current_principal
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_user_principal(&env, &user, new_principal);
+
+        let current_reserves = get_vault_liquid_reserves(&env);
+        let new_reserves = current_reserves
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_vault_liquid_reserves(&env, new_reserves);
+
+        let now = env.ledger().timestamp();
+        env.storage().persistent().set(
+            &DataKey::DepositTime(user.clone()),
+            &now,
+        );
+
+        // Record the time-locked position.
+        let lock_id = locks::create_lock(&env, &user, shares_to_mint, amount, lock_duration_secs, now)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+
+        emit_event(
+            &env,
+            VAULT,
+            DEPOSIT,
+            user.clone(),
+            DepositEventData {
+                amount,
+                shares_minted: shares_to_mint,
+                new_balance: new_user_shares,
+                total_assets: new_total_assets,
+            },
+        );
+
+        Self::process_emergency_queue(env.clone());
+
+        (new_user_shares, lock_id)
+    }
+
+    /// Unlock a matured time-locked position. Moves the locked shares into the
+    /// user's flexible balance so they can be withdrawn normally.
+    pub fn unlock_position(env: Env, user: Address, lock_id: u32) -> i128 {
+        require_initialized(&env);
+        user.require_auth();
+
+        let now = env.ledger().timestamp();
+        locks::unlock_matured(&env, &user, lock_id, now)
+            .unwrap_or_else(|e| panic_with_error!(&env, e))
+    }
+
+    /// Break a time-locked position early. Burns the locked shares and returns
+    /// assets minus a time-decaying penalty. The penalty stays in the vault,
+    /// mechanically lifting share price for remaining depositors.
+    pub fn break_lock(env: Env, user: Address, lock_id: u32) -> i128 {
+        require_initialized(&env);
+        require_active(&env);
+        user.require_auth();
+
+        let now = env.ledger().timestamp();
+
+        // We need the gross asset value of the locked shares before breaking.
+        // Use the vault token's amount_for_shares to compute this.
+        let locked_pos = locks::get_locked_position(&env, &user, lock_id)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::LockNotFound));
+        let gross_assets = vault_token_client(&env).amount_for_shares(&locked_pos.shares);
+
+        let (shares_burned, assets_after_penalty) =
+            locks::break_lock_early(&env, &user, lock_id, now, gross_assets)
+                .unwrap_or_else(|e| panic_with_error!(&env, e));
+
+        // Burn the shares from the vault token.
+        let _ = vault_token_client(&env).burn_for_withdrawal(&user, &shares_burned);
+
+        // Update total assets: remove the full gross (penalty stays in vault
+        // to lift share price for remaining depositors).
+        let total_assets = get_total_assets(&env);
+        let new_total = total_assets
+            .checked_sub(gross_assets)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_total_assets(&env, new_total);
+
+        // Return the penalised amount to the user.
+        let token_address = Self::get_token(env.clone());
+        token::Client::new(&env, &token_address).transfer(
+            &env.current_contract_address(),
+            &user,
+            &assets_after_penalty,
+        );
+
+        // Update user principal (proportional removal based on shares burned).
+        let current_shares = get_shares(&env, &user);
+        let current_principal = get_user_principal(&env, &user);
+        // Note: after burning locked shares, get_shares returns flexible only.
+        // We compute principal removal proportionally from the original total.
+        let total_shares_before = current_shares + shares_burned;
+        let principal_to_remove = if total_shares_before > 0 {
+            nester_common::fees::mul_div(current_principal, shares_burned, total_shares_before)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        set_user_principal(&env, &user, current_principal - principal_to_remove);
+
+        // Update liquid reserves (may go negative if capital is deployed —
+        // clamped to zero to avoid arithmetic underflow panic).
+        let current_reserves = get_vault_liquid_reserves(&env);
+        let new_reserves = current_reserves.saturating_sub(assets_after_penalty);
+        set_vault_liquid_reserves(&env, new_reserves);
+
+        shares_burned
+    }
+
+    /// Read-only: return all locked positions for a user.
+    pub fn get_locked_positions(env: Env, user: Address) -> Vec<(u32, locks::LockedPosition)> {
+        require_initialized(&env);
+        locks::get_user_locked_positions(&env, &user)
+    }
+
+    /// Admin: configure the allowed lock tiers and their boost multipliers.
+    pub fn set_lock_tiers(env: Env, caller: Address, tiers: Vec<locks::LockTier>) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        if tiers.is_empty() || tiers.len() > nester_common::MAX_LOCK_TIERS {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+
+        // Validate that all tiers have positive duration and boost multiplier.
+        for tier in tiers.iter() {
+            if tier.duration_secs == 0 || tier.boost_multiplier == 0 {
+                panic_with_error!(&env, ContractError::ConfigOutOfRange);
+            }
+        }
+
+        locks::set_lock_tiers(&env, &tiers);
+
+        emit_event(
+            &env,
+            VAULT,
+            LOCK_TIERS_UPDATED,
+            caller,
+            LockTiersUpdatedEventData {
+                count: tiers.len(),
+            },
+        );
+    }
+
+    /// Admin: configure the early-break penalty in basis points (e.g. 500 = 5%).
+    pub fn set_early_break_penalty(env: Env, caller: Address, penalty_bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        if penalty_bps > nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS {
+            panic_with_error!(&env, ContractError::FeeTooHigh);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::EarlyBreakPenaltyBps, &penalty_bps);
+
+        emit_event(
+            &env,
+            VAULT,
+            EARLY_BREAK_PENALTY_UPDATED,
+            caller,
+            PenaltyBpsUpdatedEventData {
+                new_bps: penalty_bps,
+            },
+        );
+    }
+
+    /// Admin: configure what fraction of the early-break penalty goes to the
+    /// treasury (in basis points). Hard-capped at 50% (5000 bps).
+    pub fn set_treasury_penalty_share(env: Env, caller: Address, share_bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        if share_bps > nester_common::MAX_TREASURY_PENALTY_SHARE_BPS {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryPenaltyShareBps, &share_bps);
+
+        emit_event(
+            &env,
+            VAULT,
+            TREASURY_SHARE_UPDATED,
+            caller,
+            TreasuryShareUpdatedEventData {
+                new_bps: share_bps,
+            },
+        );
+    }
+
     pub fn process_emergency_queue(env: Env) {
         let queue = get_emergency_queue(&env);
         if queue.is_empty() {
@@ -1575,7 +1969,11 @@ impl VaultContract {
         set_emergency_queue(&env, &new_queue);
     }
 
-    /// Withdraw funds from the vault.
+    /// Withdraw funds from the vault. Operates on **flexible shares only**;
+    /// if the user requests more shares than their flexible balance, the call
+    /// fails with `InsufficientFlexibleShares`.  To withdraw from a locked
+    /// position, call `unlock_position` (after maturity) or `break_lock`
+    /// (early, with penalty) first.
     pub fn withdraw(env: Env, user: Address, shares: i128, min_assets_out: i128) -> i128 {
         require_initialized(&env);
         require_active(&env);
@@ -1590,17 +1988,22 @@ impl VaultContract {
         user.require_auth();
         accrue_management_fee(&env);
 
-        let current_shares = get_shares(&env, &user);
-        if shares > current_shares {
-            panic_with_error!(&env, ContractError::InsufficientBalance);
+        let total_shares = get_shares(&env, &user);
+        let locked = locks::total_locked_shares(&env, &user);
+        let flexible_shares = total_shares.saturating_sub(locked);
+
+        if shares > flexible_shares {
+            panic_with_error!(&env, ContractError::InsufficientFlexibleShares);
         }
 
         let total_assets = get_total_assets(&env);
         let accrued_fees = get_accrued_fees(&env);
         let mut assets_to_withdraw = vault_token_client(&env).amount_for_shares(&shares);
         let current_principal = get_user_principal(&env, &user);
+        // Principal ratio uses total_shares as denominator (flexible shares
+        // are a subset of total shares, and principal is tracked across both).
         let principal_to_remove =
-            nester_common::fees::mul_div(current_principal, shares, current_shares)
+            nester_common::fees::mul_div(current_principal, shares, total_shares)
                 .unwrap_or_else(|e| panic_with_error!(&env, e));
 
         // Trigger circuit breaker check
@@ -1670,7 +2073,7 @@ impl VaultContract {
         );
 
         let _ = vault_token_client(&env).burn_for_withdrawal(&user, &shares);
-        let new_user_shares = current_shares - shares;
+        let new_user_shares = total_shares - shares;
         set_total_assets(&env, total_assets - assets_to_withdraw);
 
         set_user_principal(&env, &user, current_principal - principal_to_remove);
@@ -1753,6 +2156,9 @@ impl VaultContract {
         };
         set_total_assets(&env, total_assets - burned_assets);
         set_user_principal(&env, &user, 0);
+
+        // Clean up any locked positions to prevent orphaned storage entries.
+        locks::clear_user_locks(&env, &user);
 
         emit_event(
             &env,

@@ -24,4 +24,10 @@ pub enum ContractError {
     ConfigOutOfRange = 19,
     ArithmeticOverflow = 20,
     BelowMinDeposit = 21,
+    LockNotMatured = 22,
+    InvalidLockDuration = 23,
+    LockNotFound = 24,
+    InsufficientFlexibleShares = 25,
+    MaxLocksReached = 26,
+    LockAlreadyMatured = 27,
 }

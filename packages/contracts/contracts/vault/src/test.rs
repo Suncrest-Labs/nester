@@ -45,7 +45,7 @@ use soroban_sdk::{
 };
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
-use crate::{CircuitBreakerConfig, FeeConfig, VaultContract, VaultContractClient, VaultStatus};
+use crate::{locks, CircuitBreakerConfig, FeeConfig, VaultContract, VaultContractClient, VaultStatus};
 
 macro_rules! assert_rejected {
     ($call:expr, $entrypoint:literal) => {
@@ -2299,4 +2299,589 @@ fn emergency_withdraw_all_without_user_signature_is_rejected() {
         vault.try_emergency_withdraw_all(&user),
         "emergency_withdraw_all"
     );
+}
+
+// ===========================================================================
+// Time-Locked Savings Vault Tests
+// ===========================================================================
+
+fn setup_with_locks() -> (
+    Env,
+    Address,
+    token::StellarAssetClient<'static>,
+    VaultContractClient<'static>,
+    Address,
+) {
+    let (env, admin, token, vault, treasury) = setup();
+    let tiers = soroban_sdk::vec![
+        &env,
+        locks::LockTier { duration_secs: 30 * DAY, boost_multiplier: 12000 },       // 30d, 1.2×
+        locks::LockTier { duration_secs: 90 * DAY, boost_multiplier: 15000 }, // 90d, 1.5×
+        locks::LockTier { duration_secs: 180 * DAY, boost_multiplier: 20000 },// 180d, 2.0×
+    ];
+    vault.set_lock_tiers(&admin, &tiers);
+    (env, admin, token, vault, treasury)
+}
+
+// -- set_lock_tiers --------------------------------------------------------
+
+#[test]
+fn set_lock_tiers_by_admin_succeeds() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    let (shares, lock_id) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+    assert!(shares > 0);
+    assert_eq!(lock_id, 0);
+    let positions = vault.get_locked_positions(&user);
+    assert_eq!(positions.len(), 1);
+}
+
+#[test]
+fn set_lock_tiers_rejects_outsider() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+    let tiers = soroban_sdk::vec![
+        &env,
+        locks::LockTier { duration_secs: DAY, boost_multiplier: 12000 },
+    ];
+    assert_rejected!(vault.try_set_lock_tiers(&outsider, &tiers), "set_lock_tiers");
+}
+
+#[test]
+fn set_lock_tiers_rejects_empty() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let tiers: soroban_sdk::Vec<locks::LockTier> = soroban_sdk::vec![&env];
+    assert_rejected!(vault.try_set_lock_tiers(&admin, &tiers), "set_lock_tiers empty");
+}
+
+#[test]
+fn set_lock_tiers_rejects_zero_duration() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let tiers = soroban_sdk::vec![
+        &env,
+        locks::LockTier { duration_secs: 0, boost_multiplier: 12000 },
+    ];
+    assert_rejected!(vault.try_set_lock_tiers(&admin, &tiers), "set_lock_tiers zero duration");
+}
+
+#[test]
+fn set_lock_tiers_rejects_zero_boost() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let tiers = soroban_sdk::vec![
+        &env,
+        locks::LockTier { duration_secs: DAY, boost_multiplier: 0 },
+    ];
+    assert_rejected!(vault.try_set_lock_tiers(&admin, &tiers), "set_lock_tiers zero boost");
+}
+
+// -- deposit_locked --------------------------------------------------------
+
+#[test]
+fn deposit_locked_creates_lock_and_mints_shares() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    let (new_shares, lock_id) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+    assert!(new_shares > 0);
+    assert_eq!(lock_id, 0);
+
+    let positions = vault.get_locked_positions(&user);
+    assert_eq!(positions.len(), 1);
+    let (id, pos) = positions.get(0).unwrap();
+    assert_eq!(id, 0);
+    assert_eq!(pos.shares, new_shares);
+    assert_eq!(pos.tier_index, 0);
+    assert_eq!(pos.boost_multiplier, 12000);
+}
+
+#[test]
+fn deposit_locked_rejects_invalid_duration() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    // 7 days is not a configured tier.
+    assert_rejected!(
+        vault.try_deposit_locked(&user, &(100 * XLM), &0, &(7 * DAY)),
+        "deposit_locked invalid duration"
+    );
+}
+
+#[test]
+fn deposit_locked_rejects_without_auth() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    env.mock_auths(&[]);
+    assert_rejected!(
+        vault.try_deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30)),
+        "deposit_locked no auth"
+    );
+}
+
+#[test]
+fn deposit_locked_multiple_locks_same_user() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 300 * XLM);
+
+    let (_, id0) = vault.deposit_locked(&user, &(50 * XLM), &0, &(DAY * 30));
+    let (_, id1) = vault.deposit_locked(&user, &(50 * XLM), &0, &(DAY * 90));
+    let (_, id2) = vault.deposit_locked(&user, &(50 * XLM), &0, &(DAY * 180));
+
+    assert_eq!(id0, 0);
+    assert_eq!(id1, 1);
+    assert_eq!(id2, 2);
+
+    let positions = vault.get_locked_positions(&user);
+    assert_eq!(positions.len(), 3);
+    assert_eq!(positions.get(0).unwrap().1.boost_multiplier, 12000);
+    assert_eq!(positions.get(1).unwrap().1.boost_multiplier, 15000);
+    assert_eq!(positions.get(2).unwrap().1.boost_multiplier, 20000);
+}
+
+#[test]
+fn deposit_locked_respects_max_locks_per_user() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    // Mint enough for MAX_OPEN_LOCKS_PER_USER (10) deposits.
+    mint(&token, &user, (nester_common::MAX_OPEN_LOCKS_PER_USER as i128 + 1) * XLM);
+
+    for _ in 0..nester_common::MAX_OPEN_LOCKS_PER_USER {
+        vault.deposit_locked(&user, &XLM, &0, &(DAY * 30));
+    }
+    // The next one should fail.
+    assert_rejected!(
+        vault.try_deposit_locked(&user, &XLM, &0, &(DAY * 30)),
+        "deposit_locked max locks"
+    );
+}
+
+// -- withdraw restricted by locked shares ----------------------------------
+
+#[test]
+fn withdraw_rejects_when_all_shares_are_locked() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    let (shares, _) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    // Try to withdraw everything — should fail because all shares are locked.
+    assert_rejected!(
+        vault.try_withdraw(&user, &shares, &0),
+        "withdraw locked shares"
+    );
+}
+
+#[test]
+fn withdraw_allows_flexible_portion_only() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 200 * XLM);
+
+    // Deposit 100 flexible, 100 locked.
+    vault.deposit(&user, &(100 * XLM), &0);
+    vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+    let total = vault.get_shares(&user);
+
+    // Compute locked shares from positions.
+    let positions = vault.get_locked_positions(&user);
+    let mut locked_sum: i128 = 0;
+    for (_, pos) in positions.iter() {
+        locked_sum += pos.shares;
+    }
+    let flexible = total - locked_sum;
+    assert!(flexible > 0);
+    assert!(locked_sum > 0);
+
+    // Withdrawing flexible-only must succeed (returns remaining share count).
+    let remaining = vault.withdraw(&user, &flexible, &0);
+    assert_eq!(remaining, locked_sum);
+
+    // But withdrawing 1 more (crossing into locked territory) must fail.
+    assert_rejected!(
+        vault.try_withdraw(&user, &1, &0),
+        "withdraw crossing into locked"
+    );
+}
+
+// -- unlock_position -------------------------------------------------------
+
+#[test]
+fn unlock_position_before_maturity_rejected() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    let (_, lock_id) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    assert_rejected!(
+        vault.try_unlock_position(&user, &lock_id),
+        "unlock before maturity"
+    );
+}
+
+#[test]
+fn unlock_position_after_maturity_succeeds() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    let (shares, lock_id) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    // Advance ledger time past lock duration.
+    advance_time(&env, DAY * 30 + 1);
+
+    let unlocked = vault.unlock_position(&user, &lock_id);
+    assert_eq!(unlocked, shares);
+
+    // Position should be gone.
+    let positions = vault.get_locked_positions(&user);
+    assert_eq!(positions.len(), 0);
+
+    // All shares should now be flexible and withdrawable.
+    let tc = token::Client::new(&env, &token.address);
+    let bal_before = tc.balance(&user);
+    let total = vault.get_shares(&user);
+    vault.withdraw(&user, &total, &0);
+    let bal_after = tc.balance(&user);
+    assert!(bal_after > bal_before);
+    assert_eq!(vault.get_shares(&user), 0);
+}
+
+#[test]
+fn unlock_position_rejects_nonexistent_lock() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    assert_rejected!(
+        vault.try_unlock_position(&user, &999),
+        "unlock nonexistent lock"
+    );
+}
+
+#[test]
+fn unlock_position_requires_user_auth() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    let (_, lock_id) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    advance_time(&env, DAY * 30 + 1);
+
+    env.mock_auths(&[]);
+    assert_rejected!(
+        vault.try_unlock_position(&user, &lock_id),
+        "unlock no auth"
+    );
+}
+
+// -- break_lock ------------------------------------------------------------
+
+#[test]
+fn break_lock_early_returns_penalised_amount() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    let (shares, lock_id) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    // Break immediately — maximum penalty.
+    let tc = token::Client::new(&env, &token.address);
+    let balance_before = tc.balance(&user);
+    let burned = vault.break_lock(&user, &lock_id);
+    assert_eq!(burned, shares);
+    let balance_after = tc.balance(&user);
+
+    // User receives less than deposited due to penalty.
+    assert!(balance_after < balance_before + 100 * XLM);
+    assert!(balance_after > balance_before);
+
+    // Position is removed.
+    let positions = vault.get_locked_positions(&user);
+    assert_eq!(positions.len(), 0);
+
+    // No more flexible shares to withdraw.
+    let remaining = vault.get_shares(&user);
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn break_lock_later_has_less_penalty() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 200 * XLM);
+
+    // Create two identical locks and break them at different times.
+    let (_shares1, lock1) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+    let (_shares2, lock2) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    let tc = token::Client::new(&env, &token.address);
+
+    // Break lock1 immediately.
+    vault.break_lock(&user, &lock1);
+    let balance_mid = tc.balance(&user);
+
+    // Advance 15 days (half the lock period).
+    advance_time(&env, DAY * 15);
+
+    vault.break_lock(&user, &lock2);
+    let balance_late = tc.balance(&user);
+
+    // Breaking later should leave the user with more tokens.
+    assert!(balance_late > balance_mid);
+}
+
+#[test]
+fn break_lock_rejects_nonexistent_lock() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    assert_rejected!(vault.try_break_lock(&user, &999), "break_lock nonexistent");
+}
+
+#[test]
+fn break_lock_requires_user_auth() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    let (_, lock_id) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    env.mock_auths(&[]);
+    assert_rejected!(vault.try_break_lock(&user, &lock_id), "break_lock no auth");
+}
+
+// -- get_locked_positions --------------------------------------------------
+
+#[test]
+fn get_locked_positions_empty_when_no_locks() {
+    let (env, _admin, _token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    let positions = vault.get_locked_positions(&user);
+    assert_eq!(positions.len(), 0);
+}
+
+#[test]
+fn get_locked_positions_returns_all() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 300 * XLM);
+
+    vault.deposit_locked(&user, &(50 * XLM), &0, &(DAY * 30));
+    vault.deposit_locked(&user, &(50 * XLM), &0, &(DAY * 90));
+
+    let positions = vault.get_locked_positions(&user);
+    assert_eq!(positions.len(), 2);
+    assert_eq!(positions.get(0).unwrap().1.tier_index, 0);
+    assert_eq!(positions.get(1).unwrap().1.tier_index, 1);
+}
+
+// -- set_early_break_penalty -----------------------------------------------
+
+#[test]
+fn set_early_break_penalty_by_admin() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    vault.set_early_break_penalty(&admin, &500); // 5% (at the max limit)
+    // No panic = success.
+}
+
+#[test]
+fn set_early_break_penalty_rejects_outsider() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+    assert_rejected!(
+        vault.try_set_early_break_penalty(&outsider, &1000),
+        "set_early_break_penalty outsider"
+    );
+}
+
+#[test]
+fn set_early_break_penalty_rejects_too_high() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    // MAX_EARLY_WITHDRAWAL_FEE_BPS = 500
+    assert_rejected!(
+        vault.try_set_early_break_penalty(&admin, &(nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS + 1)),
+        "set_early_break_penalty too high"
+    );
+}
+
+// -- set_treasury_penalty_share --------------------------------------------
+
+#[test]
+fn set_treasury_penalty_share_by_admin() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    vault.set_treasury_penalty_share(&admin, &2000); // 20%
+}
+
+#[test]
+fn set_treasury_penalty_share_rejects_outsider() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+    assert_rejected!(
+        vault.try_set_treasury_penalty_share(&outsider, &2000),
+        "set_treasury_penalty_share outsider"
+    );
+}
+
+#[test]
+fn set_treasury_penalty_share_rejects_over_50pct() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    assert_rejected!(
+        vault.try_set_treasury_penalty_share(&admin, &(nester_common::MAX_TREASURY_PENALTY_SHARE_BPS + 1)),
+        "set_treasury_penalty_share > 50%"
+    );
+}
+
+// -- emergency_withdraw bypasses locks -------------------------------------
+
+#[test]
+fn emergency_withdraw_bypasses_locks() {
+    let (env, admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    vault.pause(&admin);
+
+    let tc = token::Client::new(&env, &token.address);
+    let balance_before = tc.balance(&user);
+    vault.emergency_withdraw(&user);
+    let balance_after = tc.balance(&user);
+
+    assert!(balance_after > balance_before);
+}
+
+#[test]
+fn emergency_withdraw_all_bypasses_locks() {
+    let (env, admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 200 * XLM);
+
+    vault.deposit(&user, &(100 * XLM), &0);
+    vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    // Set up source allocations so emergency_withdraw_all has positions to exit.
+    let aave = symbol_short!("aave");
+    vault.record_source_allocation(&admin, &aave, &(200 * XLM));
+
+    vault.pause(&admin);
+    let result = vault.emergency_withdraw_all(&user);
+
+    // Allocations should be cleared.
+    assert!(!result.succeeded.is_empty());
+
+    // The user can now withdraw because emergency_withdraw_all freed the reserves.
+    let tc = token::Client::new(&env, &token.address);
+    let balance_before = tc.balance(&user);
+    let _total = vault.get_shares(&user);
+    vault.emergency_withdraw(&user);
+    let balance_after = tc.balance(&user);
+    assert!(balance_after > balance_before);
+}
+
+// -- harvest boost-weighted yield split ------------------------------------
+
+#[test]
+fn harvest_split_with_locked_shares() {
+    let (env, admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 200 * XLM);
+
+    // Grant Manager role to admin so report_yield succeeds.
+    vault.grant_role(&admin, &admin, &Role::Manager);
+
+    // 100 flexible + 100 locked at 1.2× boost.
+    vault.deposit(&user, &(100 * XLM), &0);
+    vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    // Record pre-harvest state.
+    let shares_before = vault.get_shares(&user);
+    let vt_addr = vault.get_vault_token();
+    let vt = VaultTokenContractClient::new(&env, &vt_addr);
+    let total_supply_before = vt.total_supply();
+    let total_assets_before = vt.amount_for_shares(&total_supply_before);
+
+    // Report 50 XLM yield (total_assets increases by 50 XLM via report_yield).
+    let yield_amount = 50 * XLM;
+    vault.report_yield(&admin, &yield_amount);
+
+    // Harvest with locked positions still active — exercises the locked-pool
+    // branch of yield splitting.
+    let result = vault.harvest(&user);
+
+    // --- Verify HarvestResult fields ---
+    assert_eq!(result.gross_yield, yield_amount);
+    // performance_fee_bps = 1000 (10%) => 10% of 50 XLM = 5 XLM
+    assert_eq!(result.performance_fee, 5 * XLM);
+    assert_eq!(result.net_yield, 45 * XLM);
+    assert!(result.compounded);
+
+    // --- Total assets conservation ---
+    // After harvest: total_assets = initial + yield - performance_fee
+    // (performance_fee is transferred to treasury; net yield is compounded
+    // into share price, not added to total_assets again).
+    let total_supply_after = vt.total_supply();
+    let total_assets_after = vt.amount_for_shares(&total_supply_after);
+    assert_eq!(
+        total_assets_after,
+        total_assets_before + yield_amount - result.performance_fee,
+        "total assets must be conserved: initial + yield - performance_fee"
+    );
+
+    // --- User's share balance increased ---
+    assert!(
+        result.new_share_balance > shares_before,
+        "user should have more shares after compounding"
+    );
+}
+
+// -- mixed deposit scenarios -----------------------------------------------
+
+#[test]
+fn user_can_have_both_flexible_and_locked_deposits() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 300 * XLM);
+
+    vault.deposit(&user, &(100 * XLM), &0);
+    vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    let total = vault.get_shares(&user);
+    let positions = vault.get_locked_positions(&user);
+    let mut locked_sum: i128 = 0;
+    for (_, pos) in positions.iter() {
+        locked_sum += pos.shares;
+    }
+    let flexible = total - locked_sum;
+    assert!(flexible > 0);
+    assert!(locked_sum > 0);
+
+    // Can withdraw flexible portion.
+    let remaining = vault.withdraw(&user, &flexible, &0);
+    assert_eq!(remaining, locked_sum);
+}
+
+#[test]
+fn deposit_locked_then_unlock_then_withdraw_full() {
+    let (env, _admin, token, vault, _treasury) = setup_with_locks();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    let (_shares, lock_id) = vault.deposit_locked(&user, &(100 * XLM), &0, &(DAY * 30));
+
+    advance_time(&env, DAY * 30 + 1);
+
+    vault.unlock_position(&user, &lock_id);
+
+    let tc = token::Client::new(&env, &token.address);
+    let bal_before = tc.balance(&user);
+    let total = vault.get_shares(&user);
+    vault.withdraw(&user, &total, &0);
+    let bal_after = tc.balance(&user);
+    assert!(bal_after > bal_before);
+    assert_eq!(vault.get_shares(&user), 0);
 }

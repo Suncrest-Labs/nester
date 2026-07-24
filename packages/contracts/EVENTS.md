@@ -164,3 +164,74 @@ Emitted when a timelocked operation is cancelled.
         cancelled_by: Address
     }
     ```
+
+## Time-Lock Events (Contract Symbol: `VAULT`)
+
+### LOCK_CRT
+Emitted when a user creates a time-locked deposit position.
+- **Topics**: `(VAULT, LOCK_CRT, user: Address)`
+- **Data**:
+    ```rust
+    {
+        amount: i128,
+        shares_minted: i128,
+        lock_id: u32,
+        unlock_at: u64,
+        tier_index: u32,
+        boost_multiplier: u32
+    }
+    ```
+
+### LOCK_ULCK
+Emitted when a matured time-locked position is unlocked into flexible shares.
+- **Topics**: `(VAULT, LOCK_ULCK, user: Address)`
+- **Data**:
+    ```rust
+    {
+        lock_id: u32,
+        shares: i128
+    }
+    ```
+
+### LOCK_BRK
+Emitted when a time-locked position is broken early (before maturity).
+- **Topics**: `(VAULT, LOCK_BRK, user: Address)`
+- **Data**:
+    ```rust
+    {
+        lock_id: u32,
+        shares_burned: i128,
+        assets_returned: i128,
+        penalty: i128
+    }
+    ```
+
+### LCK_TIER
+Emitted when the admin updates the lock-tier configuration.
+- **Topics**: `(VAULT, LCK_TIER, admin: Address)`
+- **Data**:
+    ```rust
+    {
+        count: u32
+    }
+    ```
+
+### LCK_PEN
+Emitted when the admin updates the early-break penalty in basis points.
+- **Topics**: `(VAULT, LCK_PEN, admin: Address)`
+- **Data**:
+    ```rust
+    {
+        new_bps: u32
+    }
+    ```
+
+### LCK_TRS
+Emitted when the admin updates the treasury's share of the early-break penalty.
+- **Topics**: `(VAULT, LCK_TRS, admin: Address)`
+- **Data**:
+    ```rust
+    {
+        new_bps: u32
+    }
+    ```
