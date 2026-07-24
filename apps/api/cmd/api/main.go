@@ -24,6 +24,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
@@ -475,6 +476,43 @@ func run() error {
 	recurringCtx, cancelRecurring := context.WithCancel(context.Background())
 	defer cancelRecurring()
 	go recurringDepositJob.Run(recurringCtx)
+
+	// Durable async job queue (#824): the shared worker pool and producer
+	// client. Handlers are registered below before the worker starts. The
+	// client is passed to producers (harvest engine, chain invoker) so they
+	// enqueue durable work instead of doing it inline.
+	jobQueueRepo := postgres.NewJobRepository(db)
+	jobQueueMetrics := jobqueue.NewStdMetrics()
+	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+	jobWorker := jobqueue.NewWorker(
+		jobQueueRepo,
+		jobqueue.Config{
+			Enabled:            cfg.JobQueue().Enabled(),
+			PollInterval:       cfg.JobQueue().PollInterval(),
+			Lease:              cfg.JobQueue().Lease(),
+			HeartbeatInterval:  cfg.JobQueue().HeartbeatInterval(),
+			JobTimeout:         cfg.JobQueue().JobTimeout(),
+			DefaultConcurrency: cfg.JobQueue().DefaultConcurrency(),
+			Backoff: jobqueue.BackoffConfig{
+				Base: cfg.JobQueue().BackoffBase(),
+				Max:  cfg.JobQueue().BackoffMax(),
+			},
+			StatsInterval: cfg.JobQueue().StatsInterval(),
+			DrainTimeout:  cfg.JobQueue().DrainTimeout(),
+		},
+		baseLogger.WithGroup("job-queue"),
+		jobQueueMetrics,
+	)
+	_ = jobQueueClient // wired to producers in the harvest engine (#845)
+
+	// NOTE: register all job handlers here, before jobWorker.Run.
+	jobQueueCtx, cancelJobQueue := context.WithCancel(context.Background())
+	defer cancelJobQueue()
+	go func() {
+		if err := jobWorker.Run(jobQueueCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("job queue worker stopped", "error", err.Error())
+		}
+	}()
 
 	// User vault rebalance (suggestions + execution)
 	vaultRebalanceSvc := service.NewVaultRebalanceService(vaultRepository, adminService)
