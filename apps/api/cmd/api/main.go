@@ -39,6 +39,7 @@ import (
 	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
 	"github.com/suncrestlabs/nester/apps/api/internal/services"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
+	"github.com/suncrestlabs/nester/apps/api/internal/valuation"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
@@ -238,6 +239,22 @@ func run() error {
 	go wsHub.Run(wsCtx)
 	vaultHandler.SetWSHub(wsHub)
 
+	// Real-time portfolio valuation (#832): aggregates each user's positions,
+	// pending deposits, accrued yield, goal allocations, and claimable rewards to
+	// the stroop, prices multi-asset holdings through an oracle with confidence
+	// propagation, caches per user, and pushes fresh valuations over WebSocket on
+	// event-driven invalidation.
+	valuationService := valuation.NewService(valuation.Deps{
+		Positions: valuation.NewVaultPositionSource(vaultRepository),
+		Pending:   valuation.NewTxPendingSource(transactionRepository),
+		Goals:     valuation.NewGoalAllocationSource(postgres.NewSavingsGoalRepository(db)),
+		Oracle:    valuation.NewStaticOracle(nil),
+		Cache:     valuation.NewCache(30 * time.Second),
+		Notifier:  valuation.NewWSNotifier(wsHub),
+		Logger:    baseLogger.WithGroup("valuation"),
+	})
+	valuationHandler := handler.NewValuationHandler(valuationService)
+
 	performanceRepository := postgres.NewPerformanceRepository(db)
 	vaultRepository = postgres.NewVaultRepository(db)
 	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
@@ -328,8 +345,13 @@ func run() error {
 			MinAge:   cfg.TransactionPoller().MinAge(),
 		},
 		transactionService,
-		func(_ context.Context, tx transaction.Transaction) {
+		func(ctx context.Context, tx transaction.Transaction) {
 			wsHub.BroadcastEvent(transactionStatusEvent(tx))
+			// A confirmed deposit/withdrawal changes settled net worth: drop the
+			// cached valuation and push a fresh one (#832 event-driven invalidation).
+			if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
+				valuationService.Invalidate(v.UserID)
+			}
 		},
 		baseLogger.WithGroup("tx-poller"),
 	)
@@ -370,6 +392,7 @@ func run() error {
 
 	vaultHandler.Register(mux)
 	portfolioHandler.Register(mux)
+	valuationHandler.Register(mux)
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
 	userHandler.Register(mux)
