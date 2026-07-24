@@ -406,3 +406,248 @@ def test_all_claude_calls_reference_settings_anthropic_model():
 
 def test_settings_anthropic_model_default_matches_pinned_config():
     assert settings.anthropic_model  # never empty — no path falls back silently
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for reviewer-flagged fixes
+# ---------------------------------------------------------------------------
+
+
+class RecordingFakeMessages:
+    """Like FakeMessages, but remembers the last `messages=` payload sent so
+    tests can assert on how user/context data was interpolated into it."""
+
+    def __init__(self, payload: str) -> None:
+        self.payload = payload
+        self.last_kwargs: dict = {}
+
+    async def create(self, *args, **kwargs):
+        self.last_kwargs = kwargs
+        return SimpleNamespace(content=[DummyTextBlock(self.payload)])
+
+
+class RecordingFakeClient:
+    def __init__(self, payload: str) -> None:
+        self.messages = RecordingFakeMessages(payload)
+
+
+class _FakeStreamContext:
+    def __init__(self, deltas: list[str]) -> None:
+        self._deltas = deltas
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    @property
+    def text_stream(self):
+        async def _gen():
+            for delta in self._deltas:
+                yield delta
+
+        return _gen()
+
+
+class FakeStreamMessages:
+    def __init__(self, deltas: list[str]) -> None:
+        self._deltas = deltas
+
+    def stream(self, *args, **kwargs):
+        return _FakeStreamContext(self._deltas)
+
+    async def create(self, *args, **kwargs):
+        raise AssertionError("create() should not be used for streaming chat")
+
+
+class FakeStreamClient:
+    def __init__(self, deltas: list[str]) -> None:
+        self.messages = FakeStreamMessages(deltas)
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_redacts_leak_marker_split_across_deltas(monkeypatch):
+    """A marker that arrives split across two small streaming deltas must
+    still be redacted — proves the flush buffer keeps a lookback overlap
+    instead of resetting to empty on every flush."""
+    marker = guardrails._SYSTEM_PROMPT_LEAK_MARKERS[0]
+    split = len(marker) // 2
+    # Padding keeps each individual delta small (realistic token-sized
+    # chunks) while the marker itself straddles a flush boundary.
+    deltas = ["padding " * 20, marker[:split], marker[split:], " trailing text"]
+    monkeypatch.setattr(prometheus, "get_client", lambda: FakeStreamClient(deltas))
+    monkeypatch.setattr(
+        prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher()
+    )
+
+    chunks = [
+        chunk
+        async for chunk in prometheus.stream_chat(
+            "user-1", "Tell me about my vault.", request_id="req-leak-split"
+        )
+    ]
+    joined = "".join(chunks)
+    assert marker not in joined
+    assert "[redacted]" in joined
+
+
+@pytest.mark.asyncio
+async def test_recommend_vaults_wraps_context_data_before_interpolation(monkeypatch):
+    payload = (
+        '{"recommended_vaults": [{"vault_id": "vault-1", "allocation_pct": 100, '
+        '"rationale": "ok"}], "expected_yield_usdc": 10.0, "confidence": "high"}'
+    )
+    fake_client = RecordingFakeClient(payload)
+    monkeypatch.setattr(prometheus, "get_client", lambda: fake_client)
+    monkeypatch.setattr(
+        prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher()
+    )
+    monkeypatch.setattr(
+        prometheus.anthropic.types, "TextBlock", DummyTextBlock, raising=False
+    )
+
+    await prometheus.recommend_vaults(
+        VaultRecommendationRequest(
+            risk_tolerance="moderate",
+            time_horizon_months=12,
+            initial_deposit_usdc=1000,
+        ),
+        user_id="user-1",
+        request_id="req-recommend-wrap",
+    )
+
+    sent_prompt = fake_client.messages.last_kwargs["messages"][0]["content"]
+    assert sent_prompt.count("<user_message>") >= 3  # positions, vault lines, user lines
+
+
+@pytest.mark.asyncio
+async def test_analyze_recommendation_wraps_context_data_before_interpolation(
+    monkeypatch,
+):
+    payload = (
+        '{"action": "ok", "rationale": "ok", "confidence": "high", '
+        '"confidence_reason": "x", "data_freshness": "y", "disclaimer": "z"}'
+    )
+    fake_client = RecordingFakeClient(payload)
+    monkeypatch.setattr(prometheus, "get_client", lambda: fake_client)
+    monkeypatch.setattr(
+        prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher()
+    )
+    monkeypatch.setattr(
+        prometheus.anthropic.types, "TextBlock", DummyTextBlock, raising=False
+    )
+
+    await prometheus.analyze_recommendation(
+        "Which vault should I use?", "user-1", request_id="req-analyze-wrap"
+    )
+
+    sent_prompt = fake_client.messages.last_kwargs["messages"][0]["content"]
+    assert "<nester_context>" in sent_prompt
+    assert "<portfolio_context>" in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_analyze_recommendation_strips_leakage_from_confidence_fields(
+    monkeypatch,
+):
+    marker = guardrails._SYSTEM_PROMPT_LEAK_MARKERS[0]
+    payload = (
+        '{"action": "ok", "rationale": "ok", "confidence": "high", '
+        f'"confidence_reason": "{marker}", "data_freshness": "{marker}", '
+        '"disclaimer": "z"}'
+    )
+    monkeypatch.setattr(prometheus, "get_client", lambda: FakeClient(payload))
+    monkeypatch.setattr(
+        prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher()
+    )
+    monkeypatch.setattr(
+        prometheus.anthropic.types, "TextBlock", DummyTextBlock, raising=False
+    )
+
+    result = await prometheus.analyze_recommendation(
+        "Which vault should I use?", "user-1", request_id="req-analyze-fields"
+    )
+    assert marker not in result.confidence_reason
+    assert marker not in result.data_freshness
+
+
+@pytest.mark.asyncio
+async def test_generate_coaching_sanitizes_deposit_schedule_note(monkeypatch):
+    marker = guardrails._SYSTEM_PROMPT_LEAK_MARKERS[0]
+    payload = (
+        '{"progress_assessment": "ok", "deposit_schedule": '
+        f'[{{"date": "2026-06-15", "amount_usdc": 100, "note": "{marker}"}}], '
+        '"nudges": [], "confidence": "high"}'
+    )
+    monkeypatch.setattr(prometheus, "get_client", lambda: FakeClient(payload))
+    monkeypatch.setattr(
+        prometheus.anthropic.types, "TextBlock", DummyTextBlock, raising=False
+    )
+
+    result = await prometheus.generate_coaching(
+        CoachingRequest(
+            goal=SavingsGoalContext(
+                target_amount=1000,
+                currency="USDC",
+                deadline="2026-12-31T00:00:00Z",
+                current_amount=200,
+                progress_pct=20,
+            ),
+            portfolio=PortfolioContext(total_balance_usd=500),
+        ),
+        request_id="req-coaching-note",
+    )
+    assert marker not in result.deposit_schedule[0].note
+
+
+@pytest.mark.asyncio
+async def test_get_portfolio_insights_sanitizes_action_fields(monkeypatch):
+    marker = guardrails._SYSTEM_PROMPT_LEAK_MARKERS[0]
+    payload = (
+        f'[{{"title": "ok", "body": "ok", "confidence": 0.8, '
+        f'"action": {{"label": "{marker}", "href": "{marker}"}}}}]'
+    )
+    monkeypatch.setattr(prometheus, "get_client", lambda: FakeClient(payload))
+    monkeypatch.setattr(
+        prometheus.anthropic.types, "TextBlock", DummyTextBlock, raising=False
+    )
+
+    cards = await prometheus.get_portfolio_insights("user-1")
+    assert marker not in cards[0]["action"]["label"]
+    assert marker not in cards[0]["action"]["href"]
+
+
+def test_request_id_middleware_rejects_malformed_header():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    resp = client.get("/health", headers={"X-Request-Id": "bad id\r\nX-Injected: 1"})
+    returned_id = resp.headers.get("X-Request-Id", "")
+    assert returned_id != "bad id\r\nX-Injected: 1"
+    assert re.fullmatch(r"[A-Za-z0-9._-]{1,128}", returned_id)
+
+
+def test_request_id_middleware_rejects_oversized_header():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    oversized = "a" * 5000
+    resp = client.get("/health", headers={"X-Request-Id": oversized})
+    returned_id = resp.headers.get("X-Request-Id", "")
+    assert returned_id != oversized
+    assert len(returned_id) <= 128
+
+
+def test_request_id_middleware_accepts_well_formed_header():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    resp = client.get("/health", headers={"X-Request-Id": "req-abc-123"})
+    assert resp.headers.get("X-Request-Id") == "req-abc-123"

@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -15,6 +16,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=get_remote_address)
+
+# Bounded, safe charset for a client-supplied request ID (typical UUID/ULID/
+# opaque-token shape). Anything else — oversized, containing control
+# characters, etc. — is rejected in favour of a freshly minted UUID so an
+# untrusted header can't smuggle log/header injection or unbounded values
+# into request.state.request_id, response headers, or guardrail audit logs.
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 @asynccontextmanager
@@ -34,10 +42,13 @@ async def add_request_id(
 ) -> Response:
     """Attach a request ID to every request for correlating guardrail logs.
 
-    Reuses an inbound X-Request-Id if present (e.g. from an upstream
-    gateway), otherwise mints a fresh one, and always echoes it back.
+    Reuses an inbound X-Request-Id if present and well-formed (e.g. from an
+    upstream gateway), otherwise mints a fresh one, and always echoes it
+    back. A malformed or oversized inbound value is replaced rather than
+    trusted, since it flows into response headers and log lines.
     """
-    request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+    inbound = request.headers.get("X-Request-Id", "")
+    request_id = inbound if _REQUEST_ID_RE.match(inbound) else str(uuid.uuid4())
     request.state.request_id = request_id
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id

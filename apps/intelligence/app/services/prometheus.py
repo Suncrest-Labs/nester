@@ -403,6 +403,10 @@ async def stream_chat(
     full_response = ""
     pending = ""
     _FLUSH_CHARS = 120
+    # Never flush the last LEAK_MARKER_MAX_LEN-1 chars: a marker could still
+    # be mid-flight across the next delta, and once a chunk is sent to the
+    # client it can't be retroactively redacted.
+    _LEAK_OVERLAP = guardrails.LEAK_MARKER_MAX_LEN - 1
 
     try:
         async with client.messages.stream(
@@ -414,16 +418,22 @@ async def stream_chat(
             # Buffer output in small windows before flushing to the client so
             # strip_system_prompt_leakage has a real chance of matching a
             # marker even when the model emits it across several small
-            # streaming deltas.
+            # streaming deltas. Sanitize the whole accumulated buffer each
+            # time (so a marker that started in a previously-held-back tail
+            # is still caught), emit everything but a trailing overlap
+            # window, and keep that (already-sanitized) tail for next time.
             async for text in stream.text_stream:
                 full_response += text
                 pending += text
-                if len(pending) >= _FLUSH_CHARS:
-                    safe_chunk = guardrails.strip_system_prompt_leakage(
+                if len(pending) >= _FLUSH_CHARS + _LEAK_OVERLAP:
+                    sanitized = guardrails.strip_system_prompt_leakage(
                         pending, request_id=request_id
-                    ).replace("\n", "\\n")
-                    yield f"data: {safe_chunk}\n\n"
-                    pending = ""
+                    )
+                    emit_len = len(sanitized) - _LEAK_OVERLAP
+                    if emit_len > 0:
+                        safe_chunk = sanitized[:emit_len].replace("\n", "\\n")
+                        yield f"data: {safe_chunk}\n\n"
+                        pending = sanitized[emit_len:]
             if pending:
                 safe_chunk = guardrails.strip_system_prompt_leakage(
                     pending, request_id=request_id
@@ -514,7 +524,13 @@ async def generate_coaching(
             DepositScheduleItem(
                 date=str(item.get("date", "")),
                 amount_usdc=float(item.get("amount_usdc", 0)),
-                note=item.get("note"),
+                note=(
+                    guardrails.strip_system_prompt_leakage(
+                        str(item["note"]), request_id=request_id
+                    )
+                    if item.get("note") is not None
+                    else None
+                ),
             )
             for item in parsed.get("deposit_schedule", [])
         ]
@@ -581,6 +597,13 @@ async def get_portfolio_insights(user_id: str) -> list[dict[str, Any]]:
                         card[field] = guardrails.strip_system_prompt_leakage(
                             card[field]
                         )
+                action = card.get("action")
+                if isinstance(action, dict):
+                    for action_field in ("label", "href"):
+                        if isinstance(action.get(action_field), str):
+                            action[action_field] = guardrails.strip_system_prompt_leakage(
+                                action[action_field]
+                            )
         return cards
     except Exception:
         logger.exception("Failed to get portfolio insights for user %s", user_id)
@@ -1100,8 +1123,12 @@ async def recommend_vaults(
         '{"recommended_vaults": [{"vault_id": str, "allocation_pct": int, "rationale": str}], '
         '"expected_yield_usdc": float, "confidence": "high"|"medium"|"low"}'
     )
-    positions_json = json.dumps(user_vaults[:5])
+    positions_json = guardrails.wrap_user_content(json.dumps(user_vaults[:5]))
     savings_goal = guardrails.wrap_user_content(request.savings_goal or "not specified")
+    wrapped_vault_lines = guardrails.wrap_user_content(chr(10).join(vault_context_lines))
+    wrapped_user_lines = guardrails.wrap_user_content(
+        chr(10).join(user_context_lines) if user_context_lines else "none"
+    )
     prompt = (
         "Recommend the best vault or vault split for a Nester user. "
         "Use only the live context below. "
@@ -1110,9 +1137,9 @@ async def recommend_vaults(
         f"Initial deposit: ${request.initial_deposit_usdc:.2f} USDC. "
         f"Savings goal: {savings_goal}. "
         f"User positions: {positions_json}. "
-        f"Live vaults:\n{chr(10).join(vault_context_lines)}. "
+        f"Live vaults:\n{wrapped_vault_lines}. "
         "Existing position snapshot:\n"
-        f"{chr(10).join(user_context_lines) if user_context_lines else 'none'}. "
+        f"{wrapped_user_lines}. "
         f"Confidence guidance: {confidence_reason}. "
         f"Data freshness: {data_freshness}. "
         f"Return JSON only, matching this schema: {schema}. "
@@ -1216,10 +1243,16 @@ async def analyze_recommendation(
     ]
     user_context = json.dumps(user_vaults[:5]) if user_vaults else "[]"
     wrapped_prompt = guardrails.wrap_user_content(prompt)
+    wrapped_context_lines = guardrails.wrap_context_block(
+        "nester_context", chr(10).join(context_lines)
+    )
+    wrapped_user_context = guardrails.wrap_context_block(
+        "portfolio_context", user_context
+    )
     analysis_prompt = (
         f"Analyse this user request for Nester: {wrapped_prompt}. "
-        f"Live vault context:\n{chr(10).join(context_lines)}. "
-        f"User positions: {user_context}. "
+        f"Live vault context:\n{wrapped_context_lines}. "
+        f"User positions: {wrapped_user_context}. "
         f"Confidence guidance: {confidence_reason}. "
         f"Data freshness: {data_freshness}. "
         f"Return JSON only, matching this schema: {schema}."
@@ -1248,16 +1281,22 @@ async def analyze_recommendation(
         rationale = guardrails.strip_system_prompt_leakage(
             str(parsed.get("rationale", "")).strip(), request_id=request_id
         )
+        confidence_reason_out = guardrails.strip_system_prompt_leakage(
+            str(parsed.get("confidence_reason", confidence_reason)).strip()
+            or confidence_reason,
+            request_id=request_id,
+        )
+        data_freshness_out = guardrails.strip_system_prompt_leakage(
+            str(parsed.get("data_freshness", data_freshness)).strip()
+            or data_freshness,
+            request_id=request_id,
+        )
         return Recommendation(
             action=action,
             rationale=rationale,
             confidence=confidence,
-            confidence_reason=str(
-                parsed.get("confidence_reason", confidence_reason)
-            ).strip()
-            or confidence_reason,
-            data_freshness=str(parsed.get("data_freshness", data_freshness)).strip()
-            or data_freshness,
+            confidence_reason=confidence_reason_out,
+            data_freshness=data_freshness_out,
             # Deterministic, not model-controlled: a hostile prompt cannot
             # talk the model out of disclosing that this is not advice.
             disclaimer=guardrails.NON_ADVICE_DISCLAIMER,
