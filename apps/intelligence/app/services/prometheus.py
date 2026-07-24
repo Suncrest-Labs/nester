@@ -27,6 +27,9 @@ from app.models.recommendation import (
 from app.services.coingecko import get_client as get_coingecko_client
 from app.services.conversation_store import store as conversation_store
 from app.services.defillama import get_client as get_defillama_client
+from app.services.grounding import build_grounded_system_prompt, validate_grounding
+from app.services.retrieval import RetrievalService
+from app.services.retrieval_source import ApiDataSource
 from app.services.vault_context import VaultContextFetcher
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,7 @@ _RISK_LIMITS: dict[str, float] = {
 
 _client: Optional[anthropic.AsyncAnthropic] = None
 _vault_context_fetcher: Optional[VaultContextFetcher] = None
+_retrieval_service: Optional[RetrievalService] = None
 _redis_client: Any = None
 _redis_available: bool = False
 
@@ -67,6 +71,19 @@ def get_vault_context_fetcher() -> VaultContextFetcher:
             service_api_key=settings.nester_service_api_key,
         )
     return _vault_context_fetcher
+
+
+def get_retrieval_service() -> RetrievalService:
+    """Return the shared structured-retrieval service (#852)."""
+    global _retrieval_service
+    if _retrieval_service is None:
+        _retrieval_service = RetrievalService(
+            ApiDataSource(
+                api_base_url=settings.nester_api_base_url,
+                service_api_key=settings.nester_service_api_key,
+            )
+        )
+    return _retrieval_service
 
 
 def _get_redis() -> Any:
@@ -281,77 +298,18 @@ async def stream_chat(user_id: str, message: str) -> AsyncIterator[str]:
     history = conversation_store.get(user_id)
     conversation_store.append(user_id, "user", message)
 
-    # Fetch vault context, market rates, and risk data
-    vault_context_fetcher = get_vault_context_fetcher()
-    vaults = await vault_context_fetcher.fetch_user_vaults(user_id)
-    market_rates = await vault_context_fetcher.fetch_market_rates()
-
-    # Fetch risk data for each vault
-    risk_data = {}
-    for vault in vaults:
-        vault_id = vault.get("id")
-        if vault_id:
-            risk_info = await vault_context_fetcher.fetch_vault_risk(vault_id)
-            if risk_info:
-                risk_data[vault_id] = risk_info
-
-    context_block = vault_context_fetcher.build_context_block(vaults, market_rates)
-    risk_profile_block = vault_context_fetcher.build_risk_profile_block(
-        vaults, risk_data
-    )
-
-    market_context_block = await _build_market_context_block()
-
-    dynamic_system_prompt = f"""You are Prometheus, an AI financial advisor for the
-Nester DeFi platform.
-
-{context_block}
-
-{risk_profile_block}
-
-{market_context_block}
-
-## Nester Platform Context
-- Vault types: Flexible (no lock), Fixed-30d (30-day lock, higher APY),
-  Fixed-90d (90-day lock, highest APY)
-- Rebalancing threshold: triggered when allocation drift exceeds 10%
-- Fee structure: 0.5% management fee on yield
-- Protocols supported: Aave, Blend, Compound
-
-Provide personalized, data-driven advice based on user positions
-and current market conditions. Always cite specific numbers from their
-portfolio."""
-
-    # Fetch live portfolio context (60s Redis-backed cache).
-    # Injected as a prepended user message so Claude can personalise responses
-    # without the instruction appearing in the visible conversation history.
-    # If the fetch fails, continue with static knowledge — no error surfaced.
-    user_context = await _get_cached_user_context(user_id)
-    context_injection: list[anthropic.types.MessageParam] = []
-    if user_context:
-        goals_block = ""
-        active_goals = user_context.get("savings_goals") or []
-        if active_goals:
-            goals_block = (
-                "\n\nActive savings goals (use for coaching and progress nudges):\n"
-                + json.dumps(active_goals, indent=2)
-            )
-        context_injection = [
-            {
-                "role": "user",
-                "content": (
-                    "[PORTFOLIO CONTEXT — do not quote this back, "
-                    "use it to personalise your response]\n"
-                    + json.dumps(user_context, indent=2)
-                    + goals_block
-                ),
-            }
-        ]
+    # Retrieve minimal, user-scoped context via the structured retrieval layer
+    # and build a grounded system prompt (#852). The retrieved context is the
+    # single source of facts: the model is instructed to answer only from it,
+    # cite it, and refuse when the needed data is absent. Retrieval is scoped to
+    # user_id (from the JWT subject), so a prompt-injected request for another
+    # user's data cannot widen the scope.
+    retrieval_service = get_retrieval_service()
+    retrieved = await retrieval_service.retrieve(user_id, message)
+    dynamic_system_prompt = build_grounded_system_prompt(SYSTEM_PROMPT, retrieved)
 
     messages: list[anthropic.types.MessageParam] = (
-        context_injection
-        + _to_anthropic_messages(history)
-        + [{"role": "user", "content": message}]
+        _to_anthropic_messages(history) + [{"role": "user", "content": message}]
     )
 
     client = get_client()
@@ -368,6 +326,16 @@ portfolio."""
                 full_response += text
                 safe = text.replace("\n", "\\n")
                 yield f"data: {safe}\n\n"
+
+        # Grounding validation (#852): flag any figure in the answer not present
+        # in the retrieved context so hallucinated numbers are caught and logged.
+        grounded, unsupported = validate_grounding(full_response, retrieved)
+        if not grounded:
+            logger.warning(
+                "prometheus grounding: unsupported numbers in answer for user %s: %s",
+                user_id,
+                unsupported,
+            )
 
         conversation_store.append(user_id, "assistant", full_response)
         yield "data: [DONE]\n\n"
