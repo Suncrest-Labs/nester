@@ -44,6 +44,7 @@ type Config struct {
 	transactionPoller     TransactionPollerConfig
 	recurringDeposit      RecurringDepositConfig
 	jobQueue              JobQueueConfig
+	harvest               HarvestConfig
 }
 
 // AccountCipherConfig holds the versioned key set used to encrypt sensitive
@@ -300,6 +301,13 @@ func Load() (*Config, error) {
 			interval:   loader.durationDefault("RECURRING_DEPOSIT_INTERVAL", time.Hour),
 			minDeposit: loader.stringDefault("MIN_DEPOSIT_AMOUNT", "0"),
 		},
+		harvest: HarvestConfig{
+			enabled:  loader.boolDefault("HARVEST_ENGINE_ENABLED", true),
+			interval: loader.durationDefault("HARVEST_ENGINE_INTERVAL", time.Hour),
+			window:   loader.durationDefault("HARVEST_ENGINE_WINDOW", time.Hour),
+			margin:   loader.stringDefault("HARVEST_ENGINE_MARGIN", "0.10"),
+			gasFee:   loader.stringDefault("HARVEST_ENGINE_GAS_FEE", "0.05"),
+		},
 		jobQueue: JobQueueConfig{
 			enabled:            loader.boolDefault("JOB_QUEUE_ENABLED", true),
 			pollInterval:       loader.durationDefault("JOB_QUEUE_POLL_INTERVAL", time.Second),
@@ -514,6 +522,22 @@ type JobQueueConfig struct {
 	statsInterval      time.Duration
 	drainTimeout       time.Duration
 }
+
+// HarvestConfig governs the yield-harvest orchestration engine (#845).
+type HarvestConfig struct {
+	enabled  bool
+	interval time.Duration
+	window   time.Duration
+	margin   string
+	gasFee   string
+}
+
+func (c Config) Harvest() HarvestConfig         { return c.harvest }
+func (h HarvestConfig) Enabled() bool           { return h.enabled }
+func (h HarvestConfig) Interval() time.Duration { return h.interval }
+func (h HarvestConfig) Window() time.Duration   { return h.window }
+func (h HarvestConfig) Margin() string          { return h.margin }
+func (h HarvestConfig) GasFee() string          { return h.gasFee }
 
 func (c Config) JobQueue() JobQueueConfig                 { return c.jobQueue }
 func (j JobQueueConfig) Enabled() bool                    { return j.enabled }

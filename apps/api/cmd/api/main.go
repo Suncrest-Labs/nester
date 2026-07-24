@@ -27,6 +27,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
+	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
@@ -503,9 +504,40 @@ func run() error {
 		baseLogger.WithGroup("job-queue"),
 		jobQueueMetrics,
 	)
-	_ = jobQueueClient // wired to producers in the harvest engine (#845)
+	// Yield harvest orchestration engine (#845): evaluates vaults on a cadence,
+	// applies the economic gate (harvest iff accrued yield > gas + margin),
+	// defers under network congestion, and submits harvests as idempotent jobs
+	// on the queue above. Its job handler is registered on the worker before Run.
+	harvestMargin, err := decimal.NewFromString(cfg.Harvest().Margin())
+	if err != nil {
+		return fmt.Errorf("HARVEST_ENGINE_MARGIN: %w", err)
+	}
+	harvestGasFee, err := decimal.NewFromString(cfg.Harvest().GasFee())
+	if err != nil {
+		return fmt.Errorf("HARVEST_ENGINE_GAS_FEE: %w", err)
+	}
+	harvestExecutor := harvest.NewServiceExecutor(vaultService, userService)
+	jobWorker.Register(harvest.DefaultJobType,
+		harvest.NewJobHandler(harvestExecutor, baseLogger.WithGroup("harvest-job")), 0)
 
-	// NOTE: register all job handlers here, before jobWorker.Run.
+	harvestEngine := harvest.New(
+		harvest.Config{
+			Enabled:  cfg.Harvest().Enabled(),
+			Interval: cfg.Harvest().Interval(),
+			Margin:   harvestMargin,
+			Window:   cfg.Harvest().Window(),
+		},
+		harvest.NewRepoSource(vaultRepository),
+		harvest.NewStaticGasOracle(harvestGasFee),
+		jobQueueClient,
+		baseLogger.WithGroup("harvest-engine"),
+	)
+	harvestHandler := handler.NewHarvestHandler(harvestEngine)
+	harvestHandler.Register(mux)
+	harvestCtx, cancelHarvest := context.WithCancel(context.Background())
+	defer cancelHarvest()
+	go harvestEngine.Run(harvestCtx)
+
 	jobQueueCtx, cancelJobQueue := context.WithCancel(context.Background())
 	defer cancelJobQueue()
 	go func() {
