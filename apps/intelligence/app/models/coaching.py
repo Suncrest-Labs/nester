@@ -4,13 +4,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.services.guardrails import MAX_USER_MESSAGE_CHARS
+
 
 class SavingsGoalContext(BaseModel):
     id: str | None = None
     target_amount: float
     currency: str = "USDC"
     deadline: str
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=MAX_USER_MESSAGE_CHARS)
     current_amount: float = 0
     progress_pct: float = 0
 
