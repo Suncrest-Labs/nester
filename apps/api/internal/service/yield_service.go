@@ -177,6 +177,18 @@ func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, 
 	return nil, fetchErr
 }
 
+// WarmCache pre-populates the Stellar yield cache so the first request after a
+// cold start doesn't pay the full DeFiLlama round-trip (#667). It returns the
+// number of pools cached. Failures are non-fatal: callers log and rely on the
+// lazy-load path.
+func (s *YieldService) WarmCache(ctx context.Context) (int, error) {
+	resp, err := s.GetYieldOpportunities(ctx, "Stellar", 100)
+	if err != nil {
+		return 0, err
+	}
+	return len(resp.Pools), nil
+}
+
 // GetYieldOpportunitiesByTier returns up to `limit` opportunities on `chain`
 // whose risk score falls in `tier` ("low"|"medium"|"high"). An empty tier means
 // "all tiers" and behaves exactly like GetYieldOpportunities.

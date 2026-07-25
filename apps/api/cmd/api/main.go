@@ -418,6 +418,19 @@ func run() error {
 
 	// Yield opportunities (DeFiLlama Stellar pools)
 	yieldSvc := service.NewYieldService("")
+	// Warm the Stellar yield cache in the background so the first user request
+	// doesn't pay the DeFiLlama round-trip (#667). Failure is non-fatal: the
+	// lazy-load path still works.
+	go func() {
+		warmCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		start := time.Now()
+		if pools, err := yieldSvc.WarmCache(warmCtx); err != nil {
+			baseLogger.Warn("yield cache warm failed", "error", err)
+		} else {
+			baseLogger.Info("yield cache warmed", "chain", "Stellar", "pools", pools, "duration_ms", time.Since(start).Milliseconds())
+		}
+	}()
 	yieldBookmarkSvc := service.NewYieldBookmarkService(db, yieldSvc)
 	protocolTVLRepo := postgres.NewProtocolTVLRepository(db)
 	yieldHandler := handler.NewYieldHandler(yieldSvc, yieldBookmarkSvc)
