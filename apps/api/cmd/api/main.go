@@ -24,8 +24,10 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
+	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
@@ -37,6 +39,7 @@ import (
 	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
 	"github.com/suncrestlabs/nester/apps/api/internal/services"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
+	"github.com/suncrestlabs/nester/apps/api/internal/valuation"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
@@ -236,6 +239,22 @@ func run() error {
 	go wsHub.Run(wsCtx)
 	vaultHandler.SetWSHub(wsHub)
 
+	// Real-time portfolio valuation (#832): aggregates each user's positions,
+	// pending deposits, accrued yield, goal allocations, and claimable rewards to
+	// the stroop, prices multi-asset holdings through an oracle with confidence
+	// propagation, caches per user, and pushes fresh valuations over WebSocket on
+	// event-driven invalidation.
+	valuationService := valuation.NewService(valuation.Deps{
+		Positions: valuation.NewVaultPositionSource(vaultRepository),
+		Pending:   valuation.NewTxPendingSource(transactionRepository),
+		Goals:     valuation.NewGoalAllocationSource(postgres.NewSavingsGoalRepository(db)),
+		Oracle:    valuation.NewStaticOracle(nil),
+		Cache:     valuation.NewCache(30 * time.Second),
+		Notifier:  valuation.NewWSNotifier(wsHub),
+		Logger:    baseLogger.WithGroup("valuation"),
+	})
+	valuationHandler := handler.NewValuationHandler(valuationService)
+
 	performanceRepository := postgres.NewPerformanceRepository(db)
 	vaultRepository = postgres.NewVaultRepository(db)
 	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
@@ -326,8 +345,13 @@ func run() error {
 			MinAge:   cfg.TransactionPoller().MinAge(),
 		},
 		transactionService,
-		func(_ context.Context, tx transaction.Transaction) {
+		func(ctx context.Context, tx transaction.Transaction) {
 			wsHub.BroadcastEvent(transactionStatusEvent(tx))
+			// A confirmed deposit/withdrawal changes settled net worth: drop the
+			// cached valuation and push a fresh one (#832 event-driven invalidation).
+			if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
+				valuationService.Invalidate(v.UserID)
+			}
 		},
 		baseLogger.WithGroup("tx-poller"),
 	)
@@ -368,6 +392,7 @@ func run() error {
 
 	vaultHandler.Register(mux)
 	portfolioHandler.Register(mux)
+	valuationHandler.Register(mux)
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
 	userHandler.Register(mux)
@@ -475,6 +500,74 @@ func run() error {
 	recurringCtx, cancelRecurring := context.WithCancel(context.Background())
 	defer cancelRecurring()
 	go recurringDepositJob.Run(recurringCtx)
+
+	// Durable async job queue (#824): the shared worker pool and producer
+	// client. Handlers are registered below before the worker starts. The
+	// client is passed to producers (harvest engine, chain invoker) so they
+	// enqueue durable work instead of doing it inline.
+	jobQueueRepo := postgres.NewJobRepository(db)
+	jobQueueMetrics := jobqueue.NewStdMetrics()
+	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+	jobWorker := jobqueue.NewWorker(
+		jobQueueRepo,
+		jobqueue.Config{
+			Enabled:            cfg.JobQueue().Enabled(),
+			PollInterval:       cfg.JobQueue().PollInterval(),
+			Lease:              cfg.JobQueue().Lease(),
+			HeartbeatInterval:  cfg.JobQueue().HeartbeatInterval(),
+			JobTimeout:         cfg.JobQueue().JobTimeout(),
+			DefaultConcurrency: cfg.JobQueue().DefaultConcurrency(),
+			Backoff: jobqueue.BackoffConfig{
+				Base: cfg.JobQueue().BackoffBase(),
+				Max:  cfg.JobQueue().BackoffMax(),
+			},
+			StatsInterval: cfg.JobQueue().StatsInterval(),
+			DrainTimeout:  cfg.JobQueue().DrainTimeout(),
+		},
+		baseLogger.WithGroup("job-queue"),
+		jobQueueMetrics,
+	)
+	// Yield harvest orchestration engine (#845): evaluates vaults on a cadence,
+	// applies the economic gate (harvest iff accrued yield > gas + margin),
+	// defers under network congestion, and submits harvests as idempotent jobs
+	// on the queue above. Its job handler is registered on the worker before Run.
+	harvestMargin, err := decimal.NewFromString(cfg.Harvest().Margin())
+	if err != nil {
+		return fmt.Errorf("HARVEST_ENGINE_MARGIN: %w", err)
+	}
+	harvestGasFee, err := decimal.NewFromString(cfg.Harvest().GasFee())
+	if err != nil {
+		return fmt.Errorf("HARVEST_ENGINE_GAS_FEE: %w", err)
+	}
+	harvestExecutor := harvest.NewServiceExecutor(vaultService, userService)
+	jobWorker.Register(harvest.DefaultJobType,
+		harvest.NewJobHandler(harvestExecutor, baseLogger.WithGroup("harvest-job")), 0)
+
+	harvestEngine := harvest.New(
+		harvest.Config{
+			Enabled:  cfg.Harvest().Enabled(),
+			Interval: cfg.Harvest().Interval(),
+			Margin:   harvestMargin,
+			Window:   cfg.Harvest().Window(),
+		},
+		harvest.NewRepoSource(vaultRepository),
+		harvest.NewStaticGasOracle(harvestGasFee),
+		jobQueueClient,
+		baseLogger.WithGroup("harvest-engine"),
+	)
+	harvestHandler := handler.NewHarvestHandler(harvestEngine)
+	harvestHandler.Register(mux)
+	harvestCtx, cancelHarvest := context.WithCancel(context.Background())
+	defer cancelHarvest()
+	go harvestEngine.Run(harvestCtx)
+
+	jobQueueCtx, cancelJobQueue := context.WithCancel(context.Background())
+	defer cancelJobQueue()
+	go func() {
+		if err := jobWorker.Run(jobQueueCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("job queue worker stopped", "error", err.Error())
+		}
+	}()
 
 	// User vault rebalance (suggestions + execution)
 	vaultRebalanceSvc := service.NewVaultRebalanceService(vaultRepository, adminService)

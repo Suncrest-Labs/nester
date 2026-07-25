@@ -43,6 +43,8 @@ type Config struct {
 	accountCipher         AccountCipherConfig
 	transactionPoller     TransactionPollerConfig
 	recurringDeposit      RecurringDepositConfig
+	jobQueue              JobQueueConfig
+	harvest               HarvestConfig
 }
 
 // AccountCipherConfig holds the versioned key set used to encrypt sensitive
@@ -299,6 +301,25 @@ func Load() (*Config, error) {
 			interval:   loader.durationDefault("RECURRING_DEPOSIT_INTERVAL", time.Hour),
 			minDeposit: loader.stringDefault("MIN_DEPOSIT_AMOUNT", "0"),
 		},
+		harvest: HarvestConfig{
+			enabled:  loader.boolDefault("HARVEST_ENGINE_ENABLED", true),
+			interval: loader.durationDefault("HARVEST_ENGINE_INTERVAL", time.Hour),
+			window:   loader.durationDefault("HARVEST_ENGINE_WINDOW", time.Hour),
+			margin:   loader.stringDefault("HARVEST_ENGINE_MARGIN", "0.10"),
+			gasFee:   loader.stringDefault("HARVEST_ENGINE_GAS_FEE", "0.05"),
+		},
+		jobQueue: JobQueueConfig{
+			enabled:            loader.boolDefault("JOB_QUEUE_ENABLED", true),
+			pollInterval:       loader.durationDefault("JOB_QUEUE_POLL_INTERVAL", time.Second),
+			lease:              loader.durationDefault("JOB_QUEUE_LEASE", 30*time.Second),
+			heartbeatInterval:  loader.durationDefault("JOB_QUEUE_HEARTBEAT_INTERVAL", 10*time.Second),
+			jobTimeout:         loader.durationDefault("JOB_QUEUE_JOB_TIMEOUT", 2*time.Minute),
+			defaultConcurrency: loader.intDefault("JOB_QUEUE_DEFAULT_CONCURRENCY", 4),
+			backoffBase:        loader.durationDefault("JOB_QUEUE_BACKOFF_BASE", 2*time.Second),
+			backoffMax:         loader.durationDefault("JOB_QUEUE_BACKOFF_MAX", 5*time.Minute),
+			statsInterval:      loader.durationDefault("JOB_QUEUE_STATS_INTERVAL", 30*time.Second),
+			drainTimeout:       loader.durationDefault("JOB_QUEUE_DRAIN_TIMEOUT", 25*time.Second),
+		},
 	}
 
 	if cfg.bankAccountCipherKey == "" && environment == "development" {
@@ -487,6 +508,48 @@ func (r RecurringDepositConfig) Interval() time.Duration {
 func (r RecurringDepositConfig) MinDepositAmount() string {
 	return r.minDeposit
 }
+
+// JobQueueConfig governs the durable async job queue worker pool (#824).
+type JobQueueConfig struct {
+	enabled            bool
+	pollInterval       time.Duration
+	lease              time.Duration
+	heartbeatInterval  time.Duration
+	jobTimeout         time.Duration
+	defaultConcurrency int
+	backoffBase        time.Duration
+	backoffMax         time.Duration
+	statsInterval      time.Duration
+	drainTimeout       time.Duration
+}
+
+// HarvestConfig governs the yield-harvest orchestration engine (#845).
+type HarvestConfig struct {
+	enabled  bool
+	interval time.Duration
+	window   time.Duration
+	margin   string
+	gasFee   string
+}
+
+func (c Config) Harvest() HarvestConfig         { return c.harvest }
+func (h HarvestConfig) Enabled() bool           { return h.enabled }
+func (h HarvestConfig) Interval() time.Duration { return h.interval }
+func (h HarvestConfig) Window() time.Duration   { return h.window }
+func (h HarvestConfig) Margin() string          { return h.margin }
+func (h HarvestConfig) GasFee() string          { return h.gasFee }
+
+func (c Config) JobQueue() JobQueueConfig                 { return c.jobQueue }
+func (j JobQueueConfig) Enabled() bool                    { return j.enabled }
+func (j JobQueueConfig) PollInterval() time.Duration      { return j.pollInterval }
+func (j JobQueueConfig) Lease() time.Duration             { return j.lease }
+func (j JobQueueConfig) HeartbeatInterval() time.Duration { return j.heartbeatInterval }
+func (j JobQueueConfig) JobTimeout() time.Duration        { return j.jobTimeout }
+func (j JobQueueConfig) DefaultConcurrency() int          { return j.defaultConcurrency }
+func (j JobQueueConfig) BackoffBase() time.Duration       { return j.backoffBase }
+func (j JobQueueConfig) BackoffMax() time.Duration        { return j.backoffMax }
+func (j JobQueueConfig) StatsInterval() time.Duration     { return j.statsInterval }
+func (j JobQueueConfig) DrainTimeout() time.Duration      { return j.drainTimeout }
 
 func (b BankConfig) PaystackKey() string {
 	return b.paystackKey
