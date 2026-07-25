@@ -1,22 +1,25 @@
-"""
-Natural Language Goal Extraction Service
-"""
+"""Natural Language Goal Extraction Service."""
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
+
 from pydantic import BaseModel, Field
 
 from app.services.claude import get_client, get_model_id
 
 
 class ExtractedGoal(BaseModel):
-    """Structured goal extracted from natural language"""
+    """Structured goal extracted from natural language."""
+
     name: str = Field(description="Short descriptive name for the goal")
     target_amount: float = Field(description="Target amount in USDC")
     deadline: str = Field(description="ISO 8601 date string (YYYY-MM-DD)")
     category: str = Field(
-        description="Goal category: savings, vacation, emergency, education, car, home, investment, other"
+        description=(
+            "Goal category: savings, vacation, emergency, education, car, home, "
+            "investment, other"
+        )
     )
     initial_deposit: Optional[float] = Field(
         default=0, description="Optional initial deposit amount"
@@ -32,25 +35,27 @@ class ExtractedGoal(BaseModel):
         json_schema_extra = {
             "example": {
                 "name": "Car Savings",
-                "target_amount": 500000,
+                "target_amount": 500000.0,
                 "deadline": "2026-03-31",
                 "category": "car",
-                "initial_deposit": 10000,
+                "initial_deposit": 10000.0,
                 "is_recurring": False,
-                "recurring_amount": None
+                "recurring_amount": None,
             }
         }
 
 
 class AmbiguityResponse(BaseModel):
-    """Response when the extraction has ambiguities"""
+    """Response when the extraction has ambiguities."""
+
     is_ambiguous: bool = True
     message: str
     missing_fields: list[str]
 
 
 class GoalExtractionResult(BaseModel):
-    """Complete extraction result"""
+    """Complete extraction result."""
+
     success: bool
     extracted: Optional[ExtractedGoal] = None
     ambiguity: Optional[AmbiguityResponse] = None
@@ -58,24 +63,30 @@ class GoalExtractionResult(BaseModel):
 
 
 class GoalExtractor:
-    """Extracts structured savings goals from natural language using Claude"""
+    """Extracts structured savings goals from natural language using Claude."""
 
     CATEGORIES = [
-        "savings", "vacation", "emergency", "education",
-        "car", "home", "investment", "other"
+        "savings",
+        "vacation",
+        "emergency",
+        "education",
+        "car",
+        "home",
+        "investment",
+        "other",
     ]
 
     def __init__(self):
+        """Initialize the goal extractor."""
         self.client = get_client()
         self.model = get_model_id()
 
     def extract(self, user_message: str, user_timezone: str = "UTC") -> GoalExtractionResult:
-        """Extract structured goal from a natural language message"""
-        # Check for prompt injection
+        """Extract structured goal from a natural language message."""
         if self._check_injection(user_message):
             return GoalExtractionResult(
                 success=False,
-                error="Invalid input detected. Please provide a valid goal description."
+                error="Invalid input detected. Please provide a valid goal description.",
             )
 
         prompt = self._build_extraction_prompt(user_message, user_timezone)
@@ -85,12 +96,14 @@ class GoalExtractor:
                 model=self.model,
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],
-                tools=[{
-                    "name": "extract_goal",
-                    "description": "Extract structured savings goal from natural language",
-                    "input_schema": ExtractedGoal.model_json_schema()
-                }],
-                tool_choice={"type": "tool", "name": "extract_goal"}
+                tools=[
+                    {
+                        "name": "extract_goal",
+                        "description": "Extract structured savings goal from natural language",
+                        "input_schema": ExtractedGoal.model_json_schema(),
+                    }
+                ],
+                tool_choice={"type": "tool", "name": "extract_goal"},
             )
 
             for content in response.content:
@@ -100,17 +113,17 @@ class GoalExtractor:
 
             return GoalExtractionResult(
                 success=False,
-                error="Failed to extract goal. Please try rephrasing."
+                error="Failed to extract goal. Please try rephrasing.",
             )
 
         except Exception as e:
             return GoalExtractionResult(
                 success=False,
-                error=f"Extraction error: {str(e)}"
+                error=f"Extraction error: {str(e)}",
             )
 
     def _check_injection(self, message: str) -> bool:
-        """Check for prompt injection attempts"""
+        """Check for prompt injection attempts."""
         injection_patterns = [
             r"ignore (?:the|all) (?:previous|above) (?:instructions?|prompt)",
             r"(?:system|developer|assistant).*(?:prompt|instruction)",
@@ -126,7 +139,7 @@ class GoalExtractor:
             r"override",
         ]
 
-        base64_pattern = r'[A-Za-z0-9+/]{30,}={0,2}'
+        base64_pattern = r"[A-Za-z0-9+/]{30,}={0,2}"
         if re.search(base64_pattern, message):
             return True
 
@@ -138,11 +151,11 @@ class GoalExtractor:
         return False
 
     def _build_extraction_prompt(self, message: str, _timezone: str) -> str:
-        """Build the extraction prompt"""
+        """Build the extraction prompt."""
         categories_str = ", ".join(self.CATEGORIES)
         return f"""Extract a structured savings goal from the user's message.
 
-Current date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
+Current date: {datetime.now().strftime('%Y-%m-%d')}
 
 User message: "{message}"
 
@@ -175,7 +188,7 @@ Return ONLY the structured extraction."""
     def _validate_and_resolve(
         self, extracted: ExtractedGoal, _timezone: str
     ) -> GoalExtractionResult:
-        """Validate and resolve dates and amounts"""
+        """Validate and resolve dates and amounts."""
         # Validate amount
         if extracted.target_amount <= 0:
             return GoalExtractionResult(
@@ -183,8 +196,8 @@ Return ONLY the structured extraction."""
                 ambiguity=AmbiguityResponse(
                     is_ambiguous=True,
                     message="Please specify a target amount. How much would you like to save?",
-                    missing_fields=["target_amount"]
-                )
+                    missing_fields=["target_amount"],
+                ),
             )
 
         # Validate and resolve date - make both naive
@@ -199,18 +212,24 @@ Return ONLY the structured extraction."""
                     success=False,
                     ambiguity=AmbiguityResponse(
                         is_ambiguous=True,
-                        message=f"The date {extracted.deadline} is in the past. Did you mean next year?",
-                        missing_fields=["deadline"]
-                    )
+                        message=(
+                            f"The date {extracted.deadline} is in the past. "
+                            "Did you mean next year?"
+                        ),
+                        missing_fields=["deadline"],
+                    ),
                 )
         except ValueError:
             return GoalExtractionResult(
                 success=False,
                 ambiguity=AmbiguityResponse(
                     is_ambiguous=True,
-                    message=f"Could not understand the date '{extracted.deadline}'. Please specify a valid date.",
-                    missing_fields=["deadline"]
-                )
+                    message=(
+                        f"Could not understand the date '{extracted.deadline}'. "
+                        "Please specify a valid date."
+                    ),
+                    missing_fields=["deadline"],
+                ),
             )
 
         # Validate category - don't silently default, ask if unknown
@@ -219,9 +238,12 @@ Return ONLY the structured extraction."""
                 success=False,
                 ambiguity=AmbiguityResponse(
                     is_ambiguous=True,
-                    message=f"Unknown category '{extracted.category}'. Please choose from: {', '.join(self.CATEGORIES)}",
-                    missing_fields=["category"]
-                )
+                    message=(
+                        f"Unknown category '{extracted.category}'. "
+                        f"Please choose from: {', '.join(self.CATEGORIES)}"
+                    ),
+                    missing_fields=["category"],
+                ),
             )
 
         # Check for missing name
@@ -231,11 +253,34 @@ Return ONLY the structured extraction."""
                 ambiguity=AmbiguityResponse(
                     is_ambiguous=True,
                     message="Please provide a name for your goal.",
-                    missing_fields=["name"]
-                )
+                    missing_fields=["name"],
+                ),
+            )
+
+        # Validate optional fields
+        if extracted.initial_deposit is not None and extracted.initial_deposit < 0:
+            return GoalExtractionResult(
+                success=False,
+                error="Initial deposit cannot be negative.",
+            )
+
+        if extracted.is_recurring and extracted.recurring_amount is None:
+            return GoalExtractionResult(
+                success=False,
+                ambiguity=AmbiguityResponse(
+                    is_ambiguous=True,
+                    message="You indicated recurring savings. How much per month?",
+                    missing_fields=["recurring_amount"],
+                ),
+            )
+
+        if extracted.is_recurring and extracted.recurring_amount is not None and extracted.recurring_amount <= 0:
+            return GoalExtractionResult(
+                success=False,
+                error="Recurring amount must be positive.",
             )
 
         return GoalExtractionResult(
             success=True,
-            extracted=extracted
+            extracted=extracted,
         )

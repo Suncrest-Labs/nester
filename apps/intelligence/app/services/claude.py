@@ -1,3 +1,5 @@
+"""Claude client configuration."""
+
 import anthropic
 
 from app.config import settings
@@ -10,8 +12,10 @@ MODEL_ID = "claude-3-5-sonnet-20241022"
 
 
 def get_client():
+    """Get the Anthropic client."""
     return client
 
 
 def get_model_id():
+    """Get the model ID."""
     return MODEL_ID
