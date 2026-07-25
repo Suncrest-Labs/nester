@@ -307,9 +307,9 @@ Client                          Go API                         Stellar
 
 ### 9.1 Deposit Flow (Critical — Business Logic)
 
-**Finding:** The deposit endpoint computes shares from user-supplied `amount` and
-`price_per_share` without on-chain verification. The `min_shares_out` parameter
-is hardcoded to 0, meaning the user cannot protect against unfavorable execution.
+**Finding:** The deposit endpoint computes shares from the user-supplied `amount`
+without on-chain slippage protection. The `min_shares_out` parameter is hardcoded
+to 0, meaning the user cannot protect against unfavorable execution.
 
 **Status:** Acknowledged. Fixing requires API contract changes and on-chain
 verification. Documented as recommendation for maintainers.
@@ -366,8 +366,8 @@ production, but the hub design allows a nil authenticator.
 `cmd/api/main.go`.
 
 **Risk:** If a future binary constructs the hub without an authenticator,
-WebSocket connections would be unauthenticated. Mitigated by the nil check
-in the hub.
+WebSocket connections would be unauthenticated. No nil check currently exists
+in the hub — a defense-in-depth guard is recommended (see pentest report).
 
 ## 10. Future Improvements
 

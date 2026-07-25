@@ -462,5 +462,3 @@ func TestGetTransactionByHashWithoutVaultRepoSkipsOwnershipCheck(t *testing.T) {
 		t.Fatalf("expected 200 when vaultRepo is nil (backward compat), got %d", resp.StatusCode)
 	}
 }
-
-var _ = decimal.Zero
