@@ -153,9 +153,20 @@ func (h *VaultHandler) getVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
 	model, err := h.service.GetVault(r.Context(), vaultID)
 	if err != nil {
 		h.writeDomainError(w, r, err)
+		return
+	}
+
+	if model.UserID.String() != user.ID {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
 		return
 	}
 
@@ -332,9 +343,20 @@ func (h *VaultHandler) getAllocations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
 	v, err := h.service.GetVault(r.Context(), vaultID)
 	if err != nil {
 		h.writeDomainError(w, r, err)
+		return
+	}
+
+	if v.UserID.String() != user.ID {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
 		return
 	}
 
