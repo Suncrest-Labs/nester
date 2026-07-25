@@ -6,7 +6,7 @@ use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env};
 
 use nester_access_control::Role;
 
-use crate::{ContractKind, NesterContract, NesterContractClient};
+use crate::{ContractKind, NesterContract, NesterContractClient, ProtocolInitConfig};
 
 // Authorization test matrix (U = unauthorized/unsigned, A = authorized,
 // R = role revoked before a subsequent call):
@@ -43,6 +43,7 @@ use crate::{ContractKind, NesterContract, NesterContractClient};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct ProtocolAddresses {
     vault_usdc: Address,
     vault_xlm: Address,
@@ -51,6 +52,20 @@ struct ProtocolAddresses {
     treasury: Address,
     yield_registry: Address,
     allocation_strategy: Address,
+}
+
+impl From<ProtocolAddresses> for ProtocolInitConfig {
+    fn from(p: ProtocolAddresses) -> Self {
+        ProtocolInitConfig {
+            vault_usdc: p.vault_usdc,
+            vault_xlm: p.vault_xlm,
+            vault_token_usdc: p.vault_token_usdc,
+            vault_token_xlm: p.vault_token_xlm,
+            treasury: p.treasury,
+            yield_registry: p.yield_registry,
+            allocation_strategy: p.allocation_strategy,
+        }
+    }
 }
 
 fn fake_protocol(env: &Env) -> ProtocolAddresses {
@@ -73,16 +88,7 @@ fn setup(env: &Env) -> (NesterContractClient<'_>, Address, ProtocolAddresses) {
     let id = env.register_contract(None, NesterContract);
     let client = NesterContractClient::new(env, &id);
 
-    client.initialize(
-        &admin,
-        &p.vault_usdc,
-        &p.vault_xlm,
-        &p.vault_token_usdc,
-        &p.vault_token_xlm,
-        &p.treasury,
-        &p.yield_registry,
-        &p.allocation_strategy,
-    );
+    client.initialize(&admin, &p.clone().into());
 
     (client, admin, p)
 }
@@ -130,16 +136,7 @@ fn initialize_twice_panics() {
     let env = Env::default();
     let (client, admin, p) = setup(&env);
     // Second call must panic with AlreadyInitialized.
-    client.initialize(
-        &admin,
-        &p.vault_usdc,
-        &p.vault_xlm,
-        &p.vault_token_usdc,
-        &p.vault_token_xlm,
-        &p.treasury,
-        &p.yield_registry,
-        &p.allocation_strategy,
-    );
+    client.initialize(&admin, &p.clone().into());
 }
 
 #[test]
@@ -153,16 +150,7 @@ fn initialize_requires_admin_signature() {
     let client = NesterContractClient::new(&env, &id);
 
     assert!(client
-        .try_initialize(
-            &admin,
-            &p.vault_usdc,
-            &p.vault_xlm,
-            &p.vault_token_usdc,
-            &p.vault_token_xlm,
-            &p.treasury,
-            &p.yield_registry,
-            &p.allocation_strategy,
-        )
+        .try_initialize(&admin, &p.clone().into())
         .is_err());
     assert_eq!(
         client.version(),

@@ -4,7 +4,7 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 use nester_access_control::{AccessControl, Role};
-use nester_common::ContractError;
+use nester_common::{CalleeAllowlist, ContractError, with_reentrancy_guard};
 
 // ---------------------------------------------------------------------------
 // Event topic constants
@@ -101,6 +101,10 @@ impl TreasuryContract {
     /// Record incoming fees from the vault.  Only the registered vault
     /// address may call this.
     pub fn receive_fees(env: Env, amount: i128) {
+        with_reentrancy_guard(env, |env| Self::receive_fees_internal(env, amount));
+    }
+
+    fn receive_fees_internal(env: Env, amount: i128) {
         let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
         vault.require_auth();
 
@@ -178,6 +182,10 @@ impl TreasuryContract {
     ///
     /// Emits per recipient: `(TREASURY, DISTRIB, (address, amount, share_bps, total_received))`
     pub fn distribute(env: Env, caller: Address, token: Address) {
+        with_reentrancy_guard(env, |env| Self::distribute_internal(env, caller, token));
+    }
+
+    fn distribute_internal(env: Env, caller: Address, token: Address) {
         caller.require_auth();
 
         let is_admin = AccessControl::has_role(&env, &caller, Role::Admin);
@@ -215,6 +223,7 @@ impl TreasuryContract {
         }
 
         let token_client = token::Client::new(&env, &token);
+        CalleeAllowlist::assert_allowed(&env, &token);
         let contract_addr = env.current_contract_address();
 
         let recipient_count = recipients.len();
@@ -272,6 +281,10 @@ impl TreasuryContract {
 
     /// Manual/emergency withdrawal — bypasses the distribution mechanism.
     pub fn withdraw(env: Env, caller: Address, to: Address, token: Address, amount: i128) {
+        with_reentrancy_guard(env, |env| Self::withdraw_internal(env, caller, to, token, amount));
+    }
+
+    fn withdraw_internal(env: Env, caller: Address, to: Address, token: Address, amount: i128) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
 
@@ -279,6 +292,7 @@ impl TreasuryContract {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
 
+        CalleeAllowlist::assert_allowed(&env, &token);
         token::Client::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);
         env.events().publish((TREASURY, WITHDRAW), amount);
     }
@@ -337,6 +351,18 @@ impl TreasuryContract {
     /// Address of the vault contract authorised to submit fees.
     pub fn get_vault(env: Env) -> Address {
         env.storage().instance().get(&DataKey::Vault).unwrap()
+    }
+
+    pub fn register_callee(env: Env, caller: Address, callee: Address) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        CalleeAllowlist::register(&env, &callee);
+    }
+
+    pub fn unregister_callee(env: Env, caller: Address, callee: Address) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        CalleeAllowlist::unregister(&env, &callee);
     }
 }
 

@@ -90,6 +90,7 @@ fn test_full_lifecycle_deposit_to_withdraw() {
             },
         ],
     );
+    h.vault().register_callee(&h.admin, &h.strategy_id);
     h.vault().set_allocation_strategy(&h.admin, &h.strategy_id);
 
     // 2. User deposits DEPOSIT USDC → shares minted 1:1 on first deposit

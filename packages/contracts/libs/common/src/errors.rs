@@ -24,4 +24,6 @@ pub enum ContractError {
     ConfigOutOfRange = 19,
     ArithmeticOverflow = 20,
     BelowMinDeposit = 21,
+    ReentrancyDetected = 22,
+    CalleeNotAllowed = 23,
 }

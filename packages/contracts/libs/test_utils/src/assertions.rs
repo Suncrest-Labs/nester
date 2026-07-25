@@ -14,3 +14,7 @@ pub fn assert_ok<T>(result: Result<T, ContractError>) {
 pub fn assert_eq_balance(actual: u128, expected: u128) {
     assert_eq!(actual, expected, "Balance mismatch");
 }
+
+pub fn assert_reentrancy_blocked(result: &core::result::Result<(), soroban_sdk::Error>) {
+    assert!(result.is_err(), "expected reentrancy to be blocked");
+}
