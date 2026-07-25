@@ -97,6 +97,18 @@ fn get_contract(env: &Env, kind: &ContractKind) -> Address {
         .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProtocolInitConfig {
+    pub vault_usdc: Address,
+    pub vault_xlm: Address,
+    pub vault_token_usdc: Address,
+    pub vault_token_xlm: Address,
+    pub treasury: Address,
+    pub yield_registry: Address,
+    pub allocation_strategy: Address,
+}
+
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -109,40 +121,28 @@ impl NesterContract {
     /// Initialise the orchestrator with the addresses of all deployed protocol
     /// contracts. Can only be called once; a second call panics with
     /// `AlreadyInitialized`.
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        vault_usdc: Address,
-        vault_xlm: Address,
-        vault_token_usdc: Address,
-        vault_token_xlm: Address,
-        treasury: Address,
-        yield_registry: Address,
-        allocation_strategy: Address,
-    ) {
-        // AccessControl::initialize guards AlreadyInitialized and calls
-        // admin.require_auth() internally.
+    pub fn initialize(env: Env, admin: Address, config: ProtocolInitConfig) {
         AccessControl::initialize(&env, &admin);
 
         let s = env.storage().instance();
-        s.set(&DataKey::Contract(ContractKind::VaultUsdc), &vault_usdc);
-        s.set(&DataKey::Contract(ContractKind::VaultXlm), &vault_xlm);
+        s.set(&DataKey::Contract(ContractKind::VaultUsdc), &config.vault_usdc);
+        s.set(&DataKey::Contract(ContractKind::VaultXlm), &config.vault_xlm);
         s.set(
             &DataKey::Contract(ContractKind::VaultTokenUsdc),
-            &vault_token_usdc,
+            &config.vault_token_usdc,
         );
         s.set(
             &DataKey::Contract(ContractKind::VaultTokenXlm),
-            &vault_token_xlm,
+            &config.vault_token_xlm,
         );
-        s.set(&DataKey::Contract(ContractKind::Treasury), &treasury);
+        s.set(&DataKey::Contract(ContractKind::Treasury), &config.treasury);
         s.set(
             &DataKey::Contract(ContractKind::YieldRegistry),
-            &yield_registry,
+            &config.yield_registry,
         );
         s.set(
             &DataKey::Contract(ContractKind::AllocationStrategy),
-            &allocation_strategy,
+            &config.allocation_strategy,
         );
         s.set(&DataKey::Version, &1u32);
 
@@ -152,13 +152,13 @@ impl NesterContract {
             INIT,
             env.current_contract_address(),
             InitializedEventData {
-                vault_usdc,
-                vault_xlm,
-                vault_token_usdc,
-                vault_token_xlm,
-                treasury,
-                yield_registry,
-                allocation_strategy,
+                vault_usdc: config.vault_usdc,
+                vault_xlm: config.vault_xlm,
+                vault_token_usdc: config.vault_token_usdc,
+                vault_token_xlm: config.vault_token_xlm,
+                treasury: config.treasury,
+                yield_registry: config.yield_registry,
+                allocation_strategy: config.allocation_strategy,
             },
         );
     }

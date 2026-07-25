@@ -57,6 +57,7 @@ fn setup() -> (
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &contract_id);
     client.initialize(&admin, &vault);
+    client.register_callee(&admin, &token);
 
     // Grant operator role to the operator address.
     // AccessControl::grant_role is called via the admin through whatever
