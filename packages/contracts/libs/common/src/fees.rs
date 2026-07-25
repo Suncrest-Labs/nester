@@ -78,6 +78,35 @@ pub fn calculate_withdrawal_fee(amount: i128, fee_bps: u32) -> Result<i128, Cont
     mul_div(amount, fee_bps as i128, BASIS_POINT_SCALE)
 }
 
+/// Calculate the early-break penalty for a time-locked position.
+///
+/// The penalty scales linearly from `penalty_bps` at lock creation down to
+/// zero at maturity, so someone one day from maturity is not charged the same
+/// as someone one day in.
+///
+/// `penalty_bps`       — maximum penalty in basis points (e.g. 500 = 5%).
+/// `elapsed_secs`      — seconds since the lock was created.
+/// `total_term_secs`   — total lock duration in seconds.
+///
+/// Returns the penalty amount to deduct from the gross asset value.
+pub fn calculate_early_break_penalty(
+    amount: i128,
+    penalty_bps: u32,
+    elapsed_secs: u64,
+    total_term_secs: u64,
+) -> Result<i128, ContractError> {
+    if amount <= 0 || penalty_bps == 0 || total_term_secs == 0 {
+        return Ok(0);
+    }
+    if elapsed_secs >= total_term_secs {
+        return Ok(0);
+    }
+    let remaining = (total_term_secs - elapsed_secs) as i128;
+    let total = total_term_secs as i128;
+    let penalty = mul_div(amount, remaining * (penalty_bps as i128), total * BASIS_POINT_SCALE)?;
+    Ok(penalty)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +177,50 @@ mod tests {
     fn withdrawal_fee_zero_amount_returns_zero() {
         assert_eq!(calculate_withdrawal_fee(0, 100).unwrap(), 0);
         assert_eq!(calculate_withdrawal_fee(1000, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn early_break_penalty_at_zero_elapsed_is_full() {
+        let penalty = calculate_early_break_penalty(1_000, 500, 0, 100).unwrap();
+        assert_eq!(penalty, 50, "at 0% elapsed, penalty should be full 5%");
+    }
+
+    #[test]
+    fn early_break_penalty_at_half_elapsed_is_half() {
+        let penalty = calculate_early_break_penalty(1_000, 500, 50, 100).unwrap();
+        assert_eq!(penalty, 25, "at 50% elapsed, penalty should be half");
+    }
+
+    #[test]
+    fn early_break_penalty_at_maturity_is_zero() {
+        let penalty = calculate_early_break_penalty(1_000, 500, 100, 100).unwrap();
+        assert_eq!(penalty, 0, "at 100% elapsed (maturity), penalty should be zero");
+    }
+
+    #[test]
+    fn early_break_penalty_one_second_before_maturity() {
+        let penalty = calculate_early_break_penalty(100_000, 500, 99, 100).unwrap();
+        assert_eq!(penalty, 50, "1 second before maturity, penalty should be minimal but non-zero");
+    }
+
+    #[test]
+    fn early_break_penalty_zero_amount_returns_zero() {
+        assert_eq!(calculate_early_break_penalty(0, 500, 0, 100).unwrap(), 0);
+    }
+
+    #[test]
+    fn early_break_penalty_zero_bps_returns_zero() {
+        assert_eq!(calculate_early_break_penalty(1000, 0, 0, 100).unwrap(), 0);
+    }
+
+    #[test]
+    fn early_break_penalty_zero_term_returns_zero() {
+        assert_eq!(calculate_early_break_penalty(1000, 500, 0, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn early_break_penalty_past_maturity_returns_zero() {
+        let penalty = calculate_early_break_penalty(1_000, 500, 200, 100).unwrap();
+        assert_eq!(penalty, 0, "past maturity, penalty should be zero");
     }
 }
