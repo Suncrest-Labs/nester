@@ -1,12 +1,9 @@
 """
 Natural Language Goal Extraction Service
-
-Turns user messages like "I want to save 500k for a car by next March"
-into structured goal fields using Claude's structured output capability.
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -73,34 +70,21 @@ class GoalExtractor:
         self.model = get_model_id()
 
     def extract(self, user_message: str, user_timezone: str = "UTC") -> GoalExtractionResult:
-        """
-        Extract structured goal from a natural language message
-
-        Args:
-            user_message: The user's natural language description
-            user_timezone: User's timezone for date resolution
-
-        Returns:
-            GoalExtractionResult with either extracted goal or ambiguity
-        """
-        # First, check for prompt injection
-        injection_check = self._check_injection(user_message)
-        if injection_check:
+        """Extract structured goal from a natural language message"""
+        # Check for prompt injection
+        if self._check_injection(user_message):
             return GoalExtractionResult(
                 success=False,
                 error="Invalid input detected. Please provide a valid goal description."
             )
 
-        # Build the extraction prompt
         prompt = self._build_extraction_prompt(user_message, user_timezone)
 
         try:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=1024,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
+                messages=[{"role": "user", "content": prompt}],
                 tools=[{
                     "name": "extract_goal",
                     "description": "Extract structured savings goal from natural language",
@@ -109,7 +93,6 @@ class GoalExtractor:
                 tool_choice={"type": "tool", "name": "extract_goal"}
             )
 
-            # Parse the tool call response
             for content in response.content:
                 if content.type == "tool_use" and content.name == "extract_goal":
                     extracted = ExtractedGoal(**content.input)
@@ -143,12 +126,10 @@ class GoalExtractor:
             r"override",
         ]
 
-        # Check for base64 encoded content
         base64_pattern = r'[A-Za-z0-9+/]{30,}={0,2}'
         if re.search(base64_pattern, message):
             return True
 
-        # Check for injection keywords
         lower_msg = message.lower()
         for pattern in injection_patterns:
             if re.search(pattern, lower_msg):
@@ -156,12 +137,12 @@ class GoalExtractor:
 
         return False
 
-    def _build_extraction_prompt(self, message: str, timezone: str) -> str:
+    def _build_extraction_prompt(self, message: str, _timezone: str) -> str:
         """Build the extraction prompt"""
         categories_str = ", ".join(self.CATEGORIES)
         return f"""Extract a structured savings goal from the user's message.
 
-Current date and timezone: {datetime.now().strftime('%Y-%m-%d')} ({timezone})
+Current date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
 
 User message: "{message}"
 
@@ -192,31 +173,33 @@ IMPORTANT RULES:
 Return ONLY the structured extraction."""
 
     def _validate_and_resolve(
-        self, extracted: ExtractedGoal, timezone: str
+        self, extracted: ExtractedGoal, _timezone: str
     ) -> GoalExtractionResult:
         """Validate and resolve dates and amounts"""
         # Validate amount
         if extracted.target_amount <= 0:
             return GoalExtractionResult(
                 success=False,
-                error="Target amount must be a positive number"
+                ambiguity=AmbiguityResponse(
+                    is_ambiguous=True,
+                    message="Please specify a target amount. How much would you like to save?",
+                    missing_fields=["target_amount"]
+                )
             )
 
-        # Validate and resolve date
+        # Validate and resolve date - make both naive
         try:
             deadline_date = datetime.fromisoformat(extracted.deadline)
-            now = datetime.now()
+            # Make deadline naive (remove timezone)
+            deadline_date = deadline_date.replace(tzinfo=None)
+            now = datetime.now().replace(tzinfo=None)
 
-            # Check if date is in the past
             if deadline_date < now:
                 return GoalExtractionResult(
                     success=False,
                     ambiguity=AmbiguityResponse(
                         is_ambiguous=True,
-                        message=(
-                            f"The date {extracted.deadline} is in the past. "
-                            "Did you mean next year?"
-                        ),
+                        message=f"The date {extracted.deadline} is in the past. Did you mean next year?",
                         missing_fields=["deadline"]
                     )
                 )
@@ -225,30 +208,30 @@ Return ONLY the structured extraction."""
                 success=False,
                 ambiguity=AmbiguityResponse(
                     is_ambiguous=True,
-                    message=(
-                        f"Could not understand the date '{extracted.deadline}'. "
-                        "Please specify a valid date."
-                    ),
+                    message=f"Could not understand the date '{extracted.deadline}'. Please specify a valid date.",
                     missing_fields=["deadline"]
                 )
             )
 
-        # Validate category
+        # Validate category - don't silently default, ask if unknown
         if extracted.category not in self.CATEGORIES:
-            extracted.category = "savings"
-
-        # Check for missing fields that should be confirmed
-        missing_fields = []
-        if not extracted.name or len(extracted.name) < 2:
-            missing_fields.append("name")
-
-        if missing_fields:
             return GoalExtractionResult(
                 success=False,
                 ambiguity=AmbiguityResponse(
                     is_ambiguous=True,
-                    message=f"Please provide: {', '.join(missing_fields)}",
-                    missing_fields=missing_fields
+                    message=f"Unknown category '{extracted.category}'. Please choose from: {', '.join(self.CATEGORIES)}",
+                    missing_fields=["category"]
+                )
+            )
+
+        # Check for missing name
+        if not extracted.name or len(extracted.name) < 2:
+            return GoalExtractionResult(
+                success=False,
+                ambiguity=AmbiguityResponse(
+                    is_ambiguous=True,
+                    message="Please provide a name for your goal.",
+                    missing_fields=["name"]
                 )
             )
 

@@ -1,7 +1,5 @@
 """
 Natural Language Goal Creation Router
-
-Provides endpoints for creating savings goals from natural language input.
 """
 
 from typing import Any
@@ -34,24 +32,11 @@ async def extract_goal_from_natural_language(
     request: NaturalLanguageGoalRequest,
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> Any:
-    """
-    Extract structured goal fields from natural language description.
-
-    This endpoint uses Claude to parse natural language and extract:
-    - Goal name
-    - Target amount
-    - Deadline
-    - Category
-    - Initial deposit (optional)
-    - Recurring plan (optional)
-
-    Returns either:
-    1. A structured goal ready for confirmation
-    2. An ambiguity that needs clarification
-    3. An error
-    """
+    """Extract structured goal fields from natural language description."""
     extractor = GoalExtractor()
-    result = extractor.extract(request.message, request.timezone)
+    # Run synchronous extraction in thread pool to avoid blocking
+    import asyncio
+    result = await asyncio.to_thread(extractor.extract, request.message, request.timezone)
 
     response = NaturalLanguageGoalResponse(
         success=result.success,
@@ -69,12 +54,7 @@ async def confirm_and_create_goal(
     goal_data: dict[str, Any],
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> Any:
-    """
-    Confirm and create a goal from extracted data.
-
-    This is called after the user confirms the extracted goal.
-    The actual creation goes through the Go backend service.
-    """
+    """Confirm and create a goal from extracted data."""
     return {
         "success": True,
         "message": "Goal confirmed and created",
