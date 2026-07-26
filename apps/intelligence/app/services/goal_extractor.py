@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Optional
+import pytz
 
 from pydantic import BaseModel, Field
 from app.services.claude import get_client, get_model_id
@@ -64,7 +65,7 @@ class GoalExtractor:
             for content in response.content:
                 if content.type == "tool_use" and content.name == "extract_goal":
                     extracted = ExtractedGoal(**content.input)
-                    return self._validate_and_resolve(extracted)
+                    return self._validate_and_resolve(extracted, user_timezone)
 
             return GoalExtractionResult(success=False, error="Failed to extract goal.")
 
@@ -87,9 +88,6 @@ class GoalExtractor:
             r"new rules?",
             r"override",
         ]
-        base64_pattern = r"[A-Za-z0-9+/]{30,}={0,2}"
-        if re.search(base64_pattern, message):
-            return True
         lower_msg = message.lower()
         for pattern in patterns:
             if re.search(pattern, lower_msg):
@@ -104,7 +102,7 @@ User message: "{message}"
 Extract: name, target_amount (USDC), deadline (YYYY-MM-DD), category [{categories}], initial_deposit, is_recurring, recurring_amount.
 Rules: Do NOT guess missing fields. Return ONLY the structured extraction."""
 
-    def _validate_and_resolve(self, extracted: ExtractedGoal) -> GoalExtractionResult:
+    def _validate_and_resolve(self, extracted: ExtractedGoal, user_timezone: str = "UTC") -> GoalExtractionResult:
         if extracted.target_amount <= 0:
             return GoalExtractionResult(
                 success=False,
@@ -116,8 +114,16 @@ Rules: Do NOT guess missing fields. Return ONLY the structured extraction."""
             )
 
         try:
-            deadline_date = datetime.fromisoformat(extracted.deadline).replace(tzinfo=None)
-            if deadline_date < datetime.now().replace(tzinfo=None):
+            # Use user's timezone
+            try:
+                tz = pytz.timezone(user_timezone)
+            except:
+                tz = pytz.UTC
+            
+            now = datetime.now(tz)
+            deadline_date = datetime.fromisoformat(extracted.deadline).replace(tzinfo=tz)
+            
+            if deadline_date < now:
                 return GoalExtractionResult(
                     success=False,
                     ambiguity=AmbiguityResponse(

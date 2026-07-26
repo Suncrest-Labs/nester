@@ -1,7 +1,9 @@
 """Tests for natural language goal extraction."""
 
 from datetime import datetime, timedelta
+
 import pytest
+
 from app.services.goal_extractor import ExtractedGoal, GoalExtractor
 
 

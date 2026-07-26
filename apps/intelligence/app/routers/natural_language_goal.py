@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.dependencies.auth import verify_jwt
 from app.services.goal_extractor import GoalExtractor
@@ -16,7 +16,7 @@ router = APIRouter(dependencies=[Depends(verify_jwt)])
 
 
 class NaturalLanguageGoalRequest(BaseModel):
-    message: str
+    message: str = Field(..., max_length=10000)
     timezone: str = "UTC"
 
 
@@ -62,17 +62,8 @@ async def confirm_and_create_goal(
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing: {', '.join(missing)}")
 
-    try:
-        # TODO: Replace with actual Go service call via relay
-        goal_id = f"goal_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        return {
-            "success": True,
-            "message": "Goal created successfully",
-            "goal_id": goal_id,
-            "goal": goal_data,
-        }
-
-    except Exception as e:
-        logger.error(f"Goal creation failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create goal.")
+    # TODO: Replace with actual Go service call via relay
+    raise HTTPException(
+        status_code=501,
+        detail="Goal creation via API is not yet implemented. Please use the form."
+    )
