@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
   "contracts/access_control",
+  "contracts/adapter_lending",
+  "contracts/adapter_pool",
   "contracts/allocation_strategy",
   "contracts/lp_aggregator",
   "contracts/nester",

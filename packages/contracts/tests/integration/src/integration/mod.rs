@@ -14,6 +14,7 @@
 
 #![cfg(test)]
 
+pub mod adapter_failure_tests;
 pub mod lifecycle_tests;
 
 extern crate std;
@@ -80,10 +81,11 @@ fn strategy_set_weights_validates_sources_via_registry() {
         &h.admin,
         &aave,
         &h.create_user(), // mock contract address
+        &None,
         &ProtocolType::Lending,
     );
     h.registry()
-        .register_source(&h.admin, &blend, &h.create_user(), &ProtocolType::Lending);
+        .register_source(&h.admin, &blend, &h.create_user(), &None, &ProtocolType::Lending);
 
     // Both sources are active; set_weights should succeed.
     let weights: Vec<AllocationWeight> = vec![
@@ -140,7 +142,7 @@ fn strategy_rejects_weights_for_paused_source() {
 
     let aave = symbol_short!("aave");
     h.registry()
-        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
+        .register_source(&h.admin, &aave, &h.create_user(), &None, &ProtocolType::Lending);
     // Pause the source so it is no longer active.
     h.registry()
         .update_status(&h.admin, &aave, &SourceStatus::Paused);
@@ -172,9 +174,9 @@ fn calculate_allocation_distributes_total_proportionally() {
     let blend = symbol_short!("blend");
 
     h.registry()
-        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
+        .register_source(&h.admin, &aave, &h.create_user(), &None, &ProtocolType::Lending);
     h.registry()
-        .register_source(&h.admin, &blend, &h.create_user(), &ProtocolType::Staking);
+        .register_source(&h.admin, &blend, &h.create_user(), &None, &ProtocolType::Staking);
 
     let weights: Vec<AllocationWeight> = vec![
         &h.env,
@@ -217,7 +219,7 @@ fn calculate_allocation_assigns_remainder_to_highest_weight_source() {
 
     for id in [&a, &b, &c] {
         h.registry()
-            .register_source(&h.admin, id, &h.create_user(), &ProtocolType::Lending);
+            .register_source(&h.admin, id, &h.create_user(), &None, &ProtocolType::Lending);
     }
 
     // 33.33% each — intentionally uneven for a total of 10.
@@ -261,7 +263,7 @@ fn admin_can_grant_operator_who_can_set_weights() {
     let aave = symbol_short!("aave");
 
     h.registry()
-        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
+        .register_source(&h.admin, &aave, &h.create_user(), &None, &ProtocolType::Lending);
     h.strategy()
         .grant_role(&h.admin, &operator, &Role::Operator);
 
@@ -288,7 +290,7 @@ fn non_operator_cannot_set_weights() {
     let aave = symbol_short!("aave");
 
     h.registry()
-        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
+        .register_source(&h.admin, &aave, &h.create_user(), &None, &ProtocolType::Lending);
 
     let weights: Vec<AllocationWeight> = vec![
         &h.env,

@@ -37,6 +37,7 @@ type APYRefresher struct {
 	repo      perfdom.SnapshotRepository
 	vaults    VaultLister
 	registry  YieldRegistryReader
+	resolver  *RebalanceAPYResolver
 	broadcast APYBroadcaster
 	logger    *slog.Logger
 	clock     func() time.Time
@@ -65,6 +66,15 @@ func NewAPYRefresher(
 		clock:      func() time.Time { return time.Now().UTC() },
 		cachedAPYB: make(map[uuid.UUID]uint32),
 	}
+}
+
+// WithResolver installs the precedence-aware APY resolver. With it, a source
+// whose on-chain APY is unknown or stale is omitted from the weighted average
+// instead of being counted as zero, and DeFiLlama is never consulted for a
+// rebalancing input. See apy_precedence.go for the full rule.
+func (r *APYRefresher) WithResolver(resolver *RebalanceAPYResolver) *APYRefresher {
+	r.resolver = resolver
+	return r
 }
 
 func (r *APYRefresher) WithLogger(logger *slog.Logger) *APYRefresher {
@@ -137,9 +147,23 @@ func (r *APYRefresher) refreshVault(ctx context.Context, v vault.Vault, now time
 		return nil
 	}
 
+	// On-chain adapter APY is authoritative — see apy_precedence.go. When a
+	// resolver is wired, a source whose APY is unknown or stale is omitted
+	// rather than counted as zero; weightedVaultAPY then weights only the
+	// sources with a usable rate.
 	protocolAPY := make(map[string]uint32, len(v.Allocations))
 	for _, alloc := range v.Allocations {
 		if _, ok := protocolAPY[alloc.Protocol]; ok {
+			continue
+		}
+		if r.resolver != nil {
+			bps, ok := r.resolver.APYForRebalance(ctx, alloc.Protocol)
+			if !ok {
+				r.logger.Info("apy refresher: on-chain apy unusable, source omitted",
+					"protocol", alloc.Protocol, "vault_id", v.ID)
+				continue
+			}
+			protocolAPY[alloc.Protocol] = bps
 			continue
 		}
 		bps, err := r.registry.SourceAPYBPS(ctx, alloc.Protocol)

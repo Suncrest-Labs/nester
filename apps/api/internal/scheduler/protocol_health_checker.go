@@ -29,6 +29,29 @@ type ProtocolHealthNotifier interface {
 	NotifyProtocolHealth(ctx context.Context, userID uuid.UUID, slug string, dropPct, currentTVL float64) error
 }
 
+// DegradedSource is a yield source the registry has auto-degraded after its
+// adapter exceeded the consecutive-failure threshold on-chain.
+type DegradedSource struct {
+	// SourceID is the registry symbol (also the protocol slug).
+	SourceID string
+	// FailureCount is the consecutive failure tally at degradation time.
+	FailureCount uint32
+	// LastFailureAt is the ledger timestamp of the most recent failure.
+	LastFailureAt time.Time
+}
+
+// DegradedSourceLister reads auto-degraded sources from yield_registry.
+// Backed on-chain by `get_degraded_sources`.
+type DegradedSourceLister interface {
+	ListDegradedSources(ctx context.Context) ([]DegradedSource, error)
+}
+
+// DegradedSourceNotifier alerts a user that a source their vault is allocated
+// to has been degraded on-chain.
+type DegradedSourceNotifier interface {
+	NotifySourceDegraded(ctx context.Context, userID uuid.UUID, slug string, failureCount uint32) error
+}
+
 // ProtocolHealthConfig controls the background health-check loop.
 type ProtocolHealthConfig struct {
 	Enabled  bool
@@ -47,6 +70,25 @@ type ProtocolHealthChecker struct {
 	repo     protocoltvl.Repository
 	notify   ProtocolHealthNotifier
 	logger   *slog.Logger
+
+	// Optional on-chain adapter-failure inputs. Nil-safe: when unset the
+	// checker keeps doing TVL-only health checks.
+	degraded       DegradedSourceLister
+	notifyDegraded DegradedSourceNotifier
+	// Sources already alerted on, so a source that stays degraded across
+	// ticks does not re-alert every 30 minutes. Cleared when it recovers.
+	alertedDegraded map[string]bool
+}
+
+// WithDegradedSources wires the on-chain adapter-failure feed into the checker.
+// Without it the checker runs TVL-only, exactly as before.
+func (j *ProtocolHealthChecker) WithDegradedSources(
+	lister DegradedSourceLister,
+	notifier DegradedSourceNotifier,
+) *ProtocolHealthChecker {
+	j.degraded = lister
+	j.notifyDegraded = notifier
+	return j
 }
 
 // NewProtocolHealthChecker constructs the checker.
@@ -65,12 +107,13 @@ func NewProtocolHealthChecker(
 		cfg.Interval = defaultProtocolHealthInterval
 	}
 	return &ProtocolHealthChecker{
-		cfg:    cfg,
-		vaults: vaults,
-		tvl:    tvl,
-		repo:   repo,
-		notify: notify,
-		logger: logger,
+		cfg:             cfg,
+		vaults:          vaults,
+		tvl:             tvl,
+		repo:            repo,
+		notify:          notify,
+		logger:          logger,
+		alertedDegraded: make(map[string]bool),
 	}
 }
 
@@ -119,6 +162,70 @@ func (j *ProtocolHealthChecker) Tick(ctx context.Context) {
 
 	for slug, userIDs := range protocolUsers {
 		j.checkProtocol(ctx, slug, userIDs)
+	}
+
+	j.checkDegradedSources(ctx, protocolUsers)
+}
+
+// checkDegradedSources consumes the on-chain adapter-failure signal.
+//
+// A degraded source means yield_registry saw an adapter exceed its
+// consecutive-failure threshold and froze that source. Recovery is an explicit
+// admin action on-chain, so this is an operator-actionable alert, not a
+// transient blip: alert once per degradation episode and stay quiet until the
+// source disappears from the degraded list.
+func (j *ProtocolHealthChecker) checkDegradedSources(ctx context.Context, protocolUsers map[string][]uuid.UUID) {
+	if j.degraded == nil {
+		return
+	}
+
+	sources, err := j.degraded.ListDegradedSources(ctx)
+	if err != nil {
+		j.logger.Warn("protocol health checker: degraded source fetch failed", "error", err)
+		return
+	}
+
+	stillDegraded := make(map[string]bool, len(sources))
+	for _, src := range sources {
+		slug := strings.ToLower(strings.TrimSpace(src.SourceID))
+		if slug == "" {
+			continue
+		}
+		stillDegraded[slug] = true
+
+		if j.alertedDegraded[slug] {
+			continue
+		}
+		j.alertedDegraded[slug] = true
+
+		j.logger.Error("yield source degraded on-chain",
+			"source", slug,
+			"failure_count", src.FailureCount,
+			"last_failure_at", src.LastFailureAt,
+		)
+
+		if j.notifyDegraded == nil {
+			continue
+		}
+		for _, uid := range protocolUsers[slug] {
+			u := uid
+			count := src.FailureCount
+			go func() {
+				if err := j.notifyDegraded.NotifySourceDegraded(ctx, u, slug, count); err != nil {
+					j.logger.Warn("protocol health checker: degraded notify failed",
+						"user_id", u, "source", slug, "error", err)
+				}
+			}()
+		}
+	}
+
+	// Drop alert state for sources an admin has recovered, so a future
+	// degradation of the same source alerts again.
+	for slug := range j.alertedDegraded {
+		if !stillDegraded[slug] {
+			delete(j.alertedDegraded, slug)
+			j.logger.Info("yield source no longer degraded", "source", slug)
+		}
 	}
 }
 
@@ -211,5 +318,32 @@ func (n DispatcherProtocolHealthNotifier) NotifyProtocolHealth(
 		"drop_pct":       dropPct,
 		"current_tvl":    currentTVLUSD,
 		"suggested_action": "Review your position or consider withdrawing.",
+	})
+}
+
+// NotifySourceDegraded alerts a user that a yield source their vault uses has
+// been degraded on-chain after repeated adapter failures. Reuses the protocol
+// health alert channel set: same audience, same urgency.
+func (n DispatcherProtocolHealthNotifier) NotifySourceDegraded(
+	ctx context.Context,
+	userID uuid.UUID,
+	slug string,
+	failureCount uint32,
+) error {
+	if n.Dispatcher == nil {
+		return nil
+	}
+	title := fmt.Sprintf("Yield source paused: %s", slug)
+	body := fmt.Sprintf(
+		"%s has been paused automatically after %d consecutive adapter failures. "+
+			"Your funds in this source are frozen in place and rebalancing now skips it. "+
+			"An administrator must review and re-enable the source.",
+		slug, failureCount,
+	)
+	return n.Dispatcher.Send(ctx, userID, notifications.EventProtocolHealthAlert, title, body, map[string]any{
+		"protocol":         slug,
+		"failure_count":    failureCount,
+		"degraded":         true,
+		"suggested_action": "No action needed — an administrator must re-enable this source.",
 	})
 }

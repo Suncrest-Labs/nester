@@ -1,11 +1,13 @@
 #![no_std]
 
+pub mod adapters;
 pub mod constants;
 pub mod errors;
 pub mod events;
 pub mod fees;
 pub mod storage;
 
+pub use adapters::{AdapterApy, ApyConfidence, YieldAdapterClient};
 pub use constants::*;
 pub use errors::ContractError;
 pub use events::*;
@@ -21,6 +23,11 @@ pub enum SourceStatus {
     Paused,
     Deprecated,
     Exploit,
+    /// Automatically set when an adapter exceeds the failure threshold.
+    /// Allocation logic treats this like `Paused` (freeze, don't drain).
+    /// Recovery requires an explicit admin `update_status` back to `Active`
+    /// — never silent auto-recovery.
+    Degraded,
 }
 
 /// The category of yield-generating protocol.
