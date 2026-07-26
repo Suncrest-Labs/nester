@@ -66,6 +66,13 @@ func run() error {
 		return err
 	}
 
+	// Created early (rather than just before ListenAndServe, as before) so
+	// components that need to release resources as soon as shutdown begins —
+	// notably scheduler leadership below — can hook directly into it instead
+	// of only unwinding via defer after the HTTP server finishes draining.
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	pgPool, err := repository.NewPostgresDB(cfg.Database())
 	if err != nil {
 		return err
@@ -113,6 +120,24 @@ func run() error {
 	if err := pingStellarDependencies(baseLogger, cfg); err != nil {
 		return err
 	}
+
+	// Scheduler leader election (#846): elects one instance to run the five
+	// singleton background job loops below (rebalancer, recurring deposits,
+	// APY deviation, goal deadline reminders, protocol health). See
+	// internal/scheduler/leadership.go for the advisory-lock design and
+	// failover semantics. Hooked directly into shutdownCtx (created above,
+	// before the OS signal fires) rather than an independent context, so the
+	// lock releases as soon as shutdown begins instead of only once the HTTP
+	// server finishes draining — letting another instance take over sooner.
+	schedulerLeadership := scheduler.NewLeadership(
+		db,
+		scheduler.LeadershipConfig{
+			LockKey:           cfg.SchedulerLeadership().LockKey(),
+			HeartbeatInterval: cfg.SchedulerLeadership().HeartbeatInterval(),
+		},
+		baseLogger.WithGroup("scheduler-leadership"),
+	)
+	go schedulerLeadership.Run(shutdownCtx)
 
 	systemStateRepository := postgres.NewSystemStateRepository(db)
 
@@ -200,6 +225,7 @@ func run() error {
 		RPCURL:  cfg.Stellar().RPCURL(),
 		Logger:  baseLogger,
 	})
+	adminHandler.SetLeadership(schedulerLeadership)
 
 	// A single shared Redis client (nil when REDIS_ADDR is unset) powers both the
 	// challenge store and the distributed rate limiters. When nil, both fall back
@@ -452,9 +478,44 @@ func run() error {
 		scheduler.DispatcherProtocolHealthNotifier{Dispatcher: notificationDispatcher},
 		baseLogger.WithGroup("protocol-health"),
 	)
+	protocolHealthChecker.SetLeaderChecker(schedulerLeadership)
 	protocolHealthCtx, cancelProtocolHealth := context.WithCancel(context.Background())
 	defer cancelProtocolHealth()
 	go protocolHealthChecker.Run(protocolHealthCtx)
+
+	// APY deviation alert (#846): notifies a vault's users when its APY drops
+	// >20% from its 30-day mean. Notification-only, but gated behind
+	// scheduler leadership like the other four jobs (see
+	// APYDeviationJob.SetLeaderChecker for the shared dedup-race rationale).
+	// Previously built and tested (apy_deviation.go/apy_deviation_adapters.go)
+	// but never wired into main.go before #846.
+	apyDeviationJob := scheduler.NewAPYDeviationJob(
+		scheduler.APYDeviationJobFromEnv(),
+		scheduler.VaultAPYListerFunc(func(ctx context.Context) ([]scheduler.APYVaultInfo, error) {
+			infos, err := vaultRepository.ListActiveVaultsForAPYCheck(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]scheduler.APYVaultInfo, len(infos))
+			for i, v := range infos {
+				out[i] = scheduler.APYVaultInfo{
+					ID:                 v.ID,
+					UserID:             v.UserID,
+					Currency:           v.Currency,
+					LastAPYAlertSentAt: v.LastAPYAlertSentAt,
+				}
+			}
+			return out, nil
+		}),
+		performanceRepository,
+		vaultRepository,
+		notificationDispatcher,
+		baseLogger.WithGroup("apy-deviation"),
+	)
+	apyDeviationJob.SetLeaderChecker(schedulerLeadership)
+	apyDeviationCtx, cancelAPYDeviation := context.WithCancel(context.Background())
+	defer cancelAPYDeviation()
+	go apyDeviationJob.Run(apyDeviationCtx)
 
 	// User watchlist
 	watchlistSvc := service.NewWatchlistService(db)
@@ -497,31 +558,61 @@ func run() error {
 	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
 	savingsScheduleHandler.Register(mux)
 
+	// Goal deadline reminders (#846): fires at 7/3/1 days before a goal's
+	// deadline. Notification-only, but gated behind scheduler leadership
+	// anyway (see GoalDeadlineReminderJob.SetLeaderChecker) since the
+	// DeadlineRemindersSent dedup check races across concurrent replicas.
+	// Previously built and tested (goal_deadline_reminder.go) but never
+	// wired into main.go before #846.
+	goalDeadlineReminderJob := scheduler.NewGoalDeadlineReminderJob(
+		scheduler.GoalDeadlineReminderConfig{
+			Enabled:  true,
+			Interval: 24 * time.Hour,
+		},
+		savingsGoalRepo,
+		savingsGoalSvc,
+		notificationDispatcher2,
+		baseLogger.WithGroup("goal-deadline-reminder"),
+	)
+	goalDeadlineReminderJob.SetLeaderChecker(schedulerLeadership)
+	goalDeadlineCtx, cancelGoalDeadline := context.WithCancel(context.Background())
+	defer cancelGoalDeadline()
+	go goalDeadlineReminderJob.Run(goalDeadlineCtx)
+
 	ledgerVaultService := service.NewVaultService(vaultRepository)
 	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
 	goalProgressSvc := service.NewGoalProgressService(savingsGoalRepo)
+
+	// Durable async job queue (#824): the shared worker pool and producer
+	// client. Handlers are registered below before the worker starts. The
+	// client is passed to producers (harvest engine, chain invoker, and —
+	// as of #846 — the recurring-deposit job below) so they enqueue durable
+	// work instead of doing it inline.
+	jobQueueRepo := postgres.NewJobRepository(db)
+	jobQueueMetrics := jobqueue.NewStdMetrics()
+	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+
+	// Recurring deposit sweep (#846): classified SINGLETON (money-moving —
+	// see RecurringDepositJob's doc comment). The sweep loop itself only
+	// enqueues a durable per-occurrence job onto jobQueueClient rather than
+	// recording the deposit inline; RecurringDepositJobHandler (registered
+	// on jobWorker below) does the actual ledger write, giving it the same
+	// lease/retry/backoff at-least-once guarantees as the harvest engine.
 	recurringDepositJob := scheduler.NewRecurringDepositJob(
 		scheduler.RecurringDepositConfig{
 			Enabled:  cfg.RecurringDeposit().Enabled(),
 			Interval: cfg.RecurringDeposit().Interval(),
 		},
 		savingsScheduleRepo,
-		scheduledDepositSvc,
+		jobQueueClient,
 		goalProgressSvc,
-		scheduler.NotificationDepositNotifier{Dispatcher: notificationDispatcher},
 		baseLogger.WithGroup("recurring-deposit"),
 	)
+	recurringDepositJob.SetLeaderChecker(schedulerLeadership)
 	recurringCtx, cancelRecurring := context.WithCancel(context.Background())
 	defer cancelRecurring()
 	go recurringDepositJob.Run(recurringCtx)
 
-	// Durable async job queue (#824): the shared worker pool and producer
-	// client. Handlers are registered below before the worker starts. The
-	// client is passed to producers (harvest engine, chain invoker) so they
-	// enqueue durable work instead of doing it inline.
-	jobQueueRepo := postgres.NewJobRepository(db)
-	jobQueueMetrics := jobqueue.NewStdMetrics()
-	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
 	jobWorker := jobqueue.NewWorker(
 		jobQueueRepo,
 		jobqueue.Config{
@@ -556,6 +647,17 @@ func run() error {
 	harvestExecutor := harvest.NewServiceExecutor(vaultService, userService)
 	jobWorker.Register(harvest.DefaultJobType,
 		harvest.NewJobHandler(harvestExecutor, baseLogger.WithGroup("harvest-job")), 0)
+
+	// Recurring-deposit occurrence handler (#846): processes the jobs
+	// recurringDepositJob (above) enqueues. Fixes the #846 idempotency bug —
+	// see scheduled_deposit_adapters.go's RecordScheduledDeposit doc comment.
+	jobWorker.Register(scheduler.RecurringDepositJobType,
+		scheduler.NewRecurringDepositJobHandler(
+			scheduledDepositSvc,
+			savingsScheduleRepo,
+			scheduler.NotificationDepositNotifier{Dispatcher: notificationDispatcher},
+			baseLogger.WithGroup("recurring-deposit-handler"),
+		), 0)
 
 	harvestEngine := harvest.New(
 		harvest.Config{
@@ -728,9 +830,6 @@ func run() error {
 		"network_passphrase", cfg.Stellar().NetworkPassphrase(),
 		"auto_migrate", cfg.Startup().EnableAutoMigrate(),
 	)
-
-	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, cfg.Stellar().RPCURL())
 

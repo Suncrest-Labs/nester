@@ -45,6 +45,8 @@ type Config struct {
 	recurringDeposit      RecurringDepositConfig
 	jobQueue              JobQueueConfig
 	harvest               HarvestConfig
+	rebalancer            RebalancerConfig
+	schedulerLeadership   SchedulerLeadershipConfig
 }
 
 // AccountCipherConfig holds the versioned key set used to encrypt sensitive
@@ -320,6 +322,15 @@ func Load() (*Config, error) {
 			statsInterval:      loader.durationDefault("JOB_QUEUE_STATS_INTERVAL", 30*time.Second),
 			drainTimeout:       loader.durationDefault("JOB_QUEUE_DRAIN_TIMEOUT", 25*time.Second),
 		},
+		rebalancer: RebalancerConfig{
+			enabled:       loader.boolDefault("REBALANCER_ENABLED", true),
+			interval:      time.Duration(loader.intDefault("REBALANCER_INTERVAL_MINUTES", 15)) * time.Minute,
+			minAPYGainBPS: int64(loader.intDefault("REBALANCER_MIN_APY_GAIN_BPS", 50)),
+		},
+		schedulerLeadership: SchedulerLeadershipConfig{
+			lockKey:           int64(loader.intDefault("SCHEDULER_LEADER_LOCK_KEY", 846000)),
+			heartbeatInterval: loader.durationDefault("SCHEDULER_LEADER_HEARTBEAT_INTERVAL", 3*time.Second),
+		},
 	}
 
 	if cfg.bankAccountCipherKey == "" && environment == "development" {
@@ -538,6 +549,34 @@ func (h HarvestConfig) Interval() time.Duration { return h.interval }
 func (h HarvestConfig) Window() time.Duration   { return h.window }
 func (h HarvestConfig) Margin() string          { return h.margin }
 func (h HarvestConfig) GasFee() string          { return h.gasFee }
+
+// RebalancerConfig governs the automated vault rebalance-decision loop
+// (nester#372; wired into main.go as part of #846). Money-moving: gated
+// behind scheduler leadership so only one instance evaluates and submits.
+type RebalancerConfig struct {
+	enabled       bool
+	interval      time.Duration
+	minAPYGainBPS int64
+}
+
+func (c Config) Rebalancer() RebalancerConfig      { return c.rebalancer }
+func (r RebalancerConfig) Enabled() bool           { return r.enabled }
+func (r RebalancerConfig) Interval() time.Duration { return r.interval }
+func (r RebalancerConfig) MinAPYGainBPS() int64    { return r.minAPYGainBPS }
+
+// SchedulerLeadershipConfig governs the Postgres-advisory-lock leader
+// election that gates all five scheduler background job loops (#846). See
+// internal/scheduler/leadership.go for the full design rationale.
+type SchedulerLeadershipConfig struct {
+	lockKey           int64
+	heartbeatInterval time.Duration
+}
+
+func (c Config) SchedulerLeadership() SchedulerLeadershipConfig { return c.schedulerLeadership }
+func (s SchedulerLeadershipConfig) LockKey() int64              { return s.lockKey }
+func (s SchedulerLeadershipConfig) HeartbeatInterval() time.Duration {
+	return s.heartbeatInterval
+}
 
 func (c Config) JobQueue() JobQueueConfig                 { return c.jobQueue }
 func (j JobQueueConfig) Enabled() bool                    { return j.enabled }
