@@ -58,3 +58,45 @@ type SavingsPlanResponse struct {
 	Narrative              string                `json:"narrative"`
 	Milestones             []MilestoneProjection `json:"milestones"`
 }
+
+// SavingsGoalContext mirrors the intelligence service's SavingsGoalContext
+// pydantic model, sent when requesting AI progress coaching for a goal.
+type SavingsGoalContext struct {
+	ID            string  `json:"id,omitempty"`
+	TargetAmount  float64 `json:"target_amount"`
+	Currency      string  `json:"currency"`
+	Deadline      string  `json:"deadline"`
+	Description   string  `json:"description,omitempty"`
+	CurrentAmount float64 `json:"current_amount"`
+	ProgressPct   float64 `json:"progress_pct"`
+}
+
+// PortfolioContext mirrors the intelligence service's PortfolioContext model.
+type PortfolioContext struct {
+	TotalBalanceUSD float64          `json:"total_balance_usd"`
+	// omitempty: a nil slice must be omitted rather than sent as JSON null —
+	// the intelligence service's pydantic model rejects null for this list field.
+	Vaults []map[string]any `json:"vaults,omitempty"`
+}
+
+// CoachingRequest mirrors the intelligence service's CoachingRequest model.
+type CoachingRequest struct {
+	Goal      SavingsGoalContext `json:"goal"`
+	Portfolio PortfolioContext   `json:"portfolio"`
+}
+
+// DepositScheduleItem mirrors the intelligence service's DepositScheduleItem model.
+type DepositScheduleItem struct {
+	Date      string  `json:"date"`
+	AmountUSD float64 `json:"amount_usdc"`
+	Note      string  `json:"note,omitempty"`
+}
+
+// CoachingResponse mirrors the intelligence service's CoachingResponse model:
+// a weekly AI-generated progress assessment and deposit schedule for a goal.
+type CoachingResponse struct {
+	ProgressAssessment string                `json:"progress_assessment"`
+	DepositSchedule    []DepositScheduleItem `json:"deposit_schedule"`
+	Nudges             []string              `json:"nudges"`
+	Confidence         string                `json:"confidence"`
+}

@@ -606,6 +606,18 @@ func run() error {
 	intelligenceHandler := handler.NewIntelligenceHandler(intelProxy, prometheusClient)
 	intelligenceHandler.Register(mux)
 
+	// AI progress coaching (#112): on-demand endpoint plus a weekly background nudge.
+	savingsGoalHandler.SetCoachingProvider(prometheusClient)
+	goalCoachingScheduler := service.NewGoalCoachingScheduler(
+		savingsGoalRepo,
+		prometheusClient,
+		notificationDispatcher2,
+		baseLogger.WithGroup("goal-coaching"),
+	)
+	goalCoachingCtx, cancelGoalCoaching := context.WithCancel(context.Background())
+	defer cancelGoalCoaching()
+	go goalCoachingScheduler.Run(goalCoachingCtx, 7*24*time.Hour)
+
 	intelRelay := service.NewRelayHandler(http.DefaultClient, service.RelayConfig{
 		BaseURL: intelURL,
 		APIKey:  cfg.Intelligence().ServiceAPIKey(),

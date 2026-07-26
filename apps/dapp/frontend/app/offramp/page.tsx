@@ -41,6 +41,8 @@ import {
 import { SaveAccountPrompt } from "@/components/offramp/SaveAccountPrompt";
 import { useBankResolver } from "@/hooks/useBankResolver";
 import { fetchBankList } from "@/lib/api/bank";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { useTranslations } from "@/context/locale-context";
 
 const SEND_ASSETS = [
     { symbol: "USDC", name: "USD Coin", image: "/usdc.png" },
@@ -124,6 +126,8 @@ export default function OfframpPage() {
     const { isConnected } = useWallet();
     const { addNotification } = useNotifications();
     const router = useRouter();
+    const { isOffline } = useOfflineStatus();
+    const t = useTranslations();
 
     // In a real app, this would come from the user's KYC state loaded via API
     const [kycStatus] = useState<KYCStatus>("unverified");
@@ -269,6 +273,9 @@ export default function OfframpPage() {
             : 0;
 
     const handleWithdraw = handleSubmit((data) => {
+        if (isOffline) {
+            return;
+        }
         const quote = selectedQuote;
         const canSubmit =
             payoutMode.type === "saved"
@@ -351,10 +358,10 @@ export default function OfframpPage() {
                     className="text-center mb-6 sm:mb-8"
                 >
                     <h1 className="font-heading text-xl sm:text-2xl font-semibold text-foreground">
-                        Cash Out
+                        {t("offramp.title")}
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Convert crypto to fiat, directly to your bank account
+                        {t("offramp.subtitle")}
                     </p>
                 </motion.div>
 
@@ -730,6 +737,7 @@ export default function OfframpPage() {
                     <div className="p-4 sm:p-5 pt-0">
                         <button
                             disabled={
+                                isOffline ||
                                 !isValid ||
                                 quotePhase !== "done" ||
                                 resolveState === "loading" ||
@@ -740,10 +748,12 @@ export default function OfframpPage() {
                             onClick={handleWithdraw}
                             className="w-full rounded-xl bg-foreground text-background py-4 text-sm font-medium transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                            {!numericAmount
-                                ? "Enter an amount"
+                            {isOffline
+                                ? t("offramp.offlineMessage")
+                                : !numericAmount
+                                ? t("offramp.enterAmount")
                                 : !selectedBankCode
-                                    ? "Select a bank"
+                                    ? t("offramp.selectBank")
                                     : (accountNumber?.length || 0) !== 10
                                         ? "Enter account number"
                                         : resolveState === "loading"

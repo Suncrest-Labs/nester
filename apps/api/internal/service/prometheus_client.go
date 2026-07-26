@@ -149,6 +149,26 @@ func (c *PrometheusClient) CreateSavingsPlan(ctx context.Context, request intell
 	return &response, nil
 }
 
+// GetGoalCoaching requests a weekly AI-generated progress assessment and
+// deposit schedule for a single savings goal (issue #112). Unlike the other
+// Get* methods this is not cached: coaching should reflect the goal's latest
+// progress each time it is requested.
+func (c *PrometheusClient) GetGoalCoaching(ctx context.Context, request intelligence.CoachingRequest) (*intelligence.CoachingResponse, error) {
+	if !c.canCall() {
+		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
+	}
+
+	endpoint := fmt.Sprintf("%s/intelligence/coaching", c.cfg.BaseURL)
+	var response intelligence.CoachingResponse
+	err := c.doPostRequest(ctx, endpoint, request, &response)
+	if err != nil {
+		c.recordFailure()
+		return nil, fmt.Errorf("failed to get goal coaching: %w", err)
+	}
+
+	return &response, nil
+}
+
 func (c *PrometheusClient) doRequest(ctx context.Context, endpoint string, target any) error {
 	return c.doHTTPRequest(ctx, "GET", endpoint, nil, target)
 }
