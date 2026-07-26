@@ -34,6 +34,12 @@ var (
 	ErrAllocationHasBalance = errors.New("allocation has non-zero balance; set force=true to remove")
 	ErrDuplicateProtocol    = errors.New("protocol already allocated")
 	ErrBelowMinDeposit      = errors.New("deposit amount is below the minimum required for this protocol")
+	// ErrDuplicateTransaction is returned when a deposit/withdrawal insert
+	// collides with vault_transactions' UNIQUE transaction_hash index. A
+	// caller that generates its own idempotency-bearing hash (e.g. the
+	// recurring-deposit job queue handler, #846) can treat this as "already
+	// recorded" and safely no-op rather than fail.
+	ErrDuplicateTransaction = errors.New("transaction already recorded")
 )
 
 const (

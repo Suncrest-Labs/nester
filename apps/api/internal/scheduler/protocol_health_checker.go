@@ -47,6 +47,18 @@ type ProtocolHealthChecker struct {
 	repo     protocoltvl.Repository
 	notify   ProtocolHealthNotifier
 	logger   *slog.Logger
+	leader   LeaderChecker
+}
+
+// SetLeaderChecker wires leader election (#846). Notification-only (no
+// money movement); gated behind the same single leader lock as the other
+// four jobs — see APYDeviationJob.SetLeaderChecker for the shared rationale
+// (the CanAlert/RecordAlert cooldown check is a read-then-write with no
+// locking, so concurrent replicas could each pass it and double-notify).
+func (j *ProtocolHealthChecker) SetLeaderChecker(l LeaderChecker) { j.leader = l }
+
+func (j *ProtocolHealthChecker) isLeader() bool {
+	return j.leader == nil || j.leader.IsLeader()
 }
 
 // NewProtocolHealthChecker constructs the checker.
@@ -99,6 +111,11 @@ func (j *ProtocolHealthChecker) Run(ctx context.Context) {
 
 // Tick runs one health-check pass. Exported for tests.
 func (j *ProtocolHealthChecker) Tick(ctx context.Context) {
+	if !j.isLeader() {
+		j.logger.Debug("protocol health checker: skipping tick, not leader")
+		return
+	}
+
 	active, err := j.vaults.ListActive(ctx)
 	if err != nil {
 		j.logger.Error("protocol health checker: list active vaults failed", "error", err)
@@ -158,6 +175,12 @@ func (j *ProtocolHealthChecker) checkProtocol(ctx context.Context, slug string, 
 
 	if err := j.repo.RecordAlert(ctx, slug); err != nil {
 		j.logger.Warn("protocol health checker: record alert failed", "protocol", slug, "error", err)
+	}
+
+	// Execution-time recheck (#846 split-brain guard).
+	if !j.isLeader() {
+		j.logger.Debug("protocol health checker: leadership lost mid-tick, skipping alert", "protocol", slug)
+		return
 	}
 
 	j.logger.Warn("protocol health alert triggered",

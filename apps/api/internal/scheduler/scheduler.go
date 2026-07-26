@@ -75,6 +75,29 @@ type Scheduler struct {
 	submitter   RebalanceSubmitter
 	logger      *slog.Logger
 	lastTickEnd atomic.Int64 // unix nanos; observability hook
+	leader      LeaderChecker
+}
+
+// SetLeaderChecker wires leader election (#846) into the periodic sweep in
+// tick(). The rebalancer is money-moving (submits on-chain rebalance calls),
+// so it is classified SINGLETON: it must run on exactly one instance to
+// avoid two replicas independently deciding to rebalance the same vault and
+// racing each other on-chain. A nil (or never-set) checker means "always
+// leader" so single-instance deployments and existing tests are unaffected.
+//
+// TriggerOnce (the admin-triggered manual rebalance endpoint) is
+// deliberately NOT gated by this: it is a single explicit HTTP request
+// handled by whichever replica receives it, not an every-replica periodic
+// sweep — the double-execution risk this issue addresses doesn't apply to
+// it the same way.
+func (s *Scheduler) SetLeaderChecker(l LeaderChecker) { s.leader = l }
+
+// isLeader reports whether this instance should perform singleton
+// tick-work right now. Must be (re)called immediately before the actual
+// money-moving action, not only once at the top of a tick — see the
+// split-brain guard documented on Leadership.
+func (s *Scheduler) isLeader() bool {
+	return s.leader == nil || s.leader.IsLeader()
 }
 
 // New constructs a Scheduler. `logger` may be nil — a discarding logger
@@ -142,6 +165,11 @@ func (s *Scheduler) TriggerOnce(ctx context.Context, vaultID uuid.UUID) error {
 func (s *Scheduler) tick(ctx context.Context) {
 	defer s.lastTickEnd.Store(time.Now().UnixNano())
 
+	if !s.isLeader() {
+		s.logger.Debug("rebalancer: skipping tick, not leader")
+		return
+	}
+
 	vaults, err := s.vaults.ListActiveVaults(ctx)
 	if err != nil {
 		s.logger.Error("rebalancer: list active vaults failed", "error", err)
@@ -169,6 +197,15 @@ func (s *Scheduler) evaluateVault(ctx context.Context, v VaultSnapshot, yields [
 			"reason", d.Reason,
 			"gain_bps", d.ExpectedGainBPS,
 		)
+		return
+	}
+
+	// Execution-time recheck (#846 split-brain guard): a tick evaluating
+	// many vaults can take long enough that leadership, believed true when
+	// the tick started, is lost partway through. Recheck immediately before
+	// the actual on-chain submission so a demoted instance never submits.
+	if !s.isLeader() {
+		s.logger.Debug("rebalancer: leadership lost mid-tick, skipping submit", "vault_id", v.ID)
 		return
 	}
 	if err := s.submitter.SubmitRebalance(ctx, v.ID, d.OptimalProtocol, d.ExpectedGainBPS); err != nil {

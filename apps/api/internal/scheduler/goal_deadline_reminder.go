@@ -45,6 +45,18 @@ type GoalDeadlineReminderJob struct {
 	logger    *slog.Logger
 	clock     func() time.Time
 	lastTickEnd atomic.Int64
+	leader    LeaderChecker
+}
+
+// SetLeaderChecker wires leader election (#846). Notification-only (no
+// money movement); gated behind the same single leader lock as the other
+// four jobs to avoid duplicate reminders when DeadlineRemindersSent dedup
+// state is read concurrently by multiple replicas — see the rationale on
+// APYDeviationJob.SetLeaderChecker, which faces the identical race.
+func (j *GoalDeadlineReminderJob) SetLeaderChecker(l LeaderChecker) { j.leader = l }
+
+func (j *GoalDeadlineReminderJob) isLeader() bool {
+	return j.leader == nil || j.leader.IsLeader()
 }
 
 // NewGoalDeadlineReminderJob constructs the job.
@@ -99,6 +111,11 @@ func (j *GoalDeadlineReminderJob) Run(ctx context.Context) {
 func (j *GoalDeadlineReminderJob) Tick(ctx context.Context) {
 	defer j.lastTickEnd.Store(j.clock().UnixNano())
 
+	if !j.isLeader() {
+		j.logger.Debug("goal-deadline-reminder: skipping tick, not leader")
+		return
+	}
+
 	goals, err := j.repo.ListActiveApproachingDeadline(ctx, 7)
 	if err != nil {
 		j.logger.Error("goal-deadline-reminder: list active approaching deadline failed", "error", err)
@@ -139,6 +156,12 @@ func (j *GoalDeadlineReminderJob) processGoal(ctx context.Context, goal savingsg
 		if sent == threshold {
 			return
 		}
+	}
+
+	// Execution-time recheck (#846 split-brain guard).
+	if !j.isLeader() {
+		j.logger.Debug("goal-deadline-reminder: leadership lost mid-tick, skipping notify", "goal_id", enriched.ID)
+		return
 	}
 
 	var title, body string
