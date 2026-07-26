@@ -5,6 +5,11 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
 type stubOnChainReader struct {
@@ -25,102 +30,190 @@ func fixedClock(t time.Time) func() time.Time {
 	return func() time.Time { return t }
 }
 
-func TestAPYForRebalanceUsesFreshProtocolReported(t *testing.T) {
-	now := time.Now().UTC()
-	stub := &stubOnChainReader{reading: APYReading{
-		BPS:        640,
-		Confidence: APYProtocolReported,
-		ObservedAt: now.Add(-time.Hour),
-	}}
-	r := NewRebalanceAPYResolver(stub)
-	r.SetClock(fixedClock(now))
+func TestAPYForRebalance(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 
-	bps, ok := r.APYForRebalance(context.Background(), "blend")
-	if !ok {
-		t.Fatal("fresh protocol-reported APY must be usable")
+	cases := []struct {
+		name    string
+		reading APYReading
+		err     error
+		wantBPS uint32
+		wantOK  bool
+	}{
+		{
+			name:    "fresh protocol-reported rate is authoritative",
+			reading: APYReading{BPS: 640, Confidence: APYProtocolReported, ObservedAt: now.Add(-time.Hour)},
+			wantBPS: 640,
+			wantOK:  true,
+		},
+		{
+			name:    "fresh derived rate is usable",
+			reading: APYReading{BPS: 310, Confidence: APYDerived, ObservedAt: now.Add(-2 * time.Hour)},
+			wantBPS: 310,
+			wantOK:  true,
+		},
+		{
+			// The whole point of the confidence flag: a zero BPS carried by an
+			// Unavailable reading is "unknown", never a real rate of zero.
+			name:    "unavailable reading is not a zero rate",
+			reading: APYReading{BPS: 0, Confidence: APYUnavailable, ObservedAt: now},
+			wantOK:  false,
+		},
+		{
+			name:    "stale reading is rejected",
+			reading: APYReading{BPS: 800, Confidence: APYDerived, ObservedAt: now.Add(-MaxOnChainAPYAge - time.Minute)},
+			wantOK:  false,
+		},
+		{
+			name:    "reading exactly at the age bound is still usable",
+			reading: APYReading{BPS: 500, Confidence: APYDerived, ObservedAt: now.Add(-MaxOnChainAPYAge)},
+			wantBPS: 500,
+			wantOK:  true,
+		},
+		{
+			// A future timestamp is a clock or ledger fault, not fresh data.
+			name:    "future timestamp is rejected",
+			reading: APYReading{BPS: 900, Confidence: APYProtocolReported, ObservedAt: now.Add(time.Hour)},
+			wantOK:  false,
+		},
+		{
+			name:    "missing observation time is rejected",
+			reading: APYReading{BPS: 500, Confidence: APYProtocolReported},
+			wantOK:  false,
+		},
+		{
+			name:    "unrecognised confidence is rejected",
+			reading: APYReading{BPS: 700, Confidence: APYConfidence("something-else"), ObservedAt: now},
+			wantOK:  false,
+		},
+		{
+			name:   "read failure yields hold, not a fallback",
+			err:    errors.New("rpc down"),
+			wantOK: false,
+		},
 	}
-	if bps != 640 {
-		t.Fatalf("got %d, want 640", bps)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubOnChainReader{reading: tc.reading, err: tc.err}
+			r := NewRebalanceAPYResolver(stub)
+			r.SetClock(fixedClock(now))
+
+			bps, ok := r.APYForRebalance(context.Background(), "blend")
+			if ok != tc.wantOK {
+				t.Fatalf("usable = %v, want %v", ok, tc.wantOK)
+			}
+			if bps != tc.wantBPS {
+				t.Fatalf("bps = %d, want %d", bps, tc.wantBPS)
+			}
+			// There is deliberately no DeFiLlama fallback: exactly one
+			// on-chain read, and no second source consulted when it fails.
+			if stub.calls != 1 {
+				t.Fatalf("on-chain reads = %d, want exactly 1", stub.calls)
+			}
+		})
 	}
 }
 
-func TestAPYForRebalanceRejectsUnavailable(t *testing.T) {
-	now := time.Now().UTC()
-	// An adapter reporting Unavailable carries a zero BPS. Treating that as a
-	// real zero is exactly the bug this rule exists to prevent.
-	stub := &stubOnChainReader{reading: APYReading{
-		BPS:        0,
-		Confidence: APYUnavailable,
-		ObservedAt: now,
-	}}
-	r := NewRebalanceAPYResolver(stub)
-	r.SetClock(fixedClock(now))
-
-	if _, ok := r.APYForRebalance(context.Background(), "soroswap"); ok {
-		t.Fatal("unavailable APY must not be usable for rebalancing")
-	}
-}
-
-func TestAPYForRebalanceRejectsStaleReading(t *testing.T) {
-	now := time.Now().UTC()
-	stub := &stubOnChainReader{reading: APYReading{
-		BPS:        800,
-		Confidence: APYDerived,
-		ObservedAt: now.Add(-MaxOnChainAPYAge - time.Minute),
-	}}
-	r := NewRebalanceAPYResolver(stub)
-	r.SetClock(fixedClock(now))
-
+func TestAPYForRebalanceWithoutReader(t *testing.T) {
+	r := NewRebalanceAPYResolver(nil)
 	if _, ok := r.APYForRebalance(context.Background(), "blend"); ok {
-		t.Fatal("stale reading must not drive a rebalance")
-	}
-}
-
-func TestAPYForRebalanceRejectsReadError(t *testing.T) {
-	r := NewRebalanceAPYResolver(&stubOnChainReader{err: errors.New("rpc down")})
-	if _, ok := r.APYForRebalance(context.Background(), "blend"); ok {
-		t.Fatal("a failed read must not yield a usable APY")
-	}
-}
-
-// The resolver must have no DeFiLlama fallback path at all: when on-chain data
-// is unusable the answer is "hold", never an off-chain substitute.
-func TestAPYForRebalanceHasNoOffChainFallback(t *testing.T) {
-	now := time.Now().UTC()
-	stub := &stubOnChainReader{reading: APYReading{
-		BPS:        0,
-		Confidence: APYUnavailable,
-		ObservedAt: now,
-	}}
-	r := NewRebalanceAPYResolver(stub)
-	r.SetClock(fixedClock(now))
-
-	bps, ok := r.APYForRebalance(context.Background(), "blend")
-	if ok || bps != 0 {
-		t.Fatalf("expected hold (0,false), got (%d,%v)", bps, ok)
-	}
-	if stub.calls != 1 {
-		t.Fatalf("expected exactly one on-chain read, got %d", stub.calls)
-	}
-}
-
-func TestReadingUsableRequiresTimestamp(t *testing.T) {
-	r := APYReading{BPS: 500, Confidence: APYProtocolReported}
-	if r.Usable(time.Now()) {
-		t.Fatal("a reading with no observation time must not be usable")
+		t.Fatal("a resolver with no reader must never report a usable APY")
 	}
 }
 
 func TestConfidenceFromBPSFlag(t *testing.T) {
-	cases := map[uint32]APYConfidence{
-		0:   APYProtocolReported,
-		1:   APYDerived,
-		2:   APYUnavailable,
-		99:  APYUnavailable, // unrecognised provenance is not trusted
+	cases := []struct {
+		name string
+		flag uint32
+		want APYConfidence
+	}{
+		{"protocol reported", 0, APYProtocolReported},
+		{"derived", 1, APYDerived},
+		{"unavailable", 2, APYUnavailable},
+		{"unrecognised provenance is not trusted", 99, APYUnavailable},
 	}
-	for flag, want := range cases {
-		if got := ConfidenceFromBPSFlag(flag); got != want {
-			t.Errorf("flag %d: got %q, want %q", flag, got, want)
-		}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ConfidenceFromBPSFlag(tc.flag); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Weighting must exclude allocations with no usable on-chain rate rather than
+// failing the refresh or averaging them in as zero.
+func TestWeightedVaultAPYSkippingUnknown(t *testing.T) {
+	alloc := func(protocol string, amount int64) vault.Allocation {
+		return vault.Allocation{Protocol: protocol, Amount: decimal.NewFromInt(amount)}
+	}
+
+	cases := []struct {
+		name          string
+		allocations   []vault.Allocation
+		apy           map[string]uint32
+		skipUnknown   bool
+		wantBPS       uint32
+		wantBreakdown int
+		wantErr       bool
+	}{
+		{
+			name:          "all rates known",
+			allocations:   []vault.Allocation{alloc("blend", 100), alloc("soroswap", 100)},
+			apy:           map[string]uint32{"blend": 400, "soroswap": 600},
+			skipUnknown:   true,
+			wantBPS:       500,
+			wantBreakdown: 2,
+		},
+		{
+			// The unknown source must not drag the average toward zero.
+			name:          "mixed known and unknown excludes the unknown",
+			allocations:   []vault.Allocation{alloc("blend", 100), alloc("soroswap", 100)},
+			apy:           map[string]uint32{"blend": 400},
+			skipUnknown:   true,
+			wantBPS:       400,
+			wantBreakdown: 1,
+		},
+		{
+			name:          "all unknown yields zero weight and empty breakdown",
+			allocations:   []vault.Allocation{alloc("blend", 100), alloc("soroswap", 100)},
+			apy:           map[string]uint32{},
+			skipUnknown:   true,
+			wantBPS:       0,
+			wantBreakdown: 0,
+		},
+		{
+			// Legacy (non-resolver) mode keeps treating a gap as a data error.
+			name:        "missing rate is an error when not skipping",
+			allocations: []vault.Allocation{alloc("blend", 100)},
+			apy:         map[string]uint32{},
+			skipUnknown: false,
+			wantErr:     true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vault.Vault{ID: uuid.New(), Allocations: tc.allocations}
+			bps, breakdown, err := weightedVaultAPYSkippingUnknown(v, tc.apy, tc.skipUnknown)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error for a missing rate")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if bps != tc.wantBPS {
+				t.Fatalf("bps = %d, want %d", bps, tc.wantBPS)
+			}
+			if len(breakdown) != tc.wantBreakdown {
+				t.Fatalf("breakdown entries = %d, want %d", len(breakdown), tc.wantBreakdown)
+			}
+		})
 	}
 }

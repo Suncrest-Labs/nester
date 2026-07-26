@@ -47,13 +47,24 @@ impl MockLendingProtocol {
         if amount <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
+        // Cumulative cap: total assets deposited by this owner, not per call.
+        // A per-call cap would let repeated deposits blow straight past it.
         let cap: i128 = env
             .storage()
             .instance()
             .get(&LendKey::DepositCap)
             .unwrap_or(0);
-        if cap != 0 && amount > cap {
-            panic_with_error!(&env, ContractError::ExceedsLimit);
+        if cap != 0 {
+            let index: i128 = env.storage().instance().get(&LendKey::IndexBps).unwrap();
+            let held_units: i128 = env
+                .storage()
+                .instance()
+                .get(&LendKey::Units(from.clone()))
+                .unwrap_or(0);
+            let held_assets = held_units * index / INDEX_ONE;
+            if held_assets + amount > cap {
+                panic_with_error!(&env, ContractError::ExceedsLimit);
+            }
         }
 
         // Push model: the caller has already transferred `amount` to this

@@ -5,8 +5,10 @@
 //! allocation logic.
 //!
 //! # Roles
+//!
 //! * Admin: register/update/remove sources, risk + limit updates.
 //! * Operator: day-to-day performance refreshes (APY/TVL) and migration ops.
+//!
 //! Role management is delegated to [`nester_access_control`].
 //!
 //! # Status transitions
@@ -327,14 +329,19 @@ impl YieldRegistryContract {
         touch_source(&env, &mut source);
         save_source(&env, &id, &source);
 
+        // Emit the source's new configuration rather than a status transition:
+        // this call changes the adapter, not the status, and a SOURCE_UPDATED
+        // carrying old_status == new_status would be noise for consumers
+        // watching for lifecycle changes.
         emit_event_with_sym(
             &env,
             REGISTRY,
-            SOURCE_UPDATED,
+            SOURCE_ADDED,
             id,
-            SourceUpdatedEventData {
-                old_status: source.status.clone(),
-                new_status: source.status,
+            SourceAddedEventData {
+                contract_address: source.contract_address.clone(),
+                adapter: source.adapter.clone(),
+                protocol_type: source.protocol_type.clone(),
             },
         );
     }
@@ -502,16 +509,27 @@ impl YieldRegistryContract {
                 );
             }
             _ => {
-                if reading.apy_bps > MAX_APY_BPS {
-                    panic_with_error!(&env, ContractError::InvalidAmount);
-                }
+                // A reading can be rejected two ways: out of range, or beyond
+                // the single-update deviation threshold. Both mean the adapter
+                // handed us something unusable, so both count as failures —
+                // and neither may panic. Panicking would roll back the failure
+                // accounting (see the note above), letting an adapter that
+                // pins a garbage value revert this call forever while its
+                // source stays Active on a stale APY and never degrades.
                 let last_apy = source.current_apy_bps;
-                if last_apy != 0
-                    && !matches!(source.apy_confidence, ApyConfidence::Unavailable)
-                    && reading.apy_bps.abs_diff(last_apy) > apy_deviation_threshold(&env)
-                {
-                    panic_with_error!(&env, ContractError::InvalidOperation);
+                let rejected = reading.apy_bps > MAX_APY_BPS
+                    || (last_apy != 0
+                        && !matches!(source.apy_confidence, ApyConfidence::Unavailable)
+                        && reading.apy_bps.abs_diff(last_apy) > apy_deviation_threshold(&env));
+
+                if rejected {
+                    record_failure(&env, &id, &mut source, &env.current_contract_address());
+                    return AdapterApy {
+                        apy_bps: 0,
+                        confidence: ApyConfidence::Unavailable,
+                    };
                 }
+
                 source.apy_confidence = reading.confidence.clone();
                 commit_apy_update(&env, &id, &mut source, reading.apy_bps);
             }

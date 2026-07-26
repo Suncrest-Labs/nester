@@ -15,6 +15,7 @@
 #![cfg(test)]
 
 pub mod adapter_failure_tests;
+pub mod adversarial_tests;
 pub mod lifecycle_tests;
 
 extern crate std;

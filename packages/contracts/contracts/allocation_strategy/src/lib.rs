@@ -7,8 +7,8 @@ use soroban_sdk::{
 
 use nester_access_control::{AccessControl, Role};
 use nester_common::{
-    adapters::ApyConfidence, emit_event, fees::mul_div, ContractError, ProtocolType, SourceStatus,
-    BASIS_POINT_SCALE,
+    adapters::ApyConfidence, emit_event, fees::mul_div, with_reentrancy_guard, CalleeAllowlist,
+    ContractError, ProtocolType, SourceStatus, BASIS_POINT_SCALE,
 };
 
 const STRATEGY: Symbol = symbol_short!("STRATEGY");
@@ -60,6 +60,7 @@ impl<'a> RegistryClient<'a> {
     }
 
     fn get_active_sources(&self) -> Vec<RegistrySource> {
+        CalleeAllowlist::assert_allowed(self.env, self.contract_id);
         self.env.invoke_contract(
             self.contract_id,
             &Symbol::new(self.env, "get_active_sources"),
@@ -154,6 +155,7 @@ impl AllocationStrategyContract {
         env.storage()
             .instance()
             .set(&DataKey::RegistryId, &registry_id);
+        CalleeAllowlist::register(&env, &registry_id);
         env.storage()
             .instance()
             .set(&DataKey::VaultType, &vault_type);
@@ -231,6 +233,10 @@ impl AllocationStrategyContract {
     }
 
     pub fn set_weights(env: Env, caller: Address, weights: Vec<AllocationWeight>) {
+        with_reentrancy_guard(env, |env| Self::set_weights_internal(env, caller, weights));
+    }
+
+    fn set_weights_internal(env: Env, caller: Address, weights: Vec<AllocationWeight>) {
         caller.require_auth();
         require_admin_or_operator(&env, &caller);
 
@@ -347,7 +353,7 @@ impl AllocationStrategyContract {
         target_weights: Vec<AllocationWeight>,
     ) -> bool {
         let threshold = Self::get_strategy_params(env).rebalance_threshold_bps;
-        let mut seen = Vec::new(&current_weights.env());
+        let mut seen = Vec::new(current_weights.env());
 
         for weight in current_weights.iter() {
             if !contains_symbol(&seen, &weight.source_id) {
@@ -526,9 +532,9 @@ impl AllocationStrategyContract {
             if let Some(idx) = max_idx {
                 let remainder = total_to_redistribute - distributed;
                 if remainder != 0 {
-                    let mut d = deltas.get(idx as u32).unwrap();
+                    let mut d = deltas.get(idx).unwrap();
                     d.delta += remainder;
-                    deltas.set(idx as u32, d);
+                    deltas.set(idx, d);
                 }
             }
         } else if total_to_redistribute > 0 {
@@ -680,9 +686,7 @@ fn suggest_weights_from_sources(env: &Env, sources: Vec<RegistrySource>) -> Vec<
 
 fn source_score(source: &RegistrySource) -> i128 {
     let raw_risk = source.risk_rating;
-    let clamped_risk = if raw_risk == 0 {
-        MAX_RISK_RATING
-    } else if raw_risk > MAX_RISK_RATING {
+    let clamped_risk = if raw_risk == 0 || raw_risk > MAX_RISK_RATING {
         MAX_RISK_RATING
     } else {
         raw_risk
@@ -722,11 +726,12 @@ fn optimal_allocation_from_sources(
             _ => {}
         }
     }
-    // Every source has an unknown APY — fall back to the first so the vault
-    // still has a target rather than an empty allocation.
+    // Every source has an unknown APY. Returning an empty target holds the
+    // current allocation steady, which is the right answer: picking one at
+    // random would be a 100% bet placed on no information.
     let best = match best {
         Some(b) => b,
-        None => sources.get(0).unwrap(),
+        None => return weights,
     };
     weights.push_back(AllocationWeight {
         source_id: best.id.clone(),
@@ -877,7 +882,7 @@ fn even_distribution(env: &Env, count: usize) -> Vec<u32> {
 }
 
 fn proportional_with_cap(env: &Env, scores: &Vec<i128>, max_weight_bps: u32) -> Vec<u32> {
-    if scores.len() == 0 {
+    if scores.is_empty() {
         return Vec::new(env);
     }
 
@@ -1029,7 +1034,7 @@ fn compute_weights(env: &Env, apys: Vec<SourceApy>) -> Vec<AllocationWeight> {
         }
     }
 
-    if eligible_indices.len() > 0 {
+    if !eligible_indices.is_empty() {
         let computed = match vault_type {
             VaultType::DeFi500 => even_distribution(env, eligible_indices.len() as usize),
             _ => proportional_with_cap(env, &scores, params.max_weight_bps),
@@ -1056,7 +1061,7 @@ fn persist_allocations(env: &Env, total_amount: i128, weights: &Vec<AllocationWe
 fn allocation_amounts(weights: &Vec<AllocationWeight>, total_amount: i128) -> Vec<(Symbol, i128)> {
     let scale = BASIS_POINT_SCALE as i128;
     let env = weights.env();
-    let mut out = Vec::new(&env);
+    let mut out = Vec::new(env);
     let mut total_allocated = 0_i128;
     let mut max_index = None;
     let mut max_weight = 0_u32;
@@ -1069,7 +1074,7 @@ fn allocation_amounts(weights: &Vec<AllocationWeight>, total_amount: i128) -> Ve
         total_allocated += amount;
         if weight.weight_bps > max_weight {
             max_weight = weight.weight_bps;
-            max_index = Some(index as usize);
+            max_index = Some(index);
         }
         out.push_back((weight.source_id, amount));
     }
@@ -1113,6 +1118,7 @@ fn lookup_weight(weights: &Vec<AllocationWeight>, target: &Symbol) -> u32 {
 }
 
 fn registry_has_source(env: &Env, registry_id: &Address, source_id: &Symbol) -> bool {
+    CalleeAllowlist::assert_allowed(env, registry_id);
     env.invoke_contract(
         registry_id,
         &Symbol::new(env, "has_source"),
@@ -1125,6 +1131,7 @@ fn registry_get_source_status(
     registry_id: &Address,
     source_id: &Symbol,
 ) -> SourceStatus {
+    CalleeAllowlist::assert_allowed(env, registry_id);
     env.invoke_contract(
         registry_id,
         &Symbol::new(env, "get_source_status"),
@@ -1133,6 +1140,7 @@ fn registry_get_source_status(
 }
 
 fn registry_get_active_sources(env: &Env, registry_id: &Address) -> Vec<RegistrySource> {
+    CalleeAllowlist::assert_allowed(env, registry_id);
     match env.try_invoke_contract::<Vec<RegistrySource>, Error>(
         registry_id,
         &Symbol::new(env, "get_active_sources"),

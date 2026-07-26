@@ -160,6 +160,11 @@ fn setup() -> (
     (env, admin, sac, vault, treasury)
 }
 
+fn bind_strategy(vault: &VaultContractClient, admin: &Address, strategy: &Address) {
+    vault.register_callee(admin, strategy);
+    vault.set_allocation_strategy(admin, strategy);
+}
+
 /// Mint `amount` tokens to `recipient` using the Stellar asset admin client.
 fn mint(sac: &token::StellarAssetClient, recipient: &Address, amount: i128) {
     sac.mint(recipient, &amount);
@@ -1557,7 +1562,7 @@ fn test_harvest_new_share_balance_increases() {
 fn rebalance_with_net_negative_delta_increases_liquid_reserves() {
     let (env, admin, token, vault, _treasury) = setup();
     let strategy_id = Address::generate(&env); // Mock strategy
-    vault.set_allocation_strategy(&admin, &strategy_id);
+    bind_strategy(&vault, &admin, &strategy_id);
 
     let user = Address::generate(&env);
     mint(&token, &user, 1000 * XLM);
@@ -1573,7 +1578,7 @@ fn rebalance_with_net_negative_delta_increases_liquid_reserves() {
     // We need to mock calculate_rebalance_deltas to return a negative delta.
     
     let real_strategy_id = env.register_contract(None, MockStrategy);
-    vault.set_allocation_strategy(&admin, &real_strategy_id);
+    bind_strategy(&vault, &admin, &real_strategy_id);
     
     vault.rebalance(&admin);
     
@@ -1620,7 +1625,7 @@ fn rebalance_succeeds_within_slippage_tolerance() {
     vault.record_source_allocation(&admin, &source_id, &(1000 * XLM));
 
     let strategy_id = env.register_contract(None, MockStrategy);
-    vault.set_allocation_strategy(&admin, &strategy_id);
+    bind_strategy(&vault, &admin, &strategy_id);
 
     let _ = vault.rebalance(&admin); // should not panic
 }
@@ -1811,7 +1816,7 @@ fn prepare_authorized_rebalance(
     let source_id = symbol_short!("aave");
     vault.record_source_allocation(admin, &source_id, &(1_000 * XLM));
     let strategy_id = env.register_contract(None, MockStrategy);
-    vault.set_allocation_strategy(admin, &strategy_id);
+    bind_strategy(vault, admin, &strategy_id);
     vault.set_rebalance_cooldown(admin, &0);
     (strategy_id, source_id)
 }
@@ -2017,7 +2022,7 @@ fn admin_entrypoints_accept_then_reject_revoked_admin() {
     vault.set_early_withdrawal_fee(&delegated_admin, &10);
     vault.set_fee_config(&delegated_admin, &fee_config);
     vault.set_emergency_fee(&delegated_admin, &100);
-    vault.set_allocation_strategy(&delegated_admin, &strategy_id);
+    bind_strategy(&vault, &delegated_admin, &strategy_id);
     vault.set_rebalance_cooldown(&delegated_admin, &0);
     vault.harvest_vault(&delegated_admin);
     vault.record_source_allocation(&delegated_admin, &source_id, &(1_000 * XLM));
@@ -2298,5 +2303,29 @@ fn emergency_withdraw_all_without_user_signature_is_rejected() {
     assert_rejected!(
         vault.try_emergency_withdraw_all(&user),
         "emergency_withdraw_all"
+    );
+}
+
+#[test]
+fn measure_reentrancy_guard_resource_cost_on_deposit_and_withdraw() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    env.budget().reset_tracker();
+    vault.deposit(&user, &(10 * XLM), &0);
+    let deposit_cpu = env.budget().cpu_instruction_cost();
+    let deposit_mem = env.budget().memory_bytes_cost();
+
+    env.budget().reset_tracker();
+    vault.withdraw(&user, &(5 * XLM), &0);
+    let withdraw_cpu = env.budget().cpu_instruction_cost();
+    let withdraw_mem = env.budget().memory_bytes_cost();
+
+    assert!(deposit_cpu > 0);
+    assert!(withdraw_cpu > 0);
+    std::println!(
+        "reentrancy_guard_deposit_cpu={deposit_cpu} reentrancy_guard_deposit_mem={deposit_mem} \
+         reentrancy_guard_withdraw_cpu={withdraw_cpu} reentrancy_guard_withdraw_mem={withdraw_mem}"
     );
 }

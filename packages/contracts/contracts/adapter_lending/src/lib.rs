@@ -49,7 +49,11 @@ pub struct LendingAdapterContract;
 impl LendingAdapterContract {
     /// One-time wiring. No admin key is kept: the adapter is immutable after
     /// initialization, keeping its trust surface minimal.
+    ///
+    /// `vault` must authorize, so a deployed-but-uninitialized adapter cannot
+    /// be front-run by an attacker who points it at a vault they control.
     pub fn initialize(env: Env, vault: Address, protocol: Address, underlying: Address) {
+        vault.require_auth();
         if env.storage().instance().has(&DataKey::Vault) {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
@@ -81,11 +85,13 @@ impl YieldAdapter for LendingAdapterContract {
         let protocol: Address = env.storage().instance().get(&DataKey::Protocol).unwrap();
         let me = env.current_contract_address();
 
-        // Push the assets straight to the protocol, then tell it to credit
-        // this adapter's position. Routing them through the adapter first
-        // would make the protocol's pull a nested transfer authorized by a
-        // non-root address, which Soroban's auth model rejects.
-        token::Client::new(&env, &underlying).transfer(&from, &protocol, &amount);
+        // Pull the assets from the caller, then forward them to the protocol.
+        // The caller authorizes this exact transfer before invoking (see the
+        // vault's `authorize_adapter_pull`), which keeps the whole movement
+        // inside this invocation: if anything below reverts, the pull is
+        // rolled back with it and no funds are stranded here.
+        token::Client::new(&env, &underlying).transfer(&from, &me, &amount);
+        token::Client::new(&env, &underlying).transfer(&me, &protocol, &amount);
         let units: i128 = env.invoke_contract(
             &protocol,
             &Symbol::new(&env, "deposit"),

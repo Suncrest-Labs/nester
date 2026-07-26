@@ -1,6 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
     IntoVal, Symbol, Val, Vec,
 };
@@ -22,6 +23,7 @@ impl<'a> VaultTokenContractClient<'a> {
     where
         R: soroban_sdk::TryFromVal<Env, Val>,
     {
+        CalleeAllowlist::assert_allowed(self.env, &self.address);
         self.env
             .invoke_contract(&self.address, &Symbol::new(self.env, name), args)
     }
@@ -93,7 +95,10 @@ impl<'a> VaultTokenContractClient<'a> {
 }
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event, emit_event_with_sym, ContractError, SourceStatus};
+use nester_common::{
+    emit_event, emit_event_with_sym, with_reentrancy_guard, CalleeAllowlist, ContractError,
+    SourceStatus,
+};
 
 const VAULT: Symbol = symbol_short!("VAULT");
 const DEPOSIT: Symbol = symbol_short!("DEPOSIT");
@@ -412,8 +417,12 @@ fn rebalance_min_assets_out(env: &Env, gross: i128, slippage_bps: u32) -> i128 {
 enum AdapterOutcome {
     /// The source has no adapter — bookkeeping-only, pre-adapter behaviour.
     NoAdapter,
-    /// The adapter moved the value and enforced its minimum-output floor.
-    Moved,
+    /// The adapter moved value and enforced its minimum-output floor. Carries
+    /// the **realised** asset-denominated delta the protocol actually
+    /// confirmed, signed like the requested delta. Bookkeeping records this
+    /// rather than the requested figure, so the vault never books an amount the
+    /// protocol did not acknowledge.
+    Moved(i128),
     /// The adapter (or the registry lookup) reverted. Isolate this source.
     Failed,
 }
@@ -465,32 +474,72 @@ fn move_via_adapter(
         _ => return AdapterOutcome::Failed,
     };
 
+    // Adapters call third-party protocol code, so they are gated by the same
+    // callee allowlist as every other external callee (#811). An unregistered
+    // adapter is treated as a per-source failure rather than an assert, so an
+    // un-allowlisted source is skipped instead of aborting the whole rebalance
+    // — the same blast-radius rule the rest of this path follows. Register an
+    // adapter with `register_callee` before it can move value.
+    if !CalleeAllowlist::is_registered(env, &adapter) {
+        return AdapterOutcome::Failed;
+    }
+
     let me = env.current_contract_address();
     if delta > 0 {
-        // Deposit: require the protocol to mint a non-zero position. Unit
-        // pricing is protocol-specific, so the meaningful floor the vault can
-        // assert generically is "we received something".
+        // Pre-authorize the adapter to pull exactly `delta` of the underlying
+        // from this vault for this call, and nothing else.
+        //
+        // The pull happens inside the adapter's invocation, so if the adapter
+        // reverts, `try_invoke_contract` rolls the transfer back with it. A
+        // push before the call would leave the funds stranded at a broken
+        // adapter — a fund-loss bug in exactly the failure path this design
+        // exists to survive.
+        let underlying = VaultContract::get_token(env.clone());
+        CalleeAllowlist::assert_allowed(env, &underlying);
+        authorize_adapter_pull(env, &underlying, &adapter, delta);
+
+        // Floor the position units on the same slippage tolerance used for
+        // withdrawals, priced off the adapter's own valuation of what it
+        // already holds. With no prior position there is no rate to price
+        // against, so require only that the protocol mints something.
+        let min_units_out = deposit_min_units_out(env, &adapter, delta, slippage_bps);
+
         let args: Vec<Val> = soroban_sdk::vec![
             env,
             me.into_val(env),
             delta.into_val(env),
-            1i128.into_val(env),
+            min_units_out.into_val(env),
         ];
         match env.try_invoke_contract::<i128, ContractError>(
             &adapter,
             &Symbol::new(env, "deposit"),
             args,
         ) {
-            Ok(Ok(_)) => AdapterOutcome::Moved,
+            // The adapter returns units; the vault books assets. The assets it
+            // actually parted with is `delta`, which the push above realised.
+            Ok(Ok(_)) => AdapterOutcome::Moved(delta),
+            // The authorized pull is rolled back with the failed invocation,
+            // so no funds have left the vault.
             _ => AdapterOutcome::Failed,
         }
     } else {
         let gross = -delta;
         let min_out = rebalance_min_assets_out(env, gross, slippage_bps);
+
+        // `withdraw` is denominated in position units, not assets. Convert
+        // using the adapter's own valuation of the position it holds:
+        //     units_to_burn = units_held * gross / position_value
+        // Passing the asset figure straight into the units slot would burn an
+        // arbitrary and usually wrong fraction of the position.
+        let units = match assets_to_units(env, &adapter, gross) {
+            Some(u) if u > 0 => u,
+            _ => return AdapterOutcome::Failed,
+        };
+
         let args: Vec<Val> = soroban_sdk::vec![
             env,
             me.into_val(env),
-            gross.into_val(env),
+            units.into_val(env),
             min_out.into_val(env),
         ];
         match env.try_invoke_contract::<i128, ContractError>(
@@ -498,9 +547,88 @@ fn move_via_adapter(
             &Symbol::new(env, "withdraw"),
             args,
         ) {
-            Ok(Ok(_)) => AdapterOutcome::Moved,
+            // Book the proceeds the protocol actually paid, not the request.
+            Ok(Ok(received)) => AdapterOutcome::Moved(-received),
             _ => AdapterOutcome::Failed,
         }
+    }
+}
+
+/// Authorize `adapter` to `transfer` exactly `amount` of `token` out of this
+/// vault, scoped to the next invocation only.
+///
+/// This is the canonical Soroban mechanism for a contract to permit a nested
+/// transfer from its own address. The grant names the token, the exact
+/// arguments, and nothing else, so the adapter cannot move a different amount,
+/// a different asset, or anyone else's funds.
+fn authorize_adapter_pull(env: &Env, token: &Address, adapter: &Address, amount: i128) {
+    let me = env.current_contract_address();
+    let args: Vec<Val> = soroban_sdk::vec![
+        env,
+        me.clone().into_val(env),
+        adapter.clone().into_val(env),
+        amount.into_val(env),
+    ];
+
+    env.authorize_as_current_contract(soroban_sdk::vec![
+        env,
+        InvokerContractAuthEntry::Contract(SubContractInvocation {
+            context: ContractContext {
+                contract: token.clone(),
+                fn_name: Symbol::new(env, "transfer"),
+                args,
+            },
+            sub_invocations: Vec::new(env),
+        }),
+    ]);
+}
+
+/// Convert an asset amount into adapter position units, pro-rata against the
+/// adapter's current position. Returns `None` when the adapter cannot be read
+/// or holds nothing to value against — callers treat that as a failure and
+/// skip the source rather than guessing a unit count.
+fn assets_to_units(env: &Env, adapter: &Address, assets: i128) -> Option<i128> {
+    let me = env.current_contract_address();
+    let owner_args: Vec<Val> = soroban_sdk::vec![env, me.into_val(env)];
+    let no_args: Vec<Val> = Vec::new(env);
+
+    let value = match env.try_invoke_contract::<i128, ContractError>(
+        adapter,
+        &Symbol::new(env, "position_value"),
+        owner_args,
+    ) {
+        Ok(Ok(v)) if v > 0 => v,
+        _ => return None,
+    };
+    let units_held = match env.try_invoke_contract::<i128, ContractError>(
+        adapter,
+        &Symbol::new(env, "max_withdraw"),
+        no_args,
+    ) {
+        Ok(Ok(u)) if u > 0 => u,
+        _ => return None,
+    };
+
+    // Withdrawing the whole position must burn every unit, not a rounded-down
+    // share of them.
+    if assets >= value {
+        return Some(units_held);
+    }
+    units_held.checked_mul(assets).map(|n| n / value)
+}
+
+/// Minimum position units to accept for a deposit of `assets`, derived from
+/// the adapter's existing position and the configured slippage tolerance.
+/// Falls back to 1 (the protocol must mint something) when there is no prior
+/// position to price against.
+fn deposit_min_units_out(env: &Env, adapter: &Address, assets: i128, slippage_bps: u32) -> i128 {
+    match assets_to_units(env, adapter, assets) {
+        Some(expected) if expected > 0 => {
+            nester_common::fees::mul_div(expected, (10_000 - slippage_bps) as i128, 10_000)
+                .unwrap_or(1)
+                .max(1)
+        }
+        _ => 1,
     }
 }
 
@@ -525,6 +653,25 @@ fn enforce_rebalance_slippage(env: &Env, min_assets_out: i128, actual_received: 
     if actual_received < min_assets_out {
         panic_with_error!(env, ContractError::SlippageExceeded);
     }
+}
+
+fn invoke_allowed<R>(env: &Env, address: &Address, fn_name: &Symbol, args: Vec<Val>) -> R
+where
+    R: soroban_sdk::TryFromVal<Env, Val>,
+{
+    CalleeAllowlist::assert_allowed(env, address);
+    env.invoke_contract(address, fn_name, args)
+}
+
+fn transfer_tokens(env: &Env, token: &Address, from: &Address, to: &Address, amount: &i128) {
+    CalleeAllowlist::assert_allowed(env, token);
+    token::Client::new(env, token).transfer(from, to, amount);
+}
+
+fn bootstrap_callee_allowlist(env: &Env, token: &Address, vault_token: &Address, treasury: &Address) {
+    CalleeAllowlist::register(env, token);
+    CalleeAllowlist::register(env, vault_token);
+    CalleeAllowlist::register(env, treasury);
 }
 
 fn get_shares(env: &Env, user: &Address) -> i128 {
@@ -861,7 +1008,7 @@ impl VaultContract {
             performance_fee_bps: 1000,    // 10%
             management_fee_bps: 50,       // 0.5%
             early_withdrawal_fee_bps: 10, // 0.1%
-            treasury_address: treasury,
+            treasury_address: treasury.clone(),
         };
         env.storage()
             .instance()
@@ -888,6 +1035,8 @@ impl VaultContract {
         env.storage()
             .instance()
             .set(&DataKey::WithdrawalHistory, &history);
+
+        bootstrap_callee_allowlist(&env, &token_address, &vault_token_address, &treasury);
     }
 
     pub fn set_max_deposit(env: Env, caller: Address, amount: i128) {
@@ -919,7 +1068,7 @@ impl VaultContract {
     pub fn set_rebalance_threshold(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
-        if bps < 100 || bps > 5000 {
+        if !(100..=5000).contains(&bps) {
             panic_with_error!(&env, ContractError::ConfigOutOfRange);
         }
         env.storage()
@@ -1026,6 +1175,20 @@ impl VaultContract {
         env.storage()
             .instance()
             .set(&DataKey::AllocationStrategy, &strategy);
+    }
+
+    pub fn register_callee(env: Env, caller: Address, callee: Address) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        CalleeAllowlist::register(&env, &callee);
+    }
+
+    pub fn unregister_callee(env: Env, caller: Address, callee: Address) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        CalleeAllowlist::unregister(&env, &callee);
     }
 
     pub fn get_allocation_strategy(env: Env) -> Address {
@@ -1198,6 +1361,10 @@ impl VaultContract {
     /// Returns a zero-filled `HarvestResult` with `compounded: false` when the
     /// user has no pending yield, so callers can always call this safely.
     pub fn harvest(env: Env, user: Address) -> HarvestResult {
+        with_reentrancy_guard(env, |env| Self::harvest_internal(env, user))
+    }
+
+    fn harvest_internal(env: Env, user: Address) -> HarvestResult {
         require_initialized(&env);
         require_active(&env);
         user.require_auth();
@@ -1235,12 +1402,15 @@ impl VaultContract {
         // Transfer performance fee to treasury.
         if performance_fee > 0 {
             let token_address = self::VaultContract::get_token(env.clone());
-            token::Client::new(&env, &token_address).transfer(
+            transfer_tokens(
+                &env,
+                &token_address,
                 &env.current_contract_address(),
                 &config.treasury_address,
                 &performance_fee,
             );
-            env.invoke_contract::<()>(
+            invoke_allowed::<()>(
+                &env,
                 &config.treasury_address,
                 &Symbol::new(&env, "receive_fees"),
                 (performance_fee,).into_val(&env),
@@ -1299,6 +1469,10 @@ impl VaultContract {
     /// Suitable for periodic treasury collection without enumerating individual
     /// user positions on-chain (Soroban does not support unbounded iteration).
     pub fn harvest_vault(env: Env, admin: Address) -> VaultHarvestResult {
+        with_reentrancy_guard(env, |env| Self::harvest_vault_internal(env, admin))
+    }
+
+    fn harvest_vault_internal(env: Env, admin: Address) -> VaultHarvestResult {
         require_initialized(&env);
         require_active(&env);
         admin.require_auth();
@@ -1329,12 +1503,15 @@ impl VaultContract {
         // Transfer performance fee to treasury.
         if total_fee_collected > 0 {
             let token_address = self::VaultContract::get_token(env.clone());
-            token::Client::new(&env, &token_address).transfer(
+            transfer_tokens(
+                &env,
+                &token_address,
                 &env.current_contract_address(),
                 &config.treasury_address,
                 &total_fee_collected,
             );
-            env.invoke_contract::<()>(
+            invoke_allowed::<()>(
+                &env,
                 &config.treasury_address,
                 &Symbol::new(&env, "receive_fees"),
                 (total_fee_collected,).into_val(&env),
@@ -1385,7 +1562,8 @@ impl VaultContract {
         let strategy = get_allocation_strategy(&env);
         let allocations = current_allocations_vec(&env);
 
-        let in_spec: bool = env.invoke_contract(
+        let in_spec: bool = invoke_allowed(
+            &env,
             &strategy,
             &Symbol::new(&env, "validate_allocations"),
             (allocations, total_assets).into_val(&env),
@@ -1406,6 +1584,10 @@ impl VaultContract {
     /// yield-source adapters are appended once those adapters land. The
     /// rebalance is atomic — either every delta applies or the call panics.
     pub fn rebalance(env: Env, caller: Address) -> Vec<AllocationDeltaView> {
+        with_reentrancy_guard(env, |env| Self::rebalance_internal(env, caller))
+    }
+
+    fn rebalance_internal(env: Env, caller: Address) -> Vec<AllocationDeltaView> {
         require_initialized(&env);
         require_active(&env);
         caller.require_auth();
@@ -1454,7 +1636,8 @@ impl VaultContract {
         }
 
         // Fetch deltas from the allocation strategy.
-        let deltas: Vec<AllocationDeltaView> = env.invoke_contract(
+        let deltas: Vec<AllocationDeltaView> = invoke_allowed(
+            &env,
             &strategy,
             &Symbol::new(&env, "calculate_rebalance_deltas"),
             (current, deployed_total).into_val(&env),
@@ -1482,11 +1665,19 @@ impl VaultContract {
 
             // Move value through the source's adapter when one is configured.
             // Any failure isolates to this source.
+            //
+            // `effective_delta` is what actually moved: for an adapter-backed
+            // source that is the amount the protocol confirmed, which can differ
+            // from the requested delta. Bookkeeping follows the realised figure.
             let mut adapter_handled = false;
+            let mut effective_delta = d.delta;
             if let Some(registry_id) = registry.clone() {
                 match move_via_adapter(&env, &registry_id, &d.source_id, d.delta, slippage_bps) {
                     AdapterOutcome::NoAdapter => {}
-                    AdapterOutcome::Moved => adapter_handled = true,
+                    AdapterOutcome::Moved(realised) => {
+                        adapter_handled = true;
+                        effective_delta = realised;
+                    }
                     AdapterOutcome::Failed => {
                         report_source_failure(&env, &registry_id, &d.source_id);
                         emit_event_with_sym(
@@ -1507,7 +1698,7 @@ impl VaultContract {
 
             let current_amount = get_source_allocation(&env, &d.source_id);
             let new_amount = current_amount
-                .checked_add(d.delta)
+                .checked_add(effective_delta)
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
             if new_amount < 0 {
@@ -1534,8 +1725,11 @@ impl VaultContract {
             }
 
             set_source_allocation(&env, &d.source_id, new_amount);
-            total_delta += d.delta;
-            applied.push_back(d);
+            total_delta += effective_delta;
+            applied.push_back(AllocationDeltaView {
+                source_id: d.source_id.clone(),
+                delta: effective_delta,
+            });
         }
 
         if total_delta < 0 {
@@ -1620,6 +1814,12 @@ impl VaultContract {
     }
 
     pub fn collect_fees(env: Env, caller: Address) {
+        with_reentrancy_guard(env, |env| {
+            Self::collect_fees_internal(env, caller);
+        })
+    }
+
+    fn collect_fees_internal(env: Env, caller: Address) {
         caller.require_auth();
         if !AccessControl::has_role(&env, &caller, Role::Admin)
             && !AccessControl::has_role(&env, &caller, Role::Manager)
@@ -1645,13 +1845,16 @@ impl VaultContract {
             let config = get_fee_config(&env);
             let token_address = self::VaultContract::get_token(env.clone());
 
-            token::Client::new(&env, &token_address).transfer(
+            transfer_tokens(
+                &env,
+                &token_address,
                 &env.current_contract_address(),
                 &config.treasury_address,
                 &collectable,
             );
 
-            env.invoke_contract::<()>(
+            invoke_allowed::<()>(
+                &env,
                 &config.treasury_address,
                 &Symbol::new(&env, "receive_fees"),
                 (collectable,).into_val(&env),
@@ -1669,6 +1872,12 @@ impl VaultContract {
 
     /// Deposit funds into the vault.
     pub fn deposit(env: Env, user: Address, amount: i128, min_shares_out: i128) -> i128 {
+        with_reentrancy_guard(env, |env| {
+            Self::deposit_internal(env, user, amount, min_shares_out)
+        })
+    }
+
+    fn deposit_internal(env: Env, user: Address, amount: i128, min_shares_out: i128) -> i128 {
         require_initialized(&env);
         require_active(&env);
 
@@ -1703,7 +1912,7 @@ impl VaultContract {
         let token_address = self::VaultContract::get_token(env.clone());
         let contract_address = env.current_contract_address();
 
-        token::Client::new(&env, &token_address).transfer(&user, &contract_address, &amount);
+        transfer_tokens(&env, &token_address, &user, &contract_address, &amount);
 
         let total_assets = get_total_assets(&env);
         // Mint deposit shares against gross assets (pre-fee) so new depositors
@@ -1751,12 +1960,16 @@ impl VaultContract {
             },
         );
 
-        Self::process_emergency_queue(env.clone());
+        Self::process_emergency_queue_internal(env.clone());
 
         new_user_shares
     }
 
     pub fn process_emergency_queue(env: Env) {
+        with_reentrancy_guard(env, Self::process_emergency_queue_internal)
+    }
+
+    fn process_emergency_queue_internal(env: Env) {
         let queue = get_emergency_queue(&env);
         if queue.is_empty() {
             return;
@@ -1766,13 +1979,18 @@ impl VaultContract {
         let mut liquid_reserved = get_liquid_reserved(&env);
         let token_address = self::VaultContract::get_token(env.clone());
         let contract_address = env.current_contract_address();
-        let token_client = token::Client::new(&env, &token_address);
 
         let mut i = 0;
         while i < queue.len() {
             let req = queue.get(i).unwrap();
             if liquid_reserves >= req.amount {
-                token_client.transfer(&contract_address, &req.user, &req.amount);
+                transfer_tokens(
+                    &env,
+                    &token_address,
+                    &contract_address,
+                    &req.user,
+                    &req.amount,
+                );
                 liquid_reserves -= req.amount;
                 // Release the reservation now that the payment has been made.
                 liquid_reserved = liquid_reserved.saturating_sub(req.amount);
@@ -1806,6 +2024,12 @@ impl VaultContract {
 
     /// Withdraw funds from the vault.
     pub fn withdraw(env: Env, user: Address, shares: i128, min_assets_out: i128) -> i128 {
+        with_reentrancy_guard(env, |env| {
+            Self::withdraw_internal(env, user, shares, min_assets_out)
+        })
+    }
+
+    fn withdraw_internal(env: Env, user: Address, shares: i128, min_assets_out: i128) -> i128 {
         require_initialized(&env);
         require_active(&env);
 
@@ -1892,7 +2116,9 @@ impl VaultContract {
         let token_address = self::VaultContract::get_token(env.clone());
         let contract_address = env.current_contract_address();
 
-        token::Client::new(&env, &token_address).transfer(
+        transfer_tokens(
+            &env,
+            &token_address,
             &contract_address,
             &user,
             &assets_to_withdraw,
@@ -1951,6 +2177,10 @@ impl VaultContract {
 
     /// Direct withdrawal bypassing normal logic, only available when paused.
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, ContractError> {
+        with_reentrancy_guard(env, |env| Self::emergency_withdraw_internal(env, user))
+    }
+
+    fn emergency_withdraw_internal(env: Env, user: Address) -> Result<i128, ContractError> {
         require_initialized(&env);
         if !is_paused(&env) {
             panic_with_error!(&env, ContractError::InvalidOperation);
@@ -2024,7 +2254,9 @@ impl VaultContract {
             Ok(0)
         } else {
             let token_address = self::VaultContract::get_token(env.clone());
-            token::Client::new(&env, &token_address).transfer(
+            transfer_tokens(
+                &env,
+                &token_address,
                 &env.current_contract_address(),
                 &user,
                 &return_amount,
@@ -2062,6 +2294,10 @@ impl VaultContract {
     ///
     /// Authorization: callable only by the position owner (`user`).
     pub fn emergency_withdraw_all(env: Env, user: Address) -> EmergencyWithdrawAllResult {
+        with_reentrancy_guard(env, |env| Self::emergency_withdraw_all_internal(env, user))
+    }
+
+    fn emergency_withdraw_all_internal(env: Env, user: Address) -> EmergencyWithdrawAllResult {
         require_initialized(&env);
         user.require_auth();
 

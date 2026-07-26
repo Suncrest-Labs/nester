@@ -173,9 +173,20 @@ func (r *APYRefresher) refreshVault(ctx context.Context, v vault.Vault, now time
 		protocolAPY[alloc.Protocol] = bps
 	}
 
-	weightedBPS, breakdown, err := weightedVaultAPY(v, protocolAPY)
+	// In resolver mode an omitted protocol is an expected state (unknown or
+	// stale on-chain APY), not a missing-data error, so the weighted average is
+	// taken over the usable allocations only.
+	weightedBPS, breakdown, err := weightedVaultAPYSkippingUnknown(v, protocolAPY, r.resolver != nil)
 	if err != nil {
 		return err
+	}
+
+	// With no usable rate anywhere, persisting or broadcasting would publish a
+	// synthetic 0% APY that is really "we don't know". Hold instead.
+	if r.resolver != nil && len(protocolAPY) == 0 {
+		r.logger.Info("apy refresher: no usable on-chain apy for vault, skipping snapshot",
+			"vault_id", v.ID)
+		return nil
 	}
 
 	balance := v.CurrentBalance
@@ -221,6 +232,21 @@ func (r *APYRefresher) refreshVault(ctx context.Context, v vault.Vault, now time
 }
 
 func weightedVaultAPY(v vault.Vault, protocolAPY map[string]uint32) (uint32, []perfdom.AllocationBreakdownEntry, error) {
+	return weightedVaultAPYSkippingUnknown(v, protocolAPY, false)
+}
+
+// weightedVaultAPYSkippingUnknown computes the allocation-weighted APY.
+//
+// When skipUnknown is set (resolver mode), an allocation with no entry in
+// protocolAPY is excluded from both the weighted average and the breakdown
+// rather than treated as an error: the on-chain rate being unknown or stale is
+// a normal state, and excluding it is what keeps an unknown from being averaged
+// in as a zero. Without it, a missing entry is a data error as before.
+func weightedVaultAPYSkippingUnknown(
+	v vault.Vault,
+	protocolAPY map[string]uint32,
+	skipUnknown bool,
+) (uint32, []perfdom.AllocationBreakdownEntry, error) {
 	var totalWeight decimal.Decimal
 	var weightedSum decimal.Decimal
 	breakdown := make([]perfdom.AllocationBreakdownEntry, 0, len(v.Allocations))
@@ -228,6 +254,9 @@ func weightedVaultAPY(v vault.Vault, protocolAPY map[string]uint32) (uint32, []p
 	for _, alloc := range v.Allocations {
 		bps, ok := protocolAPY[alloc.Protocol]
 		if !ok {
+			if skipUnknown {
+				continue
+			}
 			return 0, nil, fmt.Errorf("missing apy for protocol %s", alloc.Protocol)
 		}
 		apyDec := decimal.NewFromInt(int64(bps)).Div(decimal.NewFromInt(100))

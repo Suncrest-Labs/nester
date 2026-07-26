@@ -72,7 +72,11 @@ pub struct PoolAdapterContract;
 impl PoolAdapterContract {
     /// One-time wiring. No admin key is kept: the adapter is immutable after
     /// initialization, keeping its trust surface minimal.
+    ///
+    /// `vault` must authorize, so a deployed-but-uninitialized adapter cannot
+    /// be front-run by an attacker who points it at a vault they control.
     pub fn initialize(env: Env, vault: Address, pool: Address, underlying: Address) {
+        vault.require_auth();
         if env.storage().instance().has(&DataKey::Vault) {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
@@ -109,9 +113,11 @@ impl YieldAdapter for PoolAdapterContract {
         let pool: Address = env.storage().instance().get(&DataKey::Pool).unwrap();
         let me = env.current_contract_address();
 
-        // Push the assets straight to the pool, then tell it to mint LP units
-        // for this adapter. See the note in the lending adapter.
-        token::Client::new(&env, &underlying).transfer(&from, &pool, &amount);
+        // Pull from the caller, then forward to the pool. The caller
+        // authorizes this exact transfer before invoking; see the note in the
+        // lending adapter.
+        token::Client::new(&env, &underlying).transfer(&from, &me, &amount);
+        token::Client::new(&env, &underlying).transfer(&me, &pool, &amount);
         let units: i128 = env.invoke_contract(
             &pool,
             &Symbol::new(&env, "deposit"),
@@ -282,7 +288,14 @@ fn lp_value(env: &Env) -> i128 {
     if total_shares <= 0 {
         return 0;
     }
-    units * reserve_a / total_shares
+    // `overflow-checks = true` turns a wrap into a trap, which would abort
+    // deposit/withdraw through reset_checkpoint. Value nothing rather than
+    // trapping: a zero valuation surfaces as an unavailable APY, which callers
+    // already handle.
+    match units.checked_mul(reserve_a) {
+        Some(n) => n / total_shares,
+        None => 0,
+    }
 }
 
 /// Re-anchor the derived-APY measurement basis at the current value/time.

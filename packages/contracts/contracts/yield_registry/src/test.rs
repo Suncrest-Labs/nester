@@ -855,10 +855,14 @@ mod adapter_backed {
         adapter.set_apy(&500, &false, &false);
         client.refresh_apy_from_adapter(&id);
 
-        // A compromised adapter must not be able to move APY arbitrarily.
+        // A compromised adapter must not be able to move APY arbitrarily. The
+        // reading is rejected and counted as a failure rather than reverting,
+        // so the failure accounting survives (a panic would roll it back).
         adapter.set_apy(&9_000, &false, &false);
-        assert!(client.try_refresh_apy_from_adapter(&id).is_err());
+        let reading = client.refresh_apy_from_adapter(&id);
+        assert_eq!(reading.confidence, ApyConfidence::Unavailable);
         assert_eq!(client.get_source_performance(&id).current_apy_bps, 500);
+        assert_eq!(client.get_source_failure_count(&id), 1);
 
         // The admin override remains the escape hatch.
         client.update_apy_override(&admin, &id, &9_000);
@@ -880,4 +884,50 @@ mod adapter_backed {
         assert_eq!(client.get_source_adapter(&id), Some(adapter_id));
         assert_eq!(client.refresh_apy_from_adapter(&id).apy_bps, 700);
     }
+
+    #[test]
+    fn beyond_deviation_reading_counts_as_failure_not_revert() {
+        let env = Env::default();
+        let (client, admin, adapter, id) = setup_with_adapter(&env);
+        client.set_apy_deviation_threshold(&admin, &100);
+
+        adapter.set_apy(&500, &false, &false);
+        client.refresh_apy_from_adapter(&id);
+
+        // An adapter pinning a wild value must not be able to make this call
+        // revert forever while the source stays Active on a stale APY: each
+        // rejected reading counts as a failure and eventually degrades it.
+        adapter.set_apy(&9_000, &false, &false);
+        for _ in 0..=client.get_failure_threshold() {
+            let reading = client.refresh_apy_from_adapter(&id);
+            assert_eq!(reading.confidence, ApyConfidence::Unavailable);
+        }
+
+        assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+        // The last known-good value is retained, never overwritten by garbage.
+        assert_eq!(client.get_source_performance(&id).current_apy_bps, 500);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Failure accounting on terminal states (#812)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn failures_do_not_override_terminal_states() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let id = aave_id(&env);
+    register_default(&client, &env, &admin, &id);
+
+    client.update_status(&admin, &id, &SourceStatus::Deprecated);
+
+    // Deprecated already keeps capital away; failures must not relabel it as
+    // Degraded, which would imply a recoverable condition.
+    for _ in 0..=client.get_failure_threshold() {
+        client.report_source_failure(&admin, &id);
+    }
+
+    assert_eq!(client.get_source_status(&id), SourceStatus::Deprecated);
+    assert!(client.get_source_failure_count(&id) > 0, "failures still counted");
 }

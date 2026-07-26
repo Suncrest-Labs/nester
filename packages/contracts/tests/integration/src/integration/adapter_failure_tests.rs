@@ -55,7 +55,7 @@ mod adapter_failure_isolation {
             &h.admin,
             &broken,
             &Address::generate(&h.env),
-            &Some(bad_adapter),
+            &Some(bad_adapter.clone()),
             &ProtocolType::Lending,
         );
         h.registry().register_source(
@@ -76,6 +76,15 @@ mod adapter_failure_isolation {
         h.registry()
             .grant_role(&h.admin, &h.vault_id, &Role::Operator);
 
+        // Callee allowlist (#811). The strategy and registry are called during
+        // rebalance; the adapter is allowlisted specifically so this test
+        // exercises the real revert path — without it the vault would skip the
+        // source as un-allowlisted and never call it, proving nothing about
+        // isolating a reverting protocol.
+        h.vault().register_callee(&h.admin, &h.strategy_id);
+        h.vault().register_callee(&h.admin, &h.registry_id);
+        h.vault().register_callee(&h.admin, &bad_adapter);
+
         // Equal targets across all three sources.
         let weights: Vec<AllocationWeight> = vec![
             &h.env,
@@ -91,10 +100,19 @@ mod adapter_failure_isolation {
         h.vault().deposit(&user, &200_000_000, &0);
 
         // Seed lopsided allocations so the strategy produces non-trivial
-        // deltas across all three sources, including the broken one.
-        h.vault().record_source_allocation(&h.admin, &good_a, &90_000_000);
-        h.vault().record_source_allocation(&h.admin, &broken, &60_000_000);
-        h.vault().record_source_allocation(&h.admin, &good_b, &10_000_000);
+        // deltas across all three sources, including the broken one. All three
+        // are Active at this point, so every write must be accepted — assert
+        // it, or a silently-skipped write would leave the fixture unverifiable.
+        for (id, amount) in [
+            (&good_a, 90_000_000_i128),
+            (&broken, 60_000_000),
+            (&good_b, 10_000_000),
+        ] {
+            assert!(
+                h.vault().record_source_allocation(&h.admin, id, &amount),
+                "fixture seeding must be accepted while the source is Active"
+            );
+        }
 
         FailureFixture { h, good_a, broken, good_b }
     }
@@ -104,6 +122,10 @@ mod adapter_failure_isolation {
     #[test]
     fn rebalance_skips_failing_adapter_and_completes() {
         let f = setup_with_broken_adapter();
+
+        let before_a = f.h.vault().get_source_allocation(&f.good_a);
+        let before_b = f.h.vault().get_source_allocation(&f.good_b);
+        let before_broken = f.h.vault().get_source_allocation(&f.broken);
 
         // Must NOT panic — the whole point of failure isolation.
         let applied = f.h.vault().rebalance(&f.h.admin);
@@ -116,12 +138,29 @@ mod adapter_failure_isolation {
             );
         }
 
-        // The healthy sources still hold their capital: the rebalance ran.
-        let total_healthy = f.h.vault().get_source_allocation(&f.good_a)
-            + f.h.vault().get_source_allocation(&f.good_b);
+        // The rebalance did real work: at least one healthy source moved.
+        // (Asserting merely that allocations are non-zero would pass on the
+        // seeded values alone and prove nothing.)
+        let after_a = f.h.vault().get_source_allocation(&f.good_a);
+        let after_b = f.h.vault().get_source_allocation(&f.good_b);
         assert!(
-            total_healthy > 0,
-            "rebalance must complete across the remaining sources"
+            after_a != before_a || after_b != before_b,
+            "rebalance must actually move capital across the healthy sources \
+             (a: {before_a} -> {after_a}, b: {before_b} -> {after_b})"
+        );
+
+        // The skipped source was left exactly as it was — not drained, not grown.
+        assert_eq!(
+            f.h.vault().get_source_allocation(&f.broken),
+            before_broken,
+            "a skipped source's allocation must be untouched"
+        );
+
+        // And it was reported as skipped rather than silently ignored.
+        assert_eq!(
+            f.h.registry().get_source_failure_count(&f.broken),
+            1,
+            "the skipped source must be reported to the registry"
         );
     }
 
@@ -158,8 +197,17 @@ mod adapter_failure_isolation {
             SourceStatus::Active
         );
 
-        // And the vault is still fully operational.
-        assert!(f.h.vault().get_total_deposits() >= 0);
+        // And the vault is still fully operational. Its assets are intact
+        // apart from the management fee that accrues over the ledger time
+        // advanced above — nothing was lost to the degrading source, which
+        // would show up as a far larger drop than a few parts per million.
+        let deposits = f.h.vault().get_total_deposits();
+        let lost = 200_000_000 - deposits;
+        assert!(
+            (0..1_000).contains(&lost),
+            "vault assets must survive a source degrading (lost {lost} of 200_000_000)"
+        );
+        assert!(!f.h.vault().is_paused(), "one bad source must not pause the vault");
     }
 
     /// A degraded source stays degraded until an admin says otherwise —

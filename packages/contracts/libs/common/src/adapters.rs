@@ -51,6 +51,17 @@ pub trait YieldAdapter {
     /// Deposit `amount` of the underlying asset into the protocol.
     /// Returns position units received. Reverts with `SlippageExceeded`
     /// if units received would be below `min_units_out`.
+    ///
+    /// **Value-transfer contract: authorized pull.** The adapter debits
+    /// `amount` of the underlying from `from` inside this invocation. The
+    /// caller must pre-authorize exactly that transfer — a contract caller via
+    /// `authorize_as_current_contract` scoped to this token, this amount, and
+    /// nothing else.
+    ///
+    /// Pulling inside the invocation (rather than being pushed beforehand) is
+    /// what makes a failed deposit atomic: if the adapter or the protocol
+    /// reverts, the transfer is rolled back with it and no funds are stranded
+    /// at the adapter.
     fn deposit(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128;
 
     /// Withdraw `units` of the position, sending underlying to `to`.

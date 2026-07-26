@@ -327,7 +327,7 @@ impl Timelock {
     /// # Panics
     /// * [`ContractError::TimelockInvalidDelay`] — new_delay outside allowed bounds.
     pub fn propose_set_delay(env: &Env, caller: &Address, new_delay: u64) -> u64 {
-        if new_delay < MIN_DELAY || new_delay > MAX_DELAY {
+        if !(MIN_DELAY..=MAX_DELAY).contains(&new_delay) {
             panic_with_error!(env, ContractError::TimelockInvalidDelay);
         }
 
@@ -341,7 +341,7 @@ impl Timelock {
     /// returns the payload for a `SET_DLY` operation.
     pub fn apply_delay(env: &Env, payload: &Bytes) {
         let new_delay = decode_u64(payload);
-        if new_delay < MIN_DELAY || new_delay > MAX_DELAY {
+        if !(MIN_DELAY..=MAX_DELAY).contains(&new_delay) {
             panic_with_error!(env, ContractError::TimelockInvalidDelay);
         }
         env.storage().instance().set(&DataKey::Delay, &new_delay);

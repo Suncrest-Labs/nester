@@ -66,13 +66,23 @@ type APYReading struct {
 // Usable reports whether this reading may drive a rebalancing decision:
 // the confidence must not be Unavailable and the observation must be fresh.
 func (r APYReading) Usable(now time.Time) bool {
-	if r.Confidence == APYUnavailable || r.Confidence == "" {
+	// Allowlist the confidences we trust. An unrecognised value is not a
+	// licence to rebalance on the number attached to it.
+	switch r.Confidence {
+	case APYProtocolReported, APYDerived:
+	default:
 		return false
 	}
 	if r.ObservedAt.IsZero() {
 		return false
 	}
-	return now.Sub(r.ObservedAt) <= MaxOnChainAPYAge
+	age := now.Sub(r.ObservedAt)
+	// A future timestamp means a clock or ledger problem, not fresh data.
+	// Without this check a negative age would sail past the staleness bound.
+	if age < 0 {
+		return false
+	}
+	return age <= MaxOnChainAPYAge
 }
 
 // ConfidenceFromBPSFlag maps the registry's on-chain confidence discriminant

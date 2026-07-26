@@ -154,3 +154,49 @@ func TestYieldService_TVLFilter(t *testing.T) {
 func TestYieldService_RiskScore(t *testing.T) {
     t.Skip("Skipping until #662 (Risk score) is merged")
 }
+
+func TestYieldService_WarmCachePopulatesCache(t *testing.T) {
+    var hitCount int32
+    payload := `{"status":"success","data":[{"pool":"1","chain":"Stellar","apy":5.0,"tvlUsd":100000},{"pool":"2","chain":"Stellar","apy":3.0,"tvlUsd":200000}]}`
+    ts := newMockDeFiLlamaServer(t, http.StatusOK, payload, &hitCount)
+    defer ts.Close()
+
+    svc := NewYieldService(ts.URL)
+    ctx := context.Background()
+
+    pools, err := svc.WarmCache(ctx)
+    if err != nil {
+        t.Fatalf("WarmCache() error = %v", err)
+    }
+    if pools != 2 {
+        t.Errorf("WarmCache() pools = %d, want 2", pools)
+    }
+
+    // The warmed cache serves the same chain/limit key without another upstream call.
+    if _, err := svc.GetYieldOpportunities(ctx, "Stellar", 100); err != nil {
+        t.Fatalf("GetYieldOpportunities() after warm error = %v", err)
+    }
+    if atomic.LoadInt32(&hitCount) != 1 {
+        t.Errorf("expected exactly 1 HTTP call after warm, got %d", hitCount)
+    }
+}
+
+func TestYieldService_WarmCacheFailureIsNonFatal(t *testing.T) {
+    ts := newMockDeFiLlamaServer(t, http.StatusInternalServerError, "", nil)
+    defer ts.Close()
+
+    svc := NewYieldService(ts.URL)
+    pools, err := svc.WarmCache(context.Background())
+    if err == nil {
+        t.Fatal("WarmCache() error = nil, want upstream error")
+    }
+    if pools != 0 {
+        t.Errorf("WarmCache() pools = %d, want 0 on failure", pools)
+    }
+
+    // A failed warm leaves no cache entry: the lazy path still surfaces the
+    // upstream error rather than serving stale/empty data.
+    if _, err := svc.GetYieldOpportunities(context.Background(), "Stellar", 100); err == nil {
+        t.Error("GetYieldOpportunities() after failed warm = nil error, want upstream error")
+    }
+}
