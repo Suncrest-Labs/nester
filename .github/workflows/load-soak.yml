@@ -1,0 +1,38 @@
+name: Nightly staging load soak
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: k6 soak (staging)
+    runs-on: ubuntu-latest
+    # A missing secret must never cause a test to fall back to localhost or production.
+    if: ${{ secrets.STAGING_LOAD_API_BASE_URL != '' }}
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run isolated staging soak
+        env:
+          API_BASE_URL: ${{ secrets.STAGING_LOAD_API_BASE_URL }}
+          INTELLIGENCE_BASE_URL: ${{ secrets.STAGING_LOAD_INTELLIGENCE_BASE_URL }}
+          WS_URL: ${{ secrets.STAGING_LOAD_WS_URL }}
+          VAULT_ID: ${{ secrets.STAGING_LOAD_VAULT_ID }}
+          AUTH_TOKEN: ${{ secrets.STAGING_LOAD_AUTH_TOKEN }}
+        run: |
+          mkdir -p results
+          docker run --rm --network host \
+            -e API_BASE_URL -e INTELLIGENCE_BASE_URL -e WS_URL -e VAULT_ID -e AUTH_TOKEN \
+            -v "$PWD:/work" -w /work grafana/k6:latest \
+            run --summary-export results/soak-summary.json tests/load/soak.js
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: k6-soak-summary-${{ github.run_id }}
+          path: results/soak-summary.json
+          if-no-files-found: warn
