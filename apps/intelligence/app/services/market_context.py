@@ -7,7 +7,6 @@ whose URL and publisher exactly match the allowlisted input document.
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -164,7 +163,11 @@ class MarketContextEngine:
 
 def _tool_payload(message: Any) -> dict[str, Any] | None:
     for block in getattr(message, "content", []):
-        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == EXTRACTION_TOOL["name"]:
+        is_extraction = (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == EXTRACTION_TOOL["name"]
+        )
+        if is_extraction:
             value = getattr(block, "input", None)
             return value if isinstance(value, dict) else None
     return None
