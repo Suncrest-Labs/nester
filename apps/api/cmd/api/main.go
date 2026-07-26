@@ -408,7 +408,7 @@ func run() error {
 	analyticsHandler.Register(mux)
 
 	// Risk service
-	riskService := services.NewRiskService(vaultRepository)
+	riskService := services.NewRiskService(vaultRepository, db)
 	riskHandler := handler.NewRiskHandler(riskService)
 	riskHandler.Register(mux)
 

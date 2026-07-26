@@ -16,6 +16,7 @@
 
 pub mod adversarial_tests;
 pub mod lifecycle_tests;
+pub mod property_tests;
 
 extern crate std;
 
