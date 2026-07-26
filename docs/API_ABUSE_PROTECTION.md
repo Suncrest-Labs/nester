@@ -15,4 +15,5 @@ Sensitive account and token lookup handlers must always call
 `WriteUniformLookupResponse` after their internal lookup so existence cannot be
 distinguished by status or body. Deployment adapters should store aggregate
 windows in the same Redis cluster as rate limiting; policy remains fail-open if
-that shared backend is unavailable.
+that shared backend is unavailable. The included in-memory policy store is
+single-instance only and is intended for tests and local deployments.

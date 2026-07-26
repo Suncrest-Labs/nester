@@ -87,3 +87,16 @@ func TestAdaptiveEscalationRelaxesAndChallengeIsRecoverable(t *testing.T) {
 		t.Fatal("graduated response did not expose a recoverable challenge")
 	}
 }
+
+func TestEscalationSurvivesShorterDetectionWindow(t *testing.T) {
+	p, now, _ := testProtector()
+	p.cfg.Window = time.Second
+	p.cfg.EscalationTTL = time.Minute
+	for range 4 {
+		p.RecordFailedAuth("/auth/login", "distributed")
+	}
+	*now = now.Add(2 * time.Second)
+	if p.RecordSensitiveFlow("/auth/login", "legitimate") != AbuseChallenge {
+		t.Fatal("window rotation erased an unexpired escalation")
+	}
+}

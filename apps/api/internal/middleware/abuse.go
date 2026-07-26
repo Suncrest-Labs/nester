@@ -14,6 +14,7 @@ type AbuseAction string
 const (
 	AbuseAllow     AbuseAction = "allow"
 	AbuseChallenge AbuseAction = "challenge"
+	maxAbuseKeyLen             = 256
 )
 
 // AbuseEvent is shared with fraud/anomaly consumers and platform metrics.
@@ -66,8 +67,13 @@ func (p *AbuseProtector) window(endpoint string) *abuseWindow {
 	now := p.now()
 	w := p.windows[endpoint]
 	if w == nil || now.Sub(w.start) >= p.cfg.Window {
+		var escalation time.Time
+		if w != nil {
+			escalation = w.escalatedTil
+		}
 		w = &abuseWindow{
 			start: now, probes: make(map[string]struct{}), fingerprints: make(map[string]int),
+			escalatedTil: escalation,
 		}
 		p.windows[endpoint] = w
 	}
@@ -78,52 +84,72 @@ func (p *AbuseProtector) window(endpoint string) *abuseWindow {
 // temporarily requires step-up verification for the targeted endpoint.
 func (p *AbuseProtector) RecordFailedAuth(endpoint, fingerprint string) AbuseAction {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	fingerprint = boundedAbuseKey(fingerprint)
 	w := p.window(endpoint)
 	w.failures++
-	w.fingerprints[fingerprint]++
+	if _, exists := w.fingerprints[fingerprint]; exists ||
+		len(w.fingerprints) < p.cfg.GlobalFailures {
+		w.fingerprints[fingerprint]++
+	}
 	if w.failures >= p.cfg.GlobalFailures {
 		w.escalatedTil = p.now().Add(p.cfg.EscalationTTL)
-		return p.emit(endpoint, "credential_stuffing", fingerprint, AbuseChallenge)
+		return p.finish(endpoint, "credential_stuffing", fingerprint, AbuseChallenge)
 	}
-	return p.emit(endpoint, "failed_auth", fingerprint, AbuseAllow)
+	return p.finish(endpoint, "failed_auth", fingerprint, AbuseAllow)
 }
 
 // RecordProbe detects enumeration by distinct resource identifiers.
 func (p *AbuseProtector) RecordProbe(endpoint, resource, fingerprint string) AbuseAction {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	resource, fingerprint = boundedAbuseKey(resource), boundedAbuseKey(fingerprint)
 	w := p.window(endpoint)
-	w.probes[resource] = struct{}{}
+	if len(w.probes) < p.cfg.EnumerationProbes {
+		w.probes[resource] = struct{}{}
+	}
 	if len(w.probes) >= p.cfg.EnumerationProbes {
 		w.escalatedTil = p.now().Add(p.cfg.EscalationTTL)
-		return p.emit(endpoint, "enumeration", fingerprint, AbuseChallenge)
+		return p.finish(endpoint, "enumeration", fingerprint, AbuseChallenge)
 	}
-	return p.emit(endpoint, "lookup", fingerprint, AbuseAllow)
+	return p.finish(endpoint, "lookup", fingerprint, AbuseAllow)
 }
 
 // RecordSensitiveFlow applies a challenge to high-velocity, shared behavioral
 // fingerprints while normal signup/auth/reward flows continue unchanged.
 func (p *AbuseProtector) RecordSensitiveFlow(endpoint, fingerprint string) AbuseAction {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	fingerprint = boundedAbuseKey(fingerprint)
 	w := p.window(endpoint)
-	w.fingerprints[fingerprint]++
+	if _, exists := w.fingerprints[fingerprint]; exists ||
+		len(w.fingerprints) < p.cfg.BotVelocity {
+		w.fingerprints[fingerprint]++
+	}
 	if w.fingerprints[fingerprint] >= p.cfg.BotVelocity {
 		w.escalatedTil = p.now().Add(p.cfg.EscalationTTL)
-		return p.emit(endpoint, "bot_velocity", fingerprint, AbuseChallenge)
+		return p.finish(endpoint, "bot_velocity", fingerprint, AbuseChallenge)
 	}
 	if p.now().Before(w.escalatedTil) {
-		return p.emit(endpoint, "adaptive_step_up", fingerprint, AbuseChallenge)
+		return p.finish(endpoint, "adaptive_step_up", fingerprint, AbuseChallenge)
 	}
-	return p.emit(endpoint, "normal", fingerprint, AbuseAllow)
+	return p.finish(endpoint, "normal", fingerprint, AbuseAllow)
 }
 
-func (p *AbuseProtector) emit(endpoint, kind, fingerprint string, action AbuseAction) AbuseAction {
-	if p.observer != nil {
-		p.observer.ObserveAbuse(AbuseEvent{
-			Endpoint: endpoint, Kind: kind, Fingerprint: fingerprint, Action: action, At: p.now(),
-		})
+func boundedAbuseKey(value string) string {
+	if len(value) > maxAbuseKeyLen {
+		return value[:maxAbuseKeyLen]
+	}
+	return value
+}
+
+// finish snapshots the event and releases state before invoking application
+// observers, which may perform I/O or re-enter the protector.
+func (p *AbuseProtector) finish(endpoint, kind, fingerprint string, action AbuseAction) AbuseAction {
+	event := AbuseEvent{
+		Endpoint: endpoint, Kind: kind, Fingerprint: fingerprint, Action: action, At: p.now(),
+	}
+	observer := p.observer
+	p.mu.Unlock()
+	if observer != nil {
+		observer.ObserveAbuse(event)
 	}
 	return action
 }
