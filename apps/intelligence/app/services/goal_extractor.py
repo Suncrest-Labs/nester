@@ -179,3 +179,4 @@ Rules: Do NOT guess missing fields. Return ONLY the structured extraction."""
             return GoalExtractionResult(success=False, error="Recurring amount must be positive.")
 
         return GoalExtractionResult(success=True, extracted=extracted)
+

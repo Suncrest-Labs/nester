@@ -410,10 +410,6 @@ async def stream_chat(
             }
         ]
 
-    messages: list[anthropic.types.MessageParam] = (
-        context_injection
-        + _to_anthropic_messages(history)
-        + [{"role": "user", "content": guardrails.wrap_user_content(message)}]
     # Retrieve minimal, user-scoped context via the structured retrieval layer
     # and build a grounded system prompt (#852). The retrieved context is the
     # single source of facts: the model is instructed to answer only from it,
@@ -425,7 +421,9 @@ async def stream_chat(
     dynamic_system_prompt = build_grounded_system_prompt(SYSTEM_PROMPT, retrieved)
 
     messages: list[anthropic.types.MessageParam] = (
-        _to_anthropic_messages(history) + [{"role": "user", "content": message}]
+        context_injection
+        + _to_anthropic_messages(history)
+        + [{"role": "user", "content": guardrails.wrap_user_content(message)}]
     )
 
     client = get_client()
@@ -1599,4 +1597,3 @@ async def analyze_portfolio(
         confidence=confidence,
         generated_at=datetime.now(timezone.utc),
     )
-
