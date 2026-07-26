@@ -1,3 +1,6 @@
+import os
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +21,16 @@ class Settings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def _validate_production_jwt(self) -> "Settings":
+        environment = os.getenv("ENVIRONMENT", "development").lower()
+        if environment != "development" and not self.jwt_secret:
+            raise ValueError(
+                "INTELLIGENCE_JWT_SECRET must be set in non-development environments. "
+                "Running without JWT authentication is not allowed outside development."
+            )
+        return self
 
 
 settings = Settings()

@@ -1332,3 +1332,122 @@ func TestSavingsGoalService_NoVaultFallsBackToSum(t *testing.T) {
 		t.Fatalf("current_amount = %s, want 450 (sum-all fallback)", goal.CurrentAmount)
 	}
 }
+
+func TestSavingsGoalService_Create_RejectsZeroAndNegativeTarget(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
+
+	for _, amount := range []decimal.Decimal{
+		decimal.Zero,
+		decimal.NewFromInt(-100),
+	} {
+		_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+			TargetAmount: amount,
+			Currency:     "USDC",
+			Deadline:     testDeadline(),
+		})
+		if !errors.Is(err, savingsgoal.ErrInvalidAmount) {
+			t.Errorf("Create(target=%s) error = %v, want ErrInvalidAmount", amount, err)
+		}
+	}
+}
+
+func TestSavingsGoalService_Create_RejectsTargetBelowMinimum(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
+
+	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.RequireFromString("0.001"),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+	})
+	if !errors.Is(err, savingsgoal.ErrInvalidAmount) {
+		t.Fatalf("Create(target=0.001) error = %v, want ErrInvalidAmount", err)
+	}
+
+	// The minimum itself is accepted.
+	if _, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: savingsgoal.MinTargetAmount,
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+	}); err != nil {
+		t.Fatalf("Create(target=0.01) error = %v, want nil", err)
+	}
+}
+
+func TestSavingsGoalService_Update_RejectsZeroTarget(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	zero := decimal.Zero
+	_, err = svc.Update(ctx, userID, goal.ID, UpdateSavingsGoalInput{TargetAmount: &zero})
+	if !errors.Is(err, savingsgoal.ErrInvalidAmount) {
+		t.Fatalf("Update(target=0) error = %v, want ErrInvalidAmount", err)
+	}
+}
+
+func TestSavingsGoalService_Create_RejectsOverlongName(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	svc := NewSavingsGoalService(newMemorySavingsGoalRepo(), nil, nil)
+
+	_, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		Name:         strings.Repeat("n", MaxGoalNameLength+1),
+	})
+	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
+		t.Fatalf("Create(101-char name) error = %v, want ErrInvalidGoal", err)
+	}
+
+	// Exactly the maximum is accepted.
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		Name:         strings.Repeat("n", MaxGoalNameLength),
+	})
+	if err != nil {
+		t.Fatalf("Create(100-char name) error = %v, want nil", err)
+	}
+	if len([]rune(goal.Name)) != MaxGoalNameLength {
+		t.Fatalf("name length = %d, want %d", len([]rune(goal.Name)), MaxGoalNameLength)
+	}
+}
+
+func TestSavingsGoalService_Update_RejectsOverlongName(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		Name:         "Emergency fund",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	long := strings.Repeat("n", MaxGoalNameLength+1)
+	_, err = svc.Update(ctx, userID, goal.ID, UpdateSavingsGoalInput{Name: &long})
+	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
+		t.Fatalf("Update(101-char name) error = %v, want ErrInvalidGoal", err)
+	}
+}

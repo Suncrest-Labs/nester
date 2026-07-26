@@ -24,7 +24,15 @@ var (
 	// ErrGoalArchived is returned when an operation is not allowed on an archived goal
 	// (e.g. adding a new contribution schedule).
 	ErrGoalArchived = errors.New("savings goal is archived")
+	// ErrInvalidAmount is returned when a goal's target amount is zero, negative,
+	// or below MinTargetAmount (#692). Defined here so handlers don't have to
+	// import the vault domain to classify amount validation failures.
+	ErrInvalidAmount = errors.New("invalid target amount")
 )
+
+// MinTargetAmount is the smallest meaningful goal target (#692). Values above
+// zero but below this (e.g. 0.000000001) are rejected as no-op goals.
+var MinTargetAmount = decimal.RequireFromString("0.01")
 
 const (
 	GoalStatusActive    = "active"

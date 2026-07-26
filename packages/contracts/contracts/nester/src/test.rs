@@ -2,14 +2,48 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env};
 
 use nester_access_control::Role;
 
-use crate::{ContractKind, NesterContract, NesterContractClient};
+use crate::{ContractKind, NesterContract, NesterContractClient, ProtocolInitConfig};
+
+// Authorization test matrix (U = unauthorized/unsigned, A = authorized,
+// R = role revoked before a subsequent call):
+//
+// initialize
+//   U: initialize_requires_admin_signature
+//   A: initialize_stores_all_addresses                     R: N/A (one-shot)
+// upgrade
+//   U: non_admin_cannot_upgrade; privileged_calls_require_signatures
+//   A: admin_reaches_wasm_validation_and_upgrades
+//   R: revoked_admin_cannot_call_admin_operations
+// update_contract
+//   U: non_admin_cannot_update_contract_reference; privileged_calls_require_signatures
+//   A: admin_can_update_contract_reference
+//   R: revoked_admin_cannot_call_admin_operations
+// grant_role
+//   U: non_admin_cannot_grant_roles; privileged_calls_require_signatures
+//   A: admin_can_grant_and_revoke_operator_role
+//   R: revoked_admin_cannot_call_admin_operations
+// revoke_role
+//   U: non_admin_cannot_revoke_roles; privileged_calls_require_signatures
+//   A: admin_can_grant_and_revoke_operator_role
+//   R: revoked_admin_cannot_call_admin_operations
+// transfer_admin
+//   U: non_admin_cannot_transfer_admin; privileged_calls_require_signatures
+//   A/R: two_step_admin_transfer
+// accept_admin
+//   U: wrong_address_cannot_accept_admin; privileged_calls_require_signatures
+//   A: two_step_admin_transfer                              R: N/A (address-bound)
+//
+// Every role-negative case uses otherwise-valid arguments. This is deliberate:
+// deleting the corresponding authorization check must make the test succeed and
+// therefore fail, rather than merely exposing a later validation panic.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct ProtocolAddresses {
     vault_usdc: Address,
     vault_xlm: Address,
@@ -18,6 +52,20 @@ struct ProtocolAddresses {
     treasury: Address,
     yield_registry: Address,
     allocation_strategy: Address,
+}
+
+impl From<ProtocolAddresses> for ProtocolInitConfig {
+    fn from(p: ProtocolAddresses) -> Self {
+        ProtocolInitConfig {
+            vault_usdc: p.vault_usdc,
+            vault_xlm: p.vault_xlm,
+            vault_token_usdc: p.vault_token_usdc,
+            vault_token_xlm: p.vault_token_xlm,
+            treasury: p.treasury,
+            yield_registry: p.yield_registry,
+            allocation_strategy: p.allocation_strategy,
+        }
+    }
 }
 
 fn fake_protocol(env: &Env) -> ProtocolAddresses {
@@ -40,18 +88,16 @@ fn setup(env: &Env) -> (NesterContractClient<'_>, Address, ProtocolAddresses) {
     let id = env.register_contract(None, NesterContract);
     let client = NesterContractClient::new(env, &id);
 
-    client.initialize(
-        &admin,
-        &p.vault_usdc,
-        &p.vault_xlm,
-        &p.vault_token_usdc,
-        &p.vault_token_xlm,
-        &p.treasury,
-        &p.yield_registry,
-        &p.allocation_strategy,
-    );
+    client.initialize(&admin, &p.clone().into());
 
     (client, admin, p)
+}
+
+fn uploaded_test_wasm_hash(env: &Env) -> BytesN<32> {
+    // Soroban testutils accepts an empty Wasm blob for native-contract upgrade
+    // lifecycle tests. This gives `upgrade` a ledger-backed hash without adding
+    // a generated Wasm artifact to the repository.
+    env.deployer().upload_contract_wasm(Bytes::new(env))
 }
 
 // ── Initialization ────────────────────────────────────────────────────────────
@@ -90,15 +136,26 @@ fn initialize_twice_panics() {
     let env = Env::default();
     let (client, admin, p) = setup(&env);
     // Second call must panic with AlreadyInitialized.
-    client.initialize(
-        &admin,
-        &p.vault_usdc,
-        &p.vault_xlm,
-        &p.vault_token_usdc,
-        &p.vault_token_xlm,
-        &p.treasury,
-        &p.yield_registry,
-        &p.allocation_strategy,
+    client.initialize(&admin, &p.clone().into());
+}
+
+#[test]
+fn initialize_requires_admin_signature() {
+    let env = Env::default();
+    env.mock_auths(&[]);
+
+    let admin = Address::generate(&env);
+    let p = fake_protocol(&env);
+    let id = env.register_contract(None, NesterContract);
+    let client = NesterContractClient::new(&env, &id);
+
+    assert!(client
+        .try_initialize(&admin, &p.clone().into())
+        .is_err());
+    assert_eq!(
+        client.version(),
+        0,
+        "failed initialization must not write state"
     );
 }
 
@@ -133,6 +190,30 @@ fn treasury_panics_before_initialize() {
     let id = env.register_contract(None, NesterContract);
     let client = NesterContractClient::new(&env, &id);
     client.treasury();
+}
+
+// -- upgrade ---------------------------------------------------------------
+
+#[test]
+fn admin_reaches_wasm_validation_and_upgrades() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    let wasm_hash = uploaded_test_wasm_hash(&env);
+
+    client.upgrade(&admin, &wasm_hash);
+
+    assert_eq!(client.version(), 2);
+}
+
+#[test]
+fn non_admin_cannot_upgrade() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    let outsider = Address::generate(&env);
+    let wasm_hash = uploaded_test_wasm_hash(&env);
+
+    assert!(client.try_upgrade(&outsider, &wasm_hash).is_err());
+    assert_eq!(client.version(), 1);
 }
 
 // ── update_contract ───────────────────────────────────────────────────────────
@@ -251,4 +332,109 @@ fn two_step_admin_transfer() {
 
     assert!(client.has_role(&new_admin, &Role::Admin));
     assert!(!client.has_role(&admin, &Role::Admin));
+
+    let replacement = Address::generate(&env);
+    client.update_contract(&new_admin, &ContractKind::Treasury, &replacement);
+    assert_eq!(client.treasury(), replacement);
+    assert!(client
+        .try_update_contract(&admin, &ContractKind::Treasury, &Address::generate(&env),)
+        .is_err());
+}
+
+#[test]
+fn non_admin_cannot_revoke_roles() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    let outsider = Address::generate(&env);
+    let operator = Address::generate(&env);
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    assert!(client
+        .try_revoke_role(&outsider, &operator, &Role::Operator)
+        .is_err());
+    assert!(client.has_role(&operator, &Role::Operator));
+}
+
+#[test]
+fn non_admin_cannot_transfer_admin() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    let outsider = Address::generate(&env);
+
+    assert!(client
+        .try_transfer_admin(&outsider, &Address::generate(&env))
+        .is_err());
+}
+
+#[test]
+fn wrong_address_cannot_accept_admin() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    let proposed_admin = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    client.transfer_admin(&admin, &proposed_admin);
+
+    assert!(client.try_accept_admin(&outsider).is_err());
+    assert!(client.has_role(&admin, &Role::Admin));
+    assert!(!client.has_role(&outsider, &Role::Admin));
+}
+
+#[test]
+fn revoked_admin_cannot_call_admin_operations() {
+    let env = Env::default();
+    let (client, initial_admin, _) = setup(&env);
+    let remaining_admin = Address::generate(&env);
+    let operator = Address::generate(&env);
+    client.grant_role(&initial_admin, &remaining_admin, &Role::Admin);
+    client.grant_role(&initial_admin, &operator, &Role::Operator);
+    client.revoke_role(&remaining_admin, &initial_admin, &Role::Admin);
+
+    assert!(client
+        .try_update_contract(
+            &initial_admin,
+            &ContractKind::Treasury,
+            &Address::generate(&env),
+        )
+        .is_err());
+    assert!(client
+        .try_grant_role(&initial_admin, &Address::generate(&env), &Role::Operator,)
+        .is_err());
+    assert!(client
+        .try_revoke_role(&initial_admin, &operator, &Role::Operator)
+        .is_err());
+    assert!(client
+        .try_transfer_admin(&initial_admin, &Address::generate(&env))
+        .is_err());
+
+    let wasm_hash = uploaded_test_wasm_hash(&env);
+    assert!(client.try_upgrade(&initial_admin, &wasm_hash).is_err());
+    assert_eq!(client.version(), 1);
+}
+
+#[test]
+fn privileged_calls_require_signatures() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    let operator = Address::generate(&env);
+    let proposed_admin = Address::generate(&env);
+    let wasm_hash = uploaded_test_wasm_hash(&env);
+    client.grant_role(&admin, &operator, &Role::Operator);
+    client.transfer_admin(&admin, &proposed_admin);
+
+    env.mock_auths(&[]);
+
+    assert!(client
+        .try_update_contract(&admin, &ContractKind::Treasury, &Address::generate(&env),)
+        .is_err());
+    assert!(client
+        .try_grant_role(&admin, &Address::generate(&env), &Role::Operator)
+        .is_err());
+    assert!(client
+        .try_revoke_role(&admin, &operator, &Role::Operator)
+        .is_err());
+    assert!(client
+        .try_transfer_admin(&admin, &Address::generate(&env))
+        .is_err());
+    assert!(client.try_accept_admin(&proposed_admin).is_err());
+    assert!(client.try_upgrade(&admin, &wasm_hash).is_err());
 }

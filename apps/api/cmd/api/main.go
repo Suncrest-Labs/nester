@@ -24,8 +24,10 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
+	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
@@ -37,6 +39,7 @@ import (
 	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
 	"github.com/suncrestlabs/nester/apps/api/internal/services"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
+	"github.com/suncrestlabs/nester/apps/api/internal/valuation"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
@@ -131,11 +134,12 @@ func run() error {
 	// (issue #496); the vault repository applies it idempotently by tx hash.
 	transactionService.SetBalanceApplier(vaultRepository)
 	transactionHandler := handler.NewTransactionHandler(transactionService)
+	transactionHandler.SetVaultRepository(vaultRepository)
 
 	bankAccountRepository := postgres.NewBankAccountRepository(db)
 	var accountCipher *cryptopkg.AccountCipher
-	if key := cfg.BankAccountEncryptionKey(); key != "" {
-		cipher, cipherErr := cryptopkg.NewAccountCipher(key)
+	if ac := cfg.AccountCipher(); ac.Configured() {
+		cipher, cipherErr := cryptopkg.NewAccountCipherWithKeys(ac.ActiveVersion(), ac.Keys(), ac.FingerprintKey())
 		if cipherErr != nil {
 			return fmt.Errorf("bank account cipher: %w", cipherErr)
 		}
@@ -197,11 +201,18 @@ func run() error {
 		Logger:  baseLogger,
 	})
 
-	var challengeStore service.ChallengeStore
+	// A single shared Redis client (nil when REDIS_ADDR is unset) powers both the
+	// challenge store and the distributed rate limiters. When nil, both fall back
+	// to in-memory implementations suitable for single-instance deployments.
+	var redisClient *redis.Client
 	if addr := cfg.Redis().Addr(); addr != "" {
-		redisClient := redis.NewClient(&redis.Options{Addr: addr})
+		redisClient = redis.NewClient(&redis.Options{Addr: addr})
+	}
+
+	var challengeStore service.ChallengeStore
+	if redisClient != nil {
 		challengeStore = service.NewRedisChallengeStore(redisClient, cfg.Auth().ChallengeExpiry())
-		baseLogger.Info("challenge store: redis", "addr", addr)
+		baseLogger.Info("challenge store: redis", "addr", cfg.Redis().Addr())
 	} else {
 		challengeStore = service.NewInMemoryChallengeStore(cfg.Auth().ChallengeExpiry())
 		baseLogger.Info("challenge store: in-memory (single-instance only)")
@@ -228,6 +239,22 @@ func run() error {
 	defer wsCancel()
 	go wsHub.Run(wsCtx)
 	vaultHandler.SetWSHub(wsHub)
+
+	// Real-time portfolio valuation (#832): aggregates each user's positions,
+	// pending deposits, accrued yield, goal allocations, and claimable rewards to
+	// the stroop, prices multi-asset holdings through an oracle with confidence
+	// propagation, caches per user, and pushes fresh valuations over WebSocket on
+	// event-driven invalidation.
+	valuationService := valuation.NewService(valuation.Deps{
+		Positions: valuation.NewVaultPositionSource(vaultRepository),
+		Pending:   valuation.NewTxPendingSource(transactionRepository),
+		Goals:     valuation.NewGoalAllocationSource(postgres.NewSavingsGoalRepository(db)),
+		Oracle:    valuation.NewStaticOracle(nil),
+		Cache:     valuation.NewCache(30 * time.Second),
+		Notifier:  valuation.NewWSNotifier(wsHub),
+		Logger:    baseLogger.WithGroup("valuation"),
+	})
+	valuationHandler := handler.NewValuationHandler(valuationService)
 
 	performanceRepository := postgres.NewPerformanceRepository(db)
 	vaultRepository = postgres.NewVaultRepository(db)
@@ -319,8 +346,13 @@ func run() error {
 			MinAge:   cfg.TransactionPoller().MinAge(),
 		},
 		transactionService,
-		func(_ context.Context, tx transaction.Transaction) {
+		func(ctx context.Context, tx transaction.Transaction) {
 			wsHub.BroadcastEvent(transactionStatusEvent(tx))
+			// A confirmed deposit/withdrawal changes settled net worth: drop the
+			// cached valuation and push a fresh one (#832 event-driven invalidation).
+			if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
+				valuationService.Invalidate(v.UserID)
+			}
 		},
 		baseLogger.WithGroup("tx-poller"),
 	)
@@ -335,7 +367,6 @@ func run() error {
 		notificationRepository,
 		nil,
 	)
-
 
 	var ready atomic.Bool
 	ready.Store(true)
@@ -362,6 +393,7 @@ func run() error {
 
 	vaultHandler.Register(mux)
 	portfolioHandler.Register(mux)
+	valuationHandler.Register(mux)
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
 	userHandler.Register(mux)
@@ -387,6 +419,19 @@ func run() error {
 
 	// Yield opportunities (DeFiLlama Stellar pools)
 	yieldSvc := service.NewYieldService("")
+	// Warm the Stellar yield cache in the background so the first user request
+	// doesn't pay the DeFiLlama round-trip (#667). Failure is non-fatal: the
+	// lazy-load path still works.
+	go func() {
+		warmCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		start := time.Now()
+		if pools, err := yieldSvc.WarmCache(warmCtx); err != nil {
+			baseLogger.Warn("yield cache warm failed", "error", err)
+		} else {
+			baseLogger.Info("yield cache warmed", "chain", "Stellar", "pools", pools, "duration_ms", time.Since(start).Milliseconds())
+		}
+	}()
 	yieldBookmarkSvc := service.NewYieldBookmarkService(db, yieldSvc)
 	protocolTVLRepo := postgres.NewProtocolTVLRepository(db)
 	yieldHandler := handler.NewYieldHandler(yieldSvc, yieldBookmarkSvc)
@@ -470,6 +515,74 @@ func run() error {
 	defer cancelRecurring()
 	go recurringDepositJob.Run(recurringCtx)
 
+	// Durable async job queue (#824): the shared worker pool and producer
+	// client. Handlers are registered below before the worker starts. The
+	// client is passed to producers (harvest engine, chain invoker) so they
+	// enqueue durable work instead of doing it inline.
+	jobQueueRepo := postgres.NewJobRepository(db)
+	jobQueueMetrics := jobqueue.NewStdMetrics()
+	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+	jobWorker := jobqueue.NewWorker(
+		jobQueueRepo,
+		jobqueue.Config{
+			Enabled:            cfg.JobQueue().Enabled(),
+			PollInterval:       cfg.JobQueue().PollInterval(),
+			Lease:              cfg.JobQueue().Lease(),
+			HeartbeatInterval:  cfg.JobQueue().HeartbeatInterval(),
+			JobTimeout:         cfg.JobQueue().JobTimeout(),
+			DefaultConcurrency: cfg.JobQueue().DefaultConcurrency(),
+			Backoff: jobqueue.BackoffConfig{
+				Base: cfg.JobQueue().BackoffBase(),
+				Max:  cfg.JobQueue().BackoffMax(),
+			},
+			StatsInterval: cfg.JobQueue().StatsInterval(),
+			DrainTimeout:  cfg.JobQueue().DrainTimeout(),
+		},
+		baseLogger.WithGroup("job-queue"),
+		jobQueueMetrics,
+	)
+	// Yield harvest orchestration engine (#845): evaluates vaults on a cadence,
+	// applies the economic gate (harvest iff accrued yield > gas + margin),
+	// defers under network congestion, and submits harvests as idempotent jobs
+	// on the queue above. Its job handler is registered on the worker before Run.
+	harvestMargin, err := decimal.NewFromString(cfg.Harvest().Margin())
+	if err != nil {
+		return fmt.Errorf("HARVEST_ENGINE_MARGIN: %w", err)
+	}
+	harvestGasFee, err := decimal.NewFromString(cfg.Harvest().GasFee())
+	if err != nil {
+		return fmt.Errorf("HARVEST_ENGINE_GAS_FEE: %w", err)
+	}
+	harvestExecutor := harvest.NewServiceExecutor(vaultService, userService)
+	jobWorker.Register(harvest.DefaultJobType,
+		harvest.NewJobHandler(harvestExecutor, baseLogger.WithGroup("harvest-job")), 0)
+
+	harvestEngine := harvest.New(
+		harvest.Config{
+			Enabled:  cfg.Harvest().Enabled(),
+			Interval: cfg.Harvest().Interval(),
+			Margin:   harvestMargin,
+			Window:   cfg.Harvest().Window(),
+		},
+		harvest.NewRepoSource(vaultRepository),
+		harvest.NewStaticGasOracle(harvestGasFee),
+		jobQueueClient,
+		baseLogger.WithGroup("harvest-engine"),
+	)
+	harvestHandler := handler.NewHarvestHandler(harvestEngine)
+	harvestHandler.Register(mux)
+	harvestCtx, cancelHarvest := context.WithCancel(context.Background())
+	defer cancelHarvest()
+	go harvestEngine.Run(harvestCtx)
+
+	jobQueueCtx, cancelJobQueue := context.WithCancel(context.Background())
+	defer cancelJobQueue()
+	go func() {
+		if err := jobWorker.Run(jobQueueCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("job queue worker stopped", "error", err.Error())
+		}
+	}()
+
 	// User vault rebalance (suggestions + execution)
 	vaultRebalanceSvc := service.NewVaultRebalanceService(vaultRepository, adminService)
 	vaultHandler.SetRebalanceService(vaultRebalanceSvc)
@@ -531,7 +644,38 @@ func run() error {
 		{PathPrefix: "/api/v1/", Public: false},
 	}
 	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules)
-	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
+	// Tell the rate-limit client-IP extractor how many trusted proxies sit in
+	// front of the API so it derives the originating client IP from
+	// X-Forwarded-For instead of collapsing all traffic onto the proxy address.
+	middleware.ConfigureClientIP(cfg.RateLimit().TrustedProxyCount())
+
+	// globalLimiter bounds every request per client IP, but skips liveness /
+	// readiness / metrics endpoints so orchestrators can always reach them. It is
+	// distributed across instances when Redis is configured.
+	globalLimiter := middleware.GlobalRateLimiter(
+		middleware.NewLimiter(redisClient, "global", cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow()),
+		[]string{"/health", "/healthz", "/readyz", "/metrics"},
+	)
+	// authRouteLimiter applies a strict per-IP limit to the unauthenticated auth
+	// handshake to blunt credential-stuffing. Keyed by IP because no user exists
+	// yet at challenge/verify time.
+	authRouteLimiter := middleware.SensitiveRouteLimiter(
+		middleware.NewLimiter(redisClient, "auth", cfg.RateLimit().AuthLimit(), cfg.RateLimit().AuthWindow()),
+		[]middleware.RouteMatch{
+			{Method: http.MethodPost, Path: "/api/v1/auth/challenge"},
+			{Method: http.MethodPost, Path: "/api/v1/auth/verify"},
+		},
+		"authentication rate limit exceeded",
+	)
+	// settlementLimiter applies a strict per-user limit to settlement creation to
+	// prevent settlement spam. Placed after authentication so it keys by user ID.
+	settlementLimiter := middleware.SensitiveUserRouteLimiter(
+		middleware.NewLimiter(redisClient, "settlement", cfg.RateLimit().SettlementLimit(), cfg.RateLimit().SettlementWindow()),
+		[]middleware.RouteMatch{
+			{Method: http.MethodPost, Path: "/api/v1/settlements"},
+		},
+		"settlement rate limit exceeded",
+	)
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 	walletLimiter := middleware.WalletRateLimiter(
 		cfg.RateLimit().WalletLimit(),
@@ -542,15 +686,24 @@ func run() error {
 
 	server := &http.Server{
 		Addr: cfg.Server().Address(),
+		// cors is outermost of the request-processing middleware (after only
+		// SecurityHeaders/RecoverPanic) so that rate-limit 429 responses from
+		// globalLimiter and authRouteLimiter still carry CORS headers and remain
+		// readable to browser clients. OPTIONS preflights are short-circuited by
+		// cors and never reach the limiters.
 		Handler: middleware.SecurityHeaders(cfg.Environment())(
 			middleware.RecoverPanic(baseLogger)(
-				globalLimiter(
-					cors(
-						writeLimiter(
-							authenticator(
-								walletLimiter(
-									middleware.LimitRequestBody(1 * 1024 * 1024)(
-										middleware.Logging(baseLogger)(mux),
+				cors(
+					globalLimiter(
+						authRouteLimiter(
+							writeLimiter(
+								authenticator(
+									settlementLimiter(
+										walletLimiter(
+											middleware.LimitRequestBody(1 * 1024 * 1024)(
+												middleware.Logging(baseLogger)(mux),
+											),
+										),
 									),
 								),
 							),

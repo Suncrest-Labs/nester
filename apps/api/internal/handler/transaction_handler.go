@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -11,17 +12,27 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
 type TransactionHandler struct {
-	service *service.TransactionService
+	service   *service.TransactionService
+	vaultRepo vaultRepository
+}
+
+type vaultRepository interface {
+	GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error)
 }
 
 func NewTransactionHandler(service *service.TransactionService) *TransactionHandler {
 	return &TransactionHandler{service: service}
+}
+
+func (h *TransactionHandler) SetVaultRepository(repo vaultRepository) {
+	h.vaultRepo = repo
 }
 
 func (h *TransactionHandler) Register(mux *http.ServeMux) {
@@ -180,6 +191,29 @@ func (h *TransactionHandler) createTransaction(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
+	if h.vaultRepo != nil {
+		v, err := h.vaultRepo.GetVault(r.Context(), vaultID)
+		if err != nil {
+			if errors.Is(err, vault.ErrVaultNotFound) {
+				response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
+				return
+			}
+			logpkg.FromContext(r.Context()).Error("transaction handler: vault lookup failed", "error", err.Error())
+			response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
+			return
+		}
+		if v.UserID.String() != user.ID {
+			response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+			return
+		}
+	}
+
 	amount, err := decimal.NewFromString(req.Amount)
 	if err != nil {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("amount must be a valid decimal number"))
@@ -218,10 +252,33 @@ func (h *TransactionHandler) getTransactionByHash(w http.ResponseWriter, r *http
 		return
 	}
 
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
 	model, err := h.service.GetTransaction(r.Context(), hash)
 	if err != nil {
 		h.writeDomainError(w, r, err)
 		return
+	}
+
+	if h.vaultRepo != nil {
+		v, err := h.vaultRepo.GetVault(r.Context(), model.VaultID)
+		if err != nil {
+			if errors.Is(err, vault.ErrVaultNotFound) {
+				response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
+				return
+			}
+			logpkg.FromContext(r.Context()).Error("transaction handler: vault lookup failed", "error", err.Error())
+			response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
+			return
+		}
+		if v.UserID.String() != user.ID {
+			response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+			return
+		}
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(model))
