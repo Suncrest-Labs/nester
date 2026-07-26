@@ -77,15 +77,33 @@ func (noopLeadershipStatus) InstanceID() string { return "" }
 func (noopLeadershipStatus) IsLeader() bool     { return false }
 func (noopLeadershipStatus) Since() time.Time   { return time.Time{} }
 
+// AuditChainVerifier exposes chain integrity verification for admin inspection.
+type AuditChainVerifier interface {
+	RunOnce(ctx context.Context) (ok bool, brokenSeq int64, err error)
+}
+
+type noopAuditChainVerifier struct{}
+
+func (noopAuditChainVerifier) RunOnce(_ context.Context) (bool, int64, error) {
+	return true, 0, nil
+}
+
 type AdminHandler struct {
-	service     adminService
-	userService *service.UserService
-	eventSyncer EventSyncer
-	leadership  LeadershipStatus
+	service            adminService
+	userService        *service.UserService
+	eventSyncer        EventSyncer
+	leadership         LeadershipStatus
+	auditChainVerifier AuditChainVerifier
 }
 
 func NewAdminHandler(svc adminService, userSvc *service.UserService) *AdminHandler {
-	return &AdminHandler{service: svc, userService: userSvc, eventSyncer: noopEventSyncer{}, leadership: noopLeadershipStatus{}}
+	return &AdminHandler{
+		service:            svc,
+		userService:        userSvc,
+		eventSyncer:        noopEventSyncer{},
+		leadership:         noopLeadershipStatus{},
+		auditChainVerifier: noopAuditChainVerifier{},
+	}
 }
 
 // SetEventSyncer wires a real EventSyncer.  Call this from main after the
@@ -100,6 +118,12 @@ func (h *AdminHandler) SetEventSyncer(es EventSyncer) {
 // scheduler.NewLeadership has been constructed.
 func (h *AdminHandler) SetLeadership(l LeadershipStatus) {
 	h.leadership = l
+}
+
+// SetAuditChainVerifier wires the audit chain verifier so operators can trigger
+// a one-shot integrity check via GET /api/v1/admin/audit/verify.
+func (h *AdminHandler) SetAuditChainVerifier(v AuditChainVerifier) {
+	h.auditChainVerifier = v
 }
 
 func (h *AdminHandler) Register(mux *http.ServeMux) {
@@ -125,6 +149,9 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/savings-goal-templates", h.createGoalTemplate)
 	mux.HandleFunc("PATCH /api/v1/admin/savings-goal-templates/{id}", h.updateGoalTemplate)
 	mux.HandleFunc("DELETE /api/v1/admin/savings-goal-templates/{id}", h.deleteGoalTemplate)
+
+	// Audit chain integrity (issue #834)
+	mux.HandleFunc("GET /api/v1/admin/audit/verify", h.verifyAuditChain)
 }
 
 // getSchedulerLeadership handles GET /api/v1/admin/scheduler/leadership
@@ -560,6 +587,29 @@ func parseAdminDateQuery(raw string) (*time.Time, error) {
 		return &utc, nil
 	}
 	return nil, errors.New("invalid date format")
+}
+
+// verifyAuditChain handles GET /api/v1/admin/audit/verify
+//
+// Triggers a one-shot audit chain verification pass.  Useful for operators
+// performing incident forensics or compliance audits.
+// Returns 200 with chain_ok=true when the chain is intact.
+// Returns 200 with chain_ok=false and broken_at_sequence when a break is found.
+func (h *AdminHandler) verifyAuditChain(w http.ResponseWriter, r *http.Request) {
+	ok, brokenSeq, err := h.auditChainVerifier.RunOnce(r.Context())
+	if err != nil {
+		response.WriteJSON(w, http.StatusOK, response.OK(map[string]any{
+			"chain_ok":          false,
+			"broken_at_sequence": brokenSeq,
+			"error":             err.Error(),
+		}))
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(map[string]any{
+		"chain_ok":          ok,
+		"broken_at_sequence": brokenSeq,
+	}))
 }
 
 func (h *AdminHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {
