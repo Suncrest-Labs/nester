@@ -950,10 +950,10 @@ func (s *SavingsGoalService) recordGamificationDeposit(ctx context.Context, user
 	})
 }
 
-func completedGoals(goals []savingsgoal.SavingsGoal, results []GoalDepositResult) int {
+func completedGoals(goals []*savingsgoal.SavingsGoal, results []GoalDepositResult) int {
 	count := 0
 	for i, result := range results {
-		if i < len(goals) && goals[i].TargetAmount.IsPositive() && result.CurrentAmount.GreaterThanOrEqual(goals[i].TargetAmount) {
+		if i < len(goals) && goals[i] != nil && goals[i].TargetAmount.IsPositive() && result.CurrentAmount.GreaterThanOrEqual(goals[i].TargetAmount) {
 			count++
 		}
 	}
