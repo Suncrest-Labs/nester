@@ -473,8 +473,6 @@ async def stream_chat(
             full_response, request_id=request_id
         )
         conversation_store.append(user_id, "assistant", clean_response)
-                safe = text.replace("\n", "\\n")
-                yield f"data: {safe}\n\n"
 
         # Grounding validation (#852): flag any figure in the answer not present
         # in the retrieved context so hallucinated numbers are caught and logged.
@@ -486,7 +484,6 @@ async def stream_chat(
                 unsupported,
             )
 
-        conversation_store.append(user_id, "assistant", full_response)
         yield "data: [DONE]\n\n"
 
     except Exception:
@@ -1602,3 +1599,4 @@ async def analyze_portfolio(
         confidence=confidence,
         generated_at=datetime.now(timezone.utc),
     )
+
