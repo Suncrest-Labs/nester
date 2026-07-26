@@ -103,7 +103,7 @@ class MarketContextEngine:
     ) -> None:
         self.allowed_sources = allowed_sources
         self.cache = cache or ExtractionCache()
-        self.llm_create = llm_create or client.messages.create
+        self.llm_create: Callable[..., Any] = llm_create or client.messages.create
 
     def source_is_allowed(self, document: SourceDocument) -> bool:
         return str(document.source_url) in self.allowed_sources.get(document.protocol, set())
