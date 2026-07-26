@@ -83,6 +83,7 @@ export interface MarketContextSignal {
   source_url: string
   publisher: string
   observed_at: string
+  corroborating_sources: string[]
   advisory_only: true
 }
 

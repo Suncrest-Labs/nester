@@ -52,7 +52,7 @@ class ExtractedSignal(BaseModel):
 class MarketContextResponse(BaseModel):
     signal: str
     summary: str
-    confidence: float
+    confidence: float = Field(ge=0, le=1)
     updatedAt: datetime
     contexts: list[ExtractedSignal]
     disclaimer: str = (

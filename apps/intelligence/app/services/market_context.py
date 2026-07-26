@@ -154,8 +154,13 @@ class MarketContextEngine:
             return None
         if payload.get("protocol") != document.protocol:
             return None
-        payload["confidence"] = min(float(payload.get("confidence", 0)), MAX_LONE_SOURCE_CONFIDENCE)
+        if payload.get("asset") != document.asset:
+            return None
         try:
+            payload["confidence"] = min(
+                float(payload.get("confidence", 0)), MAX_LONE_SOURCE_CONFIDENCE
+            )
+            payload["observed_at"] = document.published_at
             return ExtractedSignal.model_validate(payload)
         except (TypeError, ValueError):
             return None
@@ -229,7 +234,14 @@ class MarketContextBatchJob:
 
     async def run_once(self) -> list[ExtractedSignal]:
         documents = await self.fetch_documents()
-        extracted = [await self.engine.extract(document) for document in documents]
+        extracted: list[ExtractedSignal | None] = []
+        for document in documents:
+            try:
+                extracted.append(await self.engine.extract(document))
+            except Exception:
+                # One unavailable or malformed source must not suppress other
+                # independently sourced context in the scheduled batch.
+                extracted.append(None)
         signals = corroborate([signal for signal in extracted if signal is not None])
         await self.store.save(signals)
         return signals

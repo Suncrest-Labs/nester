@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS market_context_signals (
     corroborating_sources JSONB NOT NULL DEFAULT '[]'::jsonb,
     observed_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (protocol, signal_type, direction, source_url, observed_at)
+    UNIQUE (protocol, signal_type, direction, source_url)
 );
 
 CREATE INDEX idx_market_context_protocol_observed

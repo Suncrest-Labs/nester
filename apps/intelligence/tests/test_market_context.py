@@ -49,6 +49,7 @@ async def test_sourced_structured_signal_is_kept_and_low_trust():
     assert str(signal.source_url) == URL
     assert signal.confidence == 0.45
     assert signal.advisory_only is True
+    assert signal.observed_at == document().published_at
 
 
 @pytest.mark.asyncio
@@ -58,6 +59,18 @@ async def test_unsourced_or_fabricated_source_is_discarded():
         llm_create=lambda **_: response(source_url="https://attacker.example/fake"),
     )
     assert await engine.extract(document()) is None
+
+
+@pytest.mark.asyncio
+async def test_asset_mismatch_and_malformed_confidence_are_discarded():
+    wrong_asset = MarketContextEngine(
+        {"Example": {URL}}, llm_create=lambda **_: response(asset="FAKE")
+    )
+    malformed = MarketContextEngine(
+        {"Example": {URL}}, llm_create=lambda **_: response(confidence="very sure")
+    )
+    assert await wrong_asset.extract(document()) is None
+    assert await malformed.extract(document()) is None
 
 
 @pytest.mark.asyncio
