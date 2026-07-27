@@ -133,6 +133,33 @@ export function MarketSentimentWidget() {
       {/* Summary */}
       <p className="text-xs leading-relaxed text-muted-foreground">{data.summary}</p>
 
+      {data.contexts && data.contexts.length > 0 && (
+        <div className="mt-3 space-y-2 border-t border-border pt-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Sourced market context · informational only
+          </p>
+          {data.contexts.map((context) => (
+            <div key={`${context.source_url}-${context.observed_at}`} className="text-xs">
+              <p className="text-foreground/80">
+                <span className="font-medium">{context.protocol}:</span> {context.summary}
+              </p>
+              <a
+                href={context.source_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="mt-0.5 inline-block text-[10px] text-muted-foreground underline"
+              >
+                Source: {context.publisher} · {Math.round(context.confidence * 100)}% confidence
+              </a>
+            </div>
+          ))}
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            {data.disclaimer ??
+              'Low-trust context, not financial advice. It cannot trigger fund movements.'}
+          </p>
+        </div>
+      )}
+
       {/* Timestamp */}
       <p className="mt-2 text-[10px] text-muted-foreground/50">
         Updated {new Date(data.updatedAt).toLocaleTimeString()}

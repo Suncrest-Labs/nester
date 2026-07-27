@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -19,13 +20,28 @@ func NewScheduledDepositService(vaultSvc *VaultService) *ScheduledDepositService
 	return &ScheduledDepositService{vaultSvc: vaultSvc}
 }
 
+// RecordScheduledDeposit records one occurrence of a recurring savings
+// schedule against the vault ledger. occurrenceAt is the due timestamp of
+// THIS occurrence (the schedule's NextRunAt when it was picked up, not
+// "now") and is folded into the transaction hash so each occurrence of a
+// recurring schedule gets its own hash.
+//
+// Before this fix, txHash was built from scheduleID alone
+// ("scheduled-<scheduleID>"), which is constant across every occurrence of
+// the same schedule. vault_transactions.transaction_hash has a UNIQUE
+// index and RecordDeposit does a bare INSERT with no ON CONFLICT, so only
+// the FIRST-ever occurrence of any schedule could ever be recorded — every
+// later occurrence hit the unique-constraint violation, logged an error,
+// and (since UpdateAfterRun never ran on failure) retried and failed
+// forever (#846).
 func (s *ScheduledDepositService) RecordScheduledDeposit(
 	ctx context.Context,
 	userID, vaultID uuid.UUID,
 	amount decimal.Decimal,
 	scheduleID uuid.UUID,
+	occurrenceAt time.Time,
 ) error {
-	txHash := fmt.Sprintf("scheduled-%s", scheduleID.String())
+	txHash := fmt.Sprintf("scheduled-%s-%d", scheduleID, occurrenceAt.UTC().Unix())
 	_, err := s.vaultSvc.RecordDeposit(ctx, RecordDepositInput{
 		VaultID: vaultID,
 		UserID:  userID,

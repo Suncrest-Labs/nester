@@ -82,6 +82,21 @@ type APYDeviationJob struct {
 	updater   APYAlertUpdater
 	notifier  APYNotifier
 	logger    *slog.Logger
+	leader    LeaderChecker
+}
+
+// SetLeaderChecker wires leader election (#846). This job only sends
+// notifications (no money movement), so it is not required to be singleton
+// for correctness — but the dedup check (LastAPYAlertSentAt + a 24h
+// cooldown) is a read-then-write against Postgres with no locking, so N
+// replicas ticking at once can each read "not yet alerted" and all send a
+// duplicate notification in the same race window. Gating behind the same
+// single leader lock as the money-moving jobs avoids that and is simplest
+// given #846's "one leader instance" design (see Leadership's doc comment).
+func (j *APYDeviationJob) SetLeaderChecker(l LeaderChecker) { j.leader = l }
+
+func (j *APYDeviationJob) isLeader() bool {
+	return j.leader == nil || j.leader.IsLeader()
 }
 
 // NewAPYDeviationJob constructs the job.
@@ -133,6 +148,11 @@ func (j *APYDeviationJob) Run(ctx context.Context) {
 }
 
 func (j *APYDeviationJob) tick(ctx context.Context) {
+	if !j.isLeader() {
+		j.logger.Debug("apy-deviation: skipping tick, not leader")
+		return
+	}
+
 	vaults, err := j.vaults.ListActiveVaultsForAPYCheck(ctx)
 	if err != nil {
 		j.logger.Error("apy-deviation: list vaults failed", "error", err)
@@ -168,6 +188,14 @@ func (j *APYDeviationJob) checkVault(ctx context.Context, v APYVaultInfo, now ti
 	}
 	dropPct := (meanAPY - latestAPY) / meanAPY * 100
 	if dropPct <= j.cfg.ThresholdPct {
+		return
+	}
+
+	// Execution-time recheck (#846 split-brain guard): re-verify immediately
+	// before the notification send, since checkVault runs once per vault and
+	// a large fleet can take long enough for leadership to change mid-tick.
+	if !j.isLeader() {
+		j.logger.Debug("apy-deviation: leadership lost mid-tick, skipping notify", "vault_id", v.ID)
 		return
 	}
 

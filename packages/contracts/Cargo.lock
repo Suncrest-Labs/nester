@@ -333,6 +333,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "dummy-vault-fixture"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -699,6 +706,7 @@ name = "nester-test-utils"
 version = "0.1.0"
 dependencies = [
  "allocation-strategy-contract",
+ "nester-access-control",
  "nester-common",
  "soroban-sdk",
  "treasury-contract",
@@ -885,6 +893,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom",
+]
+
+[[package]]
+name = "referral-contract"
+version = "0.1.0"
+dependencies = [
+ "nester-access-control",
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
 ]
 
 [[package]]
@@ -1387,6 +1405,18 @@ dependencies = [
  "nester-test-utils",
  "soroban-sdk",
  "vault-token-contract",
+]
+
+[[package]]
+name = "vault-factory-contract"
+version = "0.1.0"
+dependencies = [
+ "dummy-vault-fixture",
+ "nester-access-control",
+ "nester-common",
+ "nester-test-utils",
+ "nester-timelock",
+ "soroban-sdk",
 ]
 
 [[package]]

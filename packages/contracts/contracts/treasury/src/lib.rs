@@ -1,10 +1,10 @@
 #![no_std]
+use nester_access_control::{AccessControl, Role};
+use nester_common::{with_reentrancy_guard, CalleeAllowlist, ContractError};
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
     Symbol, Vec,
 };
-use nester_access_control::{AccessControl, Role};
-use nester_common::ContractError;
 
 // ---------------------------------------------------------------------------
 // Event topic constants
@@ -12,8 +12,8 @@ use nester_common::ContractError;
 const TREASURY: Symbol = symbol_short!("TREASURY");
 const RECEIVE: Symbol = symbol_short!("RECEIVE");
 const WITHDRAW: Symbol = symbol_short!("WITHDRAW");
-const DISTRIB: Symbol = symbol_short!("DISTRIB");  // one recipient paid
-const RCPUPD: Symbol = symbol_short!("RCPUPD");    // recipients list replaced
+const DISTRIB: Symbol = symbol_short!("DISTRIB"); // one recipient paid
+const RCPUPD: Symbol = symbol_short!("RCPUPD"); // recipients list replaced
 
 // ---------------------------------------------------------------------------
 // Basis-point denominator — shares must sum to exactly this
@@ -85,13 +85,21 @@ impl TreasuryContract {
         AccessControl::initialize(&env, &admin);
 
         env.storage().instance().set(&DataKey::Vault, &vault);
-        env.storage().instance().set(&DataKey::TotalReceived, &0_i128);
-        env.storage().instance().set(&DataKey::TotalDistributed, &0_i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalReceived, &0_i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDistributed, &0_i128);
 
         let empty_recipients: Vec<FeeRecipient> = Vec::new(&env);
         let empty_history: Vec<DistributionRecord> = Vec::new(&env);
-        env.storage().instance().set(&DataKey::Recipients, &empty_recipients);
-        env.storage().instance().set(&DataKey::DistHistory, &empty_history);
+        env.storage()
+            .instance()
+            .set(&DataKey::Recipients, &empty_recipients);
+        env.storage()
+            .instance()
+            .set(&DataKey::DistHistory, &empty_history);
     }
 
     // -----------------------------------------------------------------------
@@ -101,6 +109,10 @@ impl TreasuryContract {
     /// Record incoming fees from the vault.  Only the registered vault
     /// address may call this.
     pub fn receive_fees(env: Env, amount: i128) {
+        with_reentrancy_guard(env, |env| Self::receive_fees_internal(env, amount));
+    }
+
+    fn receive_fees_internal(env: Env, amount: i128) {
         let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
         vault.require_auth();
 
@@ -152,12 +164,12 @@ impl TreasuryContract {
             panic_with_error!(&env, ContractError::InvalidOperation);
         }
 
-        env.storage().instance().set(&DataKey::Recipients, &recipients);
+        env.storage()
+            .instance()
+            .set(&DataKey::Recipients, &recipients);
 
-        env.events().publish(
-            (TREASURY, RCPUPD),
-            (recipients.len(), caller),
-        );
+        env.events()
+            .publish((TREASURY, RCPUPD), (recipients.len(), caller));
     }
 
     // -----------------------------------------------------------------------
@@ -178,11 +190,16 @@ impl TreasuryContract {
     ///
     /// Emits per recipient: `(TREASURY, DISTRIB, (address, amount, share_bps, total_received))`
     pub fn distribute(env: Env, caller: Address, token: Address) {
+        with_reentrancy_guard(env, |env| Self::distribute_internal(env, caller, token));
+    }
+
+    fn distribute_internal(env: Env, caller: Address, token: Address) {
         caller.require_auth();
 
         let is_admin = AccessControl::has_role(&env, &caller, Role::Admin);
         let is_operator = AccessControl::has_role(&env, &caller, Role::Operator);
-        if !is_admin && !is_operator {
+        let is_treasurer = AccessControl::has_role(&env, &caller, Role::Treasurer);
+        if !is_admin && !is_operator && !is_treasurer {
             panic_with_error!(&env, ContractError::Unauthorized);
         }
 
@@ -215,6 +232,7 @@ impl TreasuryContract {
         }
 
         let token_client = token::Client::new(&env, &token);
+        CalleeAllowlist::assert_allowed(&env, &token);
         let contract_addr = env.current_contract_address();
 
         let recipient_count = recipients.len();
@@ -244,12 +262,15 @@ impl TreasuryContract {
         }
 
         // Persist updated per-recipient totals.
-        env.storage().instance().set(&DataKey::Recipients, &recipients);
-
-        // Advance the distributed counter.
         env.storage()
             .instance()
-            .set(&DataKey::TotalDistributed, &(total_distributed + total_sent));
+            .set(&DataKey::Recipients, &recipients);
+
+        // Advance the distributed counter.
+        env.storage().instance().set(
+            &DataKey::TotalDistributed,
+            &(total_distributed + total_sent),
+        );
 
         // Append a history record.
         let mut history: Vec<DistributionRecord> = env
@@ -263,7 +284,9 @@ impl TreasuryContract {
             total_amount: total_sent,
             recipient_count,
         });
-        env.storage().instance().set(&DataKey::DistHistory, &history);
+        env.storage()
+            .instance()
+            .set(&DataKey::DistHistory, &history);
     }
 
     // -----------------------------------------------------------------------
@@ -272,13 +295,27 @@ impl TreasuryContract {
 
     /// Manual/emergency withdrawal — bypasses the distribution mechanism.
     pub fn withdraw(env: Env, caller: Address, to: Address, token: Address, amount: i128) {
+        with_reentrancy_guard(env, |env| {
+            Self::withdraw_internal(env, caller, to, token, amount)
+        });
+    }
+
+    fn withdraw_internal(env: Env, caller: Address, to: Address, token: Address, amount: i128) {
         caller.require_auth();
-        AccessControl::require_role(&env, &caller, Role::Admin);
+        // Treasury outflows (issue #820): Admin or the narrower Treasurer
+        // role — a fund-moving action gated separately from Admin's
+        // config/grant-role authority.
+        if !AccessControl::has_role(&env, &caller, Role::Admin)
+            && !AccessControl::has_role(&env, &caller, Role::Treasurer)
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
 
         if amount <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
 
+        CalleeAllowlist::assert_allowed(&env, &token);
         token::Client::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);
         env.events().publish((TREASURY, WITHDRAW), amount);
     }
@@ -337,6 +374,18 @@ impl TreasuryContract {
     /// Address of the vault contract authorised to submit fees.
     pub fn get_vault(env: Env) -> Address {
         env.storage().instance().get(&DataKey::Vault).unwrap()
+    }
+
+    pub fn register_callee(env: Env, caller: Address, callee: Address) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        CalleeAllowlist::register(&env, &callee);
+    }
+
+    pub fn unregister_callee(env: Env, caller: Address, callee: Address) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        CalleeAllowlist::unregister(&env, &callee);
     }
 }
 

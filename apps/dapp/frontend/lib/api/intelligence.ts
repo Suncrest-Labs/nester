@@ -69,6 +69,22 @@ export interface MarketSentiment {
   summary: string
   confidence: number
   updatedAt: string        // ISO timestamp
+  contexts?: MarketContextSignal[]
+  disclaimer?: string
+}
+
+export interface MarketContextSignal {
+  protocol: string
+  asset?: string | null
+  signal_type: 'announcement' | 'security_concern' | 'sentiment_shift' | 'depeg_risk'
+  direction: 'positive' | 'negative' | 'neutral'
+  confidence: number
+  summary: string
+  source_url: string
+  publisher: string
+  observed_at: string
+  corroborating_sources: string[]
+  advisory_only: true
 }
 
 export interface PortfolioInsight {

@@ -103,6 +103,9 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 	}
 	desc := strings.TrimSpace(in.Description)
 	name := strings.TrimSpace(in.Name)
+	if err := validateGoalName(name); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
 	if name == "" && desc != "" {
 		runes := []rune(desc)
 		if len(runes) > 50 {
@@ -270,7 +273,11 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 		goal.Category = category
 	}
 	if in.Name != nil {
-		goal.Name = strings.TrimSpace(*in.Name)
+		name := strings.TrimSpace(*in.Name)
+		if err := validateGoalName(name); err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		goal.Name = name
 	}
 	if in.Emoji != nil {
 		e := strings.TrimSpace(*in.Emoji)
@@ -917,9 +924,23 @@ func (s *SavingsGoalService) DepositSplit(ctx context.Context, userID uuid.UUID,
 // meaningless for a savings goal, so creation requires at least 24h (#686).
 const MinDeadlineLeadTime = 24 * time.Hour
 
+// MaxGoalNameLength caps the goal name to the savings_goals.name column width
+// (VARCHAR(100)); validating here returns a 400 instead of a DB error (#681).
+const MaxGoalNameLength = 100
+
+func validateGoalName(name string) error {
+	if len([]rune(name)) > MaxGoalNameLength {
+		return fmt.Errorf("%w: name must be at most %d characters", savingsgoal.ErrInvalidGoal, MaxGoalNameLength)
+	}
+	return nil
+}
+
 func validateSavingsGoalInput(target decimal.Decimal, currency string) error {
 	if !target.IsPositive() {
-		return fmt.Errorf("%w: target_amount must be positive", savingsgoal.ErrInvalidGoal)
+		return fmt.Errorf("%w: target_amount must be greater than zero", savingsgoal.ErrInvalidAmount)
+	}
+	if target.LessThan(savingsgoal.MinTargetAmount) {
+		return fmt.Errorf("%w: target_amount must be at least %s", savingsgoal.ErrInvalidAmount, savingsgoal.MinTargetAmount)
 	}
 	currency = strings.TrimSpace(currency)
 	if currency == "" {

@@ -5,8 +5,10 @@
 //! allocation logic.
 //!
 //! # Roles
+//!
 //! * Admin: register/update/remove sources, risk + limit updates.
 //! * Operator: day-to-day performance refreshes (APY/TVL) and migration ops.
+//!
 //! Role management is delegated to [`nester_access_control`].
 //!
 //! # Status transitions
@@ -256,7 +258,9 @@ impl YieldRegistryContract {
         let mut source = get_source_or_panic(&env, &id);
 
         // Deprecated and Exploit are terminal states.
-        if matches!(source.status, SourceStatus::Deprecated) || matches!(source.status, SourceStatus::Exploit) {
+        if matches!(source.status, SourceStatus::Deprecated)
+            || matches!(source.status, SourceStatus::Exploit)
+        {
             panic_with_error!(&env, ContractError::InvalidOperation);
         }
 
@@ -264,7 +268,9 @@ impl YieldRegistryContract {
         source.status = new_status.clone();
 
         // Deprecation or Exploit implies migration is required.
-        if matches!(new_status, SourceStatus::Deprecated) || matches!(new_status, SourceStatus::Exploit) {
+        if matches!(new_status, SourceStatus::Deprecated)
+            || matches!(new_status, SourceStatus::Exploit)
+        {
             source.migration_required = true;
             source.migration_completed = false;
             source.migration_completed_at = 0;
@@ -759,9 +765,13 @@ fn performance_event_data(source: &YieldSource) -> SourcePerformanceUpdatedEvent
     }
 }
 
+/// APY/TVL reporting (issue #820): Admin, Operator, or the narrower
+/// [`Role::Attester`] — a distinct key dedicated to signing yield reports,
+/// separate from any fund-moving role.
 fn require_admin_or_operator(env: &Env, caller: &Address) {
     if !AccessControl::has_role(env, caller, Role::Admin)
         && !AccessControl::has_role(env, caller, Role::Operator)
+        && !AccessControl::has_role(env, caller, Role::Attester)
     {
         panic_with_error!(env, ContractError::Unauthorized);
     }

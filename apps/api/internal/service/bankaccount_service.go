@@ -58,7 +58,7 @@ func (s *BankAccountService) Add(ctx context.Context, userID uuid.UUID, input ba
 		}
 	}
 
-	encrypted, err := s.cipher.Encrypt(normalized.AccountNumber)
+	envelope, err := s.cipher.Encrypt(normalized.AccountNumber)
 	if err != nil {
 		return bankaccount.PublicView{}, err
 	}
@@ -83,7 +83,7 @@ func (s *BankAccountService) Add(ctx context.Context, userID uuid.UUID, input ba
 		}
 	}
 
-	created, err := s.repo.Create(ctx, model, encrypted, fingerprint)
+	created, err := s.repo.Create(ctx, model, envelope.Ciphertext, fingerprint, envelope.KeyVersion)
 	if err != nil {
 		return bankaccount.PublicView{}, err
 	}
@@ -111,7 +111,7 @@ func (s *BankAccountService) SetDefault(ctx context.Context, userID, accountID u
 	if userID == uuid.Nil || accountID == uuid.Nil {
 		return bankaccount.PublicView{}, bankaccount.ErrInvalidInput
 	}
-	account, _, err := s.repo.GetByID(ctx, accountID)
+	account, _, _, err := s.repo.GetByID(ctx, accountID)
 	if err != nil {
 		return bankaccount.PublicView{}, err
 	}
@@ -145,7 +145,7 @@ func (s *BankAccountService) Remove(ctx context.Context, userID, accountID uuid.
 	if userID == uuid.Nil || accountID == uuid.Nil {
 		return bankaccount.ErrInvalidInput
 	}
-	account, _, err := s.repo.GetByID(ctx, accountID)
+	account, _, _, err := s.repo.GetByID(ctx, accountID)
 	if err != nil {
 		return err
 	}
@@ -163,14 +163,14 @@ func (s *BankAccountService) ResolveForSettlement(
 	if s.cipher == nil {
 		return bankaccount.BankAccount{}, bankaccount.ErrEncryptionUnavailable
 	}
-	account, encrypted, err := s.repo.GetByID(ctx, accountID)
+	account, encrypted, keyVersion, err := s.repo.GetByID(ctx, accountID)
 	if err != nil {
 		return bankaccount.BankAccount{}, err
 	}
 	if account.UserID != userID {
 		return bankaccount.BankAccount{}, bankaccount.ErrForbidden
 	}
-	plain, err := s.cipher.Decrypt(encrypted)
+	plain, err := s.cipher.Decrypt(crypto.CipherEnvelope{KeyVersion: keyVersion, Ciphertext: encrypted})
 	if err != nil {
 		return bankaccount.BankAccount{}, err
 	}

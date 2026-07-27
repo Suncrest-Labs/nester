@@ -28,6 +28,9 @@ from app.services import guardrails
 from app.services.coingecko import get_client as get_coingecko_client
 from app.services.conversation_store import store as conversation_store
 from app.services.defillama import get_client as get_defillama_client
+from app.services.grounding import build_grounded_system_prompt, validate_grounding
+from app.services.retrieval import RetrievalService
+from app.services.retrieval_source import ApiDataSource
 from app.services.vault_context import VaultContextFetcher
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,7 @@ _RISK_LIMITS: dict[str, float] = {
 
 _client: Optional[anthropic.AsyncAnthropic] = None
 _vault_context_fetcher: Optional[VaultContextFetcher] = None
+_retrieval_service: Optional[RetrievalService] = None
 _redis_client: Any = None
 _redis_available: bool = False
 
@@ -68,6 +72,19 @@ def get_vault_context_fetcher() -> VaultContextFetcher:
             service_api_key=settings.nester_service_api_key,
         )
     return _vault_context_fetcher
+
+
+def get_retrieval_service() -> RetrievalService:
+    """Return the shared structured-retrieval service (#852)."""
+    global _retrieval_service
+    if _retrieval_service is None:
+        _retrieval_service = RetrievalService(
+            ApiDataSource(
+                api_base_url=settings.nester_api_base_url,
+                service_api_key=settings.nester_service_api_key,
+            )
+        )
+    return _retrieval_service
 
 
 def _get_redis() -> Any:
@@ -397,6 +414,18 @@ async def stream_chat(
         context_injection
         + _to_anthropic_messages(history)
         + [{"role": "user", "content": guardrails.wrap_user_content(message)}]
+    # Retrieve minimal, user-scoped context via the structured retrieval layer
+    # and build a grounded system prompt (#852). The retrieved context is the
+    # single source of facts: the model is instructed to answer only from it,
+    # cite it, and refuse when the needed data is absent. Retrieval is scoped to
+    # user_id (from the JWT subject), so a prompt-injected request for another
+    # user's data cannot widen the scope.
+    retrieval_service = get_retrieval_service()
+    retrieved = await retrieval_service.retrieve(user_id, message)
+    dynamic_system_prompt = build_grounded_system_prompt(SYSTEM_PROMPT, retrieved)
+
+    messages: list[anthropic.types.MessageParam] = (
+        _to_anthropic_messages(history) + [{"role": "user", "content": message}]
     )
 
     client = get_client()
@@ -444,6 +473,20 @@ async def stream_chat(
             full_response, request_id=request_id
         )
         conversation_store.append(user_id, "assistant", clean_response)
+                safe = text.replace("\n", "\\n")
+                yield f"data: {safe}\n\n"
+
+        # Grounding validation (#852): flag any figure in the answer not present
+        # in the retrieved context so hallucinated numbers are caught and logged.
+        grounded, unsupported = validate_grounding(full_response, retrieved)
+        if not grounded:
+            logger.warning(
+                "prometheus grounding: unsupported numbers in answer for user %s: %s",
+                user_id,
+                unsupported,
+            )
+
+        conversation_store.append(user_id, "assistant", full_response)
         yield "data: [DONE]\n\n"
 
     except Exception:
@@ -644,13 +687,29 @@ async def get_market_sentiment() -> dict[str, Any]:
                 sentiment["summary"]
             )
         return sentiment
+        result = dict(json.loads(_json_strip(text)))
+        from app.services.market_context import latest_signals
+
+        result["contexts"] = latest_signals()
+        result["disclaimer"] = (
+            "Market context is low-trust information, not financial advice. "
+            "It cannot trigger fund movements."
+        )
+        return result
     except Exception:
         logger.exception("Failed to get market sentiment")
+        from app.services.market_context import latest_signals
+
         return {
             "signal": "neutral",
             "summary": "Sentiment data temporarily unavailable.",
             "confidence": 0.0,
             "updatedAt": "",
+            "contexts": latest_signals(),
+            "disclaimer": (
+                "Market context is low-trust information, not financial advice. "
+                "It cannot trigger fund movements."
+            ),
         }
 
 

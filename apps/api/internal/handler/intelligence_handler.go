@@ -33,6 +33,8 @@ func (h *IntelligenceHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/intelligence/portfolio/{userId}", h.GetPortfolioInsights)
 	mux.HandleFunc("GET /api/v1/portfolio/{user_id}/insights", h.portfolioInsightsByPath)
 	mux.HandleFunc("POST /api/v1/intelligence/savings-plan", h.CreateSavingsPlan)
+	mux.HandleFunc("POST /api/v1/vaults/{id}/rebalance/suggest", h.suggestAIRebalance)
+	mux.HandleFunc("POST /api/v1/vaults/{id}/rebalance/execute", h.executeAIRebalance)
 }
 
 func (h *IntelligenceHandler) GetVaultRecommendations(w http.ResponseWriter, r *http.Request) {
@@ -168,6 +170,38 @@ func (h *IntelligenceHandler) portfolioInsightsByPath(w http.ResponseWriter, r *
 		return
 	}
 	response.WriteJSON(w, http.StatusOK, response.OK(insights))
+}
+
+// suggestAIRebalance proxies to the intelligence service's risk-adjusted
+// rebalancing engine. Distinct from the rule-based /rebalance-suggestion
+// endpoint on VaultHandler: this one is Claude-assisted and scores protocols
+// via the Sharpe-ratio inspired risk model.
+func (h *IntelligenceHandler) suggestAIRebalance(w http.ResponseWriter, r *http.Request) {
+	vaultID := r.PathValue("id")
+	if vaultID == "" {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id is required"))
+		return
+	}
+	if h.proxy == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "UNAVAILABLE", "intelligence not configured"))
+		return
+	}
+	h.proxy.Forward(w, r, "/vaults/"+vaultID+"/rebalance/suggest")
+}
+
+// executeAIRebalance proxies to the intelligence service to build an
+// unsigned Stellar transaction for a user-approved AI rebalance suggestion.
+func (h *IntelligenceHandler) executeAIRebalance(w http.ResponseWriter, r *http.Request) {
+	vaultID := r.PathValue("id")
+	if vaultID == "" {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id is required"))
+		return
+	}
+	if h.proxy == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "UNAVAILABLE", "intelligence not configured"))
+		return
+	}
+	h.proxy.Forward(w, r, "/vaults/"+vaultID+"/rebalance/execute")
 }
 
 func (h *IntelligenceHandler) authorizeUserInsights(w http.ResponseWriter, r *http.Request, userID string) bool {
