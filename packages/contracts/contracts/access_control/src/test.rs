@@ -30,8 +30,8 @@ extern crate std;
 
 use nester_common::ContractError;
 use soroban_sdk::{
-    contract, contractimpl, testutils::Address as _, xdr::ScErrorCode, xdr::ScErrorType, Address,
-    Env, Error,
+    contract, contractimpl, testutils::Address as _, testutils::Ledger as _, xdr::ScErrorCode,
+    xdr::ScErrorType, Address, Env, Error,
 };
 
 use crate::{AccessControl, Role};
@@ -69,6 +69,41 @@ impl TestAC {
 
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
+    }
+
+    pub fn grant_role_until(
+        env: Env,
+        grantor: Address,
+        grantee: Address,
+        role: Role,
+        expires_at: u64,
+    ) {
+        AccessControl::grant_role_until(&env, &grantor, &grantee, role, expires_at);
+    }
+
+    pub fn transfer_role(env: Env, current_holder: Address, role: Role, new_holder: Address) {
+        AccessControl::transfer_role(&env, &current_holder, role, &new_holder);
+    }
+
+    pub fn accept_role(env: Env, new_holder: Address, role: Role) {
+        AccessControl::accept_role(&env, &new_holder, role);
+    }
+
+    pub fn cancel_role_transfer(env: Env, current_holder: Address, role: Role) {
+        AccessControl::cancel_role_transfer(&env, &current_holder, role);
+    }
+
+    pub fn role_expires_at(env: Env, account: Address, role: Role) -> Option<u64> {
+        AccessControl::role_expires_at(&env, &account, role)
+    }
+
+    pub fn get_role_members(
+        env: Env,
+        role: Role,
+        start: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
+        AccessControl::get_role_members(&env, role, start, limit)
     }
 }
 
@@ -824,4 +859,322 @@ fn operator_cannot_revoke_roles() {
         client.try_revoke_role(&operator, &target, &Role::Operator),
         unauthorized_role_error(),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Granular roles (issue #820): Guardian asymmetry, generalised two-step
+// transfer, role expiry, enumeration.
+// ---------------------------------------------------------------------------
+
+fn role_required_error() -> Error {
+    Error::from_contract_error(ContractError::RoleRequired as u32)
+}
+
+fn role_transfer_not_pending_error() -> Error {
+    Error::from_contract_error(ContractError::RoleTransferNotPending as u32)
+}
+
+#[test]
+fn admin_can_grant_and_revoke_guardian_role() {
+    let (env, admin, guardian, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &guardian, Role::Guardian)
+    });
+    assert!(read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Guardian
+    )));
+
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &admin, &guardian, Role::Guardian)
+    });
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Guardian
+    )));
+}
+
+/// The core Guardian asymmetry guarantee: holding Guardian never implies
+/// holding any fund-moving or de-escalating role (Admin, Upgrader,
+/// Treasurer). A Guardian-only key can never unpause, upgrade, or withdraw —
+/// those checks live in the calling contracts (e.g. the vault only accepts
+/// Guardian for `pause`/halt actions, never for `unpause`), but the
+/// prerequisite proven here is that granting Guardian grants nothing else.
+#[test]
+fn guardian_role_does_not_imply_admin_upgrader_or_treasurer() {
+    let (env, admin, guardian, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &guardian, Role::Guardian)
+    });
+
+    assert!(read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Guardian
+    )));
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Admin
+    )));
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Upgrader
+    )));
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Treasurer
+    )));
+
+    // And a Guardian-only key cannot pass an Admin-gated check.
+    let client = TestACClient::new(&env, &cid);
+    assert_soroban_error!(
+        client.try_require_role(&guardian, &Role::Admin),
+        unauthorized_role_error(),
+    );
+}
+
+#[test]
+fn all_new_granular_roles_are_independently_grantable() {
+    let (env, admin, cid) = {
+        let (env, admin, _, cid) = setup();
+        (env, admin, cid)
+    };
+
+    for role in [
+        Role::Upgrader,
+        Role::Attester,
+        Role::FeeManager,
+        Role::RebalanceKeeper,
+        Role::Treasurer,
+    ] {
+        let holder = Address::generate(&env);
+        invoke(&env, &cid, || {
+            AccessControl::grant_role(&env, &admin, &holder, role.clone())
+        });
+        assert!(read(&env, &cid, || AccessControl::has_role(
+            &env,
+            &holder,
+            role.clone()
+        )));
+    }
+}
+
+// --- Generalised two-step role transfer -------------------------------------
+
+#[test]
+fn transfer_role_two_step_happy_path_for_guardian() {
+    let (env, admin, guardian, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &guardian, Role::Guardian)
+    });
+
+    let successor = Address::generate(&env);
+    invoke(&env, &cid, || {
+        AccessControl::transfer_role(&env, &guardian, Role::Guardian, &successor)
+    });
+
+    // Pending: original holder keeps the role, successor does not have it yet.
+    assert!(read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Guardian
+    )));
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &successor,
+        Role::Guardian
+    )));
+
+    invoke(&env, &cid, || {
+        AccessControl::accept_role(&env, &successor, Role::Guardian)
+    });
+
+    assert!(read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &successor,
+        Role::Guardian
+    )));
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Guardian
+    )));
+}
+
+#[test]
+fn wrong_party_cannot_accept_role_transfer() {
+    let (env, admin, guardian, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &guardian, Role::Guardian)
+    });
+    let successor = Address::generate(&env);
+    let imposter = Address::generate(&env);
+    invoke(&env, &cid, || {
+        AccessControl::transfer_role(&env, &guardian, Role::Guardian, &successor)
+    });
+
+    let client = TestACClient::new(&env, &cid);
+    assert_soroban_error!(
+        client.try_accept_role(&imposter, &Role::Guardian),
+        unauthorized_role_error(),
+    );
+
+    // Original holder is unaffected by the failed acceptance attempt.
+    assert!(read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Guardian
+    )));
+}
+
+#[test]
+fn accept_role_without_pending_transfer_fails_typed() {
+    let (env, _, other, cid) = setup();
+    let client = TestACClient::new(&env, &cid);
+    assert_soroban_error!(
+        client.try_accept_role(&other, &Role::Guardian),
+        role_transfer_not_pending_error(),
+    );
+}
+
+#[test]
+fn proposer_can_cancel_pending_role_transfer() {
+    let (env, admin, guardian, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &guardian, Role::Guardian)
+    });
+    let successor = Address::generate(&env);
+    invoke(&env, &cid, || {
+        AccessControl::transfer_role(&env, &guardian, Role::Guardian, &successor)
+    });
+    invoke(&env, &cid, || {
+        AccessControl::cancel_role_transfer(&env, &guardian, Role::Guardian)
+    });
+
+    // Cancelled: successor can no longer accept.
+    let client = TestACClient::new(&env, &cid);
+    assert_soroban_error!(
+        client.try_accept_role(&successor, &Role::Guardian),
+        role_transfer_not_pending_error(),
+    );
+    assert!(read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &guardian,
+        Role::Guardian
+    )));
+}
+
+#[test]
+fn non_holder_cannot_propose_role_transfer() {
+    let (env, _, other, cid) = setup();
+    let target = Address::generate(&env);
+    let client = TestACClient::new(&env, &cid);
+    assert_soroban_error!(
+        client.try_transfer_role(&other, &Role::Guardian, &target),
+        role_required_error(),
+    );
+}
+
+// --- Role expiry -------------------------------------------------------------
+
+#[test]
+fn grant_role_until_expires_and_stops_authorising() {
+    let (env, admin, keeper, cid) = setup();
+    let now = env.ledger().timestamp();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role_until(&env, &admin, &keeper, Role::RebalanceKeeper, now + 1000)
+    });
+
+    assert!(read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &keeper,
+        Role::RebalanceKeeper
+    )));
+    assert_eq!(
+        read(&env, &cid, || AccessControl::role_expires_at(
+            &env,
+            &keeper,
+            Role::RebalanceKeeper
+        )),
+        Some(now + 1000)
+    );
+
+    // Advance the ledger past expiry.
+    env.ledger().with_mut(|l| l.timestamp = now + 1001);
+
+    assert!(!read(&env, &cid, || AccessControl::has_role(
+        &env,
+        &keeper,
+        Role::RebalanceKeeper
+    )));
+
+    let client = TestACClient::new(&env, &cid);
+    assert_soroban_error!(
+        client.try_require_role(&keeper, &Role::RebalanceKeeper),
+        unauthorized_role_error(),
+    );
+}
+
+#[test]
+fn permanent_grant_has_no_expiry() {
+    let (env, admin, operator, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &operator, Role::Operator)
+    });
+    assert_eq!(
+        read(&env, &cid, || AccessControl::role_expires_at(
+            &env,
+            &operator,
+            Role::Operator
+        )),
+        None
+    );
+}
+
+// --- Enumeration --------------------------------------------------------------
+
+#[test]
+fn get_role_members_lists_every_holder_and_is_bounded() {
+    let (env, admin, first, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &first, Role::Guardian)
+    });
+    let second = Address::generate(&env);
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &second, Role::Guardian)
+    });
+
+    let members = read(&env, &cid, || {
+        AccessControl::get_role_members(&env, Role::Guardian, 0, 10)
+    });
+    assert_eq!(members.len(), 2);
+    assert!(members.contains(first.clone()));
+    assert!(members.contains(second.clone()));
+
+    // Requesting more than MAX_MEMBERS_PAGE never panics or over-returns.
+    let bounded = read(&env, &cid, || {
+        AccessControl::get_role_members(&env, Role::Guardian, 0, 10_000)
+    });
+    assert_eq!(bounded.len(), 2);
+}
+
+#[test]
+fn revoked_member_is_removed_from_enumeration() {
+    let (env, admin, guardian, cid) = setup();
+    invoke(&env, &cid, || {
+        AccessControl::grant_role(&env, &admin, &guardian, Role::Guardian)
+    });
+    invoke(&env, &cid, || {
+        AccessControl::revoke_role(&env, &admin, &guardian, Role::Guardian)
+    });
+
+    let members = read(&env, &cid, || {
+        AccessControl::get_role_members(&env, Role::Guardian, 0, 10)
+    });
+    assert!(!members.contains(guardian));
 }
