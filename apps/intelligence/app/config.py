@@ -9,11 +9,13 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     anthropic_api_key: str = ""
-    # Explanation-only workload (narrating an already-computed allocation, plus
-    # existing coaching/recommendation narration): claude-sonnet-5 is the current
-    # flagship id and keeps prose quality high for user-facing copy. Still fully
-    # overridable via INTELLIGENCE_ANTHROPIC_MODEL for cost tuning (e.g. a haiku
-    # tier) without a code change.
+    # claude-sonnet-5 is the current flagship id. Used for explanation-only
+    # workloads (narrating an already-computed allocation, the recommendation
+    # engine's tool-use selection, coaching/analysis narration) on a per-user
+    # cadence, not per keystroke, so Sonnet-tier capability for prose quality
+    # and tool-use/structured-output reliability is worth the cost over Haiku.
+    # Still fully overridable via INTELLIGENCE_ANTHROPIC_MODEL for deployments
+    # that want to trade capability for cost.
     anthropic_model: str = "claude-sonnet-5"
     jwt_secret: str = ""
     redis_url: str = "redis://localhost:6379/0"  # gitleaks:allow
