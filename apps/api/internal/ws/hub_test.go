@@ -21,7 +21,7 @@ func newTestHub() *Hub {
 			return "", "", os.ErrPermission
 		}
 		return "user-123", "session-123", nil
-	}, []string{"http://localhost:3000"})
+	}, []string{"http://localhost:3000"}, nil, 0)
 }
 
 func TestHub_SubscriptionManagement(t *testing.T) {
@@ -136,7 +136,7 @@ func TestHub_UnauthorizedReject(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=invalid"
 	dialer := websocket.Dialer{}
 	_, resp, err := dialer.Dial(wsURL, nil)
-	
+
 	if err == nil {
 		t.Fatalf("Expected connection failure on invalid token")
 	}

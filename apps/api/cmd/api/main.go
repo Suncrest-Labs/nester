@@ -283,7 +283,7 @@ func run() error {
 			}
 		}
 		return claims.Subject, claims.SessionID, nil
-	}, cfg.AllowedOrigins())
+	}, cfg.AllowedOrigins(), redisClient, ws.DefaultMaxConnectionsPerIP)
 
 	wsCtx, wsCancel := context.WithCancel(context.Background())
 	defer wsCancel()

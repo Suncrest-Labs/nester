@@ -28,6 +28,7 @@ type Client struct {
 	send      chan Event
 	userID    string
 	sessionID string
+	remoteIP  string
 
 	mu   sync.Mutex
 	subs map[string]bool
@@ -50,7 +51,7 @@ func (c *Client) readPump() {
 			}
 			break
 		}
-		
+
 		var msg ClientMessage
 		if err := json.Unmarshal(message, &msg); err == nil {
 			if msg.Action == "subscribe" {

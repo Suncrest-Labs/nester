@@ -109,7 +109,7 @@ func TestVaultHandlerHarvestBroadcastsWebSocketEvent(t *testing.T) {
 	vaultService := service.NewVaultService(repository)
 
 	handler := NewVaultHandler(vaultService)
-	hub := ws.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	hub := ws.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil, nil, 0)
 	handler.SetWSHub(hub)
 	go hub.Run(t.Context())
 
