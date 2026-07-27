@@ -28,6 +28,7 @@ from app.services import guardrails
 from app.services.coingecko import get_client as get_coingecko_client
 from app.services.conversation_store import store as conversation_store
 from app.services.defillama import get_client as get_defillama_client
+from app.services.retrieval_source import RetrievalSource, now_utc
 from app.services.vault_context import VaultContextFetcher
 
 logger = logging.getLogger(__name__)
@@ -247,6 +248,14 @@ When you recommend a specific action (a vault, an allocation, a deposit schedule
 clear this is general educational guidance based on current data, not personalised
 financial advice, and that yields and risk can change.
 
+## Citing data sources
+Figures like TVL and APY in <nester_context> and <portfolio_context> are each followed
+by a citation in the form "(source: <protocol>, as of <timestamp>)". Whenever you state
+a specific TVL or APY number, include that citation immediately after the figure, using
+the exact source and timestamp shown in the context, so the user knows where the number
+came from and how fresh it is. Never state a TVL or APY figure without its citation, and
+never invent a source or timestamp that isn't present in the context.
+
 ## Vault tiers (reference)
 - Conservative: Stablecoin-only, lowest risk, ~4-6% APY. Good for emergency funds.
 - Balanced: Mix of stablecoin and blue-chip DeFi, ~8-12% APY. Good for medium-term goals.
@@ -365,7 +374,9 @@ async def stream_chat(
         f"{guardrails.wrap_context_block('nester_context', nester_context)}\n\n"
         "Provide personalized, data-driven advice based on the data in "
         "<nester_context> and current market conditions. Always cite "
-        "specific numbers from their portfolio."
+        "specific numbers from their portfolio, and whenever you state a "
+        "TVL or APY figure, include its source and as-of citation exactly "
+        "as shown in the context."
     )
 
     # Fetch live portfolio context (60s Redis-backed cache).
@@ -697,10 +708,18 @@ async def _build_market_context_block() -> str:
         dl = get_defillama_client()
         pools = await dl.get_yield_pools(chain="Stellar")
         if pools:
+            as_of = now_utc()
             top5 = sorted(pools, key=lambda p: p.get("apy") or 0, reverse=True)[:5]
             pool_lines = [
-                f"- {p['project']} {p['symbol']}: {p['apy']:.2f}% APY, "
-                f"TVL ${p['tvlUsd']:,.0f}"
+                (
+                    f"- {p['project']} {p['symbol']}: {p['apy']:.2f}% APY, "
+                    f"TVL ${p['tvlUsd']:,.0f} "
+                    + RetrievalSource(
+                        label=f"{p['project']} {p['symbol']}",
+                        protocol="defillama",
+                        as_of=as_of,
+                    ).citation()
+                )
                 for p in top5
             ]
             sections.append(
