@@ -410,10 +410,6 @@ async def stream_chat(
             }
         ]
 
-    messages: list[anthropic.types.MessageParam] = (
-        context_injection
-        + _to_anthropic_messages(history)
-        + [{"role": "user", "content": guardrails.wrap_user_content(message)}]
     # Retrieve minimal, user-scoped context via the structured retrieval layer
     # and build a grounded system prompt (#852). The retrieved context is the
     # single source of facts: the model is instructed to answer only from it,
@@ -473,8 +469,6 @@ async def stream_chat(
             full_response, request_id=request_id
         )
         conversation_store.append(user_id, "assistant", clean_response)
-                safe = text.replace("\n", "\\n")
-                yield f"data: {safe}\n\n"
 
         # Grounding validation (#852): flag any figure in the answer not present
         # in the retrieved context so hallucinated numbers are caught and logged.
@@ -486,7 +480,6 @@ async def stream_chat(
                 unsupported,
             )
 
-        conversation_store.append(user_id, "assistant", full_response)
         yield "data: [DONE]\n\n"
 
     except Exception:
@@ -687,29 +680,13 @@ async def get_market_sentiment() -> dict[str, Any]:
                 sentiment["summary"]
             )
         return sentiment
-        result = dict(json.loads(_json_strip(text)))
-        from app.services.market_context import latest_signals
-
-        result["contexts"] = latest_signals()
-        result["disclaimer"] = (
-            "Market context is low-trust information, not financial advice. "
-            "It cannot trigger fund movements."
-        )
-        return result
     except Exception:
         logger.exception("Failed to get market sentiment")
-        from app.services.market_context import latest_signals
-
         return {
             "signal": "neutral",
             "summary": "Sentiment data temporarily unavailable.",
             "confidence": 0.0,
             "updatedAt": "",
-            "contexts": latest_signals(),
-            "disclaimer": (
-                "Market context is low-trust information, not financial advice. "
-                "It cannot trigger fund movements."
-            ),
         }
 
 
