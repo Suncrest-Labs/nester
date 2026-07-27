@@ -734,11 +734,13 @@ fn apy_for_source(sources: &Vec<RegistrySource>, source_id: &Symbol) -> u32 {
     0
 }
 
-/// Panic with [`ContractError::Unauthorized`] unless `account` holds Admin or
-/// Operator. Day-to-day operations (e.g. weight updates) are open to both.
+/// Panic with [`ContractError::Unauthorized`] unless `account` holds Admin,
+/// Operator, or the narrower [`Role::RebalanceKeeper`] (issue #820).
+/// Day-to-day operations (e.g. weight updates) are open to all three.
 fn require_admin_or_operator(env: &Env, account: &Address) {
     if !AccessControl::has_role(env, account, Role::Admin)
         && !AccessControl::has_role(env, account, Role::Operator)
+        && !AccessControl::has_role(env, account, Role::RebalanceKeeper)
     {
         panic_with_error!(env, ContractError::Unauthorized);
     }
