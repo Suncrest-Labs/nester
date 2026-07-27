@@ -40,6 +40,12 @@ type ListFilter struct {
 	CursorTime *time.Time
 	CursorID   *uuid.UUID
 	Limit      int
+	// Since restricts results to harvests at or after this time (inclusive).
+	// Used by the digest fact-assembly source (#859) to sum yield harvested
+	// within a specific period without paging through full history.
+	Since *time.Time
+	// Until restricts results to harvests strictly before this time.
+	Until *time.Time
 }
 
 // Repository is the persistence contract for yield harvest records.

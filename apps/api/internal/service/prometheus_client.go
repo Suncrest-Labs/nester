@@ -169,6 +169,27 @@ func (c *PrometheusClient) GetGoalCoaching(ctx context.Context, request intellig
 	return &response, nil
 }
 
+// GenerateDigest requests the periodic personalized financial insight
+// digest for one user/period (#859). Like coaching, this is not cached at
+// this layer — the intelligence service owns the one-generation-per-period
+// cache (keyed by user+period+facts hash) so a re-request after the
+// underlying data hasn't changed is a cheap hit rather than a fresh LLM call.
+func (c *PrometheusClient) GenerateDigest(ctx context.Context, request intelligence.DigestGenerateRequest) (*intelligence.DigestGenerateResponse, error) {
+	if !c.canCall() {
+		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
+	}
+
+	endpoint := fmt.Sprintf("%s/intelligence/digest/generate", c.cfg.BaseURL)
+	var response intelligence.DigestGenerateResponse
+	err := c.doPostRequest(ctx, endpoint, request, &response)
+	if err != nil {
+		c.recordFailure()
+		return nil, fmt.Errorf("failed to generate digest: %w", err)
+	}
+
+	return &response, nil
+}
+
 func (c *PrometheusClient) doRequest(ctx context.Context, endpoint string, target any) error {
 	return c.doHTTPRequest(ctx, "GET", endpoint, nil, target)
 }

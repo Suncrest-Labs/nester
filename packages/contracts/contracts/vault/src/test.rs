@@ -45,7 +45,9 @@ use soroban_sdk::{
 };
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
-use crate::{CircuitBreakerConfig, FeeConfig, VaultContract, VaultContractClient, VaultStatus};
+use crate::{
+    CircuitBreakerConfig, FeeConfig, Severity, VaultContract, VaultContractClient, VaultStatus,
+};
 
 macro_rules! assert_rejected {
     ($call:expr, $entrypoint:literal) => {
@@ -865,8 +867,17 @@ fn withdrawal_after_lock_period_has_no_early_fee() {
     assert_eq!(vault.get_total_deposits(), 0);
 }
 
+/// A withdrawal exactly at the rolling window boundary still counts toward
+/// the cumulative sum (the boundary is inclusive), so two 100-XLM
+/// withdrawals 60s apart against a 60s window both land in the same
+/// window and cumulatively exceed the 10%-of-1000-XLM threshold.
+///
+/// Historically this hard-paused the vault via a panic
+/// (`CircuitBreakerTriggered`). Under the staged breaker (#817) a velocity
+/// breach instead escalates severity to `Throttled` and lets the triggering
+/// withdrawal complete — the vault stays open, only the *next* deposit or
+/// withdrawal decision is informed by the new severity.
 #[test]
-#[should_panic(expected = "Error(Contract, #11)")]
 fn circuit_breaker_uses_rolling_window_across_boundary() {
     let (env, admin, token, vault, _treasury) = setup();
     let user = Address::generate(&env);
@@ -883,9 +894,11 @@ fn circuit_breaker_uses_rolling_window_across_boundary() {
 
     vault.deposit(&user, &deposit_amount, &0);
     vault.withdraw(&user, &(100 * XLM), &0);
+    assert_eq!(vault.get_breaker_status().severity, Severity::Normal);
 
     advance_time(&env, 60);
     vault.withdraw(&user, &(100 * XLM), &0);
+    assert_eq!(vault.get_breaker_status().severity, Severity::Throttled);
 }
 
 // ---------------------------------------------------------------------------

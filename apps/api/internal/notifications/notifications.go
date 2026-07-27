@@ -54,7 +54,29 @@ const (
 	EventSavingsStreak             EventType = "savings_streak_milestone"
 	EventProtocolHealthAlert       EventType = "protocol_health_alert"
 	EventGoalCoaching              EventType = "goal_coaching"
+	// EventFinancialDigest is the periodic (weekly/monthly) personalized
+	// savings narrative (#859). Cadence and opt-out are controlled by
+	// Preferences.DigestCadence rather than a boolean, but delivery still
+	// goes through the same per-channel Allow() gate as every other event.
+	EventFinancialDigest EventType = "financial_digest"
 )
+
+// DigestCadence values accepted for Preferences.DigestCadence.
+const (
+	DigestCadenceOff     = "off"
+	DigestCadenceWeekly  = "weekly"
+	DigestCadenceMonthly = "monthly"
+)
+
+// ValidDigestCadence reports whether cadence is a recognized value.
+func ValidDigestCadence(cadence string) bool {
+	switch cadence {
+	case DigestCadenceOff, DigestCadenceWeekly, DigestCadenceMonthly:
+		return true
+	default:
+		return false
+	}
+}
 
 // ChannelKind is the transport a notification is delivered over.
 type ChannelKind string
@@ -83,6 +105,7 @@ var eventChannelMatrix = map[EventType][]ChannelKind{
 	EventSavingsStreak:             {ChannelPush},
 	EventProtocolHealthAlert:       {ChannelEmail, ChannelPush, ChannelWebSocket},
 	EventGoalCoaching:              {ChannelPush},
+	EventFinancialDigest:           {ChannelEmail, ChannelWebSocket, ChannelPush},
 }
 
 // ChannelsFor returns the channels configured to deliver the given event,
@@ -103,11 +126,19 @@ type Preferences struct {
 	Email     bool `json:"email"`
 	WebSocket bool `json:"websocket"`
 	Push      bool `json:"push"`
+	// DigestCadence is one of DigestCadenceOff/Weekly/Monthly (#859). The
+	// digest is delivered on the channels above like any other event; this
+	// field only controls whether/how often it fires at all.
+	DigestCadence string `json:"digest_cadence"`
 }
 
 // DefaultPreferences returns the "everything on" baseline new users get
-// before they explicitly opt out.
-func DefaultPreferences() Preferences { return Preferences{Email: true, WebSocket: true, Push: true} }
+// before they explicitly opt out. Digest defaults to monthly rather than
+// off so the feature is opt-out, matching every other notification type
+// here, but a user can turn it off entirely via DigestCadenceOff.
+func DefaultPreferences() Preferences {
+	return Preferences{Email: true, WebSocket: true, Push: true, DigestCadence: DigestCadenceMonthly}
+}
 
 // Allow returns whether the given channel is permitted by the preferences.
 func (p Preferences) Allow(c ChannelKind) bool {

@@ -492,14 +492,29 @@ async def get_market_sentiment() -> dict[str, Any]:
             ),
             "",
         )
-        return dict(json.loads(_json_strip(text)))
+        result = dict(json.loads(_json_strip(text)))
+        from app.services.market_context import latest_signals
+
+        result["contexts"] = latest_signals()
+        result["disclaimer"] = (
+            "Market context is low-trust information, not financial advice. "
+            "It cannot trigger fund movements."
+        )
+        return result
     except Exception:
         logger.exception("Failed to get market sentiment")
+        from app.services.market_context import latest_signals
+
         return {
             "signal": "neutral",
             "summary": "Sentiment data temporarily unavailable.",
             "confidence": 0.0,
             "updatedAt": "",
+            "contexts": latest_signals(),
+            "disclaimer": (
+                "Market context is low-trust information, not financial advice. "
+                "It cannot trigger fund movements."
+            ),
         }
 
 

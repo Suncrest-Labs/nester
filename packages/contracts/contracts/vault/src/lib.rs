@@ -1,9 +1,13 @@
 #![no_std]
 
+mod breaker;
+
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
     IntoVal, Symbol, Val, Vec,
 };
+
+pub use breaker::{BreakerConfig, BreakerStatus, Severity, TripReason};
 
 struct VaultTokenContractClient<'a> {
     env: &'a Env,
@@ -106,7 +110,6 @@ const DEPOSIT: Symbol = symbol_short!("DEPOSIT");
 const WITHDRAW: Symbol = symbol_short!("WITHDRAW");
 const PAUSE: Symbol = symbol_short!("PAUSE");
 const UNPAUSE: Symbol = symbol_short!("UNPAUSE");
-const CB_TRIGGER: Symbol = symbol_short!("CB_TRIG");
 const REBALANCE: Symbol = symbol_short!("REBAL");
 const HARVEST: Symbol = symbol_short!("HARVEST");
 const HARVEST_VLT: Symbol = symbol_short!("HARV_VLT");
@@ -384,6 +387,18 @@ enum DataKey {
     LastPenaltyDistributionAt,
     MinPenaltyDistributionAmount,
     PenaltyDistributionCooldown,
+    // --- Circuit breaker v2 (issue #817) ---
+    Severity,
+    LastTripReason,
+    LastObservedValue,
+    LastThreshold,
+    NextRecoveryAllowedAt,
+    SharePriceBaseline,
+    SharePriceBaselineAt,
+    SourceFailureCount,
+    BreakerConfigV2,
+    // --- Referral integration (issue #818) ---
+    ReferralContract,
 }
 
 /// Why a penalty was charged (issue #805). `LockBreak` and `WeightDeviation`
@@ -961,6 +976,61 @@ fn set_last_harvest_at(env: &Env, user: &Address, ts: u64) {
         .set(&DataKey::LastHarvestAt(user.clone()), &ts);
 }
 
+/// Fee adjustments are gated to Admin or the narrower [`Role::FeeManager`]
+/// (issue #820) — an operational key can be granted just this role instead
+/// of full Admin.
+fn require_admin_or_fee_manager(env: &Env, caller: &Address) {
+    if !AccessControl::has_role(env, caller, Role::Admin)
+        && !AccessControl::has_role(env, caller, Role::FeeManager)
+    {
+        panic_with_error!(env, ContractError::Unauthorized);
+    }
+}
+
+fn get_referral_contract(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::ReferralContract)
+}
+
+fn get_effective_deposit_time(env: &Env, user: &Address) -> u64 {
+    let vault_deposit_time: u64 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::DepositTime(user.clone()))
+        .unwrap_or(0);
+    let vt_deposit_time: u64 = vault_token_client(env).get_deposit_time(user);
+    vault_deposit_time.max(vt_deposit_time)
+}
+
+/// Fire-and-forget hook into the referral contract (issue #818), if one is
+/// configured. The referral contract independently re-checks eligibility
+/// (minimum deposit size and tenure) before crediting anything — the vault
+/// only supplies the facts it already tracks (principal, first-deposit time)
+/// and the fee slice; it never decides eligibility itself.
+fn notify_referral_of_fee(env: &Env, user: &Address, performance_fee: i128, principal: i128) {
+    if performance_fee <= 0 {
+        return;
+    }
+    if let Some(referral) = get_referral_contract(env) {
+        let deposit_time = get_effective_deposit_time(env, user);
+        invoke_allowed::<()>(
+            env,
+            &referral,
+            &Symbol::new(env, "accrue_reward"),
+            (user.clone(), performance_fee, principal, deposit_time).into_val(env),
+        );
+    }
+}
+
+/// Withdrawal-velocity trip condition (issue #817). Historically this
+/// function paused the whole vault the instant the rolling window crossed
+/// `threshold_bps`. It now feeds the staged [`breaker`] severity machine
+/// instead: a velocity breach escalates to [`Severity::Throttled`] (vault
+/// stays open, limits tighten) rather than an immediate hard stop, and the
+/// withdrawal that triggered it still completes — only *subsequent*
+/// deposits/withdrawals are affected by the new severity. This still uses
+/// the legacy [`CircuitBreakerConfig`]/`set_circuit_breaker_config` knobs so
+/// existing integrations keep working; the anti-griefing margin lives in
+/// [`BreakerConfig::margin_bps`].
 fn check_circuit_breaker(env: &Env, amount: i128) {
     let config: CircuitBreakerConfig = env
         .storage()
@@ -988,22 +1058,8 @@ fn check_circuit_breaker(env: &Env, amount: i128) {
     let threshold = nester_common::fees::mul_div(total_assets, config.threshold_bps as i128, 10000)
         .unwrap_or_else(|e| panic_with_error!(env, e));
 
-    if threshold > 0 && window_sum > threshold {
-        env.storage()
-            .instance()
-            .set(&DataKey::Status, &VaultStatus::Paused);
-        emit_event(
-            env,
-            VAULT,
-            CB_TRIGGER,
-            env.current_contract_address(),
-            CircuitBreakerEventData {
-                withdrawal_amount: amount,
-                window_sum,
-                threshold,
-            },
-        );
-        panic_with_error!(env, ContractError::CircuitBreakerTriggered);
+    if threshold > 0 {
+        breaker::check_withdraw_velocity(env, window_sum, threshold);
     }
 
     rolling_history.push_back(WithdrawalEntry {
@@ -1304,7 +1360,7 @@ impl VaultContract {
 
     pub fn set_early_withdrawal_fee(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
-        AccessControl::require_role(&env, &caller, Role::Admin);
+        require_admin_or_fee_manager(&env, &caller);
         if bps > nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS {
             panic_with_error!(&env, ContractError::FeeTooHigh);
         }
@@ -1326,7 +1382,7 @@ impl VaultContract {
 
     pub fn set_fee_config(env: Env, caller: Address, config: FeeConfig) {
         caller.require_auth();
-        AccessControl::require_role(&env, &caller, Role::Admin);
+        require_admin_or_fee_manager(&env, &caller);
         if config.management_fee_bps > nester_common::MAX_MANAGEMENT_FEE_BPS
             || config.performance_fee_bps > nester_common::MAX_PERFORMANCE_FEE_BPS
             || config.early_withdrawal_fee_bps > nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS
@@ -1453,7 +1509,7 @@ impl VaultContract {
 
     pub fn set_emergency_fee(env: Env, admin: Address, fee_bps: u32) -> Result<(), ContractError> {
         admin.require_auth();
-        AccessControl::require_role(&env, &admin, Role::Admin);
+        require_admin_or_fee_manager(&env, &admin);
         if fee_bps > nester_common::MAX_EMERGENCY_FEE_BPS {
             panic_with_error!(&env, ContractError::FeeTooHigh);
         }
@@ -1518,11 +1574,18 @@ impl VaultContract {
     // Admin operations
     // -----------------------------------------------------------------------
 
-    /// Pause all vault operations. Requires [`Role::Admin`].
+    /// Pause all vault operations. Requires [`Role::Admin`] or
+    /// [`Role::Guardian`] — the Guardian asymmetry (issue #820): a Guardian
+    /// can always make the vault safer, so pausing is open to it, but
+    /// [`Self::unpause`] deliberately is not.
     pub fn pause(env: Env, caller: Address) {
         require_initialized(&env);
         caller.require_auth();
-        AccessControl::require_role(&env, &caller, Role::Admin);
+        if !AccessControl::has_role(&env, &caller, Role::Admin)
+            && !AccessControl::has_role(&env, &caller, Role::Guardian)
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
         env.storage()
             .instance()
             .set(&DataKey::Status, &VaultStatus::Paused);
@@ -1573,14 +1636,134 @@ impl VaultContract {
     }
 
     // -----------------------------------------------------------------------
+    // Circuit breaker (issue #817)
+    // -----------------------------------------------------------------------
+
+    /// Full trip status: current severity, the last firing condition and its
+    /// observed value/threshold, and the earliest timestamp the next
+    /// recovery step is permitted.
+    pub fn get_breaker_status(env: Env) -> BreakerStatus {
+        breaker::status(&env)
+    }
+
+    /// Configure the automatic trip conditions. Admin only — a Guardian must
+    /// never be able to loosen the very thresholds that constrain it.
+    pub fn set_breaker_config(env: Env, caller: Address, config: BreakerConfig) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        breaker::set_config(&env, &config);
+    }
+
+    pub fn get_breaker_config_v2(env: Env) -> BreakerConfig {
+        breaker::get_config(&env)
+    }
+
+    /// Guardian (or Admin) manual escalation: block new deposits while
+    /// leaving withdrawals open. This can only make the vault safer.
+    pub fn guardian_halt_deposits(env: Env, caller: Address) {
+        require_initialized(&env);
+        caller.require_auth();
+        if !AccessControl::has_role(&env, &caller, Role::Admin)
+            && !AccessControl::has_role(&env, &caller, Role::Guardian)
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
+        breaker::guardian_escalate(&env, Severity::DepositsHalted);
+    }
+
+    /// Guardian (or Admin) manual escalation to `FullHalt`: blocks
+    /// everything except the emergency withdrawal queue. Still only ever
+    /// makes the vault safer — reversing it requires [`Self::recover_next_stage`],
+    /// which Guardian cannot call.
+    pub fn guardian_trip_breaker(env: Env, caller: Address) {
+        require_initialized(&env);
+        caller.require_auth();
+        if !AccessControl::has_role(&env, &caller, Role::Admin)
+            && !AccessControl::has_role(&env, &caller, Role::Guardian)
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
+        breaker::guardian_escalate(&env, Severity::FullHalt);
+    }
+
+    /// Move severity exactly one stage down (never skips a stage), enforcing
+    /// the recovery cooldown. Requires Admin or Upgrader — deliberately
+    /// excludes Guardian, so reversing a Guardian action always requires a
+    /// higher role.
+    pub fn recover_next_stage(env: Env, caller: Address) -> Severity {
+        require_initialized(&env);
+        caller.require_auth();
+        if !AccessControl::has_role(&env, &caller, Role::Admin)
+            && !AccessControl::has_role(&env, &caller, Role::Upgrader)
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
+        breaker::recover_next_stage(&env, &caller)
+    }
+
+    /// Record a yield-source adapter failure against the source-failure trip
+    /// condition. Callable by Admin, Operator, or RebalanceKeeper — whichever
+    /// integration observes the adapter fault.
+    pub fn record_source_failure(env: Env, caller: Address) {
+        caller.require_auth();
+        if !AccessControl::has_role(&env, &caller, Role::Admin)
+            && !AccessControl::has_role(&env, &caller, Role::Operator)
+            && !AccessControl::has_role(&env, &caller, Role::RebalanceKeeper)
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
+        breaker::note_source_failure(&env);
+    }
+
+    pub fn reset_source_failures(env: Env, caller: Address) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        breaker::reset_source_failures(&env);
+    }
+
+    // -----------------------------------------------------------------------
+    // Referral integration (issue #818)
+    // -----------------------------------------------------------------------
+
+    /// Bind a referral contract that receives an `accrue_reward` call after
+    /// every harvest that collects a performance fee. Admin only. Also
+    /// registers the referral contract in the callee allowlist so the
+    /// cross-contract call is permitted.
+    pub fn set_referral_contract(env: Env, caller: Address, referral: Address) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        CalleeAllowlist::register(&env, &referral);
+        env.storage()
+            .instance()
+            .set(&DataKey::ReferralContract, &referral);
+    }
+
+    pub fn get_referral_contract_address(env: Env) -> Option<Address> {
+        get_referral_contract(&env)
+    }
+
+    // -----------------------------------------------------------------------
     // Core vault operations
     // -----------------------------------------------------------------------
 
     pub fn report_yield(env: Env, caller: Address, amount: i128) {
         caller.require_auth();
-        AccessControl::require_role(&env, &caller, Role::Manager);
+        if !AccessControl::has_role(&env, &caller, Role::Manager)
+            && !AccessControl::has_role(&env, &caller, Role::Attester)
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
 
         let total_assets = get_total_assets(&env);
+
+        // Yield-sanity trip (#817): an implausible single report is not
+        // applied at all — the transaction still succeeds (so a panic can't
+        // undo the escalation it triggers), but total_assets/user_yield are
+        // left untouched and the breaker escalates.
+        if breaker::check_yield_sanity(&env, amount, total_assets) {
+            return;
+        }
+
         let new_total = total_assets
             .checked_add(amount)
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
@@ -1634,6 +1817,7 @@ impl VaultContract {
     fn harvest_internal(env: Env, user: Address) -> HarvestResult {
         require_initialized(&env);
         require_active(&env);
+        breaker::require_not_full_halt(&env);
         user.require_auth();
 
         let shares = get_shares(&env, &user);
@@ -1695,6 +1879,13 @@ impl VaultContract {
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
             set_total_assets(&env, post_fee_assets);
             sync_vault_token_total_assets(&env);
+
+            // Referral hook (#818): the referrer's reward is carved out of
+            // the protocol's performance-fee slice, never out of the
+            // referred user's own yield — `net_yield`/the user's redemption
+            // is computed above and is unaffected by this call. Silently a
+            // no-op when no referral contract is configured.
+            notify_referral_of_fee(&env, &user, performance_fee, principal);
         }
 
         // Compound net yield: mint new shares for the user at the current price.
@@ -1859,9 +2050,11 @@ impl VaultContract {
     fn rebalance_internal(env: Env, caller: Address) -> Vec<AllocationDeltaView> {
         require_initialized(&env);
         require_active(&env);
+        breaker::require_not_full_halt(&env);
         caller.require_auth();
         if !AccessControl::has_role(&env, &caller, Role::Admin)
             && !AccessControl::has_role(&env, &caller, Role::Operator)
+            && !AccessControl::has_role(&env, &caller, Role::RebalanceKeeper)
         {
             panic_with_error!(&env, ContractError::Unauthorized);
         }
@@ -2426,6 +2619,7 @@ impl VaultContract {
     fn deposit_internal(env: Env, user: Address, amount: i128, min_shares_out: i128) -> i128 {
         require_initialized(&env);
         require_active(&env);
+        breaker::require_deposits_allowed(&env);
 
         let max_deposit: i128 = env
             .storage()
@@ -2516,6 +2710,9 @@ impl VaultContract {
 
         Self::process_emergency_queue_internal(env.clone());
 
+        let post_price = vault_token_client(&env).share_price();
+        breaker::check_share_price_move(&env, post_price);
+
         new_user_shares
     }
 
@@ -2591,6 +2788,7 @@ impl VaultContract {
     fn withdraw_internal(env: Env, user: Address, shares: i128, min_assets_out: i128) -> i128 {
         require_initialized(&env);
         require_active(&env);
+        breaker::require_withdrawals_allowed(&env);
 
         if shares <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
@@ -2724,6 +2922,9 @@ impl VaultContract {
             },
         );
 
+        let post_price = vault_token_client(&env).share_price();
+        breaker::check_share_price_move(&env, post_price);
+
         new_user_shares
     }
 
@@ -2759,7 +2960,12 @@ impl VaultContract {
 
     fn emergency_withdraw_internal(env: Env, user: Address) -> Result<i128, ContractError> {
         require_initialized(&env);
-        if !is_paused(&env) {
+        // Emergency exit is available whenever the vault is in a
+        // restricted state — the legacy admin-triggered pause, or the new
+        // auto/guardian-triggered FullHalt severity (#817). This path is
+        // deliberately never gated by severity beyond that check: a breaker
+        // that stops users from leaving is a trap, not a safety device.
+        if !is_paused(&env) && breaker::severity(&env) != Severity::FullHalt {
             panic_with_error!(&env, ContractError::InvalidOperation);
         }
 

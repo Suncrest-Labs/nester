@@ -1,0 +1,17 @@
+[package]
+name = "dummy-vault-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Test-only fixture: a minimal real contract used by vault_factory's tests to
+# exercise the actual Soroban deployer (deploy + cross-contract initialize)
+# instead of a native `register_contract` double. Not part of the Nester
+# product surface.
+[lib]
+name = "dummy_vault_fixture"
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
