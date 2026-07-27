@@ -105,7 +105,8 @@ fn setup() -> (
     token::StellarAssetClient<'static>,
     VaultContractClient<'static>,
     Address,
-) {    let env = Env::default();
+) {
+    let env = Env::default();
     env.mock_all_auths();
 
     // -----------------------------
@@ -120,8 +121,10 @@ fn setup() -> (
     let token_id = sac_contract.address();
 
     // Create token client
-    let sac: token::StellarAssetClient<'static> =
-        token::StellarAssetClient::new(unsafe { core::mem::transmute::<&Env, &'static Env>(&env) }, &token_id);
+    let sac: token::StellarAssetClient<'static> = token::StellarAssetClient::new(
+        unsafe { core::mem::transmute::<&Env, &'static Env>(&env) },
+        &token_id,
+    );
 
     // -----------------------------
     // Vault setup
@@ -132,8 +135,10 @@ fn setup() -> (
     let vault_id = env.register_contract(None, VaultContract);
     let vault_token_id = env.register_contract(None, VaultTokenContract);
 
-    let vault: VaultContractClient<'static> =
-        VaultContractClient::new(unsafe { core::mem::transmute::<&Env, &'static Env>(&env) }, &vault_id);
+    let vault: VaultContractClient<'static> = VaultContractClient::new(
+        unsafe { core::mem::transmute::<&Env, &'static Env>(&env) },
+        &vault_id,
+    );
 
     // Pass admin, deposit token, vault token, and treasury.
     vault.initialize(&admin, &token_id, &vault_token_id, &treasury);
@@ -169,7 +174,6 @@ fn bind_strategy(vault: &VaultContractClient, admin: &Address, strategy: &Addres
 fn mint(sac: &token::StellarAssetClient, recipient: &Address, amount: i128) {
     sac.mint(recipient, &amount);
 }
-
 
 // ---------------------------------------------------------------------------
 // Cross-contract pause & idempotence (issue #54 acceptance criteria)
@@ -230,7 +234,6 @@ fn advance_time(env: &Env, seconds: u64) {
         ..env.ledger().get()
     });
 }
-
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -409,7 +412,10 @@ fn withdrawal_does_not_charge_perf_fee_on_preexisting_yield() {
     vault.withdraw(&bob, &bob_shares, &0);
 
     // Bob only pays early-withdrawal fee (0.1% of 1000 = 1), no performance fee.
-    assert_eq!(token::Client::new(&env, &token.address).balance(&bob), 999 * XLM);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&bob),
+        999 * XLM
+    );
 }
 
 #[test]
@@ -433,7 +439,10 @@ fn withdrawal_charges_perf_fee_only_on_realized_user_yield() {
     vault.withdraw(&user, &shares, &0);
 
     // Gross assets = 2000, performance fee = 100, early fee = 2, net = 1898.
-    assert_eq!(token::Client::new(&env, &token.address).balance(&user), 1_898 * XLM);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user),
+        1_898 * XLM
+    );
 }
 
 #[test]
@@ -491,12 +500,20 @@ fn impairment_charges_zero_performance_fee() {
 
     // Deposit at the initial share price of 1.0.
     vault.deposit(&user, &deposit, &0);
-    assert_eq!(vault.share_price(), 10_000_000, "deposit should occur at rate 1.0");
+    assert_eq!(
+        vault.share_price(),
+        10_000_000,
+        "deposit should occur at rate 1.0"
+    );
 
     // Impairment: report a loss that halves the share price (1.0 -> 0.5).
     vault.grant_role(&admin, &admin, &Role::Manager);
     vault.report_yield(&admin, &(-(500 * XLM)));
-    assert_eq!(vault.share_price(), 5_000_000, "rate should halve after impairment");
+    assert_eq!(
+        vault.share_price(),
+        5_000_000,
+        "rate should halve after impairment"
+    );
 
     // The preview must show no performance fee owed on an impaired position.
     let shares = vault.get_shares(&user);
@@ -537,7 +554,11 @@ fn test_impairment_produces_zero_performance_fee() {
     vault.set_fee_config(&admin, &fee_config);
 
     vault.deposit(&user, &deposit, &0);
-    assert_eq!(vault.share_price(), 10_000_000, "deposit should occur at rate 1.0");
+    assert_eq!(
+        vault.share_price(),
+        10_000_000,
+        "deposit should occur at rate 1.0"
+    );
 
     let vault_addr = vault.address.clone();
     let token_client = token::Client::new(&env, &token.address);
@@ -709,8 +730,14 @@ fn preview_withdraw_net_no_early_fee_after_lock() {
 
     // Confirm withdrawal_fee_preview correctly omits the early fee after lock.
     let fee_preview = vault.withdrawal_fee_preview(&user, &shares);
-    assert_eq!(fee_preview.early_withdrawal_fee_deducted, 0, "no early fee after lock");
-    assert!(fee_preview.net_amount_received >= net, "user-aware preview >= worst-case net");
+    assert_eq!(
+        fee_preview.early_withdrawal_fee_deducted, 0,
+        "no early fee after lock"
+    );
+    assert!(
+        fee_preview.net_amount_received >= net,
+        "user-aware preview >= worst-case net"
+    );
 }
 
 #[test]
@@ -1094,7 +1121,7 @@ fn test_read_only_queries() {
 
     mint(&token, &user, deposit);
     vault.deposit(&user, &deposit, &0);
-    
+
     assert_eq!(vault.total_shares(), deposit);
     assert_eq!(vault.share_price(), 10_000_000); // 1.0 share price initialized
 
@@ -1104,7 +1131,7 @@ fn test_read_only_queries() {
 
     assert_eq!(vault.total_shares(), deposit);
     assert_eq!(vault.share_price(), 15_000_000); // 1.5 share price
-    
+
     // estimated fees — advance less than DAY so we remain within the
     // MinLockPeriod (= DAY) window and still incur an early-withdrawal fee.
     advance_time(&env, DAY / 2);
@@ -1269,14 +1296,22 @@ fn withdrawal_charges_no_perf_fee_on_impairment() {
     // Soroban arithmetic is deterministic integer math (no FP rounding), so
     // an exact equality is the right contract — per-review feedback.
     let balance = token::Client::new(&env, &token.address).balance(&user);
-    assert_eq!(balance, 800 * XLM, "impairment must not charge a performance fee");
+    assert_eq!(
+        balance,
+        800 * XLM,
+        "impairment must not charge a performance fee"
+    );
 }
 
 #[contract]
 struct MockStrategy;
 #[contractimpl]
 impl MockStrategy {
-    pub fn calculate_rebalance_deltas(env: Env, _current: soroban_sdk::Vec<crate::CurrentAllocationView>, _total: i128) -> soroban_sdk::Vec<crate::AllocationDeltaView> {
+    pub fn calculate_rebalance_deltas(
+        env: Env,
+        _current: soroban_sdk::Vec<crate::CurrentAllocationView>,
+        _total: i128,
+    ) -> soroban_sdk::Vec<crate::AllocationDeltaView> {
         let mut deltas = soroban_sdk::Vec::new(&env);
         deltas.push_back(crate::AllocationDeltaView {
             source_id: Symbol::new(&env, "aave"),
@@ -1323,18 +1358,25 @@ fn test_harvest_basic() {
     assert_eq!(result.user, user);
 
     // new_share_balance must be >= shares before harvest (net yield minted new shares)
-    assert!(result.new_share_balance >= shares_before,
-        "share balance should have grown after compounding");
+    assert!(
+        result.new_share_balance >= shares_before,
+        "share balance should have grown after compounding"
+    );
 
     // Performance fee must have been sent to treasury (not sitting in accrued fees)
     let treasury_token = token::Client::new(&env, &token.address);
     let treasury_balance = treasury_token.balance(&treasury);
-    assert!(treasury_balance >= 20 * XLM,
-        "treasury should have received the performance fee");
+    assert!(
+        treasury_balance >= 20 * XLM,
+        "treasury should have received the performance fee"
+    );
 
     // last_harvest_at timestamp must be set to current ledger time
     let harvested_at = vault.get_last_harvest_at(&user);
-    assert_eq!(harvested_at, harvest_time, "last_harvest_at should match ledger timestamp at harvest");
+    assert_eq!(
+        harvested_at, harvest_time,
+        "last_harvest_at should match ledger timestamp at harvest"
+    );
 }
 
 #[test]
@@ -1361,7 +1403,10 @@ fn test_harvest_zero_yield() {
 
     // last_harvest_at is still updated for zero-yield harvest
     let harvested_at = vault.get_last_harvest_at(&user);
-    assert_eq!(harvested_at, harvest_time, "last_harvest_at should be set even on zero-yield harvest");
+    assert_eq!(
+        harvested_at, harvest_time,
+        "last_harvest_at should be set even on zero-yield harvest"
+    );
 
     // Admin also has zero yield initially
     let admin_result = vault.harvest(&admin);
@@ -1396,8 +1441,10 @@ fn test_harvest_vault() {
     // Fee must be at treasury, not sitting in accrued fees
     let treasury_token = token::Client::new(&env, &token.address);
     let treasury_balance = treasury_token.balance(&treasury);
-    assert!(treasury_balance >= 50 * XLM,
-        "treasury should have received harvest_vault fee");
+    assert!(
+        treasury_balance >= 50 * XLM,
+        "treasury should have received harvest_vault fee"
+    );
 
     // Counter should be reset: a second harvest_vault returns zeros
     let second = vault.harvest_vault(&admin);
@@ -1456,8 +1503,10 @@ fn test_harvest_fee_calculation() {
     // Fee goes to treasury, not accrued internally
     let treasury_token = token::Client::new(&env, &token.address);
     let treasury_balance = treasury_token.balance(&treasury);
-    assert!(treasury_balance >= 200 * XLM,
-        "treasury should have received 20% performance fee");
+    assert!(
+        treasury_balance >= 200 * XLM,
+        "treasury should have received 20% performance fee"
+    );
 }
 
 #[test]
@@ -1525,14 +1574,20 @@ fn test_harvest_impairment_no_fee_charged() {
 
     // After impairment reduces pending yield to zero, harvest should be a no-op
     let result = vault.harvest(&admin);
-    assert_eq!(result.gross_yield, 0, "impairment should reduce pending yield to zero");
+    assert_eq!(
+        result.gross_yield, 0,
+        "impairment should reduce pending yield to zero"
+    );
     assert_eq!(result.performance_fee, 0, "no fee on impairment");
     assert!(!result.compounded);
 
     // Treasury must not have received any fee
     let treasury_token = token::Client::new(&env, &token.address);
     let treasury_balance = treasury_token.balance(&treasury);
-    assert_eq!(treasury_balance, 0, "treasury must receive no fee when yield is non-positive");
+    assert_eq!(
+        treasury_balance, 0,
+        "treasury must receive no fee when yield is non-positive"
+    );
 }
 
 #[test]
@@ -1552,10 +1607,15 @@ fn test_harvest_new_share_balance_increases() {
     let shares_before = vault.get_shares(&admin);
     let result = vault.harvest(&admin);
 
-    assert!(result.new_share_balance >= shares_before,
-        "share balance must not decrease after harvest with positive yield");
-    assert_eq!(result.new_share_balance, vault.get_shares(&admin),
-        "new_share_balance in result must match on-chain balance");
+    assert!(
+        result.new_share_balance >= shares_before,
+        "share balance must not decrease after harvest with positive yield"
+    );
+    assert_eq!(
+        result.new_share_balance,
+        vault.get_shares(&admin),
+        "new_share_balance in result must match on-chain balance"
+    );
 }
 
 #[test]
@@ -1573,15 +1633,15 @@ fn rebalance_with_net_negative_delta_increases_liquid_reserves() {
     let source_id = Symbol::new(&env, "aave");
     vault.grant_role(&admin, &admin, &Role::Operator);
     vault.record_source_allocation(&admin, &source_id, &(1000 * XLM));
-    
-    // Deployed total = 1000. 
+
+    // Deployed total = 1000.
     // We need to mock calculate_rebalance_deltas to return a negative delta.
-    
+
     let real_strategy_id = env.register_contract(None, MockStrategy);
     bind_strategy(&vault, &admin, &real_strategy_id);
-    
+
     vault.rebalance(&admin);
-    
+
     // Let's check another way. emergency_withdraw uses liquid reserves.
     vault.pause(&admin);
     let _principal = vault.get_shares(&user); // 1000 shares
@@ -1756,7 +1816,11 @@ fn emergency_withdraw_all_skips_inactive_positions() {
 
     let result = vault.emergency_withdraw_all(&user);
 
-    assert_eq!(result.succeeded.len(), 1, "only the active position is exited");
+    assert_eq!(
+        result.succeeded.len(),
+        1,
+        "only the active position is exited"
+    );
     assert_eq!(result.failed.len(), 0);
     assert_eq!(result.succeeded.get(0).unwrap().protocol, aave);
 }
@@ -1779,7 +1843,11 @@ fn emergency_withdraw_all_allows_partial_success() {
 
     assert_eq!(result.failed.len(), 1, "overflowing position should fail");
     assert_eq!(result.failed.get(0).unwrap().protocol, aave);
-    assert_eq!(result.succeeded.len(), 1, "healthy position should still exit");
+    assert_eq!(
+        result.succeeded.len(),
+        1,
+        "healthy position should still exit"
+    );
     assert_eq!(result.succeeded.get(0).unwrap().protocol, blend);
 }
 

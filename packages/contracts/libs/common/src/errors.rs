@@ -26,4 +26,10 @@ pub enum ContractError {
     BelowMinDeposit = 21,
     ReentrancyDetected = 22,
     CalleeNotAllowed = 23,
+    QueueEntryExists = 24,
+    RequestBelowMinimum = 25,
+    NotInQueue = 26,
+    LegSlippageExceeded = 27,
+    PlanStale = 28,
+    RebalanceValueCapExceeded = 29,
 }
