@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS fraud_metrics;
+DROP TABLE IF EXISTS auth_events;
+DROP TABLE IF EXISTS fraud_actions;
+DROP TABLE IF EXISTS fraud_flags;
+DROP TYPE IF EXISTS fraud_flag_status;
+DROP TYPE IF EXISTS fraud_action_type;
+DROP TYPE IF EXISTS fraud_severity;
+DROP TABLE IF EXISTS user_known_devices;
+DROP TABLE IF EXISTS user_known_destinations;
+DROP TABLE IF EXISTS user_baselines;
