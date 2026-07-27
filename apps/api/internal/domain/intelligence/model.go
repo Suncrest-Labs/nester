@@ -100,3 +100,38 @@ type CoachingResponse struct {
 	Nudges             []string              `json:"nudges"`
 	Confidence         string                `json:"confidence"`
 }
+
+// DigestGenerateRequest mirrors the intelligence service's
+// DigestGenerateRequest model (#859): a request for the periodic insight
+// digest for one user/period. The intelligence service pulls facts itself
+// (ledger via the relay, goals/vaults/performance via existing endpoints)
+// so this request carries only the identifiers, not the data.
+type DigestGenerateRequest struct {
+	UserID string `json:"user_id"`
+	Period string `json:"period"` // "weekly" | "monthly"
+}
+
+// DigestAttentionItem mirrors the intelligence service's AttentionItem
+// model: a constructive, actionable heads-up surfaced in the digest.
+type DigestAttentionItem struct {
+	Kind       string `json:"kind"`
+	Message    string `json:"message"`
+	ActionLabel string `json:"action_label,omitempty"`
+	ActionHref string `json:"action_href,omitempty"`
+}
+
+// DigestGenerateResponse mirrors the intelligence service's DigestResponse
+// model: the assembled facts (opaque to Go — narrated by the LLM but
+// computed deterministically), the grounded narrative, and attention items.
+type DigestGenerateResponse struct {
+	Period            string                 `json:"period"`
+	PeriodStart       string                 `json:"period_start"`
+	PeriodEnd         string                 `json:"period_end"`
+	Facts             map[string]any         `json:"facts"`
+	FactsHash         string                 `json:"facts_hash"`
+	Narrative         string                 `json:"narrative"`
+	AttentionItems    []DigestAttentionItem  `json:"attention_items"`
+	HonestZeroPeriod  bool                   `json:"honest_zero_period"`
+	Cached            bool                   `json:"cached"`
+	GeneratedAt       string                 `json:"generated_at"`
+}

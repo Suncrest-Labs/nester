@@ -728,6 +728,28 @@ func run() error {
 	intelligenceRelayHandler := handler.NewIntelligenceRelayHandler(intelRelay)
 	intelligenceRelayHandler.Register(mux)
 
+	// Periodic financial insight digest (#859): a deterministic ledger
+	// source endpoint (consumed by the intelligence service via the relay),
+	// a cache/audit table, and a leader-elected daily job that generates and
+	// delivers a digest once per user per completed period.
+	digestRepository := postgres.NewDigestRepository(db)
+	digestLedgerService := service.NewDigestLedgerService(savingsGoalRepo, yieldHarvestRepository, savingsStreakRepo)
+	digestHandler := handler.NewDigestHandler(digestLedgerService, digestRepository)
+	digestHandler.Register(mux)
+
+	digestJob := scheduler.NewDigestJob(
+		scheduler.DigestJobConfig{Enabled: true, Interval: 24 * time.Hour},
+		notificationRepository,
+		digestRepository,
+		prometheusClient,
+		notificationDispatcher2,
+		baseLogger.WithGroup("digest"),
+	)
+	digestJob.SetLeaderChecker(schedulerLeadership)
+	digestCtx, cancelDigest := context.WithCancel(context.Background())
+	defer cancelDigest()
+	go digestJob.Run(digestCtx)
+
 	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
 	performanceSnapshotsHandler.Register(mux)
 
