@@ -265,6 +265,11 @@ func run() error {
 	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL(), cfg.Stellar().USDCIssuer())
 	rateHandler := handler.NewRateHandler(oracleService)
 
+	// maxWSConnsPerIP bounds simultaneous WebSocket connections from one
+	// client IP (nester#828), mirroring the per-route rate limits already
+	// applied via middleware.NewLimiter below. 0 would mean unlimited.
+	const maxWSConnsPerIP = 20
+
 	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (userID, sessionID string, err error) {
 		if token == "" {
 			return "", "", fmt.Errorf("missing token")
@@ -283,7 +288,7 @@ func run() error {
 			}
 		}
 		return claims.Subject, claims.SessionID, nil
-	}, cfg.AllowedOrigins(), redisClient, ws.DefaultMaxConnectionsPerIP)
+	}, cfg.AllowedOrigins(), redisClient, maxWSConnsPerIP)
 
 	wsCtx, wsCancel := context.WithCancel(context.Background())
 	defer wsCancel()
@@ -431,12 +436,47 @@ func run() error {
 	defer cancelPoller()
 	go txPoller.Run(pollerCtx)
 
+	// notificationRateLimit/-Window bound how many notifications a user can
+	// receive per category in a burst (#829's "a burst of deposits does not
+	// produce a burst of near-identical notifications"). Safety-category
+	// events bypass this entirely (see notifications.Category doc comment).
+	const notificationRateLimit = 20
+	const notificationRateWindow = 5 * time.Minute
+	notificationRateLimiter := middleware.NewLimiter(redisClient, "notifications", notificationRateLimit, notificationRateWindow)
+
+	// notificationDedup is process-local when Redis isn't configured, and
+	// Redis-backed (cross-instance) otherwise — same dual-mode pattern as
+	// middleware.NewLimiter above.
+	var notificationDedup notifications.Deduplicator = notifications.NewInMemoryDeduplicator()
+	if redisClient != nil {
+		notificationDedup = notifications.NewRedisDeduplicator(redisClient)
+	}
+
 	notificationDispatcher := notifications.New(
 		[]notifications.Channel{
-			// notifications.NewWebSocketChannel(wsHub), // TODO: Fix interface implementation
+			notifications.NewWebSocketChannel(wsHub),
 		},
 		notificationRepository,
 		nil,
+		notifications.WithDeduplicator(notificationDedup),
+		notifications.WithRateLimiter(notificationRateLimiter),
+	)
+
+	// notificationDispatcher2 carries the real Push channel — separate from
+	// notificationDispatcher above (WebSocket-only) because a failed
+	// WebSocket delivery is never retried by design (see
+	// notifications.RetryEnqueuer's doc comment), while a failed Push send
+	// is. NoopPushSender is the same placeholder nudgeNotificationDispatcher
+	// already uses below — a real provider integration is deliberately
+	// deferred (see #829's commit message).
+	notificationDispatcher2 := notifications.New(
+		[]notifications.Channel{
+			notifications.NewPushChannel(notifications.NoopPushSender{}, notificationRepository),
+		},
+		notificationRepository,
+		nil,
+		notifications.WithDeduplicator(notificationDedup),
+		notifications.WithRateLimiter(notificationRateLimiter),
 	)
 
 	var ready atomic.Bool
@@ -609,6 +649,8 @@ func run() error {
 		},
 		notificationRepository,
 		nil,
+		notifications.WithDeduplicator(notificationDedup),
+		notifications.WithRateLimiter(notificationRateLimiter),
 	)
 
 	nudgeEngineSvc = service.NewNudgeEngineService(
@@ -683,6 +725,16 @@ func run() error {
 	jobQueueMetrics := jobqueue.NewStdMetrics()
 	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
 
+	// Durable retry for failed notification deliveries (#829), now that the
+	// job queue client exists. Only notificationDispatcher2 gets a
+	// RetryEnqueuer: it's the only one of the two dispatchers above with a
+	// real Push channel registered. notificationDispatcher only has
+	// WebSocket registered, and WebSocket failures are never retried by
+	// design (see notifications.RetryEnqueuer's doc comment) — wiring retry
+	// there would only ever enqueue jobs for Email/Push that it has no
+	// adapter to actually redeliver.
+	notificationDispatcher2.SetRetryEnqueuer(notifications.NewJobQueueRetryEnqueuer(jobQueueClient))
+
 	// Recurring deposit sweep (#846): classified SINGLETON (money-moving —
 	// see RecurringDepositJob's doc comment). The sweep loop itself only
 	// enqueues a durable per-occurrence job onto jobQueueClient rather than
@@ -738,6 +790,12 @@ func run() error {
 	harvestExecutor := harvest.NewServiceExecutor(vaultService, userService)
 	jobWorker.Register(harvest.DefaultJobType,
 		harvest.NewJobHandler(harvestExecutor, baseLogger.WithGroup("harvest-job")), 0)
+
+	// Notification retry (#829): redelivers a failed Push notification via
+	// notificationDispatcher2 (see the RetryEnqueuer wiring above for why
+	// only that dispatcher is used here).
+	jobWorker.Register(notifications.NotificationRetryJobType,
+		notifications.NewNotificationRetryJobHandler(notificationDispatcher2), 0)
 
 	// Recurring-deposit occurrence handler (#846): processes the jobs
 	// recurringDepositJob (above) enqueues. Fixes the #846 idempotency bug —
