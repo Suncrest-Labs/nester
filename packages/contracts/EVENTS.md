@@ -275,3 +275,41 @@ Emitted when the permissionless `expire_goal` transitions a goal past its deadli
 Emitted when the goal owner calls `abandon_goal`.
 - **Topics**: `(SAV_GOAL, GOAL_AB, goal_id: BytesN<32>)`
 - **Data**: `{ contributed: i128, timestamp: u64 }`
+
+## Upgrade Events (Contract Symbol: `UPGRADE`)
+
+### PROP_UPG (upgrade_proposed)
+Emitted when a new contract WASM upgrade is proposed with a timelock ETA.
+- **Topics**: `(UPGRADE, PROP_UPG, proposer: Address)`
+- **Data**:
+    ```rust
+    {
+        wasm_hash: BytesN<32>,
+        eta: u64,
+        proposer: Address
+    }
+    ```
+
+### CAN_UPG (upgrade_cancelled)
+Emitted when a pending WASM upgrade proposal is cancelled before execution.
+- **Topics**: `(UPGRADE, CAN_UPG, cancelled_by: Address)`
+- **Data**:
+    ```rust
+    {
+        wasm_hash: BytesN<32>,
+        cancelled_by: Address
+    }
+    ```
+
+### EXEC_UPG (upgrade_executed)
+Emitted when a matured WASM upgrade is executed, updating the contract WASM.
+- **Topics**: `(UPGRADE, EXEC_UPG, executed_by: Address)`
+- **Data**:
+    ```rust
+    {
+        wasm_hash: BytesN<32>,
+        executed_by: Address,
+        execution_timestamp: u64
+    }
+    ```
+
