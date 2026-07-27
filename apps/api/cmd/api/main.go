@@ -418,6 +418,13 @@ func run() error {
 	yieldHarvestHandler.Register(mux)
 
 	vaultHandler.Register(mux)
+
+	// Read-only history for the fair-exit queue (#814), penalty escrow
+	// (#805), and slippage-safe rebalance (#810) event projections.
+	fairExitRepo := postgres.NewFairExitRepository(db)
+	fairExitHandler := handler.NewFairExitHandler(vaultService, fairExitRepo)
+	fairExitHandler.Register(mux)
+
 	portfolioHandler.Register(mux)
 	valuationHandler.Register(mux)
 	transactionHandler.Register(mux)

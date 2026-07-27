@@ -128,7 +128,10 @@ fn test_full_lifecycle_deposit_to_withdraw() {
     // Performance fee = 10 % of YIELD_AMOUNT = 100_000
     let shares_held = h.token().balance(&user);
     let remaining = h.vault().withdraw(&user, &shares_held, &0);
-    assert_eq!(remaining, 0, "all shares should be burned after full withdrawal");
+    assert_eq!(
+        remaining, 0,
+        "all shares should be burned after full withdrawal"
+    );
     assert_eq!(h.token().total_supply(), 0);
 
     let perf_fee = YIELD_AMOUNT * 1_000 / 10_000;

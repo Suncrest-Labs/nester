@@ -9,6 +9,13 @@ pub const MAX_EARLY_WITHDRAWAL_FEE_BPS: u32 = 500;
 pub const MAX_EMERGENCY_FEE_BPS: u32 = 500;
 pub const MIN_DEPOSIT_AMOUNT: i128 = 10_000_000; // 1 unit in 7 decimals
 
+/// Hard ceiling on the treasury's slice of the early-exit penalty escrow
+/// (issue #805). `depositor_share_bps` is admin-configurable but must always
+/// leave the treasury with no more than this — a compile-time constant, not
+/// storage, so an admin key compromise cannot redirect the whole escrow to
+/// the treasury.
+pub const MAX_TREASURY_SHARE_BPS: u32 = 5_000;
+
 // ---------------------------------------------------------------------------
 // Circuit breaker defaults (issue #817)
 // ---------------------------------------------------------------------------
