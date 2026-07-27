@@ -136,21 +136,25 @@ class ApiProjectionProvider:
         if not goal_id or period_months <= 0 or target_amount <= 0:
             return None
 
-        common = dict(
+        p_current = await self._simulate(
             goal_id=goal_id,
             initial_deposit=initial_deposit,
+            monthly_contribution=current_monthly_contribution,
             apy=apy,
             period_months=period_months,
             target_amount=target_amount,
             deadline_months=deadline_months,
         )
-        p_current = await self._simulate(
-            monthly_contribution=current_monthly_contribution, **common
-        )
         if p_current is None:
             return None
         p_required = await self._simulate(
-            monthly_contribution=required_monthly_contribution, **common
+            goal_id=goal_id,
+            initial_deposit=initial_deposit,
+            monthly_contribution=required_monthly_contribution,
+            apy=apy,
+            period_months=period_months,
+            target_amount=target_amount,
+            deadline_months=deadline_months,
         )
         if p_required is None:
             return None

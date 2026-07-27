@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
 
+from anthropic.types import MessageParam, ToolChoiceToolParam, ToolParam
+
 from app.config import settings
 from app.models.savings_recommendation import (
     CandidateActionType,
@@ -34,8 +36,8 @@ from app.models.savings_recommendation import (
     SavingsRecommendationSet,
 )
 from app.services.finance_math import months_to_reach_target, required_monthly_deposit
-from app.services.prometheus import get_client
 from app.services.projection_client import ProjectionProvider, get_projection_provider
+from app.services.prometheus import get_client
 from app.services.recommendation_store import EngagementStore
 from app.services.recommendation_store import store as default_engagement_store
 from app.services.retrieval import extract_numbers
@@ -96,7 +98,9 @@ class GoalContext:
 
     def months_remaining(self, now: Optional[datetime] = None) -> int:
         now = now or datetime.now(timezone.utc)
-        deadline = self.deadline if self.deadline.tzinfo else self.deadline.replace(tzinfo=timezone.utc)
+        deadline = (
+            self.deadline if self.deadline.tzinfo else self.deadline.replace(tzinfo=timezone.utc)
+        )
         delta_days = (deadline - now).days
         return max(1, round(delta_days / 30.44))
 
@@ -226,8 +230,8 @@ def generate_yield_move_candidates(
                 continue
             reason = str(suggestion.get("reason", "")).strip()
             risk_context = (
-                f"Rebalancing shifts allocation across protocols; review the "
-                f"suggested split before moving funds."
+                "Rebalancing shifts allocation across protocols; review the "
+                "suggested split before moving funds."
                 + (f" {reason}" if reason else "")
             )
             summary = (
@@ -562,7 +566,7 @@ candidates ONLY by their candidate_id from the list provided; never invent a
 candidate_id."""
 
 
-def _build_tool_schema(candidate_ids: list[str]) -> dict[str, Any]:
+def _build_tool_schema(candidate_ids: list[str]) -> ToolParam:
     return {
         "name": "select_recommendations",
         "description": (
@@ -742,8 +746,9 @@ async def select_and_explain(
         + "\n".join(candidate_lines)
     )
 
-    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    messages: list[MessageParam] = [{"role": "user", "content": prompt}]
     client = get_client()
+    tool_choice: ToolChoiceToolParam = {"type": "tool", "name": "select_recommendations"}
 
     for attempt in range(_MAX_REGENERATE_ATTEMPTS + 1):
         try:
@@ -752,7 +757,7 @@ async def select_and_explain(
                 max_tokens=SELECT_MAX_TOKENS,
                 system=SELECTION_SYSTEM_PROMPT,
                 tools=[tool],
-                tool_choice={"type": "tool", "name": "select_recommendations"},
+                tool_choice=tool_choice,
                 messages=messages,
             )
             tool_use = next(
@@ -760,7 +765,11 @@ async def select_and_explain(
             )
             if tool_use is None:
                 raise ValueError("model did not return a tool_use block")
-            tool_input = cast(dict[str, Any], tool_use.input)
+            # duck-typed rather than isinstance(b, ToolUseBlock): tests exercise
+            # this against SimpleNamespace fakes (matching this codebase's
+            # existing Anthropic-mocking convention, see prometheus.py's tests),
+            # not real SDK block instances.
+            tool_input = cast(dict[str, Any], getattr(tool_use, "input", None))
             selections = list(tool_input.get("selections", []))
             if not selections:
                 raise ValueError("model returned no selections")
