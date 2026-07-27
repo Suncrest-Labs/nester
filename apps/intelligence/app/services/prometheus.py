@@ -28,6 +28,9 @@ from app.services import guardrails
 from app.services.coingecko import get_client as get_coingecko_client
 from app.services.conversation_store import store as conversation_store
 from app.services.defillama import get_client as get_defillama_client
+from app.services.grounding import build_grounded_system_prompt, validate_grounding
+from app.services.retrieval import RetrievalService
+from app.services.retrieval_source import ApiDataSource
 from app.services.vault_context import VaultContextFetcher
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,7 @@ _RISK_LIMITS: dict[str, float] = {
 
 _client: Optional[anthropic.AsyncAnthropic] = None
 _vault_context_fetcher: Optional[VaultContextFetcher] = None
+_retrieval_service: Optional[RetrievalService] = None
 _redis_client: Any = None
 _redis_available: bool = False
 
@@ -68,6 +72,19 @@ def get_vault_context_fetcher() -> VaultContextFetcher:
             service_api_key=settings.nester_service_api_key,
         )
     return _vault_context_fetcher
+
+
+def get_retrieval_service() -> RetrievalService:
+    """Return the shared structured-retrieval service (#852)."""
+    global _retrieval_service
+    if _retrieval_service is None:
+        _retrieval_service = RetrievalService(
+            ApiDataSource(
+                api_base_url=settings.nester_api_base_url,
+                service_api_key=settings.nester_service_api_key,
+            )
+        )
+    return _retrieval_service
 
 
 def _get_redis() -> Any:

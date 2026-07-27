@@ -10,6 +10,8 @@ import { useWallet } from "@/components/wallet-provider";
 import { KYCSection, type KYCStatus } from "@/components/kyc/KYCSection";
 import { BankAccountsSection } from "@/components/settings/bank-accounts-section";
 import { cn } from "@/lib/utils";
+import { useLocale, useTranslations } from "@/context/locale-context";
+import { SUPPORTED_LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n/config";
 
 // --- Savings goal notification settings (#740) ---
 
@@ -163,6 +165,8 @@ export default function SettingsPage() {
     const { isConnected, address } = useWallet();
     const router = useRouter();
     const [activeTab, setActiveTab] = useState<Tab>("profile");
+    const { locale, setLocale } = useLocale();
+    const t = useTranslations();
 
     const kyc = useKYCState();
 
@@ -314,6 +318,29 @@ export default function SettingsPage() {
                                             <option value="GBP">GBP (£)</option>
                                             <option value="NGN">NGN (₦)</option>
                                         </select>
+                                    </div>
+                                    <div>
+                                        <label
+                                            htmlFor="locale-select"
+                                            className="mb-1.5 block text-xs text-black/45 dark:text-white/45"
+                                        >
+                                            {t("settings.language")}
+                                        </label>
+                                        <select
+                                            id="locale-select"
+                                            value={locale}
+                                            onChange={(e) => setLocale(e.target.value as Locale)}
+                                            className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm outline-none appearance-none focus:border-black/25 dark:focus:border-white/25"
+                                        >
+                                            {SUPPORTED_LOCALES.map((l) => (
+                                                <option key={l} value={l}>
+                                                    {LOCALE_LABELS[l]}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <p className="mt-1.5 text-xs text-black/40 dark:text-white/40">
+                                            {t("settings.languageDescription")}
+                                        </p>
                                     </div>
                                     <BankAccountsSection />
                                 </div>

@@ -54,20 +54,45 @@ type noopEventSyncer struct{}
 
 func (noopEventSyncer) SyncEvents(_ context.Context) (int, error) { return 0, nil }
 
+// LeadershipStatus reports the scheduler's leader-election state (#846) —
+// satisfied by *scheduler.Leadership. Declared narrowly here (rather than
+// importing the scheduler package's concrete type) so this handler only
+// depends on the three read-only accessors it actually needs.
+type LeadershipStatus interface {
+	InstanceID() string
+	IsLeader() bool
+	Since() time.Time
+}
+
+type noopLeadershipStatus struct{}
+
+func (noopLeadershipStatus) InstanceID() string { return "" }
+func (noopLeadershipStatus) IsLeader() bool     { return false }
+func (noopLeadershipStatus) Since() time.Time   { return time.Time{} }
+
 type AdminHandler struct {
 	service     adminService
 	userService *service.UserService
 	eventSyncer EventSyncer
+	leadership  LeadershipStatus
 }
 
 func NewAdminHandler(svc adminService, userSvc *service.UserService) *AdminHandler {
-	return &AdminHandler{service: svc, userService: userSvc, eventSyncer: noopEventSyncer{}}
+	return &AdminHandler{service: svc, userService: userSvc, eventSyncer: noopEventSyncer{}, leadership: noopLeadershipStatus{}}
 }
 
 // SetEventSyncer wires a real EventSyncer.  Call this from main after the
 // indexer has been initialised so the admin handler can trigger manual syncs.
 func (h *AdminHandler) SetEventSyncer(es EventSyncer) {
 	h.eventSyncer = es
+}
+
+// SetLeadership wires the scheduler's leader-election component (#846) so
+// GET /api/v1/admin/scheduler/leadership can report which instance is
+// currently the scheduler leader. Call this from main after
+// scheduler.NewLeadership has been constructed.
+func (h *AdminHandler) SetLeadership(l LeadershipStatus) {
+	h.leadership = l
 }
 
 func (h *AdminHandler) Register(mux *http.ServeMux) {
@@ -84,8 +109,32 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/settlements", h.listSettlements)
 	mux.HandleFunc("GET /api/v1/admin/users", h.listUsers)
 	mux.HandleFunc("GET /api/v1/admin/health", h.getDetailedHealth)
+	mux.HandleFunc("GET /api/v1/admin/scheduler/leadership", h.getSchedulerLeadership)
 	mux.HandleFunc("POST /api/v1/admin/sync-events", h.syncEvents)
 	mux.HandleFunc("PATCH /api/v1/admin/users/{id}/kyc", h.reviewUserKYC)
+}
+
+// getSchedulerLeadership handles GET /api/v1/admin/scheduler/leadership
+// (#846): reports whether THIS instance currently holds the scheduler
+// leader-election lock, since when, and this instance's identity — so
+// operators can confirm leadership is held by exactly one replica at a
+// time and observe failover (a new instance_id / since after a leader
+// dies) without needing a metrics backend.
+func (h *AdminHandler) getSchedulerLeadership(w http.ResponseWriter, r *http.Request) {
+	isLeader := h.leadership.IsLeader()
+	var since *string
+	if isLeader {
+		s := h.leadership.Since().UTC().Format(time.RFC3339)
+		since = &s
+	}
+	response.WriteJSON(w, http.StatusOK, response.Response{
+		Success: true,
+		Data: map[string]any{
+			"instance_id": h.leadership.InstanceID(),
+			"is_leader":   isLeader,
+			"since":       since,
+		},
+	})
 }
 
 // syncEvents handles POST /api/v1/admin/sync-events

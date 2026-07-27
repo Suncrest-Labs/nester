@@ -1065,6 +1065,9 @@ func mapRepositoryError(err error) error {
 		if pgErr.Code == "23503" && strings.Contains(pgErr.ConstraintName, "vault") {
 			return vault.ErrVaultNotFound
 		}
+		if pgErr.Code == "23505" && strings.Contains(pgErr.ConstraintName, "transaction_hash") {
+			return vault.ErrDuplicateTransaction
+		}
 	}
 
 	return err

@@ -5,8 +5,10 @@
 //! allocation logic.
 //!
 //! # Roles
+//!
 //! * Admin: register/update/remove sources, risk + limit updates.
 //! * Operator: day-to-day performance refreshes (APY/TVL) and migration ops.
+//!
 //! Role management is delegated to [`nester_access_control`].
 //!
 //! # Status transitions

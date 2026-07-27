@@ -159,8 +159,16 @@ func (r *SavingsGoalRepository) Update(ctx context.Context, goal *savingsgoal.Sa
 	return nil
 }
 
+// Delete soft-archives the goal instead of destroying the row (#685): it
+// stamps archived_at and moves the goal to the archived status. Already
+// archived goals are not matched, so a repeat DELETE surfaces as
+// ErrGoalNotFound (404) and no row is ever permanently removed via this path.
 func (r *SavingsGoalRepository) Delete(ctx context.Context, id, userID uuid.UUID) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM savings_goals WHERE id = $1 AND user_id = $2`, id, userID)
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET archived_at = NOW(), status = 'archived', updated_at = NOW()
+		WHERE id = $1 AND user_id = $2 AND status <> 'archived'
+	`, id, userID)
 	if err != nil {
 		return err
 	}

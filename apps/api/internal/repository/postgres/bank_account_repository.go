@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/bankaccount"
+	"github.com/suncrestlabs/nester/apps/api/internal/rotation"
 )
 
 type BankAccountRepository struct {
@@ -26,7 +27,7 @@ func (r *BankAccountRepository) Create(
 	ctx context.Context,
 	account bankaccount.BankAccount,
 	encryptedNumber []byte,
-	fingerprint string,
+	fingerprint, keyVersion string,
 ) (bankaccount.BankAccount, error) {
 	last4 := account.AccountNumber
 	if len(last4) > 4 {
@@ -37,8 +38,8 @@ func (r *BankAccountRepository) Create(
 		INSERT INTO bank_accounts (
 			id, user_id, bank_name, bank_code,
 			account_number_encrypted, account_number_fingerprint, account_last4,
-			account_name, currency, country, is_default, verified_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			account_name, currency, country, is_default, verified_at, key_version
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		RETURNING created_at
 	`
 
@@ -57,6 +58,7 @@ func (r *BankAccountRepository) Create(
 		strings.ToUpper(account.Country),
 		account.IsDefault,
 		account.VerifiedAt,
+		keyVersion,
 	).Scan(&account.CreatedAt)
 	if err != nil {
 		return bankaccount.BankAccount{}, mapBankAccountError(err)
@@ -115,7 +117,7 @@ func (r *BankAccountRepository) ListByUser(ctx context.Context, userID uuid.UUID
 	return out, rows.Err()
 }
 
-func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bankaccount.BankAccount, []byte, error) {
+func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bankaccount.BankAccount, []byte, string, error) {
 	var (
 		uid, bankName, bankCode string
 		encrypted               []byte
@@ -123,17 +125,18 @@ func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bank
 		isDefault               bool
 		verifiedAt              sql.NullTime
 		createdAt               time.Time
+		keyVersion              string
 	)
 	err := r.db.QueryRowContext(ctx, `
 		SELECT user_id, bank_name, COALESCE(bank_code, ''), account_number_encrypted,
-		       account_name, currency, country, is_default, verified_at, created_at
+		       account_name, currency, country, is_default, verified_at, created_at, key_version
 		FROM bank_accounts WHERE id = $1
 	`, id.String()).Scan(
 		&uid, &bankName, &bankCode, &encrypted,
-		&accountName, &currency, &country, &isDefault, &verifiedAt, &createdAt,
+		&accountName, &currency, &country, &isDefault, &verifiedAt, &createdAt, &keyVersion,
 	)
 	if err != nil {
-		return bankaccount.BankAccount{}, nil, mapBankAccountError(err)
+		return bankaccount.BankAccount{}, nil, "", mapBankAccountError(err)
 	}
 	parsedUser, _ := uuid.Parse(uid)
 	var verified *time.Time
@@ -151,7 +154,72 @@ func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bank
 		IsDefault:     isDefault,
 		VerifiedAt:    verified,
 		CreatedAt:     createdAt,
-	}, encrypted, nil
+	}, encrypted, keyVersion, nil
+}
+
+// CountPending reports how many stored rows are not on activeVersion. It backs
+// the rotation tool's progress reporting and satisfies rotation.Store.
+func (r *BankAccountRepository) CountPending(ctx context.Context, activeVersion string) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM bank_accounts WHERE key_version <> $1`, activeVersion).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("bank account repository: count pending rotation: %w", err)
+	}
+	return n, nil
+}
+
+// ScanPending returns up to limit rows whose key version is not activeVersion,
+// ordered by id for stable paging. It satisfies rotation.Store.
+func (r *BankAccountRepository) ScanPending(ctx context.Context, activeVersion string, limit int) ([]rotation.EncryptedRow, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, account_number_encrypted, key_version
+		FROM bank_accounts
+		WHERE key_version <> $1
+		ORDER BY id
+		LIMIT $2
+	`, activeVersion, limit)
+	if err != nil {
+		return nil, fmt.Errorf("bank account repository: scan pending rotation: %w", err)
+	}
+	defer rows.Close()
+
+	var out []rotation.EncryptedRow
+	for rows.Next() {
+		var (
+			id         string
+			encrypted  []byte
+			keyVersion string
+		)
+		if err := rows.Scan(&id, &encrypted, &keyVersion); err != nil {
+			return nil, err
+		}
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return nil, fmt.Errorf("bank account repository: parse id: %w", err)
+		}
+		out = append(out, rotation.EncryptedRow{ID: parsedID, Ciphertext: encrypted, KeyVersion: keyVersion})
+	}
+	return out, rows.Err()
+}
+
+// UpdateCipher atomically replaces a row's ciphertext and key version. It leaves
+// account_number_fingerprint untouched so the uniqueness index is unaffected by
+// rotation. It satisfies rotation.Store.
+func (r *BankAccountRepository) UpdateCipher(ctx context.Context, id uuid.UUID, ciphertext []byte, keyVersion string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE bank_accounts
+		SET account_number_encrypted = $2, key_version = $3
+		WHERE id = $1
+	`, id.String(), ciphertext, keyVersion)
+	if err != nil {
+		return fmt.Errorf("bank account repository: update cipher: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return bankaccount.ErrNotFound
+	}
+	return nil
 }
 
 func (r *BankAccountRepository) Delete(ctx context.Context, id uuid.UUID) error {
