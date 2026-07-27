@@ -72,12 +72,12 @@ func (m *mockAuthUserRepository) GetRoles(ctx context.Context, id uuid.UUID) ([]
 	return []string{}, nil
 }
 
-func (m *mockAuthUserRepository) SaveKYCDocument(_ context.Context, _ *user.KYCDocument) error {
+func (m *mockAuthUserRepository) SaveKYCDocument(_ context.Context, _ *user.KYCDocument, _ *user.EncryptedKYCDoc) error {
 	return nil
 }
 
-func (m *mockAuthUserRepository) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, error) {
-	return nil, user.ErrUserNotFound
+func (m *mockAuthUserRepository) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, *user.EncryptedKYCDoc, error) {
+	return nil, nil, user.ErrUserNotFound
 }
 
 func (m *mockAuthUserRepository) UpdateKYCStatus(_ context.Context, _ uuid.UUID, _ user.KYCStatus, _ *string, _ *time.Time) error {

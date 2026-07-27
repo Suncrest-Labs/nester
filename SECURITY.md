@@ -84,6 +84,66 @@ The vault trips itself automatically rather than waiting for an operator to noti
 
 The emergency withdrawal queue is never gated by severity — it works identically at every level, including `FullHalt`, because a breaker that stops users from leaving is a trap, not a safety device. Recovery only ever moves one severity stage at a time, only after a configurable cooldown, and only for callers holding `Admin`/`Upgrader` — never `Guardian`.
 
+## Encryption at Rest
+
+Nester uses **envelope encryption** with key versioning and rotation for all sensitive user data stored at rest. The scheme is implemented in `apps/api/internal/crypto/account_cipher.go` and reused across all domains.
+
+### Key Hierarchy
+
+```
+Master Key (never stored in the application)
+    └── Key-Encryption Keys (KEKs) — versioned, configured via env vars
+        └── AES-256-GCM Data Key (derived per cipher instance)
+            └── Ciphertext stored in `*_encrypted` columns, tagged with `key_version`
+```
+
+Key configuration (environment variables):
+
+| Variable | Purpose |
+|---|---|
+| `BANK_ACCOUNT_ENCRYPTION_KEY` | Legacy single 32-byte base64 key (registers as `v1`) |
+| `ACCOUNT_CIPHER_KEYS` | Comma-separated `version:base64key` pairs for multi-key rotation |
+| `ACCOUNT_CIPHER_ACTIVE_KEY` | Which version is used for new encryptions |
+| `ACCOUNT_CIPHER_FINGERPRINT_KEY` | Independent pepper for blind-index HMAC (required when no `v1` key is in the set) |
+
+### Encrypted Fields
+
+| Table | Encrypted Columns | Blind Index | Key Version |
+|---|---|---|---|
+| `bank_accounts` | `account_number_encrypted` (BYTEA) | `account_number_fingerprint` (TEXT, unique) | `key_version` (VARCHAR(32)) |
+| `kyc_documents` | `id_number_encrypted` (BYTEA), `front_object_key_encrypted` (BYTEA), `back_object_key_encrypted` (BYTEA) | `id_number_fingerprint` (TEXT) | `key_version` (VARCHAR(32)) |
+
+### Blind Indexes
+
+Fields that need exact-match lookup (deduplication, find-by-identifier) use a **blind index**: a keyed HMAC-SHA256 of the normalized plaintext stored in a separate column. The HMAC key is independent of the encryption keys — either the `v1` KEK or the explicit `ACCOUNT_CIPHER_FINGERPRINT_KEY` — so the index cannot be used to attack the ciphertext even if both the index and ciphertext are leaked in the same breach.
+
+Limitations:
+- **Exact-match only**: No prefix, range or fuzzy search on blind indexes.
+- **Collision resistant**: HMAC-SHA256 produces a 256-bit digest; collisions are not a practical concern.
+
+### Key Rotation
+
+The `cmd/rotate_keys` command re-encrypts stored ciphertext under the active key version. It processes all encrypted domains (bank accounts, KYC documents) in a single run. The rotator is:
+
+- **Idempotent**: Rows already on the active version are skipped.
+- **Resumable**: Each row is committed independently; an interrupted run picks up where it left off.
+- **Safe**: Only row IDs and key versions are logged — never plaintext, ciphertext, or keys.
+
+### Data Classification
+
+A complete data-classification inventory is maintained at `apps/api/internal/crypto/DATA_CLASSIFICATION.md`. Every column holding user data is classified as HIGH (sensitive, encrypted), MEDIUM (indirect PII), or LOW (non-sensitive).
+
+### Backfill for Existing Data
+
+When encryption is extended to a new domain, existing plaintext rows are backfilled using a dedicated command (e.g. `cmd/backfill_kyc_encryption`). The migration pattern follows:
+
+1. Add encrypted columns alongside existing plaintext columns (rollback-safe).
+2. Run a batched, resumable backfill job to populate encrypted values.
+3. Verify the backfill is complete.
+4. Drop plaintext columns in a separate, later migration after confidence is established.
+
+Plaintext is never dropped in the same step that introduces ciphertext.
+
 ## Known and Accepted Vulnerabilities
 
 We maintain a list of known vulnerabilities in our dependency chain that we have assessed and accepted based on their risk profile:
