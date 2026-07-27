@@ -76,8 +76,20 @@ func (s *SimulationInput) Validate() error {
 	if s.PeriodMonths < 0 {
 		return ErrInvalidPeriod
 	}
+	// Reject unreasonably long horizons outright (CodeQL flagged the
+	// unbounded PeriodMonths/DeadlineMonths -> make([]T, months) allocations
+	// in RunMonteCarloSimulation as a memory-exhaustion vector: a caller
+	// supplying e.g. period_months=2_000_000_000 would otherwise reach an
+	// allocation of that size before any other check fires). MaxPeriodMonths
+	// (50 years) is far beyond any realistic savings horizon.
+	if s.PeriodMonths > MaxPeriodMonths {
+		return ErrPeriodTooLong
+	}
 	if s.DeadlineMonths != nil && *s.DeadlineMonths <= 0 {
 		return ErrInvalidPeriod
+	}
+	if s.DeadlineMonths != nil && *s.DeadlineMonths > MaxPeriodMonths {
+		return ErrPeriodTooLong
 	}
 	return nil
 }
@@ -165,6 +177,14 @@ const MaxPathCount = 5000
 // MinPathCount is the floor path count for a still-meaningful distribution.
 const MinPathCount = 500
 
+// MaxPeriodMonths bounds the simulated horizon (50 years) so
+// RunMonteCarloSimulation's make([]T, months)-shaped allocations can never
+// be driven to an unbounded size by a caller-supplied PeriodMonths or
+// DeadlineMonths. SimulationInput.Validate rejects anything longer outright;
+// RunMonteCarloSimulation also clamps to this bound directly (defense in
+// depth for any caller that doesn't route through Validate first).
+const MaxPeriodMonths = 600
+
 // MonteCarloParams is the fully-resolved, side-effect-free input to the
 // simulation engine. Everything the engine needs is a plain value - no
 // repositories, no context, no clock - so RunMonteCarloSimulation is a pure
@@ -223,6 +243,14 @@ func RunMonteCarloSimulation(p MonteCarloParams) MonteCarloResult {
 	months := p.PeriodMonths
 	if months <= 0 {
 		return MonteCarloResult{PathCount: 0, Seed: p.Seed}
+	}
+	// Clamp defensively even though SimulationInput.Validate already rejects
+	// anything over MaxPeriodMonths: this is the actual make([]T, months)
+	// allocation site, and RunMonteCarloSimulation is documented as a pure
+	// function of its input, so it should never trust a caller-supplied size
+	// on its own to determine an allocation.
+	if months > MaxPeriodMonths {
+		months = MaxPeriodMonths
 	}
 
 	n := p.PathCount

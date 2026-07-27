@@ -428,3 +428,67 @@ func TestSensitivityGrid_MoreDepositNeverLowersSuccessProbability(t *testing.T) 
 		}
 	}
 }
+
+// TestSimulationInput_Validate_RejectsExcessivePeriod is a regression test
+// for a CodeQL finding on this PR: PeriodMonths/DeadlineMonths fed an
+// unbounded caller-supplied value straight into
+// RunMonteCarloSimulation's make([]T, months) allocations. Validate must
+// reject anything beyond MaxPeriodMonths with a clear error rather than
+// silently accepting it (RunMonteCarloSimulation itself now also clamps
+// defensively -- see the next test).
+func TestSimulationInput_Validate_RejectsExcessivePeriod(t *testing.T) {
+	base := SimulationInput{
+		InitialDeposit:      decimal.NewFromInt(1000),
+		MonthlyContribution: decimal.NewFromInt(100),
+		APY:                 decimalPtr(decimal.NewFromFloat(0.08)),
+		CompoundFrequency:   CompoundMonthly,
+	}
+
+	tooLong := base
+	tooLong.PeriodMonths = MaxPeriodMonths + 1
+	assert.ErrorIs(t, tooLong.Validate(), ErrPeriodTooLong)
+
+	// A hostile/buggy caller supplying billions of months (this is exactly
+	// the shape of value that made make([][]float64, months) a
+	// memory-exhaustion vector before this fix).
+	extreme := base
+	extreme.PeriodMonths = 2_000_000_000
+	assert.ErrorIs(t, extreme.Validate(), ErrPeriodTooLong)
+
+	okDeadline := 12
+	tooLongDeadline := base
+	tooLongDeadline.PeriodMonths = 12
+	d := MaxPeriodMonths + 1
+	tooLongDeadline.DeadlineMonths = &d
+	assert.ErrorIs(t, tooLongDeadline.Validate(), ErrPeriodTooLong)
+
+	valid := base
+	valid.PeriodMonths = MaxPeriodMonths
+	valid.DeadlineMonths = &okDeadline
+	assert.NoError(t, valid.Validate())
+}
+
+// TestRunMonteCarloSimulation_ClampsExcessivePeriodMonths proves the engine
+// itself -- not just Validate -- refuses to size an allocation off a raw
+// caller-supplied PeriodMonths, so any caller that reaches
+// RunMonteCarloSimulation without going through Validate first (e.g. a
+// future internal caller) is still safe. Uses an extreme value that would
+// be a multi-gigabyte/OOM allocation if unclamped; the test passing quickly
+// and without an out-of-memory failure is itself the assertion.
+func TestRunMonteCarloSimulation_ClampsExcessivePeriodMonths(t *testing.T) {
+	result := RunMonteCarloSimulation(MonteCarloParams{
+		InitialDeposit:      decimal.NewFromInt(1000),
+		MonthlyContribution: decimal.NewFromInt(100),
+		ExpectedAPY:         decimal.NewFromFloat(0.08),
+		APYStdDev:           decimal.NewFromFloat(0.02),
+		PeriodMonths:        2_000_000_000,
+		CompoundFrequency:   CompoundMonthly,
+		PathCount:           MinPathCount,
+		Seed:                1,
+	})
+
+	require.Len(t, result.Timeline, MaxPeriodMonths)
+	assert.Equal(t, MaxPeriodMonths, result.Timeline[len(result.Timeline)-1].Month)
+}
+
+func decimalPtr(d decimal.Decimal) *decimal.Decimal { return &d }
