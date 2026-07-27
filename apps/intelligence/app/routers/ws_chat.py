@@ -79,12 +79,23 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 continue
 
             request_id = str(uuid.uuid4())
-            async for chunk in stream_chat(user_id, message, request_id=request_id):
-                # Strip SSE "data: " prefix — WS clients get raw text
-                if chunk.startswith("data: "):
-                    chunk = chunk[6:].rstrip("\n")
-                if chunk:
-                    await websocket.send_text(chunk)
+            stream = stream_chat(user_id, message, request_id=request_id)
+            try:
+                async for chunk in stream:
+                    # Strip SSE "data: " prefix — WS clients get raw text
+                    if chunk.startswith("data: "):
+                        chunk = chunk[6:].rstrip("\n")
+                    if chunk:
+                        await websocket.send_text(chunk)
+            finally:
+                # If the client disconnects (or any other error interrupts
+                # the loop above) while a response is still streaming, close
+                # the generator explicitly rather than leaving it to
+                # garbage collection. This throws GeneratorExit into
+                # stream_chat at its current suspension point, unwinding the
+                # `async with client.messages.stream(...)` block immediately
+                # so we stop consuming (and paying for) tokens nobody reads.
+                await stream.aclose()
 
     except WebSocketDisconnect:
         pass
