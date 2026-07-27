@@ -248,3 +248,30 @@ Emitted when a timelocked operation is cancelled.
         cancelled_by: Address
     }
     ```
+
+## Savings Goal Events (Contract Symbol: `SAV_GOAL` — issue #807)
+
+### GOAL_NEW (goal_created)
+Emitted when `create_goal` registers a new on-chain goal.
+- **Topics**: `(SAV_GOAL, GOAL_NEW, goal_id: BytesN<32>)`
+- **Data**: `{ owner: Address, vault: Address, target_amount: i128, deadline: u64 }`
+
+### GOAL_MS (goal_milestone_reached)
+Emitted the first time `contribute` observes `contributed` crossing a 25/50/75/100% threshold. The goal's milestone bitmask makes this idempotent — a threshold can never be attested twice, even across retried calls.
+- **Topics**: `(SAV_GOAL, GOAL_MS, goal_id: BytesN<32>)`
+- **Data**: `{ threshold_pct: u32, contributed: i128, timestamp: u64 }`
+
+### GOAL_CMP (goal_completed)
+Emitted when a goal's `contributed` reaches its `target_amount`, either inline during `contribute` or via the permissionless `finalize_goal`.
+- **Topics**: `(SAV_GOAL, GOAL_CMP, goal_id: BytesN<32>)`
+- **Data**: `{ contributed: i128, timestamp: u64 }`
+
+### GOAL_EXP (goal_expired)
+Emitted when the permissionless `expire_goal` transitions a goal past its deadline without completion.
+- **Topics**: `(SAV_GOAL, GOAL_EXP, goal_id: BytesN<32>)`
+- **Data**: `{ contributed: i128, timestamp: u64 }`
+
+### GOAL_AB (goal_abandoned)
+Emitted when the goal owner calls `abandon_goal`.
+- **Topics**: `(SAV_GOAL, GOAL_AB, goal_id: BytesN<32>)`
+- **Data**: `{ contributed: i128, timestamp: u64 }`

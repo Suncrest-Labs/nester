@@ -193,6 +193,17 @@ func (m *memorySavingsGoalRepo) GetByShareToken(_ context.Context, token uuid.UU
 	return nil, savingsgoal.ErrGoalNotFound
 }
 
+func (m *memorySavingsGoalRepo) UpdateOnchainLink(_ context.Context, goalID uuid.UUID, onchainGoalID, onchainStatus string) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.OnchainGoalID = &onchainGoalID
+	g.OnchainStatus = &onchainStatus
+	m.goals[goalID] = g
+	return nil
+}
+
 // newVaultReader builds an in-memory VaultReader seeded with the given vaults,
 // reusing the shared memoryVaultRepo fake.
 func newVaultReader(vaults ...vault.Vault) *memoryVaultRepo {

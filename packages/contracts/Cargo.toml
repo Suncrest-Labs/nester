@@ -6,6 +6,7 @@ members = [
   "contracts/lp_aggregator",
   "contracts/nester",
   "contracts/referral",
+  "contracts/savings_goal",
   "contracts/timelock",
   "contracts/treasury",
   "contracts/vault",

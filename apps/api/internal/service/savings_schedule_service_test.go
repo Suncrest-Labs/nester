@@ -184,6 +184,17 @@ func (m *memoryGoalRepo) GetByShareToken(_ context.Context, token uuid.UUID) (*s
 	return nil, savingsgoal.ErrGoalNotFound
 }
 
+func (m *memoryGoalRepo) UpdateOnchainLink(_ context.Context, goalID uuid.UUID, onchainGoalID, onchainStatus string) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.OnchainGoalID = &onchainGoalID
+	g.OnchainStatus = &onchainStatus
+	m.goals[goalID] = g
+	return nil
+}
+
 type memoryVaultRepo struct {
 	vaults map[uuid.UUID]vault.Vault
 }
