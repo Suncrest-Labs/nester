@@ -24,4 +24,10 @@ pub enum ContractError {
     ConfigOutOfRange = 19,
     ArithmeticOverflow = 20,
     BelowMinDeposit = 21,
+    GoalNotCompleted = 22,
+    GoalExpired = 23,
+    BonusAlreadyClaimed = 24,
+    IneligibleContributionPattern = 25,
+    RewardPoolEmpty = 26,
+    AlreadyClaimed = 27,
 }
