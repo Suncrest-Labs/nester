@@ -64,6 +64,14 @@ func (r *YieldHarvestRepository) ListForUser(ctx context.Context, filter yieldha
 		idx := len(args) - 1
 		where += fmt.Sprintf(" AND (yh.harvested_at, yh.id) < ($%d, $%d)", idx, idx+1)
 	}
+	if filter.Since != nil {
+		args = append(args, *filter.Since)
+		where += fmt.Sprintf(" AND yh.harvested_at >= $%d", len(args))
+	}
+	if filter.Until != nil {
+		args = append(args, *filter.Until)
+		where += fmt.Sprintf(" AND yh.harvested_at < $%d", len(args))
+	}
 
 	q := fmt.Sprintf(`
 		SELECT
