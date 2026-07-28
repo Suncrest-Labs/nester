@@ -234,6 +234,19 @@ func run() error {
 	})
 	adminHandler.SetLeadership(schedulerLeadership)
 
+	// Historical chain backfill/resync tool (#840): operator-triggered via
+	// the admin endpoints below. Reuses applyIndexedEvent (same package,
+	// see internal/stellar/backfill.go's doc comment) so backfilled and
+	// live-indexed events are processed identically.
+	backfillRepo := postgres.NewBackfillRepository(db)
+	backfillRunner := &stellarpkg.Runner{
+		DB:     db,
+		Repo:   backfillRepo,
+		RPCURL: cfg.Stellar().RPCURL(),
+		Logger: baseLogger.WithGroup("backfill"),
+	}
+	adminHandler.SetBackfillRunner(backfillRunner, backfillRepo)
+
 	// A single shared Redis client (nil when REDIS_ADDR is unset) powers both the
 	// challenge store and the distributed rate limiters. When nil, both fall back
 	// to in-memory implementations suitable for single-instance deployments.

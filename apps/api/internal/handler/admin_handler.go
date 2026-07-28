@@ -14,10 +14,12 @@ import (
 	"github.com/shopspring/decimal"
 
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/backfill"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	"github.com/suncrestlabs/nester/apps/api/internal/stellar"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
@@ -61,6 +63,42 @@ type noopEventSyncer struct{}
 
 func (noopEventSyncer) SyncEvents(_ context.Context) (int, error) { return 0, nil }
 
+// BackfillTrigger starts and inspects historical chain backfill/rebuild runs
+// (#840), satisfied by *stellar.Runner. The no-op default is used when no
+// backfill runner is configured.
+type BackfillTrigger interface {
+	Start(ctx context.Context, in stellar.StartInput) (*backfill.Run, error)
+	Resume(ctx context.Context, runID uuid.UUID) (*backfill.Run, error)
+}
+
+// BackfillRunLister lists prior runs for GET /api/v1/admin/backfill,
+// satisfied by *postgres.BackfillRepository directly (no need to route
+// listing through the Runner, which only knows how to execute).
+type BackfillRunLister interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*backfill.Run, error)
+	List(ctx context.Context, limit int) ([]backfill.Run, error)
+}
+
+type noopBackfillTrigger struct{}
+
+func (noopBackfillTrigger) Start(context.Context, stellar.StartInput) (*backfill.Run, error) {
+	return nil, errBackfillNotConfigured
+}
+func (noopBackfillTrigger) Resume(context.Context, uuid.UUID) (*backfill.Run, error) {
+	return nil, errBackfillNotConfigured
+}
+
+type noopBackfillRunLister struct{}
+
+func (noopBackfillRunLister) GetByID(context.Context, uuid.UUID) (*backfill.Run, error) {
+	return nil, errBackfillNotConfigured
+}
+func (noopBackfillRunLister) List(context.Context, int) ([]backfill.Run, error) {
+	return nil, errBackfillNotConfigured
+}
+
+var errBackfillNotConfigured = errors.New("backfill is not configured on this instance")
+
 // LeadershipStatus reports the scheduler's leader-election state (#846) —
 // satisfied by *scheduler.Leadership. Declared narrowly here (rather than
 // importing the scheduler package's concrete type) so this handler only
@@ -78,20 +116,37 @@ func (noopLeadershipStatus) IsLeader() bool     { return false }
 func (noopLeadershipStatus) Since() time.Time   { return time.Time{} }
 
 type AdminHandler struct {
-	service     adminService
-	userService *service.UserService
-	eventSyncer EventSyncer
-	leadership  LeadershipStatus
+	service         adminService
+	userService     *service.UserService
+	eventSyncer     EventSyncer
+	leadership      LeadershipStatus
+	backfillTrigger BackfillTrigger
+	backfillRuns    BackfillRunLister
 }
 
 func NewAdminHandler(svc adminService, userSvc *service.UserService) *AdminHandler {
-	return &AdminHandler{service: svc, userService: userSvc, eventSyncer: noopEventSyncer{}, leadership: noopLeadershipStatus{}}
+	return &AdminHandler{
+		service: svc, userService: userSvc, eventSyncer: noopEventSyncer{}, leadership: noopLeadershipStatus{},
+		backfillTrigger: noopBackfillTrigger{}, backfillRuns: noopBackfillRunLister{},
+	}
 }
 
 // SetEventSyncer wires a real EventSyncer.  Call this from main after the
 // indexer has been initialised so the admin handler can trigger manual syncs.
 func (h *AdminHandler) SetEventSyncer(es EventSyncer) {
 	h.eventSyncer = es
+}
+
+// SetBackfillRunner wires a real *stellar.Runner (#840) so
+// POST /api/v1/admin/backfill can start/resume backfill and rebuild runs,
+// and GET /api/v1/admin/backfill(/{id}) can inspect them. trigger and
+// runs are typically the same *stellar.Runner / *postgres.BackfillRepository
+// pair — split into two params here only because they're two different
+// narrow interfaces, not because main.go needs to wire different concrete
+// values.
+func (h *AdminHandler) SetBackfillRunner(trigger BackfillTrigger, runs BackfillRunLister) {
+	h.backfillTrigger = trigger
+	h.backfillRuns = runs
 }
 
 // SetLeadership wires the scheduler's leader-election component (#846) so
@@ -125,6 +180,11 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/savings-goal-templates", h.createGoalTemplate)
 	mux.HandleFunc("PATCH /api/v1/admin/savings-goal-templates/{id}", h.updateGoalTemplate)
 	mux.HandleFunc("DELETE /api/v1/admin/savings-goal-templates/{id}", h.deleteGoalTemplate)
+
+	mux.HandleFunc("POST /api/v1/admin/backfill", h.startBackfill)
+	mux.HandleFunc("POST /api/v1/admin/backfill/{id}/resume", h.resumeBackfill)
+	mux.HandleFunc("GET /api/v1/admin/backfill", h.listBackfillRuns)
+	mux.HandleFunc("GET /api/v1/admin/backfill/{id}", h.getBackfillRun)
 }
 
 // getSchedulerLeadership handles GET /api/v1/admin/scheduler/leadership
@@ -169,6 +229,126 @@ func (h *AdminHandler) syncEvents(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, http.StatusOK, response.OK(map[string]any{
 		"processed": processed,
 	}))
+}
+
+type startBackfillRequest struct {
+	FromLedger  uint64   `json:"from_ledger"`
+	ToLedger    uint64   `json:"to_ledger"`
+	ContractIDs []string `json:"contract_ids"`
+	Mode        string   `json:"mode"`
+	DryRun      bool     `json:"dry_run"`
+	InitiatedBy string   `json:"initiated_by"`
+}
+
+// startBackfill handles POST /api/v1/admin/backfill (#840).
+//
+// Runs synchronously and returns once the run reaches a terminal state
+// (completed/failed) — for a large range an operator is expected to run
+// this with a long client timeout, or split into smaller ranges. Every run
+// is audited via initiated_by (required) and persisted to backfill_runs
+// regardless of outcome.
+func (h *AdminHandler) startBackfill(w http.ResponseWriter, r *http.Request) {
+	var req startBackfillRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid JSON"))
+		return
+	}
+	if strings.TrimSpace(req.InitiatedBy) == "" {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("initiated_by is required"))
+		return
+	}
+
+	mode := backfill.Mode(req.Mode)
+	if mode == "" {
+		mode = backfill.ModeBackfill
+	}
+	if mode != backfill.ModeBackfill && mode != backfill.ModeRebuild {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("mode must be \"backfill\" or \"rebuild\""))
+		return
+	}
+
+	run, err := h.backfillTrigger.Start(r.Context(), stellar.StartInput{
+		FromLedger:  req.FromLedger,
+		ToLedger:    req.ToLedger,
+		ContractIDs: req.ContractIDs,
+		Mode:        mode,
+		DryRun:      req.DryRun,
+		InitiatedBy: req.InitiatedBy,
+	})
+	if err != nil {
+		h.writeBackfillError(w, run, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(run))
+}
+
+// resumeBackfill handles POST /api/v1/admin/backfill/{id}/resume (#840):
+// continues an interrupted run from its last checkpoint.
+func (h *AdminHandler) resumeBackfill(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("backfill run id must be a valid UUID"))
+		return
+	}
+	run, err := h.backfillTrigger.Resume(r.Context(), id)
+	if err != nil {
+		h.writeBackfillError(w, run, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(run))
+}
+
+func (h *AdminHandler) getBackfillRun(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("backfill run id must be a valid UUID"))
+		return
+	}
+	run, err := h.backfillRuns.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, backfill.ErrRunNotFound) {
+			response.WriteJSON(w, http.StatusNotFound, response.NotFound("backfill run"))
+			return
+		}
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", err.Error()))
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(run))
+}
+
+// listBackfillRuns handles GET /api/v1/admin/backfill?limit=N — observability
+// (#840's "progress ... reported" requirement) across all runs, not just one.
+func (h *AdminHandler) listBackfillRuns(w http.ResponseWriter, r *http.Request) {
+	limit := defaultAdminPerPage
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	runs, err := h.backfillRuns.List(r.Context(), limit)
+	if err != nil {
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", err.Error()))
+		return
+	}
+	if runs == nil {
+		runs = []backfill.Run{}
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(runs))
+}
+
+// writeBackfillError renders a Start/Resume failure. When run is non-nil
+// (the failure happened mid-execution, after the row was created and
+// persisted as failed) it is included alongside the error so the operator
+// can see exactly how far the run got before failing.
+func (h *AdminHandler) writeBackfillError(w http.ResponseWriter, run *backfill.Run, err error) {
+	response.WriteJSON(w, http.StatusUnprocessableEntity, response.Response{
+		Success: false,
+		Data:    run,
+		Error: &response.ErrorBody{
+			Code:    "BACKFILL_FAILED",
+			Message: err.Error(),
+		},
+	})
 }
 
 func (h *AdminHandler) reviewUserKYC(w http.ResponseWriter, r *http.Request) {

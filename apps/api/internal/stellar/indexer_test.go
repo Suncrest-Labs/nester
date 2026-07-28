@@ -164,7 +164,7 @@ func TestApplyIndexedEvent_PenaltyCharged_PersistsReason(t *testing.T) {
 		WithArgs(event.ID, event.Ledger).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO penalty_events").
-		WithArgs("CVAULT1", "GUSER2", "500000", "10000000", "emergency_exit").
+		WithArgs("CVAULT1", "GUSER2", "500000", "10000000", "emergency_exit", event.Ledger).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -197,7 +197,7 @@ func TestApplyIndexedEvent_RebalanceLegExecuted_Persists(t *testing.T) {
 		WithArgs(event.ID, event.Ledger).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO vault_rebalance_legs").
-		WithArgs("CVAULT1", "aave", "-4000000", "4000000", "3900000").
+		WithArgs("CVAULT1", "aave", "-4000000", "4000000", "3900000", event.Ledger).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
