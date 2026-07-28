@@ -128,6 +128,7 @@ def test_wrap_user_content_neutralises_fake_closing_tag():
     assert wrapped.count("</user_message>") == 1
 
 
+
 def test_wrap_user_content_neutralises_nested_overlapping_tag():
     # The inner "<user_message>" is only fully formed once it's exposed by
     # stripping — the outer fragments "<user_mess" + "age>" reconstruct a
@@ -139,6 +140,7 @@ def test_wrap_user_content_neutralises_nested_overlapping_tag():
     assert wrapped.endswith("</user_message>")
     assert wrapped.count("</user_message>") == 1
     assert wrapped.lower().count("<user_message>") == 1
+
 
 
 def test_wrap_user_content_truncates_to_bound():

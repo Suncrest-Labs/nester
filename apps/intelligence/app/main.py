@@ -14,6 +14,7 @@ from app.routers import (
     analyze,
     chat,
     coaching,
+    fraud,
     health,
     nudges,
     optimize,
@@ -95,3 +96,4 @@ app.include_router(optimize.router, prefix="/intelligence")
 app.include_router(recommendations.router, prefix="/intelligence")
 app.include_router(nudges.router, prefix="/intelligence/nudges")
 app.include_router(tool_actions.router, prefix="/intelligence")
+app.include_router(fraud.router)
