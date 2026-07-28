@@ -244,3 +244,64 @@ func (e *Engine) idempotencyKey(vaultID uuid.UUID) string {
 type discardWriter struct{}
 
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+// SimulationResult contains the expected outcome of a harvest without execution.
+type SimulationResult struct {
+	// VaultID is the vault being simulated.
+	VaultID uuid.UUID `json:"vault_id"`
+	// WouldHarvest indicates whether the harvest would be enqueued given current
+	// yield and gas economics.
+	WouldHarvest bool `json:"would_harvest"`
+	// AccruedYield is the current harvestable yield.
+	AccruedYield decimal.Decimal `json:"accrued_yield"`
+	// EstimatedGasCost is the gas cost estimate in the vault's currency.
+	EstimatedGasCost decimal.Decimal `json:"estimated_gas_cost"`
+	// Threshold is the minimum yield required for harvest (gas + margin).
+	Threshold decimal.Decimal `json:"threshold"`
+	// NetYield is the expected net yield after gas cost (AccruedYield - Threshold).
+	NetYield decimal.Decimal `json:"net_yield"`
+	// Reason explains the gating decision.
+	Reason Reason `json:"reason"`
+	// Congested indicates whether the network is currently congested.
+	Congested bool `json:"congested"`
+}
+
+// SimulateHarvest returns the expected harvest outcome for a vault without
+// submitting a transaction. This is useful for gas estimation and user-facing
+// "preview harvest" features.
+func (e *Engine) SimulateHarvest(ctx context.Context, vaultID uuid.UUID) (SimulationResult, error) {
+	v, err := e.vaults.GetVaultYield(ctx, vaultID)
+	if err != nil {
+		return SimulationResult{}, fmt.Errorf("get vault yield: %w", err)
+	}
+
+	fee, err := e.gas.HarvestFee(ctx, v.Currency)
+	if err != nil {
+		return SimulationResult{}, fmt.Errorf("estimate gas fee: %w", err)
+	}
+
+	congested, err := e.gas.Congested(ctx)
+	if err != nil {
+		return SimulationResult{}, fmt.Errorf("check congestion: %w", err)
+	}
+
+	decision := Evaluate(GatingInput{
+		AccruedYield: v.AccruedYield,
+		GasFee:       fee,
+		Margin:       e.cfg.Margin,
+	})
+
+	// If network is congested, the harvest would be deferred (not enqueued).
+	wouldHarvest := decision.Harvest && !congested
+
+	return SimulationResult{
+		VaultID:          v.VaultID,
+		WouldHarvest:     wouldHarvest,
+		AccruedYield:     v.AccruedYield,
+		EstimatedGasCost: fee,
+		Threshold:        decision.Threshold,
+		NetYield:         decision.NetGain,
+		Reason:           decision.Reason,
+		Congested:        congested,
+	}, nil
+}
