@@ -65,11 +65,13 @@ func toVaultYield(v vault.Vault) VaultYield {
 		accrued = v.CurrentBalance.Sub(v.TotalDeposited)
 	}
 	return VaultYield{
-		VaultID:         v.ID,
-		UserID:          v.UserID,
-		ContractAddress: v.ContractAddress,
-		Currency:        v.Currency,
-		AccruedYield:    accrued,
+		VaultID:          v.ID,
+		UserID:           v.UserID,
+		ContractAddress:  v.ContractAddress,
+		Currency:         v.Currency,
+		AccruedYield:     accrued,
+		HarvestFrequency: v.HarvestFrequency,
+		LastHarvestedAt:  v.LastHarvestedAt,
 	}
 }
 

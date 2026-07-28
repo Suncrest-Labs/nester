@@ -59,3 +59,48 @@ func TestEstimateNextHarvest(t *testing.T) {
 		t.Fatal("expected undefined estimate for zero rate")
 	}
 }
+
+func TestFrequencyDuration(t *testing.T) {
+	tests := []struct {
+		frequency string
+		want      time.Duration
+	}{
+		{"daily", 24 * time.Hour},
+		{"weekly", 7 * 24 * time.Hour},
+		{"", 24 * time.Hour},
+		{"monthly", 24 * time.Hour},
+	}
+	for _, tt := range tests {
+		if got := FrequencyDuration(tt.frequency); got != tt.want {
+			t.Errorf("FrequencyDuration(%q) = %v, want %v", tt.frequency, got, tt.want)
+		}
+	}
+}
+
+func TestDueForHarvest(t *testing.T) {
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	if !DueForHarvest(now, "daily", nil) {
+		t.Error("never-harvested vault should always be due")
+	}
+
+	almostADayAgo := now.Add(-23 * time.Hour)
+	if DueForHarvest(now, "daily", &almostADayAgo) {
+		t.Error("daily vault harvested 23h ago should not be due")
+	}
+
+	overADayAgo := now.Add(-25 * time.Hour)
+	if !DueForHarvest(now, "daily", &overADayAgo) {
+		t.Error("daily vault harvested 25h ago should be due")
+	}
+
+	sixDaysAgo := now.Add(-6 * 24 * time.Hour)
+	if DueForHarvest(now, "weekly", &sixDaysAgo) {
+		t.Error("weekly vault harvested 6 days ago should not be due")
+	}
+
+	eightDaysAgo := now.Add(-8 * 24 * time.Hour)
+	if !DueForHarvest(now, "weekly", &eightDaysAgo) {
+		t.Error("weekly vault harvested 8 days ago should be due")
+	}
+}
