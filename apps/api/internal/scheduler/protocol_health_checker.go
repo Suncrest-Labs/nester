@@ -41,13 +41,14 @@ const defaultProtocolHealthInterval = 30 * time.Minute
 // users hold positions, and fires ProtocolHealthAlert notifications when TVL
 // drops more than 20% within 24 hours.
 type ProtocolHealthChecker struct {
-	cfg      ProtocolHealthConfig
-	vaults   ActiveVaultLister
-	tvl      ProtocolTVLFetcher
-	repo     protocoltvl.Repository
-	notify   ProtocolHealthNotifier
-	logger   *slog.Logger
-	leader   LeaderChecker
+	cfg           ProtocolHealthConfig
+	vaults        ActiveVaultLister
+	tvl           ProtocolTVLFetcher
+	repo          protocoltvl.Repository
+	notify        ProtocolHealthNotifier
+	logger        *slog.Logger
+	leader        LeaderChecker
+	deterioration *DeteriorationEngine
 }
 
 // SetLeaderChecker wires leader election (#846). Notification-only (no
@@ -56,6 +57,16 @@ type ProtocolHealthChecker struct {
 // (the CanAlert/RecordAlert cooldown check is a read-then-write with no
 // locking, so concurrent replicas could each pass it and double-notify).
 func (j *ProtocolHealthChecker) SetLeaderChecker(l LeaderChecker) { j.leader = l }
+
+// SetDeteriorationEngine wires the predictive deterioration-scoring
+// pipeline (#857). Optional: without it, this checker only runs its
+// existing fixed 24h/20%-drop alert; with it, every tick also computes
+// leading indicators, scores deterioration probability, and dispatches
+// graduated action (ceiling cut / recommend rebalance / automatic
+// protective rebalance).
+func (j *ProtocolHealthChecker) SetDeteriorationEngine(e *DeteriorationEngine) {
+	j.deterioration = e
+}
 
 func (j *ProtocolHealthChecker) isLeader() bool {
 	return j.leader == nil || j.leader.IsLeader()
@@ -135,11 +146,11 @@ func (j *ProtocolHealthChecker) Tick(ctx context.Context) {
 	}
 
 	for slug, userIDs := range protocolUsers {
-		j.checkProtocol(ctx, slug, userIDs)
+		j.checkProtocol(ctx, slug, userIDs, active)
 	}
 }
 
-func (j *ProtocolHealthChecker) checkProtocol(ctx context.Context, slug string, userIDs []uuid.UUID) {
+func (j *ProtocolHealthChecker) checkProtocol(ctx context.Context, slug string, userIDs []uuid.UUID, active []vault.Vault) {
 	currentTVL, err := j.tvl.ProtocolTVL(ctx, slug)
 	if err != nil {
 		j.logger.Warn("protocol health checker: TVL fetch failed", "protocol", slug, "error", err)
@@ -148,6 +159,20 @@ func (j *ProtocolHealthChecker) checkProtocol(ctx context.Context, slug string, 
 
 	if err := j.repo.InsertSnapshot(ctx, slug, currentTVL); err != nil {
 		j.logger.Warn("protocol health checker: snapshot insert failed", "protocol", slug, "error", err)
+	}
+
+	// Predictive deterioration scoring (#857) is a continuous signal
+	// independent of the fixed 24h/20% drop check below — it must not be
+	// skipped by any of that check's early returns (no baseline yet,
+	// below threshold, alert cooldown), since a mild/moderate assessment
+	// is exactly the useful case where the drop check finds nothing yet.
+	if j.deterioration != nil {
+		assessment, err := j.deterioration.Assess(ctx, slug)
+		if err != nil {
+			j.logger.Warn("protocol health checker: deterioration assessment failed", "protocol", slug, "error", err)
+		} else {
+			j.deterioration.DispatchAction(ctx, assessment, active)
+		}
 	}
 
 	// Compare with snapshot ~24h ago.
@@ -230,9 +255,9 @@ func (n DispatcherProtocolHealthNotifier) NotifyProtocolHealth(
 		slug, dropPct, currentTVLUSD,
 	)
 	return n.Dispatcher.Send(ctx, userID, notifications.EventProtocolHealthAlert, title, body, map[string]any{
-		"protocol":       slug,
-		"drop_pct":       dropPct,
-		"current_tvl":    currentTVLUSD,
+		"protocol":         slug,
+		"drop_pct":         dropPct,
+		"current_tvl":      currentTVLUSD,
 		"suggested_action": "Review your position or consider withdrawing.",
 	})
 }

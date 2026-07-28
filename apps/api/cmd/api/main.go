@@ -593,6 +593,24 @@ func run() error {
 		baseLogger.WithGroup("protocol-health"),
 	)
 	protocolHealthChecker.SetLeaderChecker(schedulerLeadership)
+
+	// Predictive deterioration scoring (#857): a continuous, graduated
+	// signal alongside the fixed 24h/20%-drop check above. apySnapshotRepo
+	// is hoisted here (rather than where it's constructed further down,
+	// alongside the APY history endpoint) since the deterioration engine
+	// needs both TVL and APY snapshot history to compute indicators.
+	apySnapshotRepo := postgres.NewAPYSnapshotRepository(db)
+	deteriorationRepo := postgres.NewDeteriorationRepository(db)
+	deteriorationEngine := scheduler.NewDeteriorationEngine(
+		protocolTVLRepo,
+		apySnapshotRepo,
+		deteriorationRepo,
+		adminService,
+		notificationDispatcher,
+		baseLogger.WithGroup("protocol-deterioration"),
+	)
+	protocolHealthChecker.SetDeteriorationEngine(deteriorationEngine)
+
 	protocolHealthCtx, cancelProtocolHealth := context.WithCancel(context.Background())
 	defer cancelProtocolHealth()
 	go protocolHealthChecker.Run(protocolHealthCtx)
@@ -964,8 +982,8 @@ func run() error {
 
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
 
-	// APY snapshot scheduler and history endpoint
-	apySnapshotRepo := postgres.NewAPYSnapshotRepository(db)
+	// APY snapshot scheduler and history endpoint (apySnapshotRepo is
+	// constructed earlier, alongside the deterioration engine wiring above).
 	apySvc := service.NewAPYService(apySnapshotRepo)
 	apyHandler := handler.NewAPYHandler(apySvc)
 	apyHandler.Register(mux)
