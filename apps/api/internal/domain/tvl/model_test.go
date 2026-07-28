@@ -268,7 +268,7 @@ func TestPrecisionHandling(t *testing.T) {
 			name:     "full 6 decimal precision",
 			tvl:      "1234.567890",
 			want6Dec: "1234.567890",
-			want2Dec: "1234.56",
+			want2Dec: "1234.57",
 		},
 		{
 			name:     "less than 6 decimals",

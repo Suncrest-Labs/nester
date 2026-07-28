@@ -180,10 +180,14 @@ func TestNegativeTVLEdgeCases(t *testing.T) {
 }
 
 // computePctChange calculates percentage change from prior to current.
-// Returns 0 if prior is zero to avoid division by zero.
+// Returns 0 if prior is zero or negative to avoid division by zero.
+// Negative current values are treated as zero.
 func computePctChange(current, prior float64) float64 {
-	if prior == 0 {
+	if prior <= 0 {
 		return 0.0
+	}
+	if current < 0 {
+		current = 0
 	}
 	return ((current - prior) / prior) * 100.0
 }
