@@ -14,12 +14,12 @@ from app.config import settings
 from app.models.coaching import CoachingRequest, CoachingResponse
 from app.models.explainability import DocumentUsed, ExplainabilityTrace, ToolInvocation
 from app.models.nudge import NudgeCopyResponse
-from app.models.preferences import ResponsePreferences
 from app.models.portfolio import (
     AllocationItem,
     PortfolioAnalysisResponse,
     PortfolioBreakdown,
 )
+from app.models.preferences import ResponsePreferences
 from app.models.recommendation import (
     ConfidenceLevel,
     Recommendation,
@@ -43,6 +43,7 @@ from app.services.i18n import (
 )
 from app.services.retrieval import RetrievalService, RetrievedContext
 from app.services.retrieval_source import ApiDataSource
+from app.services.summarization import needs_summarization, summarize_history
 from app.services.vault_context import VaultContextFetcher
 
 logger = logging.getLogger(__name__)
@@ -383,6 +384,16 @@ async def stream_chat(
     Screens the message for obvious prompt-injection/override attempts before
     any Claude call is made; flagged messages are refused without spending
     tokens or being added to conversation history.
+
+    Summarization
+    ~~~~~~~~~~~~~
+    Before building the messages list, this function checks whether the active
+    conversation history exceeds ``settings.max_history_tokens``.  If it does,
+    it calls ``summarize_history`` to compress older turns into a single summary
+    message.  The compacted history replaces the active history in the store;
+    the full pre-summarization history is preserved at the audit key.  This is
+    completely transparent to the user — there is no interruption or indication
+    in the chat stream.
     """
     screen = guardrails.screen_input(message, request_id=request_id, user_id=user_id)
     if screen.flagged:
@@ -396,7 +407,24 @@ async def stream_chat(
 
     # Get conversation history, deterministically bounded to cap context size.
     history = guardrails.truncate_history(conversation_store.get(user_id))
-    conversation_store.append(user_id, "user", message)
+
+    # --- Summarization check ------------------------------------------------
+    # Append the new user message first so the token estimate includes it.
+    history_with_new = history + [{"role": "user", "content": message}]
+    if needs_summarization(history_with_new):
+        client = get_client()
+        compacted = await summarize_history(history_with_new, client)
+        # Persist the compacted history as the new active context.  The full
+        # history (including the new user message we appended above) has
+        # already been written to the audit key by the store's append() calls;
+        # here we only need to update the active key.
+        conversation_store.append(user_id, "user", message)
+        conversation_store.set_active(user_id, compacted)
+        active_history = compacted
+    else:
+        conversation_store.append(user_id, "user", message)
+        active_history = history_with_new
+    # -------------------------------------------------------------------------
 
     # Retrieve minimal, user-scoped context via the structured retrieval layer
     # and build a grounded system prompt (#852). The retrieved context is the
@@ -422,8 +450,12 @@ async def stream_chat(
     # auditor can see what informed it, independent of whether tools are used.
     tool_invocations: list[ToolInvocation] = []
 
+    # Build messages from the (possibly compacted) active history minus the
+    # trailing user message, which is re-appended explicitly so it can be
+    # wrapped by the guardrail and so the list keeps the required
+    # user/assistant alternating order.
     messages: list[anthropic.types.MessageParam] = (
-        _to_anthropic_messages(history)
+        _to_anthropic_messages(active_history[:-1])
         + [{"role": "user", "content": guardrails.wrap_user_content(message)}]
     )
 
