@@ -980,6 +980,23 @@ func run() error {
 		},
 		"settlement rate limit exceeded",
 	)
+	// idempotencyMiddleware (#835) makes the designated write endpoints safe
+	// to retry: a client-supplied Idempotency-Key header is required on
+	// them, and a repeated key returns the original stored response instead
+	// of re-executing the handler. Explicit per-route rather than blanket,
+	// per the issue's own guidance — starting with the two endpoints most
+	// exposed to "client retried after a lost response" (a deposit/withdraw
+	// posted as a transaction, and creating a savings goal). Requires auth
+	// context, so it must sit after authenticator.
+	idempotencyStore := postgres.NewIdempotencyRepository(db)
+	idempotencyMiddleware := middleware.IdempotencyMiddleware(idempotencyStore, []middleware.RouteMatch{
+		{Method: http.MethodPost, Path: "/api/v1/transactions"},
+		{Method: http.MethodPost, Path: "/api/v1/users/savings-goals"},
+	})
+	idempotencyPurgeCtx, cancelIdempotencyPurge := context.WithCancel(context.Background())
+	defer cancelIdempotencyPurge()
+	go runIdempotencyPurge(idempotencyPurgeCtx, idempotencyStore, baseLogger.WithGroup("idempotency-purge"))
+
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 	walletLimiter := middleware.WalletRateLimiter(
 		cfg.RateLimit().WalletLimit(),
@@ -1002,10 +1019,12 @@ func run() error {
 						authRouteLimiter(
 							writeLimiter(
 								authenticator(
-									settlementLimiter(
-										walletLimiter(
-											middleware.LimitRequestBody(1 * 1024 * 1024)(
-												middleware.Logging(baseLogger)(mux),
+									idempotencyMiddleware(
+										settlementLimiter(
+											walletLimiter(
+												middleware.LimitRequestBody(1 * 1024 * 1024)(
+													middleware.Logging(baseLogger)(mux),
+												),
 											),
 										),
 									),
@@ -1092,6 +1111,33 @@ func transactionStatusEvent(tx transaction.Transaction) ws.Event {
 		Channel: "vaults:global",
 		Type:    eventType,
 		Data:    tx,
+	}
+}
+
+// idempotencyPurgeInterval bounds how often expired idempotency keys are
+// swept, so the table stays bounded without a purge running on every
+// request (#835's TTL requirement).
+const idempotencyPurgeInterval = 15 * time.Minute
+
+// runIdempotencyPurge periodically deletes idempotency_keys rows past
+// their expires_at. Runs until ctx is cancelled (server shutdown).
+func runIdempotencyPurge(ctx context.Context, store *postgres.IdempotencyRepository, logger *slog.Logger) {
+	ticker := time.NewTicker(idempotencyPurgeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := store.PurgeExpired(ctx)
+			if err != nil {
+				logger.Error("idempotency key purge failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				logger.Info("purged expired idempotency keys", "count", n)
+			}
+		}
 	}
 }
 
