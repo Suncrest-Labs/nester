@@ -227,6 +227,19 @@ export const intelligenceApi = {
     const params = new URLSearchParams({ userId, message })
     return new EventSource(`${INTELLIGENCE_BASE}/intelligence/chat?${params}`)
   },
+
+  /**
+   * Tell the recommendation engine a user dismissed an insight. The UI is
+   * updated immediately from local state (see `AiInsightsFeed`) — this call
+   * is a fire-and-forget sync that improves future recommendations without
+   * blocking the dismiss UX. Failures are silently swallowed; local state is
+   * the source of truth.
+   */
+  dismissInsight: (insightId: string) =>
+    apiFetch<{ ok: true }>(`/portfolio/insights/${encodeURIComponent(insightId)}/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify({ insightId }),
+    }),
 }
 
 // Export as default or intelligence for backward compatibility if needed

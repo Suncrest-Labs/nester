@@ -1,10 +1,13 @@
-// This file tracks known vulnerabilities that are accepted or mitigated
+// This file tracks known vulnerabilities that are accepted or mitigated.
+//
+// As of issue #867, the canonical waiver format is `.vulnignore.yml`. This
+// file is kept as a flat ID list so legacy tools (and the codebase's
+// pre-issue-#867 govulncheck step) keep working without reading YAML.
+//
+// When you add a new waiver, also add it to .vulnignore.yml with the
+// structured justification, mitigation, expires_on, and approved_by fields.
+//
+// CI enforcement of the expires_on date lives in
+// .github/workflows/security.yml → action-pinning.
 
-// GO-2026-4316: Open redirect vulnerability in github.com/go-chi/chi
-// Justification: 
-// - RedirectSlashes middleware is not used in our codebase
-// - Dependency is transitive through github.com/stellar/go-stellar-sdk
-// - No fix available yet (Fixed in: N/A)
-// - Code review confirmed middleware is not invoked
-// Status: Waiting for upstream fix
 GO-2026-4316

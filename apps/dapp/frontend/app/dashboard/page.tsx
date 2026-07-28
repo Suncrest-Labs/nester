@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
 import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
 import { RebalanceSuggestionCard } from "@/components/dashboard/RebalanceSuggestionCard";
+import { AiInsightsFeed } from "@/components/ai/ai-insights-feed";
 import { profileApi } from "@/lib/api/profile";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
@@ -648,6 +649,21 @@ export default function Dashboard() {
                         <span className="text-[11px] text-black/60 dark:text-white/60">Balance</span>
                     </div>
                 </div>
+            </motion.div>
+
+            {/* ── AI insights (consolidated surface, issue #868) ── */}
+            <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, delay: 0.08 }}
+                className="mb-8"
+            >
+                <AiInsightsFeed
+                    title="Top insights"
+                    limit={2}
+                    showProjection
+                    compact
+                />
             </motion.div>
 
             {positions.length > 0 && (
