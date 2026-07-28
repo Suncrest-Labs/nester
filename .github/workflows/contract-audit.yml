@@ -37,7 +37,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
           for contract in contracts/*/; do
             if [ -f "$contract/Cargo.toml" ]; then
-              pkg_name=$(grep '^name = ' "$contract/Cargo.toml" | head -1 | sed 's/name = "\(.*\)"/\1/' | tr -d '"')
+              pkg_name=$(grep '^name = ' "$contract/Cargo.toml" | head -1 | sed 's/^name = "\(.*\)"/\1/' | tr -d '"\r\n')
               if [ -n "$pkg_name" ]; then
                 echo "Building $pkg_name..."
                 cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
