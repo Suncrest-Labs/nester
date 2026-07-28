@@ -241,16 +241,8 @@ type MonteCarloResult struct {
 // list of distributional assumptions this implements.
 func RunMonteCarloSimulation(p MonteCarloParams) MonteCarloResult {
 	months := p.PeriodMonths
-	if months <= 0 {
+	if months <= 0 || months > MaxPeriodMonths {
 		return MonteCarloResult{PathCount: 0, Seed: p.Seed}
-	}
-	// Clamp defensively even though SimulationInput.Validate already rejects
-	// anything over MaxPeriodMonths: this is the actual make([]T, months)
-	// allocation site, and RunMonteCarloSimulation is documented as a pure
-	// function of its input, so it should never trust a caller-supplied size
-	// on its own to determine an allocation.
-	if months > MaxPeriodMonths {
-		months = MaxPeriodMonths
 	}
 
 	n := p.PathCount
@@ -289,9 +281,9 @@ func RunMonteCarloSimulation(p MonteCarloParams) MonteCarloResult {
 	}
 
 	// balances[m] holds every path's ending balance at month m+1.
-	balances := make([][]float64, min(months, MaxPeriodMonths))
+	balances := make([][]float64, months)
 	for m := range balances {
-		balances[m] = make([]float64, min(n, MaxPathCount))
+		balances[m] = make([]float64, n)
 	}
 
 	successCount := 0
@@ -336,8 +328,8 @@ func RunMonteCarloSimulation(p MonteCarloParams) MonteCarloResult {
 		}
 	}
 
-	timeline := make([]PercentileTimelinePoint, min(months, MaxPeriodMonths))
-	sorted := make([]float64, min(n, MaxPathCount))
+	timeline := make([]PercentileTimelinePoint, months)
+	sorted := make([]float64, n)
 	for m := 0; m < months; m++ {
 		copy(sorted, balances[m])
 		sort.Float64s(sorted)

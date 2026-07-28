@@ -468,14 +468,14 @@ func TestSimulationInput_Validate_RejectsExcessivePeriod(t *testing.T) {
 	assert.NoError(t, valid.Validate())
 }
 
-// TestRunMonteCarloSimulation_ClampsExcessivePeriodMonths proves the engine
+// TestRunMonteCarloSimulation_RejectsExcessivePeriodMonths proves the engine
 // itself -- not just Validate -- refuses to size an allocation off a raw
 // caller-supplied PeriodMonths, so any caller that reaches
 // RunMonteCarloSimulation without going through Validate first (e.g. a
 // future internal caller) is still safe. Uses an extreme value that would
-// be a multi-gigabyte/OOM allocation if unclamped; the test passing quickly
+// be a multi-gigabyte/OOM allocation if unbounded; the test passing quickly
 // and without an out-of-memory failure is itself the assertion.
-func TestRunMonteCarloSimulation_ClampsExcessivePeriodMonths(t *testing.T) {
+func TestRunMonteCarloSimulation_RejectsExcessivePeriodMonths(t *testing.T) {
 	result := RunMonteCarloSimulation(MonteCarloParams{
 		InitialDeposit:      decimal.NewFromInt(1000),
 		MonthlyContribution: decimal.NewFromInt(100),
@@ -487,8 +487,8 @@ func TestRunMonteCarloSimulation_ClampsExcessivePeriodMonths(t *testing.T) {
 		Seed:                1,
 	})
 
-	require.Len(t, result.Timeline, MaxPeriodMonths)
-	assert.Equal(t, MaxPeriodMonths, result.Timeline[len(result.Timeline)-1].Month)
+	require.Len(t, result.Timeline, 0)
+	assert.Zero(t, result.PathCount)
 }
 
 func decimalPtr(d decimal.Decimal) *decimal.Decimal { return &d }
