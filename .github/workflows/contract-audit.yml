@@ -35,14 +35,21 @@ jobs:
         run: |
           cd packages/contracts
           rustup target add wasm32-unknown-unknown
-          for contract in contracts/*/; do
-            if [ -f "$contract/Cargo.toml" ]; then
-              pkg_name=$(grep '^name = ' "$contract/Cargo.toml" | head -1 | sed 's/^name = "\(.*\)"/\1/' | tr -d '"\r\n')
-              if [ -n "$pkg_name" ]; then
-                echo "Building $pkg_name..."
-                cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
-              fi
-            fi
+          # Build only workspace-member contracts (excludes non-member dirs like rent_escrow)
+          # Use cargo metadata to enumerate workspace package names, then filter to those
+          # whose manifest path lives under contracts/.
+          cargo metadata --no-deps --format-version 1 \
+            | python3 -c "
+import sys, json
+meta = json.load(sys.stdin)
+for pkg in meta['packages']:
+    if '/contracts/' in pkg['manifest_path'].replace('\\\\','/') and \
+       '/test_fixtures/' not in pkg['manifest_path'].replace('\\\\','/') and \
+       '/tests/' not in pkg['manifest_path'].replace('\\\\','/'):
+        print(pkg['name'])
+" | while read pkg_name; do
+            echo "Building $pkg_name..."
+            cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
           done
           mkdir -p ../../wasm-hashes
           echo "# Reproducible WASM Hashes" > ../../wasm-hashes/wasm-hashes.txt
