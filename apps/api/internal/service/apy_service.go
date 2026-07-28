@@ -18,6 +18,11 @@ const (
 	apyPollInterval  = 6 * time.Hour
 	apyHistoryWindow = 30 * 24 * time.Hour
 	apyPruneAge      = 90 * 24 * time.Hour
+	// apyAnomalyLookback bounds how far back the poller will look for a
+	// "previous" snapshot to compare against when flagging implausible jumps
+	// (#941). A prior snapshot older than this is treated as no baseline,
+	// same as having none, since too much may have legitimately changed.
+	apyAnomalyLookback = 48 * time.Hour
 )
 
 type APYHistoryEntry struct {
@@ -94,6 +99,7 @@ func (s *APYService) poll(ctx context.Context) {
 		return
 	}
 	for _, snap := range snapshots {
+		snap = s.flagIfAnomalous(ctx, snap)
 		if err := s.repo.Upsert(ctx, snap); err != nil {
 			s.logger.Error("apy poller: upsert failed", "protocol", snap.ProtocolSlug, "error", err.Error())
 		}
@@ -101,6 +107,34 @@ func (s *APYService) poll(ctx context.Context) {
 	if err := s.repo.PruneOlderThan(ctx, apyPruneAge); err != nil {
 		s.logger.Error("apy poller: prune failed", "error", err.Error())
 	}
+}
+
+// flagIfAnomalous looks up the protocol's most recent prior snapshot within
+// apyAnomalyLookback and, if the new reading is an implausible jump relative
+// to it, marks snap as flagged (#941). It never rejects a snapshot outright —
+// callers still persist it — and any error looking up history is logged and
+// treated as "no baseline" so a lookup failure never blocks ingestion.
+func (s *APYService) flagIfAnomalous(ctx context.Context, snap apysnapshot.APYSnapshot) apysnapshot.APYSnapshot {
+	since := snap.CapturedAt.Add(-apyAnomalyLookback)
+	history, err := s.repo.ListByProtocol(ctx, snap.ProtocolSlug, since)
+	if err != nil {
+		s.logger.Warn("apy poller: anomaly lookup failed", "protocol", snap.ProtocolSlug, "error", err.Error())
+		return snap
+	}
+
+	var prev *apysnapshot.APYSnapshot
+	for i := range history {
+		if history[i].CapturedAt.Before(snap.CapturedAt) && (prev == nil || history[i].CapturedAt.After(prev.CapturedAt)) {
+			prev = &history[i]
+		}
+	}
+
+	if anomalous, reason := apysnapshot.DetectAnomalousJump(prev, snap); anomalous {
+		snap.Flagged = true
+		snap.FlagReason = reason
+		s.logger.Warn("apy poller: flagged anomalous snapshot", "protocol", snap.ProtocolSlug, "reason", reason)
+	}
+	return snap
 }
 
 func (s *APYService) fetchFromDeFiLlama(ctx context.Context) ([]apysnapshot.APYSnapshot, error) {

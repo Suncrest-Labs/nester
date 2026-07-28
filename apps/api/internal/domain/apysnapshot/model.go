@@ -3,6 +3,7 @@ package apysnapshot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -16,12 +17,65 @@ var (
 	ErrInvalidSnapshot   = errors.New("invalid snapshot input")
 )
 
+// AnomalyJumpMultiplier is the factor a new APY reading may move (up or down)
+// relative to the protocol's prior reading before DetectAnomalousJump flags
+// it as an implausible jump (#941). E.g. 3.0 flags anything that more than
+// triples or drops to under a third of the prior value.
+const AnomalyJumpMultiplier = 3.0
+
+// AnomalyJumpMinPriorAPY is the minimum prior APY (in percent) below which
+// jump detection is skipped: small absolute moves off a near-zero base
+// produce huge percentage swings that are usually normal, not anomalous.
+const AnomalyJumpMinPriorAPY = "0.5"
+
 type APYSnapshot struct {
 	ID           uuid.UUID       `json:"id"`
 	ProtocolSlug string          `json:"protocol_slug"`
 	APY          decimal.Decimal `json:"apy"`
 	TVL          decimal.Decimal `json:"tvl"`
 	CapturedAt   time.Time       `json:"captured_at"`
+	// Flagged marks a snapshot whose APY moved implausibly relative to the
+	// protocol's prior reading (#941). Flagged snapshots are still persisted,
+	// not rejected, so oracle aggregation/failover (#830) and vault APY
+	// history aren't starved of data during a genuine market dislocation —
+	// callers that care can filter or surface the flag instead.
+	Flagged bool `json:"flagged"`
+	// FlagReason explains why Flagged is true. Empty when Flagged is false.
+	FlagReason string `json:"flag_reason,omitempty"`
+}
+
+// DetectAnomalousJump compares a new snapshot's APY against the protocol's
+// previous reading and reports whether the move looks implausible. prev may
+// be nil when no prior snapshot exists yet, in which case the result is
+// always "not anomalous" — there is nothing to compare against.
+func DetectAnomalousJump(prev *APYSnapshot, next APYSnapshot) (bool, string) {
+	if prev == nil {
+		return false, ""
+	}
+	if prev.APY.LessThan(decimal.RequireFromString(AnomalyJumpMinPriorAPY)) {
+		return false, ""
+	}
+	if next.APY.LessThanOrEqual(decimal.Zero) {
+		return false, ""
+	}
+
+	ratio := next.APY.Div(prev.APY)
+	threshold := decimal.NewFromFloat(AnomalyJumpMultiplier)
+
+	switch {
+	case ratio.GreaterThan(threshold):
+		return true, fmt.Sprintf(
+			"apy jumped %sx (%s%% -> %s%%) since previous snapshot at %s",
+			ratio.StringFixed(2), prev.APY.StringFixed(2), next.APY.StringFixed(2), prev.CapturedAt.Format(time.RFC3339),
+		)
+	case ratio.LessThan(decimal.NewFromInt(1).Div(threshold)):
+		return true, fmt.Sprintf(
+			"apy dropped to %sx (%s%% -> %s%%) since previous snapshot at %s",
+			ratio.StringFixed(2), prev.APY.StringFixed(2), next.APY.StringFixed(2), prev.CapturedAt.Format(time.RFC3339),
+		)
+	default:
+		return false, ""
+	}
 }
 
 // Validate checks that a snapshot has the minimum required data before it is
