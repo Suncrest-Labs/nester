@@ -8,6 +8,9 @@ import TransactionTable from "@/components/history/TransactionTable";
 import { exportCsv } from "@/lib/export/csv";
 import { exportPdf } from "@/lib/export/pdf";
 import { useWallet } from "@/components/wallet-provider";
+import { useAuth } from "@/components/auth-provider";
+import { useVaults } from "@/hooks/useVaults";
+import { getStoredToken } from "@/lib/api/client";
 import { AppShell } from "@/components/app-shell";
 import { motion } from "framer-motion";
 
@@ -30,7 +33,14 @@ interface Transaction {
 
 export default function HistoryPage() {
   const { isConnected, user } = useWallet();
+  const { userId } = useAuth();
+  const { vaults } = useVaults(userId ?? undefined);
   const router = useRouter();
+
+  const vaultOptions = useMemo(
+    () => vaults.map((v) => ({ id: v.id, name: `${v.currency} Vault` })),
+    [vaults]
+  );
 
   useEffect(() => {
     if (!isConnected) router.push("/");
@@ -59,6 +69,7 @@ export default function HistoryPage() {
     if (filters.toDate) params.append("to", filters.toDate);
     if (filters.vaultId) params.append("vault", filters.vaultId);
     if (filters.status && filters.status !== "All") params.append("status", filters.status);
+    if (filters.searchTerm) params.append("q", filters.searchTerm);
     if (cursor) params.append("cursor", cursor);
     params.append("limit", "25");
     return params.toString();
@@ -70,7 +81,9 @@ export default function HistoryPage() {
       setError(null);
       try {
         const query = buildQuery();
-        const res = await fetch(`/api/v1/activity?${query}`);
+        const res = await fetch(`/api/v1/activity?${query}`, {
+          headers: { Authorization: `Bearer ${getStoredToken()}` },
+        });
         if (!res.ok) throw new Error(`Error ${res.status}`);
         const json: ActivityResponse = await res.json();
         setTransactions(json.data);
@@ -167,7 +180,7 @@ export default function HistoryPage() {
         </div>
       </div>
 
-      <FilterBar vaultOptions={[]} onChange={setFilters} />
+      <FilterBar vaultOptions={vaultOptions} onChange={setFilters} />
 
       <TransactionTable
         transactions={filteredTransactions}

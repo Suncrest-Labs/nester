@@ -13,6 +13,7 @@ from typing import Any
 import anthropic
 from stellar_sdk import Account, Network, StrKey, TransactionBuilder
 
+from app.config import settings
 from app.models.rebalance import (
     ProtocolAllocation,
     RebalanceAction,
@@ -125,7 +126,7 @@ async def _generate_rationale(
     try:
         client = get_client()
         response = await client.messages.create(
-            model="claude-sonnet-4-6",
+            model=settings.anthropic_model,
             max_tokens=ANALYZE_MAX_TOKENS,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],

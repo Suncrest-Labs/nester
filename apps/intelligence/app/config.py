@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     # Still fully overridable via INTELLIGENCE_ANTHROPIC_MODEL for deployments
     # that want to trade capability for cost.
     anthropic_model: str = "claude-sonnet-5"
+    max_tool_rounds: int = 4
+    daily_token_budget_per_user: int = 100000
     jwt_secret: str = ""
     redis_url: str = "redis://localhost:6379/0"  # gitleaks:allow
     nester_api_base_url: str = "http://localhost:8080"

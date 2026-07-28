@@ -34,6 +34,9 @@ func (m *mockGoalTemplateService) Get(ctx context.Context, userID, goalID uuid.U
 func (m *mockGoalTemplateService) List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
 	return nil, nil
 }
+func (m *mockGoalTemplateService) ListPaginated(ctx context.Context, userID uuid.UUID, filter service.SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error) {
+	return m.Goals, len(m.Goals), nil
+}
 func (m *mockGoalTemplateService) Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
 	return savingsgoal.SavingsGoal{}, nil
 }

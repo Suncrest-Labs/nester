@@ -1,6 +1,7 @@
 """Structured analysis endpoints — insights, sentiment, vault recommendations."""
 
 import re
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -10,6 +11,7 @@ from slowapi.util import get_remote_address
 from app.dependencies.auth import verify_jwt
 from app.models.portfolio import PortfolioAnalysisResponse
 from app.models.recommendation import (
+    AnalyzeRequest,
     Recommendation,
     VaultRecommendationRequest,
     VaultRecommendationResponse,
@@ -45,6 +47,10 @@ def _validate_id(value: str, field: str) -> str:
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Invalid {field} format",
     )
+
+
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", "") or str(uuid.uuid4())
 
 
 @router.get("/portfolio/{user_id}/insights")
@@ -89,16 +95,24 @@ async def yield_recommendation(
 @_limiter.limit("20/minute")
 async def analyze(
     request: Request,
-    body: dict[str, Any],
+    body: AnalyzeRequest,
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> Recommendation:
-    """Return a confidence-annotated recommendation for a user prompt."""
-    prompt = str(body.get("prompt", "")).strip()
+    """Return a confidence-annotated recommendation for a user prompt.
+
+    The prompt is length-bounded by ``AnalyzeRequest`` and screened for
+    prompt-injection attempts inside ``analyze_recommendation``; flagged
+    prompts get a refused-but-schema-conformant ``Recommendation`` back,
+    never free-form text.
+    """
+    prompt = body.prompt.strip()
     if not prompt:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required"
         )
-    return await analyze_recommendation(prompt, claims.get("sub", ""))
+    return await analyze_recommendation(
+        prompt, claims.get("sub", ""), request_id=_request_id(request)
+    )
 
 
 @router.post("/recommend/vault", response_model=VaultRecommendationResponse)
@@ -109,7 +123,9 @@ async def recommend_vault(
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> VaultRecommendationResponse:
     """Return an AI-picked vault allocation based on live APY and risk data."""
-    return await recommend_vaults(body, claims.get("sub", ""))
+    return await recommend_vaults(
+        body, claims.get("sub", ""), request_id=_request_id(request)
+    )
 
 
 @router.get("/vaults/{vault_id}/recommendations")
@@ -150,4 +166,4 @@ async def portfolio_analyze(
             detail="User ID not found in token",
         )
 
-    return await analyze_portfolio(user_id)
+    return await analyze_portfolio(user_id, request_id=_request_id(request))

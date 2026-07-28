@@ -16,11 +16,11 @@ import (
 
 func newTestHub() *Hub {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	return NewHub(logger, func(token string) (string, error) {
+	return NewHub(logger, func(token string) (string, string, error) {
 		if token == "invalid" {
-			return "", os.ErrPermission
+			return "", "", os.ErrPermission
 		}
-		return "user-123", nil
+		return "user-123", "session-123", nil
 	}, []string{"http://localhost:3000"})
 }
 

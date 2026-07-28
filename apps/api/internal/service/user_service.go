@@ -75,6 +75,7 @@ type UpdateProfileInput struct {
 	RiskProfile         *user.RiskProfile `json:"risk_profile"`
 	SavingsGoal         *string           `json:"savings_goal"`
 	OnboardingCompleted *bool             `json:"onboarding_completed"`
+	Timezone            *string           `json:"timezone"`
 }
 
 func (s *UserService) UpdateProfile(ctx context.Context, userID uuid.UUID, in UpdateProfileInput) (*user.User, error) {
@@ -82,6 +83,7 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID uuid.UUID, in Up
 		RiskProfile:         in.RiskProfile,
 		SavingsGoal:         in.SavingsGoal,
 		OnboardingCompleted: in.OnboardingCompleted,
+		Timezone:            in.Timezone,
 	})
 }
 

@@ -40,11 +40,15 @@ var (
 	// recurring-deposit job queue handler, #846) can treat this as "already
 	// recorded" and safely no-op rather than fail.
 	ErrDuplicateTransaction = errors.New("transaction already recorded")
+	ErrCapacityExceeded     = errors.New("deposit would exceed vault capacity limit")
 )
 
 const (
 	MaxAmountScale = int32(8)
 	MaxAPYScale    = int32(4)
+	// DefaultCapacityWarningThreshold is the percentage of capacity at which
+	// warnings are surfaced (80% by default).
+	DefaultCapacityWarningThreshold = 80.0
 )
 
 type Vault struct {
@@ -57,12 +61,19 @@ type Vault struct {
 	Status          VaultStatus     `json:"status"`
 	YieldEarned     decimal.Decimal `json:"yield_earned"`
 	FeesPaid        decimal.Decimal `json:"fees_paid"`
-	LastSyncedAt       *time.Time      `json:"last_synced_at,omitempty"`
-	LastAPYAlertSentAt *time.Time      `json:"last_apy_alert_sent_at,omitempty"`
-	DeletedAt          *time.Time      `json:"deleted_at,omitempty"`
-	Allocations     []Allocation    `json:"allocations,omitempty"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	// SoftCapacity is an optional maximum deposit limit. When nil, no capacity
+	// limit is enforced. When set, deposits that would push CurrentBalance over
+	// this limit are rejected with ErrCapacityExceeded.
+	SoftCapacity        *decimal.Decimal `json:"soft_capacity,omitempty"`
+	// CapacityWarningPct is the percentage threshold at which capacity warnings
+	// are surfaced. Defaults to DefaultCapacityWarningThreshold (80%) when nil.
+	CapacityWarningPct  *float64         `json:"capacity_warning_pct,omitempty"`
+	LastSyncedAt        *time.Time       `json:"last_synced_at,omitempty"`
+	LastAPYAlertSentAt  *time.Time       `json:"last_apy_alert_sent_at,omitempty"`
+	DeletedAt           *time.Time       `json:"deleted_at,omitempty"`
+	Allocations         []Allocation     `json:"allocations,omitempty"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
 }
 
 type ProjectionPoint struct {
@@ -169,4 +180,74 @@ func ParseStatus(value string) (VaultStatus, error) {
 	default:
 		return "", ErrInvalidVault
 	}
+}
+
+// CapacityStatus describes the vault's capacity utilization for display and gating.
+type CapacityStatus struct {
+	// HasLimit is true when the vault has a soft capacity set.
+	HasLimit bool `json:"has_limit"`
+	// Capacity is the soft cap amount, nil if no limit.
+	Capacity *decimal.Decimal `json:"capacity,omitempty"`
+	// CurrentBalance is the vault's current balance.
+	CurrentBalance decimal.Decimal `json:"current_balance"`
+	// UtilizationPct is the percentage of capacity used, nil if no limit.
+	UtilizationPct *float64 `json:"utilization_pct,omitempty"`
+	// Warning is true when the vault is at or above the warning threshold.
+	Warning bool `json:"warning"`
+	// WarningThreshold is the percentage at which warnings are shown.
+	WarningThreshold float64 `json:"warning_threshold"`
+}
+
+// GetCapacityStatus computes the vault's capacity utilization status.
+func (v *Vault) GetCapacityStatus() CapacityStatus {
+	warningThreshold := DefaultCapacityWarningThreshold
+	if v.CapacityWarningPct != nil {
+		warningThreshold = *v.CapacityWarningPct
+	}
+
+	if v.SoftCapacity == nil {
+		return CapacityStatus{
+			HasLimit:         false,
+			CurrentBalance:   v.CurrentBalance,
+			Warning:          false,
+			WarningThreshold: warningThreshold,
+		}
+	}
+
+	utilization := calculateUtilizationPct(v.CurrentBalance, *v.SoftCapacity)
+	warning := utilization >= warningThreshold
+
+	return CapacityStatus{
+		HasLimit:         true,
+		Capacity:         v.SoftCapacity,
+		CurrentBalance:   v.CurrentBalance,
+		UtilizationPct:   &utilization,
+		Warning:          warning,
+		WarningThreshold: warningThreshold,
+	}
+}
+
+// CanAcceptDeposit checks whether a deposit amount would exceed the vault's
+// soft capacity. Returns nil if the deposit is allowed, ErrCapacityExceeded otherwise.
+func (v *Vault) CanAcceptDeposit(amount decimal.Decimal) error {
+	if v.SoftCapacity == nil {
+		return nil
+	}
+
+	newBalance := v.CurrentBalance.Add(amount)
+	if newBalance.GreaterThan(*v.SoftCapacity) {
+		return ErrCapacityExceeded
+	}
+
+	return nil
+}
+
+// calculateUtilizationPct computes the percentage of capacity used.
+func calculateUtilizationPct(current, capacity decimal.Decimal) float64 {
+	if capacity.IsZero() {
+		return 0.0
+	}
+	pct := current.Div(capacity).Mul(decimal.NewFromInt(100))
+	utilization, _ := pct.Float64()
+	return utilization
 }

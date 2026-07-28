@@ -25,7 +25,9 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
@@ -236,29 +238,48 @@ func run() error {
 	}
 
 	var challengeStore service.ChallengeStore
+	var revocationCache service.RevocationCache
 	if redisClient != nil {
 		challengeStore = service.NewRedisChallengeStore(redisClient, cfg.Auth().ChallengeExpiry())
+		revocationCache = service.NewRedisRevocationCache(redisClient)
 		baseLogger.Info("challenge store: redis", "addr", cfg.Redis().Addr())
+		baseLogger.Info("revocation cache: redis", "addr", cfg.Redis().Addr())
 	} else {
 		challengeStore = service.NewInMemoryChallengeStore(cfg.Auth().ChallengeExpiry())
+		revocationCache = service.NewInMemoryRevocationCache()
 		baseLogger.Info("challenge store: in-memory (single-instance only)")
+		baseLogger.Info("revocation cache: in-memory (single-instance only)")
 	}
 
-	authService := service.NewAuthService(challengeStore, userService, cfg.Auth())
-	authHandler := handler.NewAuthHandler(authService)
+	sessionRepository := postgres.NewSessionRepository(db)
+	auditLogger := postgres.NewPostgresAuditLogger(db)
+	anomalyDetector := service.NoopAnomalyDetector{}
+
+	activityEventRepo := postgres.NewActivityEventRepository(db)
+	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)
+	nudgeOutcomeService := service.NewNudgeOutcomeService(nudgeHistoryRepo)
 
 	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL(), cfg.Stellar().USDCIssuer())
 	rateHandler := handler.NewRateHandler(oracleService)
 
-	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (string, error) {
+	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (userID, sessionID string, err error) {
 		if token == "" {
-			return "", fmt.Errorf("missing token")
+			return "", "", fmt.Errorf("missing token")
 		}
 		claims, err := auth.ParseJWT(token, cfg.Auth().Secret())
 		if err != nil {
-			return "", fmt.Errorf("invalid token: %w", err)
+			return "", "", fmt.Errorf("invalid token: %w", err)
 		}
-		return claims.Subject, nil
+		if claims.SessionID != "" {
+			revoked, err := revocationCache.IsRevoked(context.Background(), claims.SessionID)
+			if err != nil {
+				return "", "", fmt.Errorf("session verification unavailable: %w", err)
+			}
+			if revoked {
+				return "", "", fmt.Errorf("session revoked")
+			}
+		}
+		return claims.Subject, claims.SessionID, nil
 	}, cfg.AllowedOrigins())
 
 	wsCtx, wsCancel := context.WithCancel(context.Background())
@@ -281,6 +302,9 @@ func run() error {
 		Logger:    baseLogger.WithGroup("valuation"),
 	})
 	valuationHandler := handler.NewValuationHandler(valuationService)
+
+	authService := service.NewAuthService(challengeStore, userService, sessionRepository, revocationCache, anomalyDetector, auditLogger, wsHub, cfg.Auth())
+	authHandler := handler.NewAuthHandler(authService, cfg.Environment() != "development", userService, nudgeOutcomeService, activityEventRepo)
 
 	performanceRepository := postgres.NewPerformanceRepository(db)
 	vaultRepository = postgres.NewVaultRepository(db)
@@ -365,6 +389,8 @@ func run() error {
 	// Background reconciliation of pending transactions: polls Horizon so a
 	// transaction's status is confirmed even when the client never calls
 	// GET /api/v1/transactions/{hash}. Broadcasts a WebSocket event on change.
+	var nudgeEngineSvc *service.NudgeEngineService
+
 	txPoller := service.NewTransactionPoller(
 		service.TransactionPollerConfig{
 			Enabled:  cfg.TransactionPoller().Enabled(),
@@ -378,6 +404,14 @@ func run() error {
 			// cached valuation and push a fresh one (#832 event-driven invalidation).
 			if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
 				valuationService.Invalidate(v.UserID)
+			}
+			if tx.Status == transaction.StatusCompleted && tx.Type == transaction.TypeDeposit {
+				if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
+					_ = nudgeOutcomeService.RecordDeposit(ctx, v.UserID, time.Now())
+					if nudgeEngineSvc != nil {
+						_ = nudgeEngineSvc.EvaluateAndDispatch(ctx, v.UserID)
+					}
+				}
 			}
 		},
 		baseLogger.WithGroup("tx-poller"),
@@ -429,6 +463,13 @@ func run() error {
 	valuationHandler.Register(mux)
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
+
+	// Unified activity feed (deposits/withdrawals/rebalances/settlements/
+	// yield harvests) backing the dApp's transaction-history page.
+	activityRepository := postgres.NewActivityRepository(db)
+	activityService := service.NewActivityService(activityRepository)
+	activityHandler := handler.NewActivityHandler(activityService)
+	activityHandler.Register(mux)
 	userHandler.Register(mux)
 	notificationHandler.Register(mux)
 	adminHandler.Register(mux)
@@ -531,13 +572,62 @@ func run() error {
 
 	// Savings goals
 	savingsGoalRepo := postgres.NewSavingsGoalRepository(db)
-	notificationDispatcher2 := notifications.New(
+	// Intelligence proxy (forwards to Python service)
+	intelURL := cfg.Intelligence().ServiceURL()
+	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
+	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
+		BaseURL: intelURL,
+		APIKey:  cfg.Intelligence().ServiceAPIKey(),
+		Timeout: cfg.Intelligence().Timeout(),
+	})
+
+	nudgeCopyGen := service.CompositeCopyGenerator{
+		Template: nudge.TemplateCopyGenerator{},
+		LLM:      service.LLMCopyGenerator{Client: prometheusClient},
+	}
+
+	savingsStreakRepo := postgres.NewSavingsStreakRepository(db)
+
+	// Nudges dispatch over their own push-enabled dispatcher: the shared
+	// `notificationDispatcher` above is constructed with zero channels
+	// (websocket is still disabled), so nudges need their own live channel
+	// rather than silently persisting-but-never-delivering.
+	nudgeNotificationDispatcher := notifications.New(
 		[]notifications.Channel{
 			notifications.NewPushChannel(notifications.NoopPushSender{}, notificationRepository),
 		},
 		notificationRepository,
 		nil,
 	)
+
+	nudgeEngineSvc = service.NewNudgeEngineService(
+		savingsGoalRepo,
+		savingsStreakRepo,
+		transactionRepository,
+		userRepository,
+		usersignal.HeuristicSegmentProvider{UserRepo: userRepository, GoalRepo: savingsGoalRepo},
+		usersignal.HeuristicEngagementProvider{UserRepo: userRepository},
+		usersignal.HeuristicTimingProvider{Activity: activityEventRepo, UserRepo: userRepository},
+		nudgeHistoryRepo,
+		nudgeHistoryRepo,
+		nudgeHistoryRepo,
+		nudgeCopyGen,
+		service.DispatcherNudgeNotifier{Dispatcher: nudgeNotificationDispatcher},
+	)
+
+	nudgeEngineJob := scheduler.NewNudgeEngineJob(
+		scheduler.NudgeEngineConfig{
+			Enabled:  true,
+			Interval: 1 * time.Hour,
+		},
+		savingsGoalRepo,
+		nudgeEngineSvc,
+		baseLogger.WithGroup("nudge-engine"),
+	)
+	nudgeCtx, cancelNudge := context.WithCancel(context.Background())
+	defer cancelNudge()
+	go nudgeEngineJob.Run(nudgeCtx)
+
 	webhookRepo := postgres.NewWebhookRepository(db)
 	webhookSvc := service.NewWebhookService(webhookRepo)
 	webhookHandler := handler.NewWebhookHandler(webhookSvc)
@@ -547,14 +637,14 @@ func run() error {
 		vaultRepository,
 		service.CompositeGoalMilestoneNotifier{
 			Notifiers: []service.GoalMilestoneNotifier{
-				service.DispatcherGoalMilestoneNotifier{Dispatcher: notificationDispatcher2},
+				service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
 				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
 			},
 		},
 	)
-	savingsStreakRepo := postgres.NewSavingsStreakRepository(db)
+	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
-	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
+	savingsGoalSvc.SetStreakNotifier(service.NudgeEngineStreakMilestoneNotifier{NudgeEngine: nudgeEngineSvc})
 
 	minDeposit, _ := decimal.NewFromString(cfg.RecurringDeposit().MinDepositAmount())
 	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)
@@ -565,26 +655,9 @@ func run() error {
 	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
 	savingsScheduleHandler.Register(mux)
 
-	// Goal deadline reminders (#846): fires at 7/3/1 days before a goal's
-	// deadline. Notification-only, but gated behind scheduler leadership
-	// anyway (see GoalDeadlineReminderJob.SetLeaderChecker) since the
-	// DeadlineRemindersSent dedup check races across concurrent replicas.
-	// Previously built and tested (goal_deadline_reminder.go) but never
-	// wired into main.go before #846.
-	goalDeadlineReminderJob := scheduler.NewGoalDeadlineReminderJob(
-		scheduler.GoalDeadlineReminderConfig{
-			Enabled:  true,
-			Interval: 24 * time.Hour,
-		},
-		savingsGoalRepo,
-		savingsGoalSvc,
-		notificationDispatcher2,
-		baseLogger.WithGroup("goal-deadline-reminder"),
-	)
-	goalDeadlineReminderJob.SetLeaderChecker(schedulerLeadership)
-	goalDeadlineCtx, cancelGoalDeadline := context.WithCancel(context.Background())
-	defer cancelGoalDeadline()
-	go goalDeadlineReminderJob.Run(goalDeadlineCtx)
+	// Goal deadline reminders are handled by the unified nudge engine
+	// (nudge.NudgeTypeDeadlineReminder / EvaluateDeadlineReminderTrigger)
+	// rather than a dedicated scheduler job — see nudgeEngineJob below.
 
 	ledgerVaultService := service.NewVaultService(vaultRepository)
 	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
@@ -704,14 +777,6 @@ func run() error {
 	)
 	vaultHandler.SetRebalanceRateLimiter(rebalanceRateLimiter)
 
-	// Intelligence proxy (forwards to Python service)
-	intelURL := cfg.Intelligence().ServiceURL()
-	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
-	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
-		BaseURL: intelURL,
-		APIKey:  cfg.Intelligence().ServiceAPIKey(),
-		Timeout: cfg.Intelligence().Timeout(),
-	})
 	intelligenceHandler := handler.NewIntelligenceHandler(intelProxy, prometheusClient)
 	intelligenceHandler.Register(mux)
 
@@ -720,7 +785,7 @@ func run() error {
 	goalCoachingScheduler := service.NewGoalCoachingScheduler(
 		savingsGoalRepo,
 		prometheusClient,
-		notificationDispatcher2,
+		nudgeNotificationDispatcher,
 		baseLogger.WithGroup("goal-coaching"),
 	)
 	goalCoachingCtx, cancelGoalCoaching := context.WithCancel(context.Background())
@@ -749,7 +814,7 @@ func run() error {
 		notificationRepository,
 		digestRepository,
 		prometheusClient,
-		notificationDispatcher2,
+		nudgeNotificationDispatcher,
 		baseLogger.WithGroup("digest"),
 	)
 	digestJob.SetLeaderChecker(schedulerLeadership)
@@ -759,6 +824,11 @@ func run() error {
 
 	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
 	performanceSnapshotsHandler.Register(mux)
+
+	toolAuditRepo := postgres.NewToolAuditRepository(db)
+	toolAuditSvc := service.NewToolAuditService(toolAuditRepo)
+	toolAuditHandler := handler.NewToolAuditHandler(toolAuditSvc)
+	toolAuditHandler.Register(mux)
 
 	bankHandler.Register(mux)
 	bankAccountHandler.Register(mux)
@@ -779,14 +849,19 @@ func run() error {
 		{PathPrefix: "/healthz", Public: true},
 		{PathPrefix: "/readyz", Public: true},
 		{PathPrefix: "/ws", Public: true},
-		{PathPrefix: "/api/v1/auth/", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/challenge", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/verify", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/refresh", Public: true},
+		// No blanket "/api/v1/auth/" rule: logout, logout-all, and sessions
+		// must stay protected and fall through to the "/api/v1/" catch-all.
 		{PathPrefix: "/api/v1/banks/", Public: true},
 		{PathPrefix: "/api/v1/yields/", Public: true},
 		{PathPrefix: "/api/v1/savings-goals/shared/", Public: true},
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
+		{PathPrefix: "/api/v1/internal/", Role: "service"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}
-	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules)
+	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules, revocationCache)
 	// Tell the rate-limit client-IP extractor how many trusted proxies sit in
 	// front of the API so it derives the originating client IP from
 	// X-Forwarded-For instead of collapsing all traffic onto the proxy address.

@@ -45,13 +45,16 @@ func (m *memorySavingsGoalRepo) Create(_ context.Context, goal *savingsgoal.Savi
 	return nil
 }
 
-func (m *memorySavingsGoalRepo) ListByUser(_ context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (m *memorySavingsGoalRepo) ListByUser(_ context.Context, userID uuid.UUID, category, search string) ([]savingsgoal.SavingsGoal, error) {
 	var out []savingsgoal.SavingsGoal
 	for _, g := range m.goals {
 		if g.UserID != userID {
 			continue
 		}
 		if category != "" && string(g.Category) != category {
+			continue
+		}
+		if search != "" && !strings.Contains(strings.ToLower(g.Name), strings.ToLower(search)) {
 			continue
 		}
 		out = append(out, g)

@@ -135,3 +135,15 @@ type DigestGenerateResponse struct {
 	Cached            bool                   `json:"cached"`
 	GeneratedAt       string                 `json:"generated_at"`
 }
+
+type NudgeCopyRequest struct {
+	NudgeType string            `json:"nudge_type"`
+	Segment   string            `json:"segment"`
+	Facts     map[string]string `json:"facts"`
+	RequestID string            `json:"request_id"`
+}
+
+type NudgeCopyResponse struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}

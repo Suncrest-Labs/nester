@@ -38,6 +38,7 @@ type User struct {
 	SavingsGoal         *string     `json:"savings_goal,omitempty"`
 	OnboardingCompleted bool        `json:"onboarding_completed"`
 	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
+	Timezone           string     `json:"timezone"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
@@ -74,4 +75,5 @@ type ProfilePatch struct {
 	RiskProfile         *RiskProfile
 	SavingsGoal         *string
 	OnboardingCompleted *bool
+	Timezone            *string
 }

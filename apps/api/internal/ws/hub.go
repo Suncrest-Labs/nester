@@ -41,15 +41,16 @@ type Hub struct {
 	unregister chan *Client
 	history    map[string][]Event
 
-	// Optional authenticator callback to validate tokens
-	authenticator  func(token string) (userID string, err error)
+	// Optional authenticator callback to validate tokens. sessionID may be
+	// empty (e.g. service-to-service auth carries no session).
+	authenticator  func(token string) (userID, sessionID string, err error)
 	allowedOrigins []string
 	logger         *slog.Logger
 	upgrader       websocket.Upgrader
 	mu             sync.RWMutex
 }
 
-func NewHub(logger *slog.Logger, authFunc func(string) (string, error), allowedOrigins []string) *Hub {
+func NewHub(logger *slog.Logger, authFunc func(string) (userID, sessionID string, err error), allowedOrigins []string) *Hub {
 	h := &Hub{
 		clients:        make(map[*Client]bool),
 		channels:       make(map[string]map[*Client]bool),
@@ -197,13 +198,47 @@ func (h *Hub) removeClientLocked(client *Client) {
 	}
 }
 
+// CloseConnectionsForSession forcibly disconnects every live WebSocket
+// client authenticated under sessionID. Used when a single session is
+// revoked (logout, reuse/device-mismatch detected) so an already-open
+// connection doesn't outlive the session.
+func (h *Hub) CloseConnectionsForSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for client := range h.clients {
+		if client.sessionID == sessionID {
+			client.conn.Close()
+			h.removeClientLocked(client)
+		}
+	}
+}
+
+// CloseConnectionsForUser forcibly disconnects every live WebSocket client
+// belonging to userID. Used for "sign out everywhere".
+func (h *Hub) CloseConnectionsForUser(userID string) {
+	if userID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for client := range h.clients {
+		if client.userID == userID {
+			client.conn.Close()
+			h.removeClientLocked(client)
+		}
+	}
+}
+
 func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
-	var userID string
+	var userID, sessionID string
 	var err error
 
 	if h.authenticator != nil {
-		userID, err = h.authenticator(token)
+		userID, sessionID, err = h.authenticator(token)
 		if err != nil {
 			h.logger.Warn("websocket unauthorized", "error", err)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -218,11 +253,12 @@ func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		hub:    h,
-		conn:   conn,
-		send:   make(chan Event, 256),
-		userID: userID,
-		subs:   make(map[string]bool),
+		hub:       h,
+		conn:      conn,
+		send:      make(chan Event, 256),
+		userID:    userID,
+		sessionID: sessionID,
+		subs:      make(map[string]bool),
 	}
 	client.hub.register <- client
 

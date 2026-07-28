@@ -252,6 +252,7 @@ func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
 		Currency:     params.Currency,
 		MinBalance:   params.MinBalance,
 		CreatedAfter: params.CreatedAfter,
+		Search:       params.Search,
 	})
 	if err != nil {
 		h.writeDomainError(w, r, err)

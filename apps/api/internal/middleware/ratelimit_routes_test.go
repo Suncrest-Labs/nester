@@ -164,7 +164,7 @@ func TestSensitiveUserRouteLimiterPerUser(t *testing.T) {
 	routes := []RouteMatch{{Method: http.MethodPost, Path: "/api/v1/settlements"}}
 
 	rules := []RouteRule{{PathPrefix: "/api/v1/"}}
-	chain := Authenticate(testSecret, "", rules)(
+	chain := Authenticate(testSecret, "", rules, alwaysActiveRevocation)(
 		SensitiveUserRouteLimiter(l, routes, "settlement rate limit exceeded")(ok200),
 	)
 

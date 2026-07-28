@@ -1,12 +1,19 @@
-import config from "@/lib/config";
+import {
+  getAccessToken,
+  getOrCreateDeviceFingerprint,
+  setAccessToken,
+  clearTokens,
+} from "@/lib/auth/token-store";
 
 /**
  * Typed API client for the Nester Go backend.
  *
- * All routes under /api/v1/ require a Bearer JWT.
- * The token is read from the auth-store (localStorage) on every request so it
- * always reflects the current login state without needing to thread it through
- * props/context.
+ * All routes under /api/v1/ require a Bearer JWT. The token is read from the
+ * canonical token store (lib/auth/token-store) on every request so it always
+ * reflects the current login state without needing to thread it through
+ * props/context. Access tokens are short-lived (minutes); a 401 triggers a
+ * single transparent refresh-and-retry so the short lifetime stays invisible
+ * to callers.
  */
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -24,9 +31,9 @@ function getApiBase(): string {
 
 const API_BASE = getApiBase();
 
+/** @deprecated import getAccessToken from "@/lib/auth/token-store" instead. */
 export function getStoredToken(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem("nester_token") ?? "";
+  return getAccessToken();
 }
 
 export class ApiError extends Error {
@@ -46,29 +53,89 @@ type ApiEnvelope<T> = {
   error?: { code?: string; message: string };
 };
 
+// Single-flight guard: concurrent 401s share one in-flight /auth/refresh
+// call. Without this, N concurrent requests hitting a stale access token
+// would each attempt to rotate the refresh token, and the server's reuse
+// detection would treat the losers as token theft and kill the session.
+let refreshInFlight: Promise<{ access_token: string }> | null = null;
+
+async function refreshTokens(): Promise<{ access_token: string }> {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function performRefresh(): Promise<{ access_token: string }> {
+  // The refresh token itself is an httpOnly cookie set by the server — this
+  // client never reads or sends it explicitly; `credentials: "include"`
+  // makes the browser attach it (and store the rotated one from the
+  // response) automatically.
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        device_fingerprint: getOrCreateDeviceFingerprint(),
+      }),
+    });
+  } catch {
+    // Network failure — the refresh token was never actually rejected, so
+    // don't tear down the session over a transient connectivity blip.
+    throw new ApiError(0, "NETWORK_ERROR", "Could not reach the server to refresh the session");
+  }
+
+  const body = await res.text();
+  let json: ApiEnvelope<{ access_token: string }> | null = null;
+  if (body.trim()) {
+    try {
+      json = JSON.parse(body) as ApiEnvelope<{ access_token: string }>;
+    } catch {
+      json = null;
+    }
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    // The refresh token itself was rejected (expired, reused, revoked,
+    // device mismatch) — this is a genuine end of session.
+    clearTokens();
+    throw new ApiError(
+      res.status,
+      json?.error?.code ?? "SESSION_EXPIRED",
+      json?.error?.message ?? "Session expired, please sign in again"
+    );
+  }
+
+  if (!res.ok || !json?.success) {
+    // 5xx / malformed response — transient. The refresh token may still be
+    // valid, so preserve the local session rather than forcing a re-login;
+    // let the caller (reactive retry or the proactive-refresh timer) try
+    // again.
+    throw new ApiError(
+      res.status,
+      json?.error?.code ?? "REFRESH_UNAVAILABLE",
+      json?.error?.message ?? "Could not refresh the session, please try again"
+    );
+  }
+
+  setAccessToken(json.data.access_token);
+  return json.data;
+}
+
 export async function apiRequest<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const token = getStoredToken();
-  const res = await fetch(`${config.apiUrl}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
-    },
-  });
-  const json = (await res.json()) as ApiEnvelope<T>;
-  if (!res.ok || !json.success) {
-    throw new Error(json.error?.message ?? `API error ${res.status}`);
-  }
-  return json.data;
+  return apiFetch<T>(path, init);
 }
 
 async function apiFetch<T>(
   path: string,
-  init?: RequestInit & { skipAuth?: boolean }
+  init?: RequestInit & { skipAuth?: boolean; _isRetry?: boolean }
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -76,16 +143,33 @@ async function apiFetch<T>(
   };
 
   if (!init?.skipAuth) {
-    const token = getStoredToken();
+    const token = getAccessToken();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
+    // Needed so /auth/verify, /auth/logout(-all) can set/clear the httpOnly
+    // refresh cookie via Set-Cookie — harmless for every other route.
+    credentials: "include",
     ...init,
     headers,
   });
+
+  // A 401 on an authenticated request means the access token expired (it's
+  // short-lived by design) — transparently refresh once and retry, rather
+  // than surfacing a spurious failure to the caller.
+  if (res.status === 401 && !init?.skipAuth && !init?._isRetry) {
+    try {
+      await refreshTokens();
+    } catch (refreshErr) {
+      throw refreshErr instanceof ApiError
+        ? refreshErr
+        : new ApiError(401, "SESSION_EXPIRED", "Session expired, please sign in again");
+    }
+    return apiFetch<T>(path, { ...init, _isRetry: true });
+  }
 
   // Handle non-JSON or empty responses
   const body = await res.text();
@@ -227,14 +311,29 @@ export interface ChallengeResponse {
   challenge: string;
 }
 
-export interface VerifyResponse {
-  token: string;
+// The refresh token is never present here — the server sets it as an
+// httpOnly cookie instead (see lib/auth/token-store.ts).
+export interface TokenResponse {
+  access_token: string;
+  expires_in: number;
+  token_type: string;
+}
+
+export interface SessionView {
+  id: string;
+  device_fingerprint: string;
+  user_agent?: string;
+  ip_address?: string;
+  created_at: string;
+  last_active_at: string;
+  absolute_expires_at: string;
+  is_current: boolean;
 }
 
 // ── API surface ───────────────────────────────────────────────────────────────
 
 export const api = {
-  /** Challenge / verify wallet login */
+  /** Challenge / verify wallet login, session refresh + device management */
   auth: {
     requestChallenge: (walletAddress: string) =>
       apiFetch<ChallengeResponse>("/auth/challenge", {
@@ -243,16 +342,29 @@ export const api = {
         skipAuth: true,
       }),
 
-    verify: (
-      walletAddress: string,
-      signature: string,
-      challenge: string
-    ) =>
-      apiFetch<VerifyResponse>("/auth/verify", {
+    verify: (walletAddress: string, signature: string, challenge: string) =>
+      apiFetch<TokenResponse>("/auth/verify", {
         method: "POST",
-        body: JSON.stringify({ wallet_address: walletAddress, signature, challenge }),
+        body: JSON.stringify({
+          wallet_address: walletAddress,
+          signature,
+          challenge,
+          device_fingerprint: getOrCreateDeviceFingerprint(),
+        }),
         skipAuth: true,
       }),
+
+    /** Manually trigger a refresh; apiFetch already does this transparently on 401. */
+    refresh: () => refreshTokens(),
+
+    logout: () => apiFetch<void>("/auth/logout", { method: "POST" }),
+
+    logoutAll: () => apiFetch<{ revoked_count: number }>("/auth/logout-all", { method: "POST" }),
+
+    listSessions: () => apiFetch<{ sessions: SessionView[] }>("/auth/sessions"),
+
+    revokeSession: (id: string) =>
+      apiFetch<void>(`/auth/sessions/${id}`, { method: "DELETE" }),
   },
 
   /** User lookups */
