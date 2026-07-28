@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.config import settings
 from app.services.fraud_detection import (
     FraudFlag,
     Severity,
@@ -86,9 +87,8 @@ class FraudExplanationService:
     All user-controlled fields are sanitized before reaching the model.
     """
 
-    def __init__(self, anthropic_client: Any = None, model_id: str = "claude-sonnet-4-6") -> None:
+    def __init__(self, anthropic_client: Any = None) -> None:
         self._client = anthropic_client
-        self._model_id = model_id
 
     def generate_explanation(self, flag: FraudFlag) -> ExplanationResult:
         """Generate both operator and user explanations for a fraud flag.
@@ -125,7 +125,7 @@ class FraudExplanationService:
         )
 
         response = self._client.messages.create(
-            model=self._model_id,
+            model=settings.anthropic_model,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": _wrap_user_content(user_prompt)}],

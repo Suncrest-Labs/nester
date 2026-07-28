@@ -46,11 +46,8 @@ def get_explanation_service() -> FraudExplanationService:
     global _explanation_service
     if _explanation_service is None:
         try:
-            from app.config import settings
             from app.services.claude import client
-            _explanation_service = FraudExplanationService(
-                anthropic_client=client, model_id=settings.anthropic_model
-            )
+            _explanation_service = FraudExplanationService(anthropic_client=client)
         except Exception:
             logger.warning(
                 "fraud_router: could not initialize LLM client, "
