@@ -50,3 +50,16 @@ pub const DEFAULT_MAX_REWARDED_REFERRALS: u32 = 50;
 pub const DEFAULT_MAX_REWARD_PER_REFERRER: i128 = 5_000_000_000; // 500 units
 /// Minimum claimable balance before `claim_referral_rewards` will pay out.
 pub const DEFAULT_MIN_REFERRAL_CLAIM: i128 = 1_000_000; // 0.1 unit
+
+// ---------------------------------------------------------------------------
+// Upgrade delay constants
+// ---------------------------------------------------------------------------
+/// Mandatory timelock delay for Vault upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_VAULT: u64 = 172_800;
+/// Mandatory timelock delay for Yield Registry upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_YIELD_REGISTRY: u64 = 172_800;
+/// Mandatory timelock delay for Allocation Strategy upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY: u64 = 172_800;
+/// Mandatory timelock delay for Treasury upgrades (7 days).
+pub const MIN_UPGRADE_DELAY_TREASURY: u64 = 604_800;
+

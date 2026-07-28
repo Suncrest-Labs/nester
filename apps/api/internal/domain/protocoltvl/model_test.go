@@ -200,3 +200,4 @@ func floatNear(a, b, tolerance float64) bool {
 	}
 	return diff <= tolerance
 }
+

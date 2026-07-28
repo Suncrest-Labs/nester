@@ -44,4 +44,9 @@ pub enum ContractError {
     RecoveryStageInvalid = 39,
     NotNesterVault = 40,
     VaultCreationFailed = 41,
+    UpgradeNotMatured = 42,
+    NoPendingUpgrade = 43,
+    UpgradeHashMismatch = 44,
+    SchemaVersionMismatch = 45,
 }
+

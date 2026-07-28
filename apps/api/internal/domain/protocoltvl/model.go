@@ -35,3 +35,6 @@ type Repository interface {
 	// RecordAlert marks that an alert was just sent for slug.
 	RecordAlert(ctx context.Context, slug string) error
 }
+
+
+

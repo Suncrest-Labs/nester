@@ -696,6 +696,7 @@ dependencies = [
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",
+ "treasury-contract",
  "vault-contract",
  "vault-token-contract",
  "yield-registry-contract",

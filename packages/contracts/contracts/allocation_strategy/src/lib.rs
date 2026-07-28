@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Error,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env, Error,
     IntoVal, Symbol, Val, Vec,
 };
 
@@ -145,6 +145,7 @@ impl AllocationStrategyContract {
         vault_type: VaultType,
     ) {
         AccessControl::initialize(&env, &admin);
+        nester_common::Upgrade::init_schema_version(&env, 1);
         env.storage()
             .instance()
             .set(&DataKey::RegistryId, &registry_id);
@@ -617,7 +618,63 @@ impl AllocationStrategyContract {
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
     }
+
+    // -----------------------------------------------------------------------
+    // Upgradeability & Schema Migration
+    // -----------------------------------------------------------------------
+
+    /// Proposes a new WASM upgrade for the allocation strategy.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY (48 hours).
+    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &admin,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY,
+            eta,
+        );
+    }
+
+    /// Cancels a pending WASM upgrade for the allocation strategy.
+    ///
+    /// Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, admin: Address) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &admin);
+    }
+
+    /// Executes a matured WASM upgrade for the allocation strategy.
+    ///
+    /// Execution is permissionless after maturity.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
+
+    /// Retrieves pending upgrade details if present.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
+    }
+
+    /// Returns current contract schema version.
+    pub fn get_schema_version(env: Env) -> u32 {
+        nester_common::Upgrade::get_schema_version(&env)
+    }
+
+    /// Bumps schema version if needed (idempotent).
+    pub fn migrate(env: Env) -> u32 {
+        let current = nester_common::Upgrade::get_schema_version(&env);
+        let target = 1u32;
+        if current < target {
+            nester_common::Upgrade::set_schema_version(&env, target);
+            target
+        } else {
+            current
+        }
+    }
 }
+
 
 // ---------------------------------------------------------------------------
 // Private helpers

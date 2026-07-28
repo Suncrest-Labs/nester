@@ -274,8 +274,69 @@ mod tests {
 4. Run full QA suite: `make fmt && make clippy && make test && make build`
 5. Deploy to testnet: `make deploy-testnet`
 
+## Contract Upgrade Runbook
+
+All upgradeable Nester contracts (`vault`, `yield_registry`, `allocation_strategy`, `treasury`) use a secure, timelock-governed upgrade mechanism.
+
+### 1. Reproducible Build Process
+Compile and optimize contract WASM binaries:
+```bash
+cargo build --release --target wasm32-unknown-unknown -p vault-contract
+stellar contract optimize \
+  --wasm ./target/wasm32-unknown-unknown/release/vault_contract.wasm \
+  --wasm-out ./target/wasm32-unknown-unknown/release/vault_contract_opt.wasm
+```
+
+### 2. WASM Hash Computation & Verification
+Compute the SHA-256 hash of the optimized WASM:
+```bash
+sha256sum ./target/wasm32-unknown-unknown/release/vault_contract_opt.wasm
+```
+Alternatively, install WASM to testnet to obtain the on-chain WASM hash:
+```bash
+stellar contract install --wasm ./target/wasm32-unknown-unknown/release/vault_contract_opt.wasm --source-account <ACCOUNT> --network testnet
+```
+
+### 3. Proposal Process
+An account holding the `Upgrader` role proposes the upgrade:
+- Minimum timelock delays:
+  - Vault: 48 hours (`172,800` seconds)
+  - Yield Registry: 48 hours (`172,800` seconds)
+  - Allocation Strategy: 48 hours (`172,800` seconds)
+  - Treasury: 7 days (`604_800` seconds)
+```bash
+stellar contract invoke --id <CONTRACT_ID> --source-account upgrader --network testnet -- propose_upgrade \
+  --admin <UPGRADER_ADDRESS> \
+  --new_wasm_hash <WASM_HASH> \
+  --eta <FUTURE_TIMESTAMP>
+```
+
+### 4. Multisig Signing & Cancellation
+If a proposal needs to be aborted before maturity, an `Upgrader` calls:
+```bash
+stellar contract invoke --id <CONTRACT_ID> --source-account upgrader --network testnet -- cancel_upgrade \
+  --admin <UPGRADER_ADDRESS>
+```
+
+### 5. Execution & Migration
+Once the ledger timestamp reaches `ETA`, execution is permissionless:
+```bash
+stellar contract invoke --id <CONTRACT_ID> --source-account any_relayer --network testnet -- execute_upgrade \
+  --caller <CALLER_ADDRESS> \
+  --wasm_hash <WASM_HASH>
+```
+Following upgrade execution, run explicit storage migration if schema changes occurred:
+```bash
+stellar contract invoke --id <CONTRACT_ID> --source-account admin --network testnet -- migrate
+```
+
+### 6. Storage Invariant & Rollback Considerations
+- **Storage Invariant**: Existing storage keys may never be reused with different data types. New schema modifications must allocate new keys.
+- **Rollbacks**: If an executed WASM contains a bug, a new upgrade proposal must be submitted with the previous known-good WASM hash and serve out the timelock delay. Emergency pause state remains available throughout to protect funds.
+
 ## References
 
 - [Soroban Documentation](https://soroban.stellar.org/)
 - [Soroban SDK Docs](https://docs.rs/soroban-sdk/)
 - [Rust Edition 2021](https://doc.rust-lang.org/edition-guide/rust-2021/index.html)
+
