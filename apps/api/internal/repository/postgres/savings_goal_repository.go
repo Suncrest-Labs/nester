@@ -76,7 +76,7 @@ func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
-		       share_token, share_enabled_at
+		       share_token, share_enabled_at, onchain_goal_id, onchain_status
 		FROM savings_goals WHERE share_token = $1
 	`, token)
 	g, err := scanSavingsGoalWithShare(row)
@@ -89,19 +89,23 @@ func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.
 	return &g, nil
 }
 
-func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category, search string) ([]savingsgoal.SavingsGoal, error) {
 	query := `
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
-		       share_token, share_enabled_at
+		       share_token, share_enabled_at, onchain_goal_id, onchain_status
 		FROM savings_goals
 		WHERE user_id = $1
 	`
 	args := []any{userID}
 	if category != "" {
-		query += ` AND category = $2`
 		args = append(args, category)
+		query += fmt.Sprintf(` AND category = $%d`, len(args))
+	}
+	if search != "" {
+		args = append(args, search)
+		query += fmt.Sprintf(` AND search_vector @@ plainto_tsquery('english', $%d)`, len(args))
 	}
 	query += ` ORDER BY created_at DESC`
 
@@ -127,7 +131,7 @@ func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*sav
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
-		       share_token, share_enabled_at
+		       share_token, share_enabled_at, onchain_goal_id, onchain_status
 		FROM savings_goals WHERE id = $1
 	`, id)
 	g, err := scanSavingsGoalWithShare(row)
@@ -239,7 +243,7 @@ func (r *SavingsGoalRepository) ListActiveApproachingDeadline(ctx context.Contex
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
-		       share_token, share_enabled_at
+		       share_token, share_enabled_at, onchain_goal_id, onchain_status
 		FROM savings_goals
 		WHERE (status = 'active' OR status IS NULL OR status = '')
 		  AND deadline BETWEEN NOW() AND NOW() + ($1 || ' days')::INTERVAL
@@ -259,6 +263,50 @@ func (r *SavingsGoalRepository) ListActiveApproachingDeadline(ctx context.Contex
 		goals = append(goals, g)
 	}
 	return goals, rows.Err()
+}
+
+// UpdateOnchainLink persists the result of asynchronously registering goalID
+// against the savings_goal contract (#807). Not scoped to userID: this is
+// called from the background registration path, not a user-facing request.
+func (r *SavingsGoalRepository) UpdateOnchainLink(ctx context.Context, goalID uuid.UUID, onchainGoalID, onchainStatus string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET onchain_goal_id = $1, onchain_status = $2, updated_at = NOW()
+		WHERE id = $3
+	`, onchainGoalID, onchainStatus, goalID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
+}
+
+func (r *SavingsGoalRepository) ListActiveGoalUserIDs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT user_id
+		FROM savings_goals
+		WHERE (status = 'active' OR status IS NULL OR status = '')
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, err
+		}
+		uid, err := uuid.Parse(idStr)
+		if err == nil {
+			ids = append(ids, uid)
+		}
+	}
+	return ids, rows.Err()
 }
 
 func (r *SavingsGoalRepository) UpdateStatus(ctx context.Context, goalID, userID uuid.UUID, status string) error {
@@ -423,12 +471,13 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		name, emoji                               sql.NullString
 		shareToken                                sql.NullString
 		shareEnabledAt                            sql.NullTime
+		onchainGoalID, onchainStatus              sql.NullString
 	)
 	if err := row.Scan(
 		&id, &userID, &vaultID, &targetStr, &currency, &deadline, &description, &category,
 		&notifiedMilestones, &deadlineReminders, &createdAt, &updatedAt,
 		&status, &completedAt, &completionAction, &name, &emoji,
-		&shareToken, &shareEnabledAt,
+		&shareToken, &shareEnabledAt, &onchainGoalID, &onchainStatus,
 	); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -474,6 +523,13 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		t := shareEnabledAt.Time
 		shareEnabledAtPtr = &t
 	}
+	var onchainGoalIDPtr, onchainStatusPtr *string
+	if onchainGoalID.Valid {
+		onchainGoalIDPtr = &onchainGoalID.String
+	}
+	if onchainStatus.Valid {
+		onchainStatusPtr = &onchainStatus.String
+	}
 	return savingsgoal.SavingsGoal{
 		ID:                    parsedID,
 		UserID:                parsedUserID,
@@ -495,6 +551,8 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		ShareToken:            shareTokenPtr,
 		ShareEnabledAt:        shareEnabledAtPtr,
 		IsShared:              shareTokenPtr != nil,
+		OnchainGoalID:         onchainGoalIDPtr,
+		OnchainStatus:         onchainStatusPtr,
 	}, nil
 }
 

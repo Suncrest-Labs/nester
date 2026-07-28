@@ -25,7 +25,9 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
@@ -65,6 +67,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// Created early (rather than just before ListenAndServe, as before) so
+	// components that need to release resources as soon as shutdown begins —
+	// notably scheduler leadership below — can hook directly into it instead
+	// of only unwinding via defer after the HTTP server finishes draining.
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	pgPool, err := repository.NewPostgresDB(cfg.Database())
 	if err != nil {
@@ -114,6 +123,24 @@ func run() error {
 		return err
 	}
 
+	// Scheduler leader election (#846): elects one instance to run the five
+	// singleton background job loops below (rebalancer, recurring deposits,
+	// APY deviation, goal deadline reminders, protocol health). See
+	// internal/scheduler/leadership.go for the advisory-lock design and
+	// failover semantics. Hooked directly into shutdownCtx (created above,
+	// before the OS signal fires) rather than an independent context, so the
+	// lock releases as soon as shutdown begins instead of only once the HTTP
+	// server finishes draining — letting another instance take over sooner.
+	schedulerLeadership := scheduler.NewLeadership(
+		db,
+		scheduler.LeadershipConfig{
+			LockKey:           cfg.SchedulerLeadership().LockKey(),
+			HeartbeatInterval: cfg.SchedulerLeadership().HeartbeatInterval(),
+		},
+		baseLogger.WithGroup("scheduler-leadership"),
+	)
+	go schedulerLeadership.Run(shutdownCtx)
+
 	systemStateRepository := postgres.NewSystemStateRepository(db)
 
 	vaultRepository := postgres.NewVaultRepository(db)
@@ -156,6 +183,9 @@ func run() error {
 
 	userRepository := postgres.NewUserRepository(db)
 	userService := service.NewUserService(userRepository)
+	if accountCipher != nil {
+		userService.WithCipher(accountCipher)
+	}
 	userHandler := handler.NewUserHandler(userService)
 	userVaultsSvc := service.NewUserVaultsService(vaultRepository)
 	userHandler.SetUserVaultsService(userVaultsSvc)
@@ -200,6 +230,7 @@ func run() error {
 		RPCURL:  cfg.Stellar().RPCURL(),
 		Logger:  baseLogger,
 	})
+	adminHandler.SetLeadership(schedulerLeadership)
 
 	// A single shared Redis client (nil when REDIS_ADDR is unset) powers both the
 	// challenge store and the distributed rate limiters. When nil, both fall back
@@ -210,29 +241,48 @@ func run() error {
 	}
 
 	var challengeStore service.ChallengeStore
+	var revocationCache service.RevocationCache
 	if redisClient != nil {
 		challengeStore = service.NewRedisChallengeStore(redisClient, cfg.Auth().ChallengeExpiry())
+		revocationCache = service.NewRedisRevocationCache(redisClient)
 		baseLogger.Info("challenge store: redis", "addr", cfg.Redis().Addr())
+		baseLogger.Info("revocation cache: redis", "addr", cfg.Redis().Addr())
 	} else {
 		challengeStore = service.NewInMemoryChallengeStore(cfg.Auth().ChallengeExpiry())
+		revocationCache = service.NewInMemoryRevocationCache()
 		baseLogger.Info("challenge store: in-memory (single-instance only)")
+		baseLogger.Info("revocation cache: in-memory (single-instance only)")
 	}
 
-	authService := service.NewAuthService(challengeStore, userService, cfg.Auth())
-	authHandler := handler.NewAuthHandler(authService)
+	sessionRepository := postgres.NewSessionRepository(db)
+	auditLogger := postgres.NewPostgresAuditLogger(db)
+	anomalyDetector := service.NoopAnomalyDetector{}
+
+	activityEventRepo := postgres.NewActivityEventRepository(db)
+	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)
+	nudgeOutcomeService := service.NewNudgeOutcomeService(nudgeHistoryRepo)
 
 	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL(), cfg.Stellar().USDCIssuer())
 	rateHandler := handler.NewRateHandler(oracleService)
 
-	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (string, error) {
+	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (userID, sessionID string, err error) {
 		if token == "" {
-			return "", fmt.Errorf("missing token")
+			return "", "", fmt.Errorf("missing token")
 		}
 		claims, err := auth.ParseJWT(token, cfg.Auth().Secret())
 		if err != nil {
-			return "", fmt.Errorf("invalid token: %w", err)
+			return "", "", fmt.Errorf("invalid token: %w", err)
 		}
-		return claims.Subject, nil
+		if claims.SessionID != "" {
+			revoked, err := revocationCache.IsRevoked(context.Background(), claims.SessionID)
+			if err != nil {
+				return "", "", fmt.Errorf("session verification unavailable: %w", err)
+			}
+			if revoked {
+				return "", "", fmt.Errorf("session revoked")
+			}
+		}
+		return claims.Subject, claims.SessionID, nil
 	}, cfg.AllowedOrigins())
 
 	wsCtx, wsCancel := context.WithCancel(context.Background())
@@ -256,14 +306,25 @@ func run() error {
 	})
 	valuationHandler := handler.NewValuationHandler(valuationService)
 
+	authService := service.NewAuthService(challengeStore, userService, sessionRepository, revocationCache, anomalyDetector, auditLogger, wsHub, cfg.Auth())
+	authHandler := handler.NewAuthHandler(authService, cfg.Environment() != "development", userService, nudgeOutcomeService, activityEventRepo)
+
 	performanceRepository := postgres.NewPerformanceRepository(db)
 	vaultRepository = postgres.NewVaultRepository(db)
 	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
 	performanceHandler := handler.NewPerformanceHandler(performanceService, handler.NewVaultOwnerAdapter(vaultRepository))
 
-	// Projection service for compound interest calculations
+	// Projection service for compound interest calculations, plus the Monte
+	// Carlo savings forecast (#843), which needs the goal/schedule repos to
+	// ground contribution behavior in the user's own history.
 	projectionCalculator := service.NewCompoundInterestCalculator()
-	projectionService := service.NewProjectionService(projectionCalculator, vaultRepository, performanceRepository)
+	projectionService := service.NewProjectionService(
+		projectionCalculator,
+		vaultRepository,
+		performanceRepository,
+		postgres.NewSavingsGoalRepository(db),
+		postgres.NewSavingsScheduleRepository(db),
+	)
 	projectionHandler := handler.NewProjectionHandler(projectionService)
 
 	contractReader := stellarpkg.NewContractReader(
@@ -339,6 +400,8 @@ func run() error {
 	// Background reconciliation of pending transactions: polls Horizon so a
 	// transaction's status is confirmed even when the client never calls
 	// GET /api/v1/transactions/{hash}. Broadcasts a WebSocket event on change.
+	var nudgeEngineSvc *service.NudgeEngineService
+
 	txPoller := service.NewTransactionPoller(
 		service.TransactionPollerConfig{
 			Enabled:  cfg.TransactionPoller().Enabled(),
@@ -352,6 +415,14 @@ func run() error {
 			// cached valuation and push a fresh one (#832 event-driven invalidation).
 			if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
 				valuationService.Invalidate(v.UserID)
+			}
+			if tx.Status == transaction.StatusCompleted && tx.Type == transaction.TypeDeposit {
+				if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
+					_ = nudgeOutcomeService.RecordDeposit(ctx, v.UserID, time.Now())
+					if nudgeEngineSvc != nil {
+						_ = nudgeEngineSvc.EvaluateAndDispatch(ctx, v.UserID)
+					}
+				}
 			}
 		},
 		baseLogger.WithGroup("tx-poller"),
@@ -392,10 +463,24 @@ func run() error {
 	yieldHarvestHandler.Register(mux)
 
 	vaultHandler.Register(mux)
+
+	// Read-only history for the fair-exit queue (#814), penalty escrow
+	// (#805), and slippage-safe rebalance (#810) event projections.
+	fairExitRepo := postgres.NewFairExitRepository(db)
+	fairExitHandler := handler.NewFairExitHandler(vaultService, fairExitRepo)
+	fairExitHandler.Register(mux)
+
 	portfolioHandler.Register(mux)
 	valuationHandler.Register(mux)
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
+
+	// Unified activity feed (deposits/withdrawals/rebalances/settlements/
+	// yield harvests) backing the dApp's transaction-history page.
+	activityRepository := postgres.NewActivityRepository(db)
+	activityService := service.NewActivityService(activityRepository)
+	activityHandler := handler.NewActivityHandler(activityService)
+	activityHandler.Register(mux)
 	userHandler.Register(mux)
 	notificationHandler.Register(mux)
 	adminHandler.Register(mux)
@@ -452,9 +537,44 @@ func run() error {
 		scheduler.DispatcherProtocolHealthNotifier{Dispatcher: notificationDispatcher},
 		baseLogger.WithGroup("protocol-health"),
 	)
+	protocolHealthChecker.SetLeaderChecker(schedulerLeadership)
 	protocolHealthCtx, cancelProtocolHealth := context.WithCancel(context.Background())
 	defer cancelProtocolHealth()
 	go protocolHealthChecker.Run(protocolHealthCtx)
+
+	// APY deviation alert (#846): notifies a vault's users when its APY drops
+	// >20% from its 30-day mean. Notification-only, but gated behind
+	// scheduler leadership like the other four jobs (see
+	// APYDeviationJob.SetLeaderChecker for the shared dedup-race rationale).
+	// Previously built and tested (apy_deviation.go/apy_deviation_adapters.go)
+	// but never wired into main.go before #846.
+	apyDeviationJob := scheduler.NewAPYDeviationJob(
+		scheduler.APYDeviationJobFromEnv(),
+		scheduler.VaultAPYListerFunc(func(ctx context.Context) ([]scheduler.APYVaultInfo, error) {
+			infos, err := vaultRepository.ListActiveVaultsForAPYCheck(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]scheduler.APYVaultInfo, len(infos))
+			for i, v := range infos {
+				out[i] = scheduler.APYVaultInfo{
+					ID:                 v.ID,
+					UserID:             v.UserID,
+					Currency:           v.Currency,
+					LastAPYAlertSentAt: v.LastAPYAlertSentAt,
+				}
+			}
+			return out, nil
+		}),
+		performanceRepository,
+		vaultRepository,
+		notificationDispatcher,
+		baseLogger.WithGroup("apy-deviation"),
+	)
+	apyDeviationJob.SetLeaderChecker(schedulerLeadership)
+	apyDeviationCtx, cancelAPYDeviation := context.WithCancel(context.Background())
+	defer cancelAPYDeviation()
+	go apyDeviationJob.Run(apyDeviationCtx)
 
 	// User watchlist
 	watchlistSvc := service.NewWatchlistService(db)
@@ -463,13 +583,62 @@ func run() error {
 
 	// Savings goals
 	savingsGoalRepo := postgres.NewSavingsGoalRepository(db)
-	notificationDispatcher2 := notifications.New(
+	// Intelligence proxy (forwards to Python service)
+	intelURL := cfg.Intelligence().ServiceURL()
+	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
+	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
+		BaseURL: intelURL,
+		APIKey:  cfg.Intelligence().ServiceAPIKey(),
+		Timeout: cfg.Intelligence().Timeout(),
+	})
+
+	nudgeCopyGen := service.CompositeCopyGenerator{
+		Template: nudge.TemplateCopyGenerator{},
+		LLM:      service.LLMCopyGenerator{Client: prometheusClient},
+	}
+
+	savingsStreakRepo := postgres.NewSavingsStreakRepository(db)
+
+	// Nudges dispatch over their own push-enabled dispatcher: the shared
+	// `notificationDispatcher` above is constructed with zero channels
+	// (websocket is still disabled), so nudges need their own live channel
+	// rather than silently persisting-but-never-delivering.
+	nudgeNotificationDispatcher := notifications.New(
 		[]notifications.Channel{
 			notifications.NewPushChannel(notifications.NoopPushSender{}, notificationRepository),
 		},
 		notificationRepository,
 		nil,
 	)
+
+	nudgeEngineSvc = service.NewNudgeEngineService(
+		savingsGoalRepo,
+		savingsStreakRepo,
+		transactionRepository,
+		userRepository,
+		usersignal.HeuristicSegmentProvider{UserRepo: userRepository, GoalRepo: savingsGoalRepo},
+		usersignal.HeuristicEngagementProvider{UserRepo: userRepository},
+		usersignal.HeuristicTimingProvider{Activity: activityEventRepo, UserRepo: userRepository},
+		nudgeHistoryRepo,
+		nudgeHistoryRepo,
+		nudgeHistoryRepo,
+		nudgeCopyGen,
+		service.DispatcherNudgeNotifier{Dispatcher: nudgeNotificationDispatcher},
+	)
+
+	nudgeEngineJob := scheduler.NewNudgeEngineJob(
+		scheduler.NudgeEngineConfig{
+			Enabled:  true,
+			Interval: 1 * time.Hour,
+		},
+		savingsGoalRepo,
+		nudgeEngineSvc,
+		baseLogger.WithGroup("nudge-engine"),
+	)
+	nudgeCtx, cancelNudge := context.WithCancel(context.Background())
+	defer cancelNudge()
+	go nudgeEngineJob.Run(nudgeCtx)
+
 	webhookRepo := postgres.NewWebhookRepository(db)
 	webhookSvc := service.NewWebhookService(webhookRepo)
 	webhookHandler := handler.NewWebhookHandler(webhookSvc)
@@ -479,12 +648,12 @@ func run() error {
 		vaultRepository,
 		service.CompositeGoalMilestoneNotifier{
 			Notifiers: []service.GoalMilestoneNotifier{
-				service.DispatcherGoalMilestoneNotifier{Dispatcher: notificationDispatcher2},
+				service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
 				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
 			},
 		},
 	)
-	savingsStreakRepo := postgres.NewSavingsStreakRepository(db)
+	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
 	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
 	savingsGamificationRepo := postgres.NewSavingsGamificationRepository(db)
@@ -505,31 +674,44 @@ func run() error {
 	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
 	savingsScheduleHandler.Register(mux)
 
+	// Goal deadline reminders are handled by the unified nudge engine
+	// (nudge.NudgeTypeDeadlineReminder / EvaluateDeadlineReminderTrigger)
+	// rather than a dedicated scheduler job — see nudgeEngineJob below.
+
 	ledgerVaultService := service.NewVaultService(vaultRepository)
 	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
 	goalProgressSvc := service.NewGoalProgressService(savingsGoalRepo)
+
+	// Durable async job queue (#824): the shared worker pool and producer
+	// client. Handlers are registered below before the worker starts. The
+	// client is passed to producers (harvest engine, chain invoker, and —
+	// as of #846 — the recurring-deposit job below) so they enqueue durable
+	// work instead of doing it inline.
+	jobQueueRepo := postgres.NewJobRepository(db)
+	jobQueueMetrics := jobqueue.NewStdMetrics()
+	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+
+	// Recurring deposit sweep (#846): classified SINGLETON (money-moving —
+	// see RecurringDepositJob's doc comment). The sweep loop itself only
+	// enqueues a durable per-occurrence job onto jobQueueClient rather than
+	// recording the deposit inline; RecurringDepositJobHandler (registered
+	// on jobWorker below) does the actual ledger write, giving it the same
+	// lease/retry/backoff at-least-once guarantees as the harvest engine.
 	recurringDepositJob := scheduler.NewRecurringDepositJob(
 		scheduler.RecurringDepositConfig{
 			Enabled:  cfg.RecurringDeposit().Enabled(),
 			Interval: cfg.RecurringDeposit().Interval(),
 		},
 		savingsScheduleRepo,
-		scheduledDepositSvc,
+		jobQueueClient,
 		goalProgressSvc,
-		scheduler.NotificationDepositNotifier{Dispatcher: notificationDispatcher},
 		baseLogger.WithGroup("recurring-deposit"),
 	)
+	recurringDepositJob.SetLeaderChecker(schedulerLeadership)
 	recurringCtx, cancelRecurring := context.WithCancel(context.Background())
 	defer cancelRecurring()
 	go recurringDepositJob.Run(recurringCtx)
 
-	// Durable async job queue (#824): the shared worker pool and producer
-	// client. Handlers are registered below before the worker starts. The
-	// client is passed to producers (harvest engine, chain invoker) so they
-	// enqueue durable work instead of doing it inline.
-	jobQueueRepo := postgres.NewJobRepository(db)
-	jobQueueMetrics := jobqueue.NewStdMetrics()
-	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
 	jobWorker := jobqueue.NewWorker(
 		jobQueueRepo,
 		jobqueue.Config{
@@ -564,6 +746,17 @@ func run() error {
 	harvestExecutor := harvest.NewServiceExecutor(vaultService, userService)
 	jobWorker.Register(harvest.DefaultJobType,
 		harvest.NewJobHandler(harvestExecutor, baseLogger.WithGroup("harvest-job")), 0)
+
+	// Recurring-deposit occurrence handler (#846): processes the jobs
+	// recurringDepositJob (above) enqueues. Fixes the #846 idempotency bug —
+	// see scheduled_deposit_adapters.go's RecordScheduledDeposit doc comment.
+	jobWorker.Register(scheduler.RecurringDepositJobType,
+		scheduler.NewRecurringDepositJobHandler(
+			scheduledDepositSvc,
+			savingsScheduleRepo,
+			scheduler.NotificationDepositNotifier{Dispatcher: notificationDispatcher},
+			baseLogger.WithGroup("recurring-deposit-handler"),
+		), 0)
 
 	harvestEngine := harvest.New(
 		harvest.Config{
@@ -603,16 +796,20 @@ func run() error {
 	)
 	vaultHandler.SetRebalanceRateLimiter(rebalanceRateLimiter)
 
-	// Intelligence proxy (forwards to Python service)
-	intelURL := cfg.Intelligence().ServiceURL()
-	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
-	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
-		BaseURL: intelURL,
-		APIKey:  cfg.Intelligence().ServiceAPIKey(),
-		Timeout: cfg.Intelligence().Timeout(),
-	})
 	intelligenceHandler := handler.NewIntelligenceHandler(intelProxy, prometheusClient)
 	intelligenceHandler.Register(mux)
+
+	// AI progress coaching (#112): on-demand endpoint plus a weekly background nudge.
+	savingsGoalHandler.SetCoachingProvider(prometheusClient)
+	goalCoachingScheduler := service.NewGoalCoachingScheduler(
+		savingsGoalRepo,
+		prometheusClient,
+		nudgeNotificationDispatcher,
+		baseLogger.WithGroup("goal-coaching"),
+	)
+	goalCoachingCtx, cancelGoalCoaching := context.WithCancel(context.Background())
+	defer cancelGoalCoaching()
+	go goalCoachingScheduler.Run(goalCoachingCtx, 7*24*time.Hour)
 
 	intelRelay := service.NewRelayHandler(http.DefaultClient, service.RelayConfig{
 		BaseURL: intelURL,
@@ -622,8 +819,35 @@ func run() error {
 	intelligenceRelayHandler := handler.NewIntelligenceRelayHandler(intelRelay)
 	intelligenceRelayHandler.Register(mux)
 
+	// Periodic financial insight digest (#859): a deterministic ledger
+	// source endpoint (consumed by the intelligence service via the relay),
+	// a cache/audit table, and a leader-elected daily job that generates and
+	// delivers a digest once per user per completed period.
+	digestRepository := postgres.NewDigestRepository(db)
+	digestLedgerService := service.NewDigestLedgerService(savingsGoalRepo, yieldHarvestRepository, savingsStreakRepo)
+	digestHandler := handler.NewDigestHandler(digestLedgerService, digestRepository)
+	digestHandler.Register(mux)
+
+	digestJob := scheduler.NewDigestJob(
+		scheduler.DigestJobConfig{Enabled: true, Interval: 24 * time.Hour},
+		notificationRepository,
+		digestRepository,
+		prometheusClient,
+		nudgeNotificationDispatcher,
+		baseLogger.WithGroup("digest"),
+	)
+	digestJob.SetLeaderChecker(schedulerLeadership)
+	digestCtx, cancelDigest := context.WithCancel(context.Background())
+	defer cancelDigest()
+	go digestJob.Run(digestCtx)
+
 	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
 	performanceSnapshotsHandler.Register(mux)
+
+	toolAuditRepo := postgres.NewToolAuditRepository(db)
+	toolAuditSvc := service.NewToolAuditService(toolAuditRepo)
+	toolAuditHandler := handler.NewToolAuditHandler(toolAuditSvc)
+	toolAuditHandler.Register(mux)
 
 	bankHandler.Register(mux)
 	bankAccountHandler.Register(mux)
@@ -644,14 +868,19 @@ func run() error {
 		{PathPrefix: "/healthz", Public: true},
 		{PathPrefix: "/readyz", Public: true},
 		{PathPrefix: "/ws", Public: true},
-		{PathPrefix: "/api/v1/auth/", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/challenge", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/verify", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/refresh", Public: true},
+		// No blanket "/api/v1/auth/" rule: logout, logout-all, and sessions
+		// must stay protected and fall through to the "/api/v1/" catch-all.
 		{PathPrefix: "/api/v1/banks/", Public: true},
 		{PathPrefix: "/api/v1/yields/", Public: true},
 		{PathPrefix: "/api/v1/savings-goals/shared/", Public: true},
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
+		{PathPrefix: "/api/v1/internal/", Role: "service"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}
-	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules)
+	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules, revocationCache)
 	// Tell the rate-limit client-IP extractor how many trusted proxies sit in
 	// front of the API so it derives the originating client IP from
 	// X-Forwarded-For instead of collapsing all traffic onto the proxy address.
@@ -736,9 +965,6 @@ func run() error {
 		"network_passphrase", cfg.Stellar().NetworkPassphrase(),
 		"auto_migrate", cfg.Startup().EnableAutoMigrate(),
 	)
-
-	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, cfg.Stellar().RPCURL())
 

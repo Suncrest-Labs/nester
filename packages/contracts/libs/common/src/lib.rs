@@ -6,12 +6,15 @@ pub mod events;
 pub mod fees;
 pub mod reentrancy;
 pub mod storage;
+pub mod upgrade;
 
 pub use constants::*;
 pub use errors::ContractError;
 pub use events::*;
 pub use reentrancy::{CalleeAllowlist, ReentrancyGuard, with_reentrancy_guard};
 pub use storage::*;
+pub use upgrade::*;
+
 
 use soroban_sdk::contracttype;
 

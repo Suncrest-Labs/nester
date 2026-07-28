@@ -23,10 +23,11 @@ const (
 )
 
 type Client struct {
-	hub    *Hub
-	conn   *websocket.Conn
-	send   chan Event
-	userID string
+	hub       *Hub
+	conn      *websocket.Conn
+	send      chan Event
+	userID    string
+	sessionID string
 
 	mu   sync.Mutex
 	subs map[string]bool

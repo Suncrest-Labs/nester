@@ -45,13 +45,16 @@ func (m *memorySavingsGoalRepo) Create(_ context.Context, goal *savingsgoal.Savi
 	return nil
 }
 
-func (m *memorySavingsGoalRepo) ListByUser(_ context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (m *memorySavingsGoalRepo) ListByUser(_ context.Context, userID uuid.UUID, category, search string) ([]savingsgoal.SavingsGoal, error) {
 	var out []savingsgoal.SavingsGoal
 	for _, g := range m.goals {
 		if g.UserID != userID {
 			continue
 		}
 		if category != "" && string(g.Category) != category {
+			continue
+		}
+		if search != "" && !strings.Contains(strings.ToLower(g.Name), strings.ToLower(search)) {
 			continue
 		}
 		out = append(out, g)
@@ -191,6 +194,17 @@ func (m *memorySavingsGoalRepo) GetByShareToken(_ context.Context, token uuid.UU
 		}
 	}
 	return nil, savingsgoal.ErrGoalNotFound
+}
+
+func (m *memorySavingsGoalRepo) UpdateOnchainLink(_ context.Context, goalID uuid.UUID, onchainGoalID, onchainStatus string) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.OnchainGoalID = &onchainGoalID
+	g.OnchainStatus = &onchainStatus
+	m.goals[goalID] = g
+	return nil
 }
 
 // newVaultReader builds an in-memory VaultReader seeded with the given vaults,

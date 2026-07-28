@@ -23,6 +23,10 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
+type noopRevocationChecker struct{}
+
+func (noopRevocationChecker) IsRevoked(context.Context, string) (bool, error) { return false, nil }
+
 type adminHandlerStubService struct {
 	dashboard   admindomain.VaultHealthDashboard
 	vaults      map[uuid.UUID]admindomain.VaultDetail
@@ -292,7 +296,7 @@ func TestAdminHandlerAuthDashboardRequiresAdmin(t *testing.T) {
 	rules := []middleware.RouteRule{
 		{PathPrefix: "/api/v1/admin/", Role: "admin"},
 	}
-	protected := middleware.Authenticate("admin-test-secret", "", rules)(mux)
+	protected := middleware.Authenticate("admin-test-secret", "", rules, noopRevocationChecker{})(mux)
 	server := httptest.NewServer(protected)
 	defer server.Close()
 
@@ -411,7 +415,7 @@ func TestAdminHandlerAuthListPauseVerify(t *testing.T) {
 	rules := []middleware.RouteRule{
 		{PathPrefix: "/api/v1/admin/", Role: "admin"},
 	}
-	protected := middleware.Authenticate("admin-test-secret", "", rules)(mux)
+	protected := middleware.Authenticate("admin-test-secret", "", rules, noopRevocationChecker{})(mux)
 	server := httptest.NewServer(protected)
 	defer server.Close()
 
@@ -473,7 +477,7 @@ func TestAdminHandlerRebalanceAuth(t *testing.T) {
 	rules := []middleware.RouteRule{
 		{PathPrefix: "/api/v1/admin/", Role: "admin"},
 	}
-	protected := middleware.Authenticate("admin-test-secret", "", rules)(mux)
+	protected := middleware.Authenticate("admin-test-secret", "", rules, noopRevocationChecker{})(mux)
 	server := httptest.NewServer(protected)
 	defer server.Close()
 
@@ -512,7 +516,7 @@ func TestAdminHandlerAllocationEndpointsRequireAdmin(t *testing.T) {
 	mux := http.NewServeMux()
 	h.Register(mux)
 	rules := []middleware.RouteRule{{PathPrefix: "/api/v1/admin/", Role: "admin"}}
-	protected := middleware.Authenticate("admin-test-secret", "", rules)(mux)
+	protected := middleware.Authenticate("admin-test-secret", "", rules, noopRevocationChecker{})(mux)
 	server := httptest.NewServer(protected)
 	defer server.Close()
 

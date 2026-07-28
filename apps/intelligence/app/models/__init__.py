@@ -12,14 +12,26 @@ from app.models.recommendation import (
     VaultRecommendationRequest,
     VaultRecommendationResponse,
 )
+from app.models.savings_recommendation import (
+    CandidateActionType,
+    RecommendationCandidate,
+    RecommendationImpact,
+    SavingsRecommendationItem,
+    SavingsRecommendationSet,
+)
 
 __all__ = [
     "AllocationItem",
+    "CandidateActionType",
     "ConfidenceLevel",
     "PortfolioAnalysisResponse",
     "PortfolioBreakdown",
     "Recommendation",
+    "RecommendationCandidate",
+    "RecommendationImpact",
     "RecommendedVault",
+    "SavingsRecommendationItem",
+    "SavingsRecommendationSet",
     "VaultRecommendationRequest",
     "VaultRecommendationResponse",
 ]

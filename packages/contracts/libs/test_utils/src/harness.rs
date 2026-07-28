@@ -137,6 +137,11 @@ impl NesterHarness {
         AllocationStrategyContractClient::new(&self.env, &self.strategy_id)
     }
 
+    /// Return a fresh client handle for the Treasury contract.
+    pub fn treasury(&self) -> TreasuryContractClient<'_> {
+        TreasuryContractClient::new(&self.env, &self.treasury_id)
+    }
+
     // -----------------------------------------------------------------------
     // Test helpers
     // -----------------------------------------------------------------------

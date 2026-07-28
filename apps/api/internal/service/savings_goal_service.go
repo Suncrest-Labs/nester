@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,6 +50,11 @@ func NewSavingsGoalService(repo savingsgoal.Repository, vaultRepo VaultReader, n
 		notifier:       notifier,
 		streakNotifier: noopStreakMilestoneNotifier{},
 	}
+}
+
+// SetOutcomeRecorder attaches an outcome recorder for nudge effectiveness tracking.
+func (s *SavingsGoalService) SetOutcomeRecorder(rec OutcomeRecorder) {
+	s.outcomeRec = rec
 }
 
 // SetTemplateRepository attaches the template repository.
@@ -218,7 +224,7 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		return nil, err
 	}
 
-	goals, err := s.repo.ListByUser(ctx, userID, filterCategory)
+	goals, err := s.repo.ListByUser(ctx, userID, filterCategory, "")
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +244,117 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		out = append(out, enriched)
 	}
 	return out, nil
+}
+
+// SavingsGoalListFilter drives ListPaginated: pagination, sort, and search on
+// top of the same category/status/archived semantics as List.
+type SavingsGoalListFilter struct {
+	Page            int
+	PerPage         int
+	SortField       string
+	SortOrder       string
+	Category        string
+	Status          string
+	IncludeArchived bool
+	Search          string
+}
+
+// ListPaginated is List with pagination, sort, and full-text search applied.
+// Status/archived filtering depends on each goal's enriched status, which is
+// only known after EnrichProgress runs — so, unlike vault/settlement
+// listing, pagination here is applied in Go after enrichment and filtering,
+// not pushed down as SQL LIMIT/OFFSET. Goals-per-user is low-cardinality, so
+// this is not a performance concern.
+func (s *SavingsGoalService) ListPaginated(ctx context.Context, userID uuid.UUID, filter SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error) {
+	filterCategory := ""
+	if strings.TrimSpace(filter.Category) != "" {
+		parsed, err := savingsgoal.ParseCategory(filter.Category)
+		if err != nil {
+			return nil, 0, err
+		}
+		filterCategory = string(parsed)
+	}
+
+	filterStatus, err := savingsgoal.ParseStatusFilter(filter.Status)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	goals, err := s.repo.ListByUser(ctx, userID, filterCategory, filter.Search)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	out := make([]savingsgoal.SavingsGoal, 0, len(goals))
+	for _, g := range goals {
+		enriched, err := s.EnrichProgress(ctx, g)
+		if err != nil {
+			return nil, 0, err
+		}
+		if filterStatus != "" {
+			if enriched.Status != filterStatus {
+				continue
+			}
+		} else if !filter.IncludeArchived && enriched.Status == savingsgoal.GoalStatusArchived {
+			continue
+		}
+		out = append(out, enriched)
+	}
+
+	sortSavingsGoals(out, filter.SortField, filter.SortOrder)
+
+	total := len(out)
+	page, perPage := filter.Page, filter.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = listquery.DefaultPerPage
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return out[start:end], total, nil
+}
+
+func sortSavingsGoals(goals []savingsgoal.SavingsGoal, field, order string) {
+	desc := order != "asc"
+	compare := func(i, j int) int {
+		switch field {
+		case "target_amount":
+			return goals[i].TargetAmount.Cmp(goals[j].TargetAmount)
+		case "deadline":
+			switch {
+			case goals[i].Deadline.Before(goals[j].Deadline):
+				return -1
+			case goals[i].Deadline.After(goals[j].Deadline):
+				return 1
+			default:
+				return 0
+			}
+		default:
+			switch {
+			case goals[i].CreatedAt.Before(goals[j].CreatedAt):
+				return -1
+			case goals[i].CreatedAt.After(goals[j].CreatedAt):
+				return 1
+			default:
+				return 0
+			}
+		}
+	}
+	sort.SliceStable(goals, func(i, j int) bool {
+		c := compare(i, j)
+		if desc {
+			return c > 0
+		}
+		return c < 0
+	})
 }
 
 func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUID, in UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
@@ -323,7 +440,7 @@ func (s *SavingsGoalService) ListContributions(ctx context.Context, userID, goal
 }
 
 func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {
-	goals, err := s.repo.ListByUser(ctx, userID, "")
+	goals, err := s.repo.ListByUser(ctx, userID, "", "")
 	if err != nil {
 		return savingsgoal.SavingsGoalsSummary{}, err
 	}
@@ -439,6 +556,9 @@ func (s *SavingsGoalService) EnrichProgress(ctx context.Context, goal savingsgoa
 		now := time.Now().UTC()
 		goal.CompletedAt = &now
 		goal.Status = savingsgoal.GoalStatusCompleted
+		if s.outcomeRec != nil {
+			_ = s.outcomeRec.RecordGoalCompletion(ctx, goal.UserID, now)
+		}
 	}
 
 	newMilestones := savingsgoal.DetectNewMilestones(goal.ProgressPct, goal.NotifiedMilestones)
@@ -562,6 +682,9 @@ func (s *SavingsGoalService) Complete(ctx context.Context, userID, goalID uuid.U
 	goal.CompletionAction = action
 	now := time.Now().UTC()
 	goal.CompletedAt = &now
+	if s.outcomeRec != nil {
+		_ = s.outcomeRec.RecordGoalCompletion(ctx, goal.UserID, now)
+	}
 	return s.EnrichProgress(ctx, *goal)
 }
 

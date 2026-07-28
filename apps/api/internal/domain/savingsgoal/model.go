@@ -2,6 +2,8 @@ package savingsgoal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -42,6 +44,29 @@ const (
 	// after it completes) to hide it without deleting it (#684).
 	GoalStatusArchived = "archived"
 )
+
+// On-chain goal status values, mirroring the savings_goal contract's
+// GoalStatus enum (#807). Stored separately from Status: on-chain
+// registration happens asynchronously, so a goal can be backend-Active
+// while its on-chain twin is still nil (not yet registered), and the two
+// only need to agree once registration lands.
+const (
+	OnchainStatusActive    = "active"
+	OnchainStatusCompleted = "completed"
+	OnchainStatusAbandoned = "abandoned"
+	OnchainStatusExpired   = "expired"
+)
+
+// DeriveOnchainGoalID hashes a goal's UUID into the 32-byte identifier the
+// savings_goal contract's create_goal expects as goal_id, hex-encoded for
+// storage. The contract never generates goal IDs itself (#807): the backend
+// remains the source of truth for the ID, and this hash is the only stable,
+// deterministic way to turn a UUID into a BytesN<32> without a chain
+// round-trip.
+func DeriveOnchainGoalID(id uuid.UUID) string {
+	sum := sha256.Sum256(id[:])
+	return hex.EncodeToString(sum[:])
+}
 
 // ParseStatusFilter validates a status used to filter the goal list. An empty
 // value means "no filter" and returns ("", nil).
@@ -200,6 +225,10 @@ type SavingsGoal struct {
 	ShareToken      *uuid.UUID `json:"share_token,omitempty"`
 	ShareEnabledAt  *time.Time `json:"share_enabled_at,omitempty"`
 	IsShared        bool       `json:"is_shared"`
+	// On-chain linkage (#807). OnchainGoalID is nil until asynchronous
+	// registration against the savings_goal contract succeeds.
+	OnchainGoalID  *string `json:"onchain_goal_id,omitempty"`
+	OnchainStatus  *string `json:"onchain_status,omitempty"`
 }
 
 // SharedGoalView is the read-only public projection of a savings goal exposed
@@ -238,7 +267,7 @@ type GoalContribution struct {
 
 type Repository interface {
 	Create(ctx context.Context, goal *SavingsGoal) error
-	ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]SavingsGoal, error)
+	ListByUser(ctx context.Context, userID uuid.UUID, category, search string) ([]SavingsGoal, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*SavingsGoal, error)
 	Update(ctx context.Context, goal *SavingsGoal) error
 	Delete(ctx context.Context, id, userID uuid.UUID) error
@@ -263,6 +292,9 @@ type Repository interface {
 	ClearShareToken(ctx context.Context, goalID, userID uuid.UUID) error
 	// GetByShareToken returns the goal whose share_token matches. Returns ErrGoalNotFound if none.
 	GetByShareToken(ctx context.Context, token uuid.UUID) (*SavingsGoal, error)
+	// UpdateOnchainLink persists the result of asynchronously registering the
+	// goal against the savings_goal contract (#807).
+	UpdateOnchainLink(ctx context.Context, goalID uuid.UUID, onchainGoalID, onchainStatus string) error
 }
 
 // categoryIconDefaults maps each GoalCategory to a default icon name and color

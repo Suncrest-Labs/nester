@@ -63,6 +63,12 @@ func (e *Engine) statusFor(ctx context.Context, v VaultYield) (Status, error) {
 		Margin:       e.cfg.Margin,
 	})
 
+	due := DueForHarvest(e.clock(), v.HarvestFrequency, v.LastHarvestedAt)
+	if !due {
+		decision.Harvest = false
+		decision.Reason = ReasonNotDue
+	}
+
 	status := Status{
 		VaultID:      v.VaultID,
 		PendingYield: v.AccruedYield,
