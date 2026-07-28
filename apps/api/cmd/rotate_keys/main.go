@@ -100,7 +100,6 @@ func run() error {
 
 	// Rotate KYC document ciphertext
 	kycStore := &kycRotationStore{repo: userRepo}
-	startKYC := time.Now()
 	kycStats, err := rotation.NewRotator(kycStore, cipher).Run(ctx, rotation.Options{
 		BatchSize: *batchSize,
 		Logger:    logger,
