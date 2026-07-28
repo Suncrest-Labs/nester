@@ -31,6 +31,12 @@ type VaultYield struct {
 	// AccrualRatePerHour is the recent yield accrual rate, used only to estimate
 	// the next harvest time for user-facing status. Zero means "unknown".
 	AccrualRatePerHour decimal.Decimal
+	// HarvestFrequency is the vault owner's configured cadence ("daily" or
+	// "weekly", #940). Empty is treated as the default (daily).
+	HarvestFrequency string
+	// LastHarvestedAt is when this vault's yield was last harvested. Nil means
+	// never harvested, so the frequency gate always lets it through.
+	LastHarvestedAt *time.Time
 }
 
 // VaultSource lists vaults eligible for harvest evaluation.
@@ -194,6 +200,10 @@ func (e *Engine) TriggerVault(ctx context.Context, vaultID uuid.UUID) (bool, err
 // evaluateAndEnqueue applies the gate to one vault and enqueues an idempotent
 // harvest job when it clears. Returns whether a harvest was enqueued.
 func (e *Engine) evaluateAndEnqueue(ctx context.Context, v VaultYield) (bool, error) {
+	if !DueForHarvest(e.clock(), v.HarvestFrequency, v.LastHarvestedAt) {
+		return false, nil
+	}
+
 	fee, err := e.gas.HarvestFee(ctx, v.Currency)
 	if err != nil {
 		return false, fmt.Errorf("estimate gas fee: %w", err)
@@ -290,6 +300,11 @@ func (e *Engine) SimulateHarvest(ctx context.Context, vaultID uuid.UUID) (Simula
 		GasFee:       fee,
 		Margin:       e.cfg.Margin,
 	})
+
+	if !DueForHarvest(e.clock(), v.HarvestFrequency, v.LastHarvestedAt) {
+		decision.Harvest = false
+		decision.Reason = ReasonNotDue
+	}
 
 	// If network is congested, the harvest would be deferred (not enqueued).
 	wouldHarvest := decision.Harvest && !congested
