@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from app.services.fraud_detection import (
     FraudFlag,
@@ -158,7 +159,8 @@ class FraudExplanationService:
         desc = severity_desc.get(flag.severity, "anomalous")
 
         operator_explanation = (
-            f"[{flag.severity.value.upper()}] {desc} event detected for user {flag.user_id[:8]}...: "
+            f"[{flag.severity.value.upper()}] {desc} event "
+            f"detected for user {flag.user_id[:8]}...: "
             f"{flag.event_type}. Risk score: {flag.risk_score:.2f}. "
             f"Contributing signals: {signals_summary}."
         )

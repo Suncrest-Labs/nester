@@ -14,14 +14,12 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.fraud_detection import (
-    ActionType,
     FraudDetectionService,
     FraudFlag,
-    PopulationBaseline,
     Severity,
     Signal,
     UserBaseline,
@@ -48,13 +46,16 @@ def get_explanation_service() -> FraudExplanationService:
     global _explanation_service
     if _explanation_service is None:
         try:
-            from app.services.claude import client
             from app.config import settings
+            from app.services.claude import client
             _explanation_service = FraudExplanationService(
                 anthropic_client=client, model_id=settings.anthropic_model
             )
         except Exception:
-            logger.warning("fraud_router: could not initialize LLM client, using deterministic explanations")
+            logger.warning(
+                "fraud_router: could not initialize LLM client, "
+                "using deterministic explanations"
+            )
             _explanation_service = FraudExplanationService()
     return _explanation_service
 
@@ -273,7 +274,7 @@ async def get_fraud_metrics() -> MetricsResponse:
     a detection system nobody trusts because it cries wolf gets disabled,
     which is worse than not having it.
     """
-    service = get_fraud_service()
+    get_fraud_service()
 
     # In production, these would come from the database.
     # For the API contract, we return the shape.

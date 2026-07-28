@@ -87,7 +87,8 @@ def test_user_notification_reassuring_tone() -> None:
     assert "hacked" not in result.user_notification.lower()
     assert "stolen" not in result.user_notification.lower()
     # Should mention action
-    assert "confirm" in result.user_notification.lower() or "verify" in result.user_notification.lower()
+    notif = result.user_notification.lower()
+    assert "confirm" in notif or "verify" in notif
 
 
 def test_high_severity_mentions_hold() -> None:
@@ -96,7 +97,8 @@ def test_high_severity_mentions_hold() -> None:
 
     result = service.generate_explanation(flag)
 
-    assert "hold" in result.user_notification.lower() or "paused" in result.user_notification.lower()
+    notif = result.user_notification.lower()
+    assert "hold" in notif or "paused" in notif
 
 
 def test_low_severity_no_action_needed() -> None:
@@ -105,7 +107,8 @@ def test_low_severity_no_action_needed() -> None:
 
     result = service.generate_explanation(flag)
 
-    assert "no action" in result.user_notification.lower() or "no action needed" in result.user_notification.lower()
+    notif = result.user_notification.lower()
+    assert "no action" in notif or "no action needed" in notif
 
 
 def test_sanitize_field_removes_tags() -> None:
@@ -182,4 +185,5 @@ def test_critical_severity_action_text() -> None:
 
     result = service.generate_explanation(flag)
 
-    assert "hold" in result.user_notification.lower() or "paused" in result.user_notification.lower()
+    notif = result.user_notification.lower()
+    assert "hold" in notif or "paused" in notif

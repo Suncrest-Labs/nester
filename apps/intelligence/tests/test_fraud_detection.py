@@ -12,14 +12,11 @@ Covers:
 - Post-credential-change activity detection
 """
 
-from datetime import datetime, timezone
 
 from app.services.fraud_detection import (
     ABSOLUTE_MAX_AMOUNT_NEW_USER,
     AUTH_FAILURE_BURST_COUNT,
-    IMPOSSIBLE_TRAVEL_MIN_KM,
     FraudDetectionService,
-    PopulationBaseline,
     Severity,
     UserBaseline,
     aggregate_score,
