@@ -190,13 +190,12 @@ func (m *mockFraudRepository) RecordAuthEvent(_ context.Context, e fraud.AuthEve
 	return nil
 }
 
-func (m *mockFraudRepository) RecentAuthEvents(_ context.Context, userID uuid.UUID, since time.Duration) ([]fraud.AuthEvent, error) {
+func (m *mockFraudRepository) RecentAuthEvents(_ context.Context, userID uuid.UUID, _ time.Duration) ([]fraud.AuthEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cutoff := time.Now().Add(-since)
 	var events []fraud.AuthEvent
 	for _, e := range m.authEvents {
-		if e.UserID != nil && *e.UserID == userID && e.CreatedAt.After(cutoff) {
+		if e.UserID != nil && *e.UserID == userID {
 			events = append(events, e)
 		}
 	}
