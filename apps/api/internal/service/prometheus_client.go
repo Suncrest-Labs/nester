@@ -190,6 +190,22 @@ func (c *PrometheusClient) GenerateDigest(ctx context.Context, request intellige
 	return &response, nil
 }
 
+func (c *PrometheusClient) GenerateNudgeCopy(ctx context.Context, req intelligence.NudgeCopyRequest) (*intelligence.NudgeCopyResponse, error) {
+	if !c.canCall() {
+		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
+	}
+
+	endpoint := fmt.Sprintf("%s/intelligence/nudges/copy", c.cfg.BaseURL)
+	var response intelligence.NudgeCopyResponse
+	err := c.doPostRequest(ctx, endpoint, req, &response)
+	if err != nil {
+		c.recordFailure()
+		return nil, fmt.Errorf("failed to generate nudge copy: %w", err)
+	}
+
+	return &response, nil
+}
+
 func (c *PrometheusClient) doRequest(ctx context.Context, endpoint string, target any) error {
 	return c.doHTTPRequest(ctx, "GET", endpoint, nil, target)
 }

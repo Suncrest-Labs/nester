@@ -155,10 +155,12 @@ type IntelligenceConfig struct {
 }
 
 type AuthConfig struct {
-	secret          string
-	serviceAPIKey   string
-	tokenExpiry     time.Duration
-	challengeExpiry time.Duration
+	secret                  string
+	serviceAPIKey           string
+	accessTokenExpiry       time.Duration
+	refreshTokenExpiry      time.Duration
+	absoluteSessionLifetime time.Duration
+	challengeExpiry         time.Duration
 }
 
 type RateLimitConfig struct {
@@ -248,10 +250,12 @@ func Load() (*Config, error) {
 		},
 		settlementProviderURL: loader.stringDefault("SETTLEMENT_PROVIDER_URL", ""),
 		auth: AuthConfig{
-			secret:          loader.requiredString("AUTH_JWT_SECRET"),
-			serviceAPIKey:   loader.stringDefault("NESTER_SERVICE_API_KEY", ""),
-			tokenExpiry:     loader.durationDefault("AUTH_TOKEN_EXPIRY", 24*time.Hour),
-			challengeExpiry: loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
+			secret:                  loader.requiredString("AUTH_JWT_SECRET"),
+			serviceAPIKey:           loader.stringDefault("NESTER_SERVICE_API_KEY", ""),
+			accessTokenExpiry:       loader.durationDefault("AUTH_ACCESS_TOKEN_EXPIRY", 5*time.Minute),
+			refreshTokenExpiry:      loader.durationDefault("AUTH_REFRESH_TOKEN_EXPIRY", 7*24*time.Hour),
+			absoluteSessionLifetime: loader.durationDefault("AUTH_ABSOLUTE_SESSION_LIFETIME", 30*24*time.Hour),
+			challengeExpiry:         loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
 		},
 		rateLimit: RateLimitConfig{
 			globalLimit:       loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
@@ -656,8 +660,20 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("AUTH_JWT_SECRET must not use the development default in production or staging")
 	}
 
-	if c.auth.tokenExpiry <= 0 {
-		loader.addError("AUTH_TOKEN_EXPIRY must be greater than 0")
+	if c.auth.accessTokenExpiry <= 0 {
+		loader.addError("AUTH_ACCESS_TOKEN_EXPIRY must be greater than 0")
+	}
+	if c.auth.refreshTokenExpiry <= 0 {
+		loader.addError("AUTH_REFRESH_TOKEN_EXPIRY must be greater than 0")
+	}
+	if c.auth.absoluteSessionLifetime <= 0 {
+		loader.addError("AUTH_ABSOLUTE_SESSION_LIFETIME must be greater than 0")
+	}
+	if c.auth.accessTokenExpiry >= c.auth.refreshTokenExpiry {
+		loader.addError("AUTH_ACCESS_TOKEN_EXPIRY must be less than AUTH_REFRESH_TOKEN_EXPIRY")
+	}
+	if c.auth.refreshTokenExpiry >= c.auth.absoluteSessionLifetime {
+		loader.addError("AUTH_REFRESH_TOKEN_EXPIRY must be less than AUTH_ABSOLUTE_SESSION_LIFETIME")
 	}
 
 	if c.auth.challengeExpiry <= 0 {
@@ -894,8 +910,16 @@ func (a AuthConfig) ServiceAPIKey() string {
 	return a.serviceAPIKey
 }
 
-func (a AuthConfig) TokenExpiry() time.Duration {
-	return a.tokenExpiry
+func (a AuthConfig) AccessTokenExpiry() time.Duration {
+	return a.accessTokenExpiry
+}
+
+func (a AuthConfig) RefreshTokenExpiry() time.Duration {
+	return a.refreshTokenExpiry
+}
+
+func (a AuthConfig) AbsoluteSessionLifetime() time.Duration {
+	return a.absoluteSessionLifetime
 }
 
 func (a AuthConfig) ChallengeExpiry() time.Duration {

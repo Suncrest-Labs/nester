@@ -101,7 +101,7 @@ type memoryGoalRepo struct {
 }
 
 func (m *memoryGoalRepo) Create(context.Context, *savingsgoal.SavingsGoal) error { return nil }
-func (m *memoryGoalRepo) ListByUser(context.Context, uuid.UUID, string) ([]savingsgoal.SavingsGoal, error) {
+func (m *memoryGoalRepo) ListByUser(context.Context, uuid.UUID, string, string) ([]savingsgoal.SavingsGoal, error) {
 	return nil, nil
 }
 func (m *memoryGoalRepo) GetByID(_ context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {

@@ -92,12 +92,7 @@ export const savingsGoals = {
       body: JSON.stringify(input),
     }),
   delete: (id: string) =>
-    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1"}/users/savings-goals/${id}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("nester_token") ?? "" : ""}`,
-      },
-    }),
+    apiRequest<void>(`/users/savings-goals/${id}`, { method: "DELETE" }),
   pause: (id: string) =>
     apiRequest<SavingsGoal>(`/users/savings-goals/${id}/pause`, { method: "PATCH" }),
   resume: (id: string) =>
@@ -112,12 +107,7 @@ export const savingsGoals = {
   share: (id: string) =>
     apiRequest<SavingsGoal>(`/users/savings-goals/${id}/share`, { method: "POST" }),
   unshare: (id: string) =>
-    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1"}/users/savings-goals/${id}/share`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("nester_token") ?? "" : ""}`,
-      },
-    }),
+    apiRequest<void>(`/users/savings-goals/${id}/share`, { method: "DELETE" }),
   getShared: (token: string) =>
     apiRequest<SharedGoalView>(`/savings-goals/shared/${token}`),
 };

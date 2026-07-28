@@ -89,7 +89,7 @@ func (s *TxPendingSource) PendingDeposits(ctx context.Context, userID uuid.UUID)
 
 // GoalLister is the subset of the savings-goal repository the goal source needs.
 type GoalLister interface {
-	ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error)
+	ListByUser(ctx context.Context, userID uuid.UUID, category, search string) ([]savingsgoal.SavingsGoal, error)
 }
 
 // GoalAllocationSource adapts the savings-goal repository to GoalSource.
@@ -104,7 +104,7 @@ func NewGoalAllocationSource(goals GoalLister) *GoalAllocationSource {
 
 // Goals implements GoalSource.
 func (s *GoalAllocationSource) Goals(ctx context.Context, userID uuid.UUID) ([]GoalInput, error) {
-	goals, err := s.goals.ListByUser(ctx, userID, "")
+	goals, err := s.goals.ListByUser(ctx, userID, "", "")
 	if err != nil {
 		return nil, err
 	}

@@ -107,6 +107,7 @@ export interface AllocationRecommendation {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  proposal?: { id: string; text: string; status?: 'pending' | 'executed' | 'declined' }
 }
 
 export interface SavingsPlanRequest {
@@ -227,6 +228,12 @@ export const intelligenceApi = {
     const params = new URLSearchParams({ userId, message })
     return new EventSource(`${INTELLIGENCE_BASE}/intelligence/chat?${params}`)
   },
+
+  confirmToolAction: (proposalId: string, approved: boolean) =>
+    goApiFetch<{ status: string; assistant_message: string }>(`/intelligence/tools/${proposalId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ approved })
+    }),
 }
 
 // Export as default or intelligence for backward compatibility if needed

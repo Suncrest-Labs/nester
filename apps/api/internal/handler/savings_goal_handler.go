@@ -26,6 +26,7 @@ type SavingsGoalManager interface {
 	Create(ctx context.Context, userID uuid.UUID, in service.CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error)
+	ListPaginated(ctx context.Context, userID uuid.UUID, filter service.SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error)
 	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Delete(ctx context.Context, userID, goalID uuid.UUID) error
 	Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error)
@@ -322,14 +323,21 @@ func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	includeArchived := strings.TrimSpace(r.URL.Query().Get("include_archived")) == "true"
-	goals, err := h.svc.List(
-		r.Context(),
-		userID,
-		strings.TrimSpace(r.URL.Query().Get("category")),
-		strings.TrimSpace(r.URL.Query().Get("status")),
-		includeArchived,
-	)
+	params, err := listquery.ParseSavingsGoalList(r)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	goals, total, err := h.svc.ListPaginated(r.Context(), userID, service.SavingsGoalListFilter{
+		Page:            params.Page.Page,
+		PerPage:         params.Page.PerPage,
+		SortField:       params.Sort.Field,
+		SortOrder:       params.Sort.Order,
+		Category:        params.Category,
+		Status:          params.Status,
+		IncludeArchived: params.IncludeArchived,
+		Search:          params.Search,
+	})
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -337,7 +345,7 @@ func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 	if goals == nil {
 		goals = []savingsgoal.SavingsGoal{}
 	}
-	response.WriteJSON(w, http.StatusOK, response.OK(goals))
+	response.WriteJSON(w, http.StatusOK, response.PaginatedOK(goals, params.Page.Page, params.Page.PerPage, total, ""))
 }
 
 func (h *SavingsGoalHandler) summary(w http.ResponseWriter, r *http.Request) {

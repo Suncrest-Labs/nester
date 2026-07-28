@@ -4,11 +4,12 @@ import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ShieldCheck, User, Bell, Globe } from "lucide-react";
+import { ShieldCheck, User, Bell, Globe, Monitor } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { useWallet } from "@/components/wallet-provider";
 import { KYCSection, type KYCStatus } from "@/components/kyc/KYCSection";
 import { BankAccountsSection } from "@/components/settings/bank-accounts-section";
+import { SessionsSection } from "@/components/settings/sessions-section";
 import { cn } from "@/lib/utils";
 import { useLocale, useTranslations } from "@/context/locale-context";
 import { SUPPORTED_LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n/config";
@@ -129,11 +130,12 @@ function SavingsNotificationsSection() {
     );
 }
 
-type Tab = "profile" | "verification" | "notifications" | "preferences";
+type Tab = "profile" | "verification" | "security" | "notifications" | "preferences";
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: "profile", label: "Profile", icon: User },
     { id: "verification", label: "Verification", icon: ShieldCheck },
+    { id: "security", label: "Security", icon: Monitor },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "preferences", label: "Preferences", icon: Globe },
 ];
@@ -263,6 +265,17 @@ export default function SettingsPage() {
                                     onSubmit={kyc.submitKYC}
                                     isSubmitting={kyc.isSubmitting}
                                 />
+                            </motion.div>
+                        )}
+
+                        {activeTab === "security" && (
+                            <motion.div
+                                key="security"
+                                initial={{ opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 8 }}
+                            >
+                                <SessionsSection />
                             </motion.div>
                         )}
 

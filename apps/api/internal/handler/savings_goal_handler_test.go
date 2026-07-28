@@ -97,6 +97,30 @@ func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, categ
 	return out, nil
 }
 
+func (m *mockSavingsGoalService) ListPaginated(ctx context.Context, userID uuid.UUID, filter service.SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error) {
+	out, err := m.List(ctx, userID, filter.Category, filter.Status, filter.IncludeArchived)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(out)
+	page, perPage := filter.Page, filter.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = listquery.DefaultPerPage
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return out[start:end], total, nil
+}
+
 func (m *mockSavingsGoalService) Update(_ context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
 	g, ok := m.goals[goalID]
 	if !ok || g.UserID != userID {

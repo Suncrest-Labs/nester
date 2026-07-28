@@ -45,7 +45,7 @@ func (r *UserRepository) Create(ctx context.Context, model *user.User) error {
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*user.User, error) {
 	query := `
-		SELECT id, wallet_address, display_name, kyc_status, tier, kyc_submitted_at, kyc_reviewed_at, kyc_rejection_reason, risk_profile, savings_goal, onboarding_completed, last_login_at, created_at, updated_at
+		SELECT id, wallet_address, display_name, kyc_status, tier, kyc_submitted_at, kyc_reviewed_at, kyc_rejection_reason, risk_profile, savings_goal, onboarding_completed, last_login_at, timezone, created_at, updated_at
 		FROM users
 		WHERE id = $1
 	`
@@ -54,7 +54,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*user.User,
 
 func (r *UserRepository) GetByWalletAddress(ctx context.Context, addr string) (*user.User, error) {
 	query := `
-		SELECT id, wallet_address, display_name, kyc_status, tier, kyc_submitted_at, kyc_reviewed_at, kyc_rejection_reason, risk_profile, savings_goal, onboarding_completed, last_login_at, created_at, updated_at
+		SELECT id, wallet_address, display_name, kyc_status, tier, kyc_submitted_at, kyc_reviewed_at, kyc_rejection_reason, risk_profile, savings_goal, onboarding_completed, last_login_at, timezone, created_at, updated_at
 		FROM users
 		WHERE wallet_address = $1
 	`
@@ -75,11 +75,14 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, patch 
 	if patch.OnboardingCompleted != nil {
 		u.OnboardingCompleted = *patch.OnboardingCompleted
 	}
+	if patch.Timezone != nil {
+		u.Timezone = *patch.Timezone
+	}
 	_, err = r.db.ExecContext(ctx, `
 		UPDATE users
-		SET risk_profile = $1, savings_goal = $2, onboarding_completed = $3, updated_at = NOW()
-		WHERE id = $4
-	`, nullableRiskProfile(u.RiskProfile), nullableStringPtr(u.SavingsGoal), u.OnboardingCompleted, id)
+		SET risk_profile = $1, savings_goal = $2, onboarding_completed = $3, timezone = $4, updated_at = NOW()
+		WHERE id = $5
+	`, nullableRiskProfile(u.RiskProfile), nullableStringPtr(u.SavingsGoal), u.OnboardingCompleted, u.Timezone, id)
 	if err != nil {
 		return nil, err
 	}
@@ -118,6 +121,7 @@ func scanUser(row userScanner) (*user.User, error) {
 		savingsGoal         sql.NullString
 		onboardingCompleted bool
 		lastLoginAt        sql.NullTime
+		timezone           string
 		createdAt          time.Time
 		updatedAt          time.Time
 	)
@@ -135,6 +139,7 @@ func scanUser(row userScanner) (*user.User, error) {
 		&savingsGoal,
 		&onboardingCompleted,
 		&lastLoginAt,
+		&timezone,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -190,6 +195,7 @@ func scanUser(row userScanner) (*user.User, error) {
 		SavingsGoal:         savingsPtr,
 		OnboardingCompleted: onboardingCompleted,
 		LastLoginAt:        lastLoginAtPtr,
+		Timezone:           timezone,
 		CreatedAt:          createdAt,
 		UpdatedAt:          updatedAt,
 	}, nil

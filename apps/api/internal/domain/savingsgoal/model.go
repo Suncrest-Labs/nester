@@ -267,7 +267,7 @@ type GoalContribution struct {
 
 type Repository interface {
 	Create(ctx context.Context, goal *SavingsGoal) error
-	ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]SavingsGoal, error)
+	ListByUser(ctx context.Context, userID uuid.UUID, category, search string) ([]SavingsGoal, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*SavingsGoal, error)
 	Update(ctx context.Context, goal *SavingsGoal) error
 	Delete(ctx context.Context, id, userID uuid.UUID) error

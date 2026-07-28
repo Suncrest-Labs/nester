@@ -89,7 +89,7 @@ func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.
 	return &g, nil
 }
 
-func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID, category, search string) ([]savingsgoal.SavingsGoal, error) {
 	query := `
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
@@ -100,8 +100,12 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 	`
 	args := []any{userID}
 	if category != "" {
-		query += ` AND category = $2`
 		args = append(args, category)
+		query += fmt.Sprintf(` AND category = $%d`, len(args))
+	}
+	if search != "" {
+		args = append(args, search)
+		query += fmt.Sprintf(` AND search_vector @@ plainto_tsquery('english', $%d)`, len(args))
 	}
 	query += ` ORDER BY created_at DESC`
 
@@ -278,6 +282,31 @@ func (r *SavingsGoalRepository) UpdateOnchainLink(ctx context.Context, goalID uu
 		return savingsgoal.ErrGoalNotFound
 	}
 	return nil
+}
+
+func (r *SavingsGoalRepository) ListActiveGoalUserIDs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT user_id
+		FROM savings_goals
+		WHERE (status = 'active' OR status IS NULL OR status = '')
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, err
+		}
+		uid, err := uuid.Parse(idStr)
+		if err == nil {
+			ids = append(ids, uid)
+		}
+	}
+	return ids, rows.Err()
 }
 
 func (r *SavingsGoalRepository) UpdateStatus(ctx context.Context, goalID, userID uuid.UUID, status string) error {

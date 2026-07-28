@@ -59,6 +59,7 @@ const (
 	// Preferences.DigestCadence rather than a boolean, but delivery still
 	// goes through the same per-channel Allow() gate as every other event.
 	EventFinancialDigest EventType = "financial_digest"
+	EventSavingsNudge    EventType = "savings_nudge"
 )
 
 // DigestCadence values accepted for Preferences.DigestCadence.
@@ -106,6 +107,7 @@ var eventChannelMatrix = map[EventType][]ChannelKind{
 	EventProtocolHealthAlert:       {ChannelEmail, ChannelPush, ChannelWebSocket},
 	EventGoalCoaching:              {ChannelPush},
 	EventFinancialDigest:           {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventSavingsNudge:              {ChannelPush, ChannelWebSocket},
 }
 
 // ChannelsFor returns the channels configured to deliver the given event,
