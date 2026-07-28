@@ -242,6 +242,15 @@ func (m *memoryVaultRepo) UpdateVault(_ context.Context, id uuid.UUID, addr stri
 	m.vaults[id] = v
 	return nil
 }
+func (m *memoryVaultRepo) UpdateHarvestFrequency(_ context.Context, id uuid.UUID, frequency string) error {
+	v, ok := m.vaults[id]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	v.HarvestFrequency = frequency
+	m.vaults[id] = v
+	return nil
+}
 func (m *memoryVaultRepo) RecordWithdrawal(context.Context, uuid.UUID, vault.TransactionRecord) error {
 	return nil
 }
