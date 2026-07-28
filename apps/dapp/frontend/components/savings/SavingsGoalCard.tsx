@@ -70,7 +70,7 @@ export function SavingsGoalCard({
       daysLeft: left,
       deadlineLabel: left === 0 ? "Due today" : `${left} day${left > 1 ? "s" : ""} left`,
     };
-  }, [deadlineDate?.getTime()]);
+  }, [deadlineDate]);
 
   const hasRichData = goal.principal_amount != null || goal.locked_positions?.length;
 

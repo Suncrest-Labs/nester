@@ -18,7 +18,6 @@ import {
   Calendar,
   Wallet,
   ArrowDownLeft,
-  TrendingUp,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { useWallet } from "@/components/wallet-provider";
@@ -326,10 +325,8 @@ export default function SavingsGoalDetailPage() {
         (() => {
           const current = toNumber(goal.current_amount);
           const target = toNumber(goal.target_amount);
-          const progress = Math.min(100, Math.max(0, goal.progress_pct ?? 0));
           const isPaused = goal.status === "paused";
           const isCompleted = goal.status === "completed";
-          const remaining = Math.max(0, target - current);
 
           return (
             <>
