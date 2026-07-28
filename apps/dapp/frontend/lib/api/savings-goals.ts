@@ -40,6 +40,35 @@ export interface SavingsGoal {
   /** Sharing. */
   share_token?: string;
   is_shared?: boolean;
+  /** Progress visualization fields (#869). */
+  principal_amount?: string | number;
+  yield_amount?: string | number;
+  locked_positions?: Array<{
+    id: string;
+    amount: string | number;
+    locked_at: string;
+    matures_at: string;
+    boost_percent: number;
+    yield_earned: string | number;
+  }>;
+  flexible_amount?: string | number;
+  projection?: {
+    success_probability: number;
+    on_track: boolean;
+    monthly_gap?: number;
+    timeline: Array<{
+      date: string;
+      median: number;
+      upper_bound: number;
+      lower_bound: number;
+    }>;
+  };
+  asset_composition?: Array<{
+    asset: string;
+    value: number;
+    percentage: number;
+    color: string;
+  }>;
 }
 
 export interface SharedGoalView {
