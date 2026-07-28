@@ -9,7 +9,10 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-var ErrProtocolNotFound = errors.New("protocol not found")
+var (
+	ErrProtocolNotFound    = errors.New("protocol not found")
+	ErrDuplicateSnapshot   = errors.New("snapshot already exists for this protocol and timestamp")
+)
 
 type APYSnapshot struct {
 	ID           uuid.UUID       `json:"id"`
