@@ -311,9 +311,17 @@ func run() error {
 	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
 	performanceHandler := handler.NewPerformanceHandler(performanceService, handler.NewVaultOwnerAdapter(vaultRepository))
 
-	// Projection service for compound interest calculations
+	// Projection service for compound interest calculations, plus the Monte
+	// Carlo savings forecast (#843), which needs the goal/schedule repos to
+	// ground contribution behavior in the user's own history.
 	projectionCalculator := service.NewCompoundInterestCalculator()
-	projectionService := service.NewProjectionService(projectionCalculator, vaultRepository, performanceRepository)
+	projectionService := service.NewProjectionService(
+		projectionCalculator,
+		vaultRepository,
+		performanceRepository,
+		postgres.NewSavingsGoalRepository(db),
+		postgres.NewSavingsScheduleRepository(db),
+	)
 	projectionHandler := handler.NewProjectionHandler(projectionService)
 
 	contractReader := stellarpkg.NewContractReader(
