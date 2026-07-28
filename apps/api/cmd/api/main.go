@@ -654,7 +654,6 @@ func run() error {
 		notifications.WithDeduplicator(notificationDedup),
 		notifications.WithRateLimiter(notificationRateLimiter),
 	)
-
 	nudgeEngineSvc = service.NewNudgeEngineService(
 		savingsGoalRepo,
 		savingsStreakRepo,
@@ -683,10 +682,37 @@ func run() error {
 	defer cancelNudge()
 	go nudgeEngineJob.Run(nudgeCtx)
 
+	// Durable async job queue (#824): the shared worker pool and producer
+	// client. Hoisted here (rather than further down where the harvest/
+	// recurring-deposit producers are wired) so the webhook delivery
+	// producer below can also enqueue onto it; handlers are registered on
+	// jobWorker further down, before the worker starts.
+	jobQueueRepo := postgres.NewJobRepository(db)
+	jobQueueMetrics := jobqueue.NewStdMetrics()
+	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+
+	// Outbound webhooks (#836): subscriptions with SSRF-validated targets and
+	// encrypted signing secrets; delivery goes through the durable job queue
+	// above (WebhookDeliveryJobHandler, registered on jobWorker further down)
+	// rather than the old ad-hoc goroutine+sleep retry, so it gets the same
+	// at-least-once/backoff/dead-letter guarantees as harvest and recurring
+	// deposits. accountCipher may be nil (unconfigured deployment) — Register
+	// then fails with service.ErrWebhookCipherNotConfigured rather than
+	// panicking, matching bankaccount_service.go's convention.
 	webhookRepo := postgres.NewWebhookRepository(db)
-	webhookSvc := service.NewWebhookService(webhookRepo)
+	webhookDeliveryRepo := postgres.NewWebhookDeliveryRepository(db)
+	webhookSvc := service.NewWebhookService(webhookRepo, webhookDeliveryRepo, accountCipher, jobQueueClient)
 	webhookHandler := handler.NewWebhookHandler(webhookSvc)
 	webhookHandler.Register(mux)
+	webhookLimiter := middleware.NewLimiter(redisClient, "webhook-delivery", cfg.JobQueue().DefaultConcurrency()*2, time.Minute)
+	webhookDeliveryHandler := service.NewWebhookDeliveryJobHandler(
+		webhookRepo,
+		webhookDeliveryRepo,
+		accountCipher,
+		webhookLimiter,
+		service.DispatcherSuspensionNotifier{Dispatcher: notificationDispatcher2},
+		baseLogger.WithGroup("webhook-delivery"),
+	)
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
 		vaultRepository,
@@ -719,14 +745,10 @@ func run() error {
 	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
 	goalProgressSvc := service.NewGoalProgressService(savingsGoalRepo)
 
-	// Durable async job queue (#824): the shared worker pool and producer
-	// client. Handlers are registered below before the worker starts. The
-	// client is passed to producers (harvest engine, chain invoker, and —
-	// as of #846 — the recurring-deposit job below) so they enqueue durable
-	// work instead of doing it inline.
-	jobQueueRepo := postgres.NewJobRepository(db)
-	jobQueueMetrics := jobqueue.NewStdMetrics()
-	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+	// jobQueueRepo / jobQueueMetrics / jobQueueClient (#824) are constructed
+	// earlier, alongside the webhook subscription wiring (#836), since that
+	// producer needs jobQueueClient too. Handlers (including the webhook
+	// delivery handler) are registered on jobWorker below, before it starts.
 
 	// Durable retry for failed notification deliveries (#829), now that the
 	// job queue client exists. Only notificationDispatcher2 gets a
@@ -823,6 +845,14 @@ func run() error {
 			scheduler.NotificationDepositNotifier{Dispatcher: notificationDispatcher},
 			baseLogger.WithGroup("recurring-deposit-handler"),
 		), 0)
+
+	// Webhook delivery (#836): one attempt per job invocation; the queue's
+	// own retry/backoff/dead-letter drives everything past that (see
+	// WebhookDeliveryJobHandler's doc comment). Concurrency uses the
+	// worker's default rather than a dedicated limit — per-subscription
+	// throttling is handled inside the handler via webhookLimiter, so a
+	// wide worker-level concurrency here is safe.
+	jobWorker.Register(service.WebhookDeliveryJobType, webhookDeliveryHandler, 0)
 
 	harvestEngine := harvest.New(
 		harvest.Config{
