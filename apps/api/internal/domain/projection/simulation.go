@@ -289,9 +289,9 @@ func RunMonteCarloSimulation(p MonteCarloParams) MonteCarloResult {
 	}
 
 	// balances[m] holds every path's ending balance at month m+1.
-	balances := make([][]float64, months)
+	balances := make([][]float64, min(months, MaxPeriodMonths))
 	for m := range balances {
-		balances[m] = make([]float64, n)
+		balances[m] = make([]float64, min(n, MaxPathCount))
 	}
 
 	successCount := 0
@@ -336,8 +336,8 @@ func RunMonteCarloSimulation(p MonteCarloParams) MonteCarloResult {
 		}
 	}
 
-	timeline := make([]PercentileTimelinePoint, months)
-	sorted := make([]float64, n)
+	timeline := make([]PercentileTimelinePoint, min(months, MaxPeriodMonths))
+	sorted := make([]float64, min(n, MaxPathCount))
 	for m := 0; m < months; m++ {
 		copy(sorted, balances[m])
 		sort.Float64s(sorted)
