@@ -35,3 +35,21 @@ type Repository interface {
 	// RecordAlert marks that an alert was just sent for slug.
 	RecordAlert(ctx context.Context, slug string) error
 }
+
+// computePctChange returns the percentage change from prior to current TVL.
+//
+// Edge-case rules that guard the alert pipeline from nonsense data:
+//   - If prior is negative or zero, return 0 — percentage change is undefined.
+//   - If current is negative (data quality issue), clamp it to 0 before computing.
+//   - Otherwise: (current - prior) / prior * 100.
+func computePctChange(current, prior float64) float64 {
+	if prior <= 0 {
+		return 0
+	}
+	if current < 0 {
+		current = 0
+	}
+	return (current - prior) / prior * 100
+}
+
+
