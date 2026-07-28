@@ -26,11 +26,15 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env,
+    Symbol, Vec,
 };
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event_with_sym, ContractError, ProtocolType, SourceStatus};
+use nester_common::{
+    emit_event_with_sym, emit_value_attested, Attestation, AttestedField, AttestationPayload,
+    ContractError, ProtocolType, SourceStatus, ValueAttestedEventData, FIELD_APY, FIELD_TVL,
+};
 
 const REGISTRY: Symbol = symbol_short!("REGISTRY");
 const SOURCE_ADDED: Symbol = symbol_short!("SRC_ADD");
@@ -38,6 +42,7 @@ const SOURCE_UPDATED: Symbol = symbol_short!("SRC_UPD");
 const SOURCE_REMOVED: Symbol = symbol_short!("SRC_REM");
 const SOURCE_PERF: Symbol = symbol_short!("SRC_PERF");
 const SOURCE_MIGRATION: Symbol = symbol_short!("SRC_MIG");
+const VAL_ATT: Symbol = symbol_short!("VAL_ATT");
 
 const DEFAULT_RISK_RATING: u32 = 5;
 const MAX_RISK_RATING: u32 = 10;
@@ -160,7 +165,27 @@ enum DataKey {
     SourceList,
     /// Configurable APY single-update deviation threshold, in basis points.
     ApyDeviationThresholdBps,
+    // ------ Attestation keys -----------------------------------------------
+    /// Set of registered attester public keys (BytesN<32>).
+    Attesters,
+    /// Per-attester last-seen nonce: BytesN<32> → u64.
+    AttesterNonce(BytesN<32>),
+    /// Optional human-readable label for an attester key (for audit logs).
+    AttesterLabel(BytesN<32>),
+    /// Minimum number of distinct valid attestations required for an APY update.
+    AttestationThresholdApy,
+    /// Minimum number of distinct valid attestations required for a TVL update.
+    AttestationThresholdTvl,
 }
+
+// ---------------------------------------------------------------------------
+// Attester types
+// ---------------------------------------------------------------------------
+
+/// Default m-of-n attestation threshold for APY updates (2 attesters required).
+pub const DEFAULT_APY_ATTESTATION_THRESHOLD: u32 = 1;
+/// Default m-of-n attestation threshold for TVL updates (1 attester required).
+pub const DEFAULT_TVL_ATTESTATION_THRESHOLD: u32 = 1;
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -184,6 +209,18 @@ impl YieldRegistryContract {
         env.storage().instance().set(
             &DataKey::ApyDeviationThresholdBps,
             &DEFAULT_APY_DEVIATION_THRESHOLD_BPS,
+        );
+        // Seed attester registry and default thresholds.
+        env.storage()
+            .instance()
+            .set(&DataKey::Attesters, &Vec::<BytesN<32>>::new(&env));
+        env.storage().instance().set(
+            &DataKey::AttestationThresholdApy,
+            &DEFAULT_APY_ATTESTATION_THRESHOLD,
+        );
+        env.storage().instance().set(
+            &DataKey::AttestationThresholdTvl,
+            &DEFAULT_TVL_ATTESTATION_THRESHOLD,
         );
     }
 
@@ -654,6 +691,283 @@ impl YieldRegistryContract {
     }
 
     // -----------------------------------------------------------------------
+    // Attester management — Admin only
+    // -----------------------------------------------------------------------
+
+    /// Register an ed25519 public key as a trusted attester for APY/TVL
+    /// updates.  Admin only.
+    ///
+    /// `key` is a 32-byte ed25519 raw public key.  `label` is an optional
+    /// human-readable description (e.g. "backend-attester-v1") stored for
+    /// audit purposes only.
+    ///
+    /// Panics with [`ContractError::InvalidOperation`] if the key is already
+    /// registered.
+    pub fn register_attester(
+        env: Env,
+        caller: Address,
+        key: BytesN<32>,
+        label: Symbol,
+    ) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        let mut attesters = attester_list(&env);
+        for existing in attesters.iter() {
+            if existing == key {
+                panic_with_error!(&env, ContractError::InvalidOperation);
+            }
+        }
+        attesters.push_back(key.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::Attesters, &attesters);
+        // Initialise nonce to 0 for new attester.
+        env.storage()
+            .instance()
+            .set(&DataKey::AttesterNonce(key.clone()), &0u64);
+        // Store optional label.
+        env.storage()
+            .instance()
+            .set(&DataKey::AttesterLabel(key), &label);
+    }
+
+    /// Revoke a previously registered attester key.  Admin only.
+    ///
+    /// After revocation the key is removed from the registered set; any
+    /// signatures produced with it will be rejected immediately.
+    ///
+    /// Panics with [`ContractError::AttesterNotRegistered`] if the key is
+    /// not in the registered set.
+    pub fn revoke_attester(env: Env, caller: Address, key: BytesN<32>) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        let attesters = attester_list(&env);
+        let mut new_list = Vec::<BytesN<32>>::new(&env);
+        let mut found = false;
+        for existing in attesters.iter() {
+            if existing == key {
+                found = true;
+            } else {
+                new_list.push_back(existing);
+            }
+        }
+        if !found {
+            panic_with_error!(&env, ContractError::AttesterNotRegistered);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::Attesters, &new_list);
+        // Leave nonce and label in storage — they are harmless and preserve
+        // the audit trail; the key simply no longer appears in the active set.
+    }
+
+    /// Configure the minimum number of distinct valid attestations required
+    /// for a given field.  Admin only.
+    ///
+    /// `field_tag` is `0x01` (APY) or `0x02` (TVL).  `threshold` must be ≥ 1.
+    /// Setting `threshold` higher than the number of registered attesters
+    /// effectively makes that field un-updatable until more attesters are
+    /// registered.
+    pub fn set_attestation_threshold(
+        env: Env,
+        caller: Address,
+        field_tag: u32,
+        threshold: u32,
+    ) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        if threshold == 0 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+
+        let key = match field_tag {
+            1 => DataKey::AttestationThresholdApy,
+            2 => DataKey::AttestationThresholdTvl,
+            _ => panic_with_error!(&env, ContractError::InvalidOperation),
+        };
+        env.storage().instance().set(&key, &threshold);
+    }
+
+    /// Return the currently configured attestation threshold for `field_tag`.
+    pub fn get_attestation_threshold(env: Env, field_tag: u32) -> u32 {
+        match field_tag {
+            1 => env
+                .storage()
+                .instance()
+                .get(&DataKey::AttestationThresholdApy)
+                .unwrap_or(DEFAULT_APY_ATTESTATION_THRESHOLD),
+            2 => env
+                .storage()
+                .instance()
+                .get(&DataKey::AttestationThresholdTvl)
+                .unwrap_or(DEFAULT_TVL_ATTESTATION_THRESHOLD),
+            _ => panic_with_error!(&env, ContractError::InvalidOperation),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Signature-attested performance updates
+    // -----------------------------------------------------------------------
+
+    /// Update the APY for a yield source via cryptographic attestation.
+    ///
+    /// Each element of `attestations` must:
+    /// - Carry an ed25519 public key registered in the attester set.
+    /// - Have a signature that verifies over the canonical payload (see
+    ///   `libs/common/src/attestation.rs` for the exact byte layout).
+    /// - Fall within the `[valid_from, valid_until)` window.
+    /// - Carry a nonce strictly greater than the last-seen nonce for that key.
+    ///
+    /// Distinct valid attesters are counted; if the count meets or exceeds the
+    /// configured APY threshold the deviation check is applied and — if it
+    /// passes — the APY is committed.  Both attestation and deviation limits
+    /// are enforced; they are complementary, not alternatives.
+    ///
+    /// Panics with one of:
+    /// - [`ContractError::AttesterNotRegistered`] — key not in registered set.
+    /// - [`ContractError::AttestationExpired`]   — outside validity window.
+    /// - [`ContractError::NonceReused`]           — nonce not monotonically increasing.
+    /// - [`ContractError::SignatureInvalid`]      — signature verification failed.
+    /// - [`ContractError::ThresholdNotMet`]       — too few valid attesters.
+    /// - [`ContractError::InvalidOperation`]      — deviation check failed.
+    /// - [`ContractError::InvalidAmount`]         — value out of range.
+    pub fn update_apy_attested(
+        env: Env,
+        caller: Address,
+        id: Symbol,
+        new_apy_bps: u32,
+        valid_from: u64,
+        valid_until: u64,
+        attestations: Vec<Attestation>,
+    ) {
+        caller.require_auth();
+        require_admin_or_operator(&env, &caller);
+
+        if new_apy_bps > MAX_APY_BPS {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
+        let now = env.ledger().timestamp();
+        let threshold = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::AttestationThresholdApy)
+            .unwrap_or(DEFAULT_APY_ATTESTATION_THRESHOLD);
+
+        let payload = AttestationPayload {
+            contract_address: env.current_contract_address(),
+            source_id: id.clone(),
+            field: AttestedField::Apy,
+            apy_bps: new_apy_bps,
+            tvl: 0,
+            valid_from,
+            valid_until,
+        };
+
+        let (valid_keys, used_nonces) =
+            verify_and_collect(&env, &attestations, &payload, threshold, now);
+
+        // Deviation check — attestation does not bypass the existing guard.
+        let mut source = get_source_or_panic(&env, &id);
+        let last_apy = source.current_apy_bps;
+        if last_apy != 0 {
+            let deviation = new_apy_bps.abs_diff(last_apy);
+            if deviation > apy_deviation_threshold(&env) {
+                panic_with_error!(&env, ContractError::InvalidOperation);
+            }
+        }
+
+        commit_apy_update(&env, &id, &mut source, new_apy_bps);
+
+        emit_value_attested(
+            &env,
+            REGISTRY,
+            VAL_ATT,
+            id.clone(),
+            ValueAttestedEventData {
+                source_id: id,
+                field_tag: FIELD_APY as u32,
+                value: new_apy_bps as i128,
+                attester_keys: valid_keys,
+                nonces: used_nonces,
+                accepted_at: now,
+            },
+        );
+    }
+
+    /// Update the TVL for a yield source via cryptographic attestation.
+    ///
+    /// Verification is identical to [`Self::update_apy_attested`] except the
+    /// TVL attestation threshold applies (default: 1-of-n).
+    pub fn update_tvl_attested(
+        env: Env,
+        caller: Address,
+        id: Symbol,
+        new_tvl: i128,
+        valid_from: u64,
+        valid_until: u64,
+        attestations: Vec<Attestation>,
+    ) {
+        caller.require_auth();
+        require_admin_or_operator(&env, &caller);
+
+        if new_tvl < 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
+        let now = env.ledger().timestamp();
+        let threshold = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::AttestationThresholdTvl)
+            .unwrap_or(DEFAULT_TVL_ATTESTATION_THRESHOLD);
+
+        let payload = AttestationPayload {
+            contract_address: env.current_contract_address(),
+            source_id: id.clone(),
+            field: AttestedField::Tvl,
+            apy_bps: 0,
+            tvl: new_tvl,
+            valid_from,
+            valid_until,
+        };
+
+        let (valid_keys, used_nonces) =
+            verify_and_collect(&env, &attestations, &payload, threshold, now);
+
+        let mut source = get_source_or_panic(&env, &id);
+        source.tvl = new_tvl;
+        touch_source(&env, &mut source);
+        save_source(&env, &id, &source);
+
+        emit_event_with_sym(
+            &env,
+            REGISTRY,
+            SOURCE_PERF,
+            id.clone(),
+            performance_event_data(&source),
+        );
+
+        emit_value_attested(
+            &env,
+            REGISTRY,
+            VAL_ATT,
+            id.clone(),
+            ValueAttestedEventData {
+                source_id: id,
+                field_tag: FIELD_TVL as u32,
+                value: new_tvl,
+                attester_keys: valid_keys,
+                nonces: used_nonces,
+                accepted_at: now,
+            },
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Role management — delegates to nester_access_control
     // -----------------------------------------------------------------------
 
@@ -775,6 +1089,78 @@ fn require_admin_or_operator(env: &Env, caller: &Address) {
     {
         panic_with_error!(env, ContractError::Unauthorized);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Attestation helpers
+// ---------------------------------------------------------------------------
+
+fn attester_list(env: &Env) -> Vec<BytesN<32>> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Attesters)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn is_registered_attester(env: &Env, key: &BytesN<32>) -> bool {
+    let list = attester_list(env);
+    for k in list.iter() {
+        if &k == key {
+            return true;
+        }
+    }
+    false
+}
+
+fn attester_last_nonce(env: &Env, key: &BytesN<32>) -> u64 {
+    env.storage()
+        .instance()
+        .get::<DataKey, u64>(&DataKey::AttesterNonce(key.clone()))
+        .unwrap_or(0)
+}
+
+fn save_attester_nonce(env: &Env, key: &BytesN<32>, nonce: u64) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AttesterNonce(key.clone()), &nonce);
+}
+
+/// Verify all attestations, collect distinct valid attester keys, and assert
+/// the threshold is met.  Updates each attester's last-seen nonce on success.
+///
+/// Returns (valid_keys, used_nonces) — parallel arrays for event emission.
+fn verify_and_collect(
+    env: &Env,
+    attestations: &Vec<Attestation>,
+    payload: &AttestationPayload,
+    threshold: u32,
+    now: u64,
+) -> (Vec<BytesN<32>>, Vec<u64>) {
+    let mut valid_keys: Vec<BytesN<32>> = Vec::new(env);
+    let mut used_nonces: Vec<u64> = Vec::new(env);
+
+    for att in attestations.iter() {
+        let registered = is_registered_attester(env, &att.public_key);
+        let last_nonce = attester_last_nonce(env, &att.public_key);
+
+        // verify_attestation panics on any failure — errors are distinct typed
+        // errors (AttesterNotRegistered, AttestationExpired, NonceReused, and
+        // a host-level panic for SignatureInvalid which we cannot catch in
+        // no_std; the host will surface it as ContractError to the caller).
+        nester_common::verify_attestation(env, &att, payload, registered, last_nonce, now);
+
+        // Update nonce immediately so a duplicate key in the same Vec is
+        // caught as NonceReused on the second occurrence.
+        save_attester_nonce(env, &att.public_key, att.nonce);
+        valid_keys.push_back(att.public_key.clone());
+        used_nonces.push_back(att.nonce);
+    }
+
+    if (valid_keys.len() as u32) < threshold {
+        panic_with_error!(env, ContractError::ThresholdNotMet);
+    }
+
+    (valid_keys, used_nonces)
 }
 
 // ---------------------------------------------------------------------------

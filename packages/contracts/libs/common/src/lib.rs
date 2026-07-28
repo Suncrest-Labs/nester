@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod attestation;
 pub mod constants;
 pub mod errors;
 pub mod events;
@@ -7,6 +8,10 @@ pub mod fees;
 pub mod reentrancy;
 pub mod storage;
 
+pub use attestation::{
+    build_payload_bytes, verify_attestation, Attestation, AttestedField, AttestationPayload,
+    FIELD_APY, FIELD_TVL,
+};
 pub use constants::*;
 pub use errors::ContractError;
 pub use events::*;

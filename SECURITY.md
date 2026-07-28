@@ -73,6 +73,67 @@ Every role transfer is two-step (`transfer_role` / `accept_role`, cancellable vi
 
 **On-chain roles vs application roles:** the RBAC above lives entirely in the Soroban contracts. The `user_roles` tables in the API's Postgres migrations are a separate, application-level authorization layer (who can see what in the dashboard) and do not confer any on-chain authority — do not conflate the two when reasoning about contract security.
 
+## Attester Signing Key Separation (issue #820 — signature-attested APY/TVL)
+
+The `update_apy_attested` and `update_tvl_attested` registry functions require every value to
+be signed by one or more registered ed25519 attester keys before it is accepted on-chain.
+This converts "trust the caller" into "verify the data" and makes every accepted value
+independently auditable via the `VAL_ATT` event log.
+
+**The attester signing key MUST be distinct from the Stellar transaction-submitting (fee-paying) key.**
+
+This requirement is not advisory — it is the security boundary the feature is built on:
+
+- The **transaction key** pays Stellar fees and authorises the `update_apy_attested` call. It
+  is exposed to the Stellar network on every submission. Compromise of this key lets an attacker
+  submit transactions, but without a valid attester signature the on-chain contract will reject
+  the value.
+- The **attester key** signs the canonical payload (contract address, source id, field, value,
+  validity window, nonce). It never touches the Stellar network directly. Compromise of this
+  key lets an attacker forge signatures, but without the transaction key no on-chain call can
+  be submitted.
+
+If the same key plays both roles, attestation adds nothing — a compromise gives the attacker
+both halves simultaneously. The registry can be updated to any value with a single key, exactly
+as before.
+
+### Implementation requirements for the backend attester
+
+The Go APY push pipeline (`apps/api/internal/service/apy_service.go`,
+`apps/api/internal/service/performance/apy_refresh.go`) is responsible for signing attestations
+before submitting registry updates via `apps/api/internal/stellar/invoker.go`.
+
+- The attester private key **must** be stored in the same secret store as the AES cipher keys
+  (see `apps/api/internal/crypto/account_cipher.go` and `apps/api/internal/rotation/rotation.go`),
+  **never** in a plain environment variable.
+- The attester key versioning **must** follow the same rotation scheme used for cipher keys:
+  versioned labels (e.g. `attester-v1`, `attester-v2`), non-destructive rotation, with old
+  public keys revoked from the registry only after no in-flight attestations using them remain.
+- The configuration entry for the attester key lives in `apps/api/internal/config/config.go`
+  under the same section as the cipher key configuration. The field name is
+  `ATTESTER_SIGNING_KEY` (env: `API_ATTESTER_SIGNING_KEY`). It holds the base64-encoded
+  raw ed25519 private key (32 bytes).
+- The fee-paying Stellar key is already managed separately in config. Do **not** derive the
+  attester key from it or store them together.
+
+### Canonical payload encoding (summary — full spec in `EVENTS.md → VAL_ATT`)
+
+Every attester signature covers:
+- The **registry contract address** — so a signature for testnet cannot be replayed on mainnet.
+- The **source id** and **field tag** (APY vs TVL) — so a signature for one source/field cannot
+  be used for another.
+- The **exact value** — so a captured attestation cannot be altered.
+- A **validity window** (`valid_from` / `valid_until`) — so a captured-but-old signature has a
+  bounded lifetime.
+- A **monotonic nonce** per attester — so the same signature cannot be submitted twice.
+
+### Break-glass path
+
+If all attesters become unavailable, the protocol can still mark any source `Paused` or
+`Deprecated` via `update_status`, which requires only the normal Admin/Operator role — no
+attestation. This means an attester outage can never become a protocol outage: sources can
+always be paused to stop capital allocation while the attester infrastructure is restored.
+
 ## Circuit Breaker (issue #817)
 
 The vault trips itself automatically rather than waiting for an operator to notice a problem. Four independently-configurable conditions escalate a graded severity (`Normal` → `Throttled` → `DepositsHalted` → `FullHalt`):

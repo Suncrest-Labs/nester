@@ -38,4 +38,19 @@ pub enum ContractError {
     RecoveryStageInvalid = 33,
     NotNesterVault = 34,
     VaultCreationFailed = 35,
+    // Attestation errors (issue #820 — signature-attested APY/TVL updates)
+    /// The supplied public key is not in the registered attester set, or has
+    /// been revoked.
+    AttesterNotRegistered = 36,
+    /// The ed25519 signature does not verify over the canonical payload bytes.
+    SignatureInvalid = 37,
+    /// The ledger timestamp falls outside the attestation's `[valid_from,
+    /// valid_until)` window.
+    AttestationExpired = 38,
+    /// The supplied nonce is not strictly greater than the last nonce recorded
+    /// for this attester key — replay or out-of-order submission.
+    NonceReused = 39,
+    /// Fewer distinct valid attesters signed than the configured threshold for
+    /// this field.
+    ThresholdNotMet = 40,
 }
