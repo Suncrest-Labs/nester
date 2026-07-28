@@ -798,6 +798,7 @@ func run() error {
 		prometheusClient,
 		nudgeNotificationDispatcher,
 		baseLogger.WithGroup("goal-coaching"),
+		nudgeHistoryRepo,
 	)
 	goalCoachingCtx, cancelGoalCoaching := context.WithCancel(context.Background())
 	defer cancelGoalCoaching()
