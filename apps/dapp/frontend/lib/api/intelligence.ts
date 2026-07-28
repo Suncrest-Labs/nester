@@ -73,6 +73,17 @@ export interface MarketSentiment {
   disclaimer?: string
 }
 
+export interface MarketSentimentPoint {
+  signal: 'bull' | 'bear' | 'neutral'
+  confidence: number
+  observed_at: number // unix seconds
+}
+
+export interface MarketSentimentHistory {
+  days: number
+  points: MarketSentimentPoint[]
+}
+
 export interface MarketContextSignal {
   protocol: string
   asset?: string | null
@@ -184,6 +195,10 @@ export const intelligenceApi = {
   /** Bull/Bear/Neutral market sentiment summary. */
   getMarketSentiment: () =>
     apiFetch<MarketSentiment>('/market/sentiment'),
+
+  /** Historical sentiment points (7 or 30 day) for the trend sparkline. */
+  getMarketSentimentHistory: (days: 7 | 30 = 7) =>
+    apiFetch<MarketSentimentHistory>(`/market/sentiment/history?days=${days}`),
 
   /** Portfolio-level insight cards for a given user. */
   getPortfolioInsights: (userId: string) =>

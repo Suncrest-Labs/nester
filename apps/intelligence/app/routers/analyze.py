@@ -25,6 +25,7 @@ from app.services.prometheus import (
     get_yield_recommendation,
     recommend_vaults,
 )
+from app.services.sentiment_history import history as get_sentiment_history
 
 router = APIRouter(dependencies=[Depends(verify_jwt)])
 
@@ -79,6 +80,19 @@ async def portfolio_insights(
 async def market_sentiment(request: Request) -> dict[str, Any]:
     """Return current market sentiment for the Stellar DeFi / stablecoin space."""
     return await get_market_sentiment()
+
+
+@router.get("/market/sentiment/history")
+@_limiter.limit("30/minute")
+async def market_sentiment_history(request: Request, days: int = 7) -> dict[str, Any]:
+    """Return recorded market sentiment points for the trend sparkline (#939).
+
+    `days` is clamped to [1, 30]; points are recorded each time
+    /market/sentiment is computed successfully, so the series starts sparse
+    and fills in over time.
+    """
+    clamped_days = max(1, min(days, 30))
+    return {"days": clamped_days, "points": get_sentiment_history(clamped_days)}
 
 
 @router.get("/recommend/vault")
