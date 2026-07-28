@@ -86,15 +86,92 @@ The emergency withdrawal queue is never gated by severity — it works identical
 
 ## Known and Accepted Vulnerabilities
 
-We maintain a list of known vulnerabilities in our dependency chain that we have assessed and accepted based on their risk profile:
+We maintain a list of known vulnerabilities in our dependency chain that we have assessed and accepted based on their risk profile. The canonical waiver list lives in **`.vulnignore.yml`** with structured fields (id, ecosystem, package, severity, justification, mitigation, expires_on, approved_by). A flat ID-only mirror is kept in `.vulnignore` for backward compatibility with legacy scanners.
 
 | ID | Module | Severity | Reason | Status |
 |----|--------|----------|--------|--------|
-| **GO-2026-4316** | `github.com/go-chi/chi` | Medium | Open redirect in unused `RedirectSlashes` middleware. Transitive dependency via `github.com/stellar/go-stellar-sdk`. Middleware not used in codebase. Waiting for upstream fix. | Accepted |
+| **GO-2026-4316** | `github.com/go-chi/chi` | Medium | Open redirect in unused `RedirectSlashes` middleware. Transitive dependency via `github.com/stellar/go-stellar-sdk`. Middleware not used in codebase. Waiver expires 2026-10-15. | Accepted (waivered) |
 
-**Mitigation strategy:** Our CI/CD pipeline (`govulncheck` step in `.github/workflows/security.yml`) explicitly allows known accepted vulnerabilities and only fails on new or unreviewed vulnerabilities.
+**Mitigation strategy:** Our CI/CD pipeline (`govulncheck` step in `.github/workflows/security.yml` and `.github/workflows/ci.yml`) reads `.vulnignore.yml` and explicitly allows known accepted vulnerabilities, only failing on new or unreviewed vulnerabilities. The `action-pinning` job fails the build when any waiver in `.vulnignore.yml` has expired without renewal, so suppressed risks cannot silently persist forever.
 
 To report a vulnerability not listed here, see [Reporting a Vulnerability](#reporting-a-vulnerability) above.
+
+## Supply-Chain Security (issue #867)
+
+Nester's code is a small fraction of what actually runs in production — the rest is dependencies (Go modules, npm packages, Rust crates, Python packages, container base images, and the CI actions that build and ship everything). A compromised package version, a typosquatted dependency, or a malicious update to a transitive dependency can inject code through the front door of the build where ordinary code review never looks. The following controls bring that invisible attack surface under the same scrutiny as the code itself.
+
+### Software Bill of Materials (SBOM)
+
+Every deployable artifact is accompanied by a **CycloneDX** SBOM in JSON format, generated on every CI build and retained per build:
+
+| Artifact | SBOM generator | Output |
+|----------|----------------|--------|
+| Go API (`apps/api`) | `cyclonedx-gomod` | `api-sbom.cdx.json` |
+| dApp frontend (`apps/dapp/frontend`) | `@cyclonedx/cyclonedx-npm` | `dapp-frontend-sbom.cdx.json` |
+| Website (`apps/website`) | `@cyclonedx/cyclonedx-npm` | `website-sbom.cdx.json` |
+| Contracts (`packages/contracts`) | `cargo-cyclonedx` | `contracts-sbom.cdx.json` |
+| Intelligence service (`apps/intelligence`) | `cyclonedx-bom` | `intelligence-sbom.cdx.json` |
+
+The jobs live in `.github/workflows/security.yml` and the SBOM is uploaded as a CI artifact. When a new vulnerability is disclosed, the SBOM answers "are we affected, and where?" in seconds instead of a frantic manual audit.
+
+### Dependency pinning and integrity verification
+
+- **npm** — `pnpm-lock.yaml` is committed, CI installs with `--frozen-lockfile`, and the build runs `npm audit --audit-level=high` against the lockfile's integrity hashes.
+- **Go** — `go.sum` is committed, and `govulncheck ./...` runs against the locked module graph.
+- **Rust** — `Cargo.lock` is committed, and `cargo audit` runs against the locked dependency tree.
+- **Python** — `requirements.txt` is hashed at audit time and re-checked by `pip-audit`.
+- **CI actions** — every third-party `uses:` is pinned to a commit SHA, never a mutable tag like `@v4`. The `.github/workflows/security.yml` `action-pinning` job enforces this on every push and PR with a regex check; `dtolnay/rust-toolchain@stable` is pinned to the `master` branch HEAD SHA and is reviewed with each Rust toolchain bump.
+
+### Provenance verification
+
+We prefer dependencies and CI actions that publish build attestations (npm provenance, Sigstore, GitHub artifact attestations) and verify them where our tooling supports it. The coverage matrix is:
+
+| Source | Provenance coverage |
+|--------|---------------------|
+| npm registry (default) | npm provenance flag enabled for publishers; verified when available |
+| PyPI | Sigstore attestation verified when available |
+| Rust crates.io | cargo `--locked` flag rejects unexpected lockfile mutations |
+| GitHub Actions marketplace | SHA pinning makes the immutable commit the trusted identifier |
+| Container base images | Pinned by digest in production (see `apps/api/Dockerfile`, `apps/dapp/frontend/Dockerfile.dev`) |
+
+### Vulnerability scanning with policy gates
+
+`.github/workflows/security.yml` and `.github/workflows/ci.yml` run a `*-audit` step for every ecosystem on every PR:
+
+- A **high** or **critical** vulnerability in a production dependency blocks the merge.
+- A **moderate** vulnerability produces a warning annotation but does not block.
+- Waivers (`.vulnignore.yml`) are auditable, time-bounded (≤ 6 months by default), and require a `justification`, `mitigation`, `expires_on` date, and an `approved_by` GitHub handle. A waiver with `expires_on` in the past fails the build until renewed or removed.
+
+### Typosquat / suspicious-package detection
+
+`.github/workflows/security.yml` → `typosquat-check` runs `scripts/typosquat_check.py` on every PR. The script flags:
+
+1. New packages whose Levenshtein distance is ≤ 1 from a popular package on any ecosystem (catches `reqests` vs `requests`, `reactt` vs `react`).
+2. Names that mix Latin and Cyrillic/Greek scripts (homoglyph attack).
+3. Names whose shape is wrong for their declared ecosystem (uppercase letters in pip, scoped npm without target).
+
+### New-dependency review
+
+Adding a new top-level dependency is a security decision, not a routine change. The PR that introduces it must:
+
+- Pass the typosquat check and the vulnerability audit.
+- Include a one-paragraph justification: what does this dependency do that we cannot reasonably implement ourselves, and how is it maintained (bus factor, last release, governance)?
+- Have a SHA-pinned lockfile entry (no `latest` or floating ranges).
+- For significant additions, a brief maintainer-level review (security team tag) before merge.
+
+### Audit trail
+
+The following artifacts and commands let an auditor trace any deployed version's supply chain back to source:
+
+- The SBOM artifact for that build (per `GitHub Actions → Run → Artifacts`).
+- The CI run logs that produced the build (per `GitHub Actions → Run → Logs`).
+- The `.vulnignore.yml` history (`git log -- .vulnignore.yml`).
+- The `gitleaks` scan results (per `GitHub Actions → Security → Code scanning`).
+
+### What this policy does NOT cover
+
+- Application-level vulnerabilities in our own code — those are covered by CodeQL and Semgrep SAST (the `security` job in `.github/workflows/ci.yml` and the `codeql` job in `.github/workflows/security.yml`).
+- On-chain contract vulnerabilities — those are covered by the dedicated audit workflow `.github/workflows/contract-audit.yml` and `scripts/contract-audit.sh`.
 
 ## Safe Harbor
 

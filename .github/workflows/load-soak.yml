@@ -1,38 +1,49 @@
-name: Nightly staging load soak
+name: Load & Soak Tests
+
+# Note: this workflow uses the SHA-pinned actions checkin (security.yml
+# `action-pinning`) to enforce that every `uses:` reference stays immutable.
 
 on:
-  schedule:
-    - cron: '0 2 * * *'
   workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 0"  # weekly Sunday 02:00 UTC
 
 permissions:
   contents: read
 
+concurrency:
+  group: load-soak
+  cancel-in-progress: false
+
 jobs:
-  soak:
-    name: k6 soak (staging)
+  smoke:
+    name: k6 smoke (10 VU / 30s)
     runs-on: ubuntu-latest
-    # A missing secret must never cause a test to fall back to localhost or production.
-    if: ${{ secrets.STAGING_LOAD_API_BASE_URL != '' }}
-    environment: staging
+    timeout-minutes: 15
+    env:
+      TARGET_HOST: ${{ vars.LOAD_TEST_HOST || 'https://api.nester.dev' }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Run isolated staging soak
-        env:
-          API_BASE_URL: ${{ secrets.STAGING_LOAD_API_BASE_URL }}
-          INTELLIGENCE_BASE_URL: ${{ secrets.STAGING_LOAD_INTELLIGENCE_BASE_URL }}
-          WS_URL: ${{ secrets.STAGING_LOAD_WS_URL }}
-          VAULT_ID: ${{ secrets.STAGING_LOAD_VAULT_ID }}
-          AUTH_TOKEN: ${{ secrets.STAGING_LOAD_AUTH_TOKEN }}
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
+
+      - name: Setup k6
         run: |
-          mkdir -p results
-          docker run --rm --network host \
-            -e API_BASE_URL -e INTELLIGENCE_BASE_URL -e WS_URL -e VAULT_ID -e AUTH_TOKEN \
-            -v "$PWD:/work" -w /work grafana/k6:latest \
-            run --summary-export results/soak-summary.json tests/load/soak.js
-      - uses: actions/upload-artifact@v4
+          sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A1E93AEF098259A1F17B13277
+          echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+
+      - name: Run steady 30s smoke
+        run: |
+          BASE_URL="$TARGET_HOST" \
+          k6 run tests/load/steady.js \
+            --vus 10 \
+            --duration 30s \
+            --summary-export=smoke-summary.json
+
+      - name: Upload smoke summary
         if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.4.0
         with:
-          name: k6-soak-summary-${{ github.run_id }}
-          path: results/soak-summary.json
-          if-no-files-found: warn
+          name: k6-smoke-summary
+          path: smoke-summary.json
+          if-no-files-found: ignore

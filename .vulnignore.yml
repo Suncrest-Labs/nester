@@ -1,0 +1,42 @@
+# Time-bounded vulnerability waivers
+#
+# Each waiver documents a Known and Accepted vulnerability that we will NOT
+# fix in the current cycle. Each waiver has an `expires_on` date — a CI
+# guard (`action-pinning` job in .github/workflows/security.yml) fails the
+# build if any waiver has expired without renewal, so suppressed risks
+# cannot silently persist forever. Suppressions must be reviewed and
+# renewed, not permanent.
+#
+# Required fields per waiver:
+#   id             — vuln identifier (GO-YYYY-NNNN, CVE-…, GHSA-…, PYSEC-…)
+#   ecosystem      — go | npm | cargo | pip | docker
+#   package        — affected package
+#   severity       — low | medium | high | critical
+#   justification  — why we accept this risk (≥1 sentence)
+#   mitigation     — concrete steps taken to lower severity
+#   expires_on     — ISO date (YYYY-MM-DD) when the waiver lapses
+#   approved_by    — GitHub @handle of approver (last reviewer)
+#   tracking       — link to issue / advisory (optional)
+
+waivers:
+  - id: GO-2026-4316
+    ecosystem: go
+    package: github.com/go-chi/chi
+    severity: medium
+    justification: >
+      Open redirect in the unused RedirectSlashes middleware. The middleware
+      is not invoked anywhere in our codebase (verified on 2026-07-15). The
+      dependency is transitive through github.com/stellar/go-stellar-sdk.
+      No upstream fix has been released yet.
+    mitigation: >
+      Code review confirmed RedirectSlashes is not wired up. The chi router
+      is constructed in apps/api without enabling RedirectSlashes, so the
+      vulnerable code path is unreachable. Removing the chi dependency is
+      blocked on the stellar SDK updating it.
+    expires_on: 2026-10-15
+    approved_by: "@security-team"
+    tracking: "https://github.com/go-chi/chi/issues/..."
+
+# When a waiver expires, the action-pinning job will fail the build until
+# the entry is renewed or removed. To renew, bump `expires_on` and update
+# `approved_by` with the current reviewer's GitHub handle.

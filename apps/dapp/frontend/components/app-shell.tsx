@@ -16,6 +16,7 @@ import {
     Menu,
     PiggyBank,
     Settings,
+    Sparkles,
     TrendingUp,
     User,
     Vault,
@@ -33,6 +34,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 const SIDEBAR_NAV = [
     { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+    { label: "AI Insights", href: "/dashboard/insights", icon: Sparkles },
     { label: "Savings", href: "/savings", icon: PiggyBank },
     { label: "Yields", href: "/yields", icon: TrendingUp },
     { label: "Markets", href: "/vaults", icon: Vault },

@@ -13,12 +13,72 @@ permissions:
   security-events: write
 
 jobs:
+  ##############################################################################
+  # Action-pinning integrity check (defence in depth)
+  #
+  # Walks every workflow and fails the job if any third-party `uses:` is
+  # declared with a mutable tag (@v1, @v2, @v3, @v4, @stable, @main, @master)
+  # instead of an immutable commit SHA. GitHub itself warns about this; this
+  # makes the gate enforceable on every PR.  Local actions (`./...`) and the
+  # canonical `actions/checkout` self-reference are allowlisted.
+  ##############################################################################
+  action-pinning:
+    name: Verify actions are SHA-pinned
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
+
+      - name: Run pinning check
+        run: |
+          set -e
+          UNPINNED=$(
+            grep -RnE "uses:\s+[^/@]+@(v[0-9]+|main|master|stable|latest)" .github/workflows/ \
+              | grep -v "uses: \./" \
+              | grep -v "actions/checkout@" \
+              || true
+          )
+          if [ -n "$UNPINNED" ]; then
+            echo "::error::Third-party actions must be pinned to a commit SHA, not a mutable ref."
+            echo "$UNPINNED"
+            exit 1
+          fi
+          echo "All third-party actions are SHA-pinned."
+      - name: Verify waiver file is well-formed
+        run: |
+          set -e
+          if [ -f .vulnignore.yml ]; then
+            python3 - <<'PY'
+          import sys
+          try:
+              import yaml  # type: ignore
+          except ImportError:
+              print("::error::PyYAML must be installed in the runner image to validate .vulnignore.yml")
+              sys.exit(1)
+          from pathlib import Path
+          data = yaml.safe_load(Path(".vulnignore.yml").read_text()) or {}
+          waivers = data.get("waivers") or []
+          today = __import__("datetime").date.today().isoformat()
+          for w in waivers:
+              for field in ("id", "ecosystem", "package", "justification", "expires_on", "approved_by"):
+                  if field not in w:
+                      print(f"::error::waiver missing required field '{field}': {w}")
+                      sys.exit(1)
+              if w["expires_on"] < today:
+                  print(f"::error::waiver {w['id']} for {w['package']} expired on {w['expires_on']} (today={today})")
+                  sys.exit(1)
+          print(f"OK: {len(waivers)} waiver(s) validated, none expired.")
+          PY
+          else
+            echo "::warning::.vulnignore.yml not found — falling back to legacy .vulnignore"
+          fi
+
   secret-scan:
     name: Secret Detection (gitleaks)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
         with:
           fetch-depth: 0
 
@@ -31,6 +91,135 @@ jobs:
             --verbose \
             --exit-code 1
 
+  ##############################################################################
+  # SBOM generation
+  #
+  # Each ecosystem gets a CycloneDX-format SBOM uploaded on every push/PR.
+  # Retained per-build so an audit can answer "is dependency X vulnerable?"
+  # for any past deployed version in seconds, without a frantic manual audit.
+  ##############################################################################
+  sbom-go:
+    name: SBOM (Go API)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.0.1
+        with:
+          go-version-file: apps/api/go.mod
+          cache: true
+      - name: Install cyclonedx-gomod
+        working-directory: apps/api
+        run: |
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+      - name: Generate CycloneDX SBOM
+        working-directory: apps/api
+        run: |
+          cyclonedx-gomod mod -output ../api-sbom.cdx.json -format json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.4.0
+        with:
+          name: sbom-go-api
+          path: apps/api/api-sbom.cdx.json
+          if-no-files-found: error
+
+  sbom-npm-dapp:
+    name: SBOM (npm — dapp frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@32f57ac043e003bc1b07edcb2b9102bbbf3e92f1 # v4.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Generate CycloneDX SBOM
+        working-directory: apps/dapp/frontend
+        run: |
+          npx --yes @cyclonedx/cyclonedx-npm --output-file ../../dapp-frontend-sbom.cdx.json --spec-version 1.5 --output-format JSON
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.4.0
+        with:
+          name: sbom-npm-dapp-frontend
+          path: dapp-frontend-sbom.cdx.json
+          if-no-files-found: error
+
+  sbom-npm-website:
+    name: SBOM (npm — website)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@32f57ac043e003bc1b07edcb2b9102bbbf3e92f1 # v4.1.0
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Generate CycloneDX SBOM
+        working-directory: apps/website
+        run: |
+          npx --yes @cyclonedx/cyclonedx-npm --output-file ../../website-sbom.cdx.json --spec-version 1.5 --output-format JSON
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.4.0
+        with:
+          name: sbom-npm-website
+          path: website-sbom.cdx.json
+          if-no-files-found: error
+
+  sbom-rust:
+    name: SBOM (Rust contracts)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+      - name: Generate CycloneDX SBOM
+        run: cargo cyclonedx --override-filename ../../contracts-sbom.cdx.json --format json --spec-version 1.5
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.4.0
+        with:
+          name: sbom-rust-contracts
+          path: contracts-sbom.cdx.json
+          if-no-files-found: error
+
+  sbom-python:
+    name: SBOM (Python intelligence)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/intelligence
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Install cyclonedx-bom
+        run: pip install cyclonedx-bom
+      - name: Generate CycloneDX SBOM
+        run: cyclonedx-py environment requirements -o ../../intelligence-sbom.cdx.json -F json --spec-version 1.5
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.4.0
+        with:
+          name: sbom-python-intelligence
+          path: intelligence-sbom.cdx.json
+          if-no-files-found: error
+
+  ##############################################################################
+  # Dependency scanning (across all ecosystems)
+  ##############################################################################
   audit-npm:
     name: Dependency Audit (npm)
     runs-on: ubuntu-latest
@@ -45,10 +234,9 @@ jobs:
         working-directory: ${{ matrix.directory }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@32f57ac043e003bc1b07edcb2b9102bbbf3e92f1 # v4.1.0
         with:
           node-version: 22
 
@@ -71,10 +259,9 @@ jobs:
         working-directory: ${{ matrix.module }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.0.1
         with:
           go-version-file: ${{ matrix.module }}/go.mod
           cache: true
@@ -88,16 +275,27 @@ jobs:
           OUTPUT=$(govulncheck ./... 2>&1)
           EXIT_CODE=$?
           echo "$OUTPUT"
-          
+
+          # Read the structured waiver list (.vulnignore.yml takes priority over
+          # the legacy space-separated .vulnignore and inline ACCEPTED string).
+          ACCEPTED=""
+          if [ -f .vulnignore.yml ]; then
+            ACCEPTED=$(python3 -c "import yaml,sys; data=yaml.safe_load(open('.vulnignore.yml')); print(' '.join(w['id'] for w in (data.get('waivers') or [])))" 2>/dev/null || true)
+          fi
+          if [ -z "$ACCEPTED" ] && [ -f .vulnignore ]; then
+            # Legacy fallback: a flat list of GO-YYYY-NNNN IDs.
+            ACCEPTED=$(grep -oE 'GO-[0-9]{4}-[0-9]+' .vulnignore | sort -u | tr '\n' ' ')
+          fi
+          if [ -z "$ACCEPTED" ]; then
+            ACCEPTED="GO-2026-4316 GO-2026-5004 GO-2026-5037 GO-2026-5039"
+          fi
+
           # Exit code 0 = no vulnerabilities
           # Exit code 1 = error running govulncheck
           # Exit code 3 = vulnerabilities found
-          
           if [ $EXIT_CODE -eq 0 ]; then
             exit 0
           elif [ $EXIT_CODE -eq 3 ]; then
-            # Allow if every reported vuln ID is in the accepted list
-            ACCEPTED="GO-2026-4316 GO-2026-5004 GO-2026-5037 GO-2026-5039"
             UNKNOWN=$(echo "$OUTPUT" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u | while read id; do
               echo "$ACCEPTED" | grep -qw "$id" || echo "$id"
             done)
@@ -119,10 +317,9 @@ jobs:
         working-directory: packages/contracts
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -138,10 +335,9 @@ jobs:
         working-directory: apps/intelligence
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.3.0
         with:
           python-version: "3.12"
 
@@ -218,6 +414,29 @@ jobs:
           print("No high/critical Python vulnerabilities detected")
           PY
 
+  ##############################################################################
+  # Typosquat / suspicious-package detection
+  #
+  # Catches a malicious lookalike at introduction: the script flags packages
+  # whose Levenshtein distance is 1 from a popular package, and packages that
+  # cross-leak npm names into pip manifests and vice versa.  Runs every PR.
+  ##############################################################################
+  typosquat-check:
+    name: Typosquat detection (new packages)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Run typosquat checker
+        run: python3 scripts/typosquat_check.py
+
   codeql:
     name: Static Analysis (CodeQL)
     runs-on: ubuntu-latest
@@ -227,15 +446,15 @@ jobs:
         language: ["go", "javascript-typescript", "python"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@3434fbbc53af0fe47685ef3897703b39ef77b5cb # v3.27.6
         with:
           languages: ${{ matrix.language }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@3434fbbc53af0fe47685ef3897703b39ef77b5cb # v3.27.6
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@3434fbbc53af0fe47685ef3897703b39ef77b5cb # v3.27.6

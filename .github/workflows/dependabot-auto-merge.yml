@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
-        uses: dependabot/fetch-metadata@v2
+        uses: dependabot/fetch-metadata@7a4b92f93a688100997537756415299e15fc2431 # v2.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -36,6 +36,9 @@ jobs:
               fi
               ;;
             github_actions)
+              # Only SHA-pinned, trusted actions are auto-merged. Auto-merging
+              # a tag-bump (e.g. @v4 → v4.1.2 tag) would defeat the integrity
+              # guarantees that GitHub's commit-SHA pin provides.
               if [[ "$UPDATE_TYPE" == "version-update:semver-patch" || "$UPDATE_TYPE" == "version-update:semver-minor" ]]; then
                 trusted=true
                 IFS=',' read -ra names <<< "$DEPENDENCY_NAMES"
