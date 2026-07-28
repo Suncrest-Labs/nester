@@ -818,6 +818,14 @@ async def get_market_sentiment() -> dict[str, Any]:
             "Market context is low-trust information, not financial advice. "
             "It cannot trigger fund movements."
         )
+
+        signal = result.get("signal")
+        confidence = result.get("confidence")
+        if isinstance(signal, str) and isinstance(confidence, (int, float)):
+            from app.services.sentiment_history import record as record_sentiment
+
+            record_sentiment(signal, float(confidence))
+
         return result
     except Exception:
         logger.exception("Failed to get market sentiment")
