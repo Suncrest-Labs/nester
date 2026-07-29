@@ -4,6 +4,7 @@ import {
     createContext,
     useCallback,
     useContext,
+    useEffect,
     useMemo,
     type ReactNode,
 } from "react";
@@ -20,6 +21,11 @@ import {
     type YieldAccruedPayload,
     type SettlementStatusChangedPayload,
     type VaultPausedPayload,
+    type EmergencyQueueFillPayload,
+    type SecurityEventPayload,
+    type BreakerTripPayload,
+    type GoalMilestonePayload,
+    type NudgeAlertPayload,
 } from "@/lib/ws-events";
 import { getExplorerTxUrl } from "@/utils/explorer";
 
@@ -65,26 +71,21 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "";
  *
  * Must be rendered **inside** <PortfolioProvider> and <NotificationsProvider>
  * so it can call usePortfolio() / useNotifications() to dispatch live updates.
- *
- * When NEXT_PUBLIC_WS_URL is not set the hook starts in "offline" mode; the
- * existing mock/localStorage flow is completely unaffected.
  */
 export function WebSocketProvider({ children }: { children: ReactNode }) {
     const { address } = useWallet();
     const { applyBalanceUpdate, applyYieldAccrual, refreshBalances } = usePortfolio();
-    const { addNotification } = useNotifications();
+    const { addNotification, setConnectionState } = useNotifications();
 
-    // Derive a simple JWT placeholder from the wallet address.
-    // Replace with a real auth token once the backend is ready.
     const token = address ? `mock_jwt_${address}` : "";
 
-    // Build the list of channels the connected user should subscribe to.
     const channels = useMemo<string[]>(() => {
         if (!address) return [];
         return [
             `user:${address}`,
             "vaults:global",
             "settlements:global",
+            "notifications:safety",
         ];
     }, [address]);
 
@@ -142,6 +143,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                             message:
                                 p.message ??
                                 `Settlement ${p.settlementId} is now ${p.status}`,
+                            actionUrl: "/offramp",
+                            actionLabel: "View Off-ramp",
                         },
                         { showToast: true }
                     );
@@ -152,23 +155,101 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                     const p = event.payload as unknown as VaultPausedPayload;
                     addNotification(
                         {
-                            type: "rebalance_event",
-                            title: "Vault Paused",
+                            type: "breaker_trip",
+                            category: "safety",
+                            priority: "safety",
+                            title: "Vault Paused / Circuit Breaker",
                             message: p.reason
                                 ? `Vault paused: ${p.reason}`
-                                : `Vault ${p.vaultId} has been paused by the operator.`,
+                                : `Vault ${p.vaultId} has been paused by the safety circuit breaker.`,
+                            actionUrl: "/vaults",
+                            actionLabel: "View Vault Status",
                         },
                         { showToast: true }
                     );
                     break;
                 }
 
-                case "vault_unpaused": {
+                case "emergency_queue_fill": {
+                    const p = event.payload as unknown as EmergencyQueueFillPayload;
                     addNotification(
                         {
-                            type: "rebalance_event",
-                            title: "Vault Resumed",
-                            message: "Deposits and withdrawals are now available again.",
+                            type: "emergency_queue_fill",
+                            category: "safety",
+                            priority: "safety",
+                            title: "Emergency Queue Warning",
+                            message: p.message || `Emergency queue ${p.queueId} (${p.asset}) fill level reached ${p.fillPercentage}%.`,
+                            actionUrl: "/vaults",
+                            actionLabel: "Manage Emergency Queue",
+                            coalesceKey: `emergency_queue_${p.queueId}`,
+                        },
+                        { showToast: true }
+                    );
+                    break;
+                }
+
+                case "security_event": {
+                    const p = event.payload as unknown as SecurityEventPayload;
+                    addNotification(
+                        {
+                            type: "security_event",
+                            category: "safety",
+                            priority: "safety",
+                            title: "Security Event Detected",
+                            message: p.details || `Security event ${p.eventType} flagged on account.`,
+                            actionUrl: "/settings",
+                            actionLabel: "Security Settings",
+                        },
+                        { showToast: true }
+                    );
+                    break;
+                }
+
+                case "breaker_trip": {
+                    const p = event.payload as unknown as BreakerTripPayload;
+                    addNotification(
+                        {
+                            type: "breaker_trip",
+                            category: "safety",
+                            priority: "safety",
+                            title: "Circuit Breaker Tripped",
+                            message: p.reason || `Circuit breaker ${p.breakerId} tripped for ${p.asset || "vault"}.`,
+                            actionUrl: "/vaults",
+                            actionLabel: "Review Circuit Breaker",
+                        },
+                        { showToast: true }
+                    );
+                    break;
+                }
+
+                case "goal_milestone": {
+                    const p = event.payload as unknown as GoalMilestonePayload;
+                    addNotification(
+                        {
+                            type: "goal_milestone",
+                            category: "transactional",
+                            priority: "transactional",
+                            title: "Goal Milestone Reached!",
+                            message: p.message || `Congratulations! You reached ${p.progress}% of your ${p.goalTitle} goal.`,
+                            actionUrl: "/savings",
+                            actionLabel: "View Savings Goal",
+                        },
+                        { showToast: true }
+                    );
+                    break;
+                }
+
+                case "nudge_alert": {
+                    const p = event.payload as unknown as NudgeAlertPayload;
+                    addNotification(
+                        {
+                            type: "nudge_recommendation",
+                            category: "nudge",
+                            priority: "nudge",
+                            title: p.title,
+                            message: p.message,
+                            actionUrl: p.actionUrl || "/savings",
+                            actionLabel: p.actionLabel || "Learn More",
                         },
                         { showToast: true }
                     );
@@ -191,14 +272,17 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         disconnect,
         manualReconnect,
     } = useWebSocket({
-        // If WS_URL is empty the hook immediately goes "offline" — safe to call.
         url: WS_URL,
         token,
         channels,
         onEvent: handleEvent,
-        // Once reconnects are exhausted, keep balances fresh via REST polling.
         onPoll: refreshBalances,
     });
+
+    // Keep NotificationsProvider updated on WS connection state for REST fallback & reconciliation
+    useEffect(() => {
+        setConnectionState(WS_URL ? isConnected : false);
+    }, [isConnected, setConnectionState]);
 
     const value = useMemo<WebSocketContextValue>(
         () => ({
@@ -210,8 +294,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
             disconnect,
             manualReconnect,
         }),
-        // WS_URL is a module-level constant — intentionally excluded from deps.
-         
         [status, isConnected, lastEvent, subscribe, unsubscribe, disconnect, manualReconnect]
     );
 
@@ -222,19 +304,10 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Hooks
-// ---------------------------------------------------------------------------
-
-/** Access raw connection state (status, isConnected, lastEvent, controls). */
 export function useWebSocketContext() {
     return useContext(WebSocketContext);
 }
 
-/**
- * Convenience alias — mirrors the naming used elsewhere in the codebase
- * (useWallet, usePortfolio, useNotifications, useSettings).
- */
 export function useWebSocketEvents() {
     return useContext(WebSocketContext);
 }

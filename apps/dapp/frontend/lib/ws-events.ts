@@ -1,5 +1,5 @@
 // WebSocket event types shared between the hook, provider, and consumers.
-// Mirrors the shape the backend service (#146) will produce.
+// Mirrors the shape the backend service (#146 / #870) will produce.
 
 export type WSConnectionStatus = "connected" | "reconnecting" | "offline";
 
@@ -10,7 +10,12 @@ export type WSEventType =
     | "yield_accrued"
     | "settlement_status_changed"
     | "vault_paused"
-    | "vault_unpaused";
+    | "vault_unpaused"
+    | "emergency_queue_fill"
+    | "security_event"
+    | "breaker_trip"
+    | "goal_milestone"
+    | "nudge_alert";
 
 export interface WSEvent {
     type: WSEventType;
@@ -62,4 +67,39 @@ export interface VaultPausedPayload {
 
 export interface VaultUnpausedPayload {
     vaultId: string;
+}
+
+export interface EmergencyQueueFillPayload {
+    queueId: string;
+    asset: string;
+    fillPercentage: number;
+    message?: string;
+}
+
+export interface SecurityEventPayload {
+    eventId: string;
+    eventType: string;
+    details: string;
+    severity?: "info" | "warning" | "high" | "critical";
+}
+
+export interface BreakerTripPayload {
+    breakerId: string;
+    asset?: string;
+    reason?: string;
+}
+
+export interface GoalMilestonePayload {
+    goalId: string;
+    goalTitle: string;
+    progress: number;
+    message?: string;
+}
+
+export interface NudgeAlertPayload {
+    nudgeId?: string;
+    title: string;
+    message: string;
+    actionUrl?: string;
+    actionLabel?: string;
 }
