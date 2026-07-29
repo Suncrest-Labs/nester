@@ -38,7 +38,10 @@ func ComputeSharePrice(v Vault) decimal.Decimal {
 	if v.TotalDeposited.IsZero() || v.TotalDeposited.Sign() <= 0 {
 		return decimal.NewFromInt(1)
 	}
-	return v.CurrentBalance.Div(v.TotalDeposited).Round(8)
+	// Keep the full decimal precision here. Rounding the share price before it
+	// is multiplied by a user's shares can create material valuation drift for
+	// large positions, especially after many small deposits and harvests.
+	return v.CurrentBalance.Div(v.TotalDeposited)
 }
 
 // BuildUserVaultPosition aggregates user transactions and applies live vault pricing.
