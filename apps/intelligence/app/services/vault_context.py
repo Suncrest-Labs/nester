@@ -11,6 +11,8 @@ except ImportError:
 
 import aiohttp
 
+from app.services.i18n import DEFAULT_LANGUAGE, format_amount, format_percentage
+
 logger = logging.getLogger(__name__)
 
 
@@ -257,10 +259,17 @@ class VaultContextFetcher:
         return fallback_rates
 
     def build_context_block(
-        self, vaults: List[Dict[str, Any]], market_rates: List[Dict[str, Any]]
+        self,
+        vaults: List[Dict[str, Any]],
+        market_rates: List[Dict[str, Any]],
+        language: str = DEFAULT_LANGUAGE,
     ) -> str:
         """
         Build a formatted string block to be injected into the system prompt.
+
+        Amounts and percentages are formatted deterministically for
+        `language` here (#multilingual) so Prometheus can reference them
+        verbatim instead of formatting numbers itself.
         """
         if not vaults:
             vault_context = "The user has no active vaults."
@@ -278,8 +287,11 @@ class VaultContextFetcher:
                     else "No allocation data"
                 )
 
+                balance_str = format_amount(balance, "USD", language)
+                apy_str = format_percentage(apy, language)
                 vault_lines.append(
-                    f"- {name}: ${balance:,.2f} balance, {apy:.2f}% APY, Allocation: [{alloc_str}]"
+                    f"- {name}: {balance_str} balance, {apy_str} APY, "
+                    f"Allocation: [{alloc_str}]"
                 )
 
             vault_context = f"""## User Portfolio
@@ -292,7 +304,8 @@ class VaultContextFetcher:
             for rate in market_rates:
                 protocol = rate.get("protocol", "unknown").upper()
                 apy = rate.get("apy", 0)
-                market_lines.append(f"- {protocol}: {apy * 100:.2f}% APY")
+                apy_str = format_percentage(apy * 100, language)
+                market_lines.append(f"- {protocol}: {apy_str} APY")
 
             market_context = f"""## Current Market Rates (Live)
 {chr(10).join(market_lines)}"""
@@ -302,7 +315,10 @@ class VaultContextFetcher:
 {market_context}"""
 
     def build_risk_profile_block(
-        self, vaults: List[Dict[str, Any]], risk_data: Dict[str, Dict[str, Any]]
+        self,
+        vaults: List[Dict[str, Any]],
+        risk_data: Dict[str, Dict[str, Any]],
+        language: str = DEFAULT_LANGUAGE,
     ) -> str:
         """
         Build a risk profile block to be injected into the system prompt.

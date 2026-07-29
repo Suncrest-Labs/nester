@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-6"
+    anthropic_model: str = "claude-sonnet-5"
     jwt_secret: str = ""
     redis_url: str = "redis://localhost:6379/0"  # gitleaks:allow
     nester_api_base_url: str = "http://localhost:8080"

@@ -21,6 +21,9 @@ _limiter = Limiter(key_func=get_remote_address)
 async def chat(
     request: Request,
     message: str = Query(..., description="User message to Prometheus"),
+    language: str | None = Query(
+        None, description="Preferred response language (ISO 639-1, e.g. 'fr', 'sw')"
+    ),
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> StreamingResponse:
     """Stream a Prometheus AI response as Server-Sent Events.
@@ -28,6 +31,10 @@ async def chat(
     The user ID is sourced from the JWT subject claim — never from the caller.
     Each event is ``data: <text chunk>\\n\\n``.
     The stream terminates with ``data: [DONE]\\n\\n``.
+
+    `language` is the user's stored language preference (shared with the
+    frontend i18n settings, #789); when omitted, Prometheus detects the
+    language of `message` as a fallback (#multilingual).
     """
     user_id: str = claims.get("sub", "")
     if not user_id:
@@ -36,7 +43,7 @@ async def chat(
             detail="Token missing subject claim",
         )
     return StreamingResponse(
-        stream_chat(user_id, message),
+        stream_chat(user_id, message, language),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

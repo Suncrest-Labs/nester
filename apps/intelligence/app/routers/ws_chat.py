@@ -70,8 +70,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
             if not message:
                 await websocket.send_json({"type": "error", "message": "message is required"})
                 continue
+            language: Optional[str] = data.get("language")
 
-            async for chunk in stream_chat(user_id, message):
+            async for chunk in stream_chat(user_id, message, language):
                 # Strip SSE "data: " prefix — WS clients get raw text
                 if chunk.startswith("data: "):
                     chunk = chunk[6:].rstrip("\n")

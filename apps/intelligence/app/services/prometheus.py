@@ -24,9 +24,18 @@ from app.models.recommendation import (
     VaultRecommendationRequest,
     VaultRecommendationResponse,
 )
+from app.services.claude import build_system_prompt
 from app.services.coingecko import get_client as get_coingecko_client
 from app.services.conversation_store import store as conversation_store
 from app.services.defillama import get_client as get_defillama_client
+from app.services.i18n import (
+    build_portfolio_narrative,
+    format_amount,
+    format_date,
+    format_percentage,
+    resolve_language,
+    structured_output_language_note,
+)
 from app.services.vault_context import VaultContextFetcher
 
 logger = logging.getLogger(__name__)
@@ -271,12 +280,21 @@ def _to_anthropic_messages(
 # ---------------------------------------------------------------------------
 
 
-async def stream_chat(user_id: str, message: str) -> AsyncIterator[str]:
+async def stream_chat(
+    user_id: str, message: str, language: str | None = None
+) -> AsyncIterator[str]:
     """Yield SSE-formatted data strings for a streaming Claude response.
 
     Each yielded string is formatted as `data: <text>\\n\\n`.
     A final `data: [DONE]\\n\\n` is yielded when the stream ends.
+
+    `language` is the user's stored language preference, if any (shared with
+    the frontend i18n settings, #789). When absent, the language is detected
+    from `message` as a fallback (#multilingual) — a stored preference always
+    wins over the incidental language of a single message.
     """
+    resolved_language = resolve_language(language, message)
+
     # Get conversation history
     history = conversation_store.get(user_id)
     conversation_store.append(user_id, "user", message)
@@ -295,9 +313,11 @@ async def stream_chat(user_id: str, message: str) -> AsyncIterator[str]:
             if risk_info:
                 risk_data[vault_id] = risk_info
 
-    context_block = vault_context_fetcher.build_context_block(vaults, market_rates)
+    context_block = vault_context_fetcher.build_context_block(
+        vaults, market_rates, language=resolved_language
+    )
     risk_profile_block = vault_context_fetcher.build_risk_profile_block(
-        vaults, risk_data
+        vaults, risk_data, language=resolved_language
     )
 
     market_context_block = await _build_market_context_block()
@@ -321,6 +341,8 @@ Nester DeFi platform.
 Provide personalized, data-driven advice based on user positions
 and current market conditions. Always cite specific numbers from their
 portfolio."""
+
+    dynamic_system_prompt = build_system_prompt(dynamic_system_prompt, resolved_language)
 
     # Fetch live portfolio context (60s Redis-backed cache).
     # Injected as a prepended user message so Claude can personalise responses
@@ -399,28 +421,35 @@ async def generate_coaching(request: CoachingRequest) -> CoachingResponse:
 
     goal = request.goal
     portfolio = request.portfolio
+    language = resolve_language(request.language)
     schema = (
         '{"progress_assessment": str, "deposit_schedule": '
         '[{"date": str, "amount_usdc": float, "note": str}], '
         '"nudges": [str], "confidence": "high"|"medium"|"low"}'
     )
     vaults_preview = json.dumps(portfolio.vaults[:5])
+    target_amount_str = format_amount(goal.target_amount, goal.currency, language)
+    current_amount_str = format_amount(goal.current_amount, goal.currency, language)
+    progress_str = format_percentage(goal.progress_pct, language)
+    deadline_str = format_date(goal.deadline, language)
+    total_balance_str = format_amount(portfolio.total_balance_usd, "USD", language)
     prompt = (
         "You are Prometheus, a savings coach for Nester on Stellar. "
-        f"Goal: target {goal.target_amount} {goal.currency}, deadline {goal.deadline}, "
+        f"Goal: target {target_amount_str}, deadline {deadline_str}, "
         f"description: {goal.description or 'none'}. "
-        f"Current progress: {goal.progress_pct:.1f}% ({goal.current_amount} saved). "
-        f"Portfolio total USD: {portfolio.total_balance_usd}. Vaults: {vaults_preview}. "
+        f"Current progress: {progress_str} ({current_amount_str} saved). "
+        f"Portfolio total: {total_balance_str}. Vaults: {vaults_preview}. "
         "Return a realistic deposit schedule from today until the deadline, with 3-8 installments. "
         "Include a short progress assessment and 2-3 motivational nudges. "
-        f"Respond with JSON only matching: {schema}"
+        f"Respond with JSON only matching: {schema}."
+        f"{structured_output_language_note(language)}"
     )
     client = get_client()
     try:
         response = await client.messages.create(
             model=settings.anthropic_model,
             max_tokens=ANALYZE_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=build_system_prompt(SYSTEM_PROMPT, language),
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
@@ -460,8 +489,11 @@ async def generate_coaching(request: CoachingRequest) -> CoachingResponse:
         )
 
 
-async def get_portfolio_insights(user_id: str) -> list[dict[str, Any]]:
+async def get_portfolio_insights(
+    user_id: str, language: str | None = None
+) -> list[dict[str, Any]]:
     """Return 2 insight cards for the user's portfolio."""
+    resolved_language = resolve_language(language)
     schema = (
         '[{"title": str, "body": str, "confidence": float,'
         ' "action": {"label": str, "href": str} | null}]'
@@ -471,7 +503,8 @@ async def get_portfolio_insights(user_id: str) -> list[dict[str, Any]]:
         "Each card should have a short title, a one-sentence body, a confidence score "
         "(0.0–1.0), and optionally an action with a label and href. "
         "Focus on practical savings advice relevant to Nester vaults on Stellar. "
-        f"Respond with a JSON array only, no markdown, matching this schema: {schema}"
+        f"Respond with a JSON array only, no markdown, matching this schema: {schema}."
+        f"{structured_output_language_note(resolved_language)}"
     )
 
     client = get_client()
@@ -479,7 +512,7 @@ async def get_portfolio_insights(user_id: str) -> list[dict[str, Any]]:
         response = await client.messages.create(
             model=settings.anthropic_model,
             max_tokens=ANALYZE_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=build_system_prompt(SYSTEM_PROMPT, resolved_language),
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
@@ -496,8 +529,9 @@ async def get_portfolio_insights(user_id: str) -> list[dict[str, Any]]:
         return []
 
 
-async def get_market_sentiment() -> dict[str, Any]:
+async def get_market_sentiment(language: str | None = None) -> dict[str, Any]:
     """Return a market sentiment summary for the Stellar DeFi / stablecoin space."""
+    resolved_language = resolve_language(language)
     schema = (
         '{"signal": "bull"|"bear"|"neutral", "summary": str (1 sentence),'
         ' "confidence": float (0.0–1.0), "updatedAt": str (ISO timestamp now)}'
@@ -505,7 +539,8 @@ async def get_market_sentiment() -> dict[str, Any]:
     prompt = (
         "Give a brief market sentiment assessment for the Stellar DeFi and stablecoin "
         "yield space as it relates to Nester users in Africa. "
-        f"Respond with JSON only, no markdown, matching this schema: {schema}"
+        f"Respond with JSON only, no markdown, matching this schema: {schema}."
+        f"{structured_output_language_note(resolved_language)}"
     )
 
     client = get_client()
@@ -513,7 +548,7 @@ async def get_market_sentiment() -> dict[str, Any]:
         response = await client.messages.create(
             model=settings.anthropic_model,
             max_tokens=200,
-            system=SYSTEM_PROMPT,
+            system=build_system_prompt(SYSTEM_PROMPT, resolved_language),
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
@@ -593,8 +628,9 @@ async def _build_market_context_block() -> str:
     return "\n\n".join(sections)
 
 
-async def get_yield_recommendation() -> dict[str, Any]:
+async def get_yield_recommendation(language: str | None = None) -> dict[str, Any]:
     """Return an AI-picked yield opportunity based on current DeFiLlama and CoinGecko data."""
+    resolved_language = resolve_language(language)
     dl = get_defillama_client()
     cg = get_coingecko_client()
 
@@ -638,7 +674,8 @@ async def get_yield_recommendation() -> dict[str, Any]:
         f"Market sentiment: {sentiment_signal}. "
         f"Prices: {json.dumps(prices)}. "
         f"{top_pools_summary}\n"
-        f"Respond with JSON only, no markdown, matching this schema: {schema}"
+        f"Respond with JSON only, no markdown, matching this schema: {schema}."
+        f"{structured_output_language_note(resolved_language)}"
     )
 
     client = get_client()
@@ -646,7 +683,7 @@ async def get_yield_recommendation() -> dict[str, Any]:
         response = await client.messages.create(
             model=settings.anthropic_model,
             max_tokens=ANALYZE_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=build_system_prompt(SYSTEM_PROMPT, resolved_language),
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
@@ -671,8 +708,11 @@ async def get_yield_recommendation() -> dict[str, Any]:
         }
 
 
-async def get_vault_recommendations(vault_id: str) -> dict[str, Any]:
+async def get_vault_recommendations(
+    vault_id: str, language: str | None = None
+) -> dict[str, Any]:
     """Return AI commentary and recommendations for a specific vault."""
+    resolved_language = resolve_language(language)
     schema = (
         '{"vaultId": str, "commentary": str, "percentileRank": int (0-100),'
         ' "recommendations": [str], "confidence": float}'
@@ -681,7 +721,8 @@ async def get_vault_recommendations(vault_id: str) -> dict[str, Any]:
         f"Give an AI commentary and recommendations for Nester vault id '{vault_id}'. "
         "Assume it is a yield-bearing Stellar vault. "
         "Be specific about what type of user this vault suits. "
-        f"Respond with JSON only, no markdown, matching this schema: {schema}"
+        f"Respond with JSON only, no markdown, matching this schema: {schema}."
+        f"{structured_output_language_note(resolved_language)}"
     )
 
     client = get_client()
@@ -689,7 +730,7 @@ async def get_vault_recommendations(vault_id: str) -> dict[str, Any]:
         response = await client.messages.create(
             model=settings.anthropic_model,
             max_tokens=ANALYZE_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=build_system_prompt(SYSTEM_PROMPT, resolved_language),
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
@@ -897,7 +938,9 @@ def _fallback_vault_recommendation(
 async def recommend_vaults(
     request: VaultRecommendationRequest,
     user_id: str | None = None,
+    language: str | None = None,
 ) -> VaultRecommendationResponse:
+    resolved_language = resolve_language(language)
     vault_context_fetcher = get_vault_context_fetcher()
     live_vaults = await vault_context_fetcher.fetch_available_vaults()
     market_rates = await vault_context_fetcher.fetch_market_rates()
@@ -961,15 +1004,15 @@ async def recommend_vaults(
     def _vault_context_line(vault: dict[str, Any]) -> str:
         vid = str(vault.get("id", ""))
         risk_overall = risk_scores.get(vid, {}).get("overall", 100.0)
-        return (
-            f"- {vault['name']}: APY {vault.get('apy', 0.0):.2f}%, "
-            f"risk {risk_overall:.0f}/100"
-        )
+        apy_str = format_percentage(vault.get("apy", 0.0), resolved_language)
+        return f"- {vault['name']}: APY {apy_str}, risk {risk_overall:.0f}/100"
 
     def _user_context_line(vault: dict[str, Any]) -> str:
         bal = float(vault.get("balance_usd", 0.0) or 0.0)
         apy = float(vault.get("apy", 0.0) or 0.0)
-        return f"- {vault.get('name', 'Vault')}: ${bal:,.2f} balance, APY {apy:.2f}%"
+        bal_str = format_amount(bal, "USD", resolved_language)
+        apy_str = format_percentage(apy, resolved_language)
+        return f"- {vault.get('name', 'Vault')}: {bal_str} balance, APY {apy_str}"
 
     vault_context_lines = [_vault_context_line(v) for v in live_vaults[:8]]
     user_context_lines = [_user_context_line(v) for v in user_vaults[:5]]
@@ -978,12 +1021,13 @@ async def recommend_vaults(
         '"expected_yield_usdc": float, "confidence": "high"|"medium"|"low"}'
     )
     positions_json = json.dumps(user_vaults[:5])
+    deposit_str = format_amount(request.initial_deposit_usdc, "USDC", resolved_language)
     prompt = (
         "Recommend the best vault or vault split for a Nester user. "
         "Use only the live context below. "
         f"Risk tolerance: {request.risk_tolerance}. "
         f"Time horizon: {request.time_horizon_months} months. "
-        f"Initial deposit: ${request.initial_deposit_usdc:.2f} USDC. "
+        f"Initial deposit: {deposit_str}. "
         f"Savings goal: {request.savings_goal or 'not specified'}. "
         f"User positions: {positions_json}. "
         f"Live vaults:\n{chr(10).join(vault_context_lines)}. "
@@ -993,13 +1037,14 @@ async def recommend_vaults(
         f"Data freshness: {data_freshness}. "
         f"Return JSON only, matching this schema: {schema}. "
         "Keep the rationale plain-language and avoid redundant wording."
+        f"{structured_output_language_note(resolved_language)}"
     )
 
     try:
         response = await get_client().messages.create(
             model=settings.anthropic_model,
             max_tokens=RECOMMEND_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=build_system_prompt(SYSTEM_PROMPT, resolved_language),
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(
@@ -1039,7 +1084,9 @@ async def recommend_vaults(
 async def analyze_recommendation(
     prompt: str,
     user_id: str | None = None,
+    language: str | None = None,
 ) -> Recommendation:
+    resolved_language = resolve_language(language, prompt)
     vault_context_fetcher = get_vault_context_fetcher()
     live_vaults = await vault_context_fetcher.fetch_available_vaults()
     market_rates = await vault_context_fetcher.fetch_market_rates()
@@ -1068,7 +1115,7 @@ async def analyze_recommendation(
     )
     context_lines = [
         (
-            f"- {v['name']}: APY {v.get('apy', 0.0):.2f}%, "
+            f"- {v['name']}: APY {format_percentage(v.get('apy', 0.0), resolved_language)}, "
             f"risk {v.get('risk_tier', 'unknown')}"
         )
         for v in live_vaults[:6]
@@ -1081,13 +1128,14 @@ async def analyze_recommendation(
         f"Confidence guidance: {confidence_reason}. "
         f"Data freshness: {data_freshness}. "
         f"Return JSON only, matching this schema: {schema}."
+        f"{structured_output_language_note(resolved_language)}"
     )
 
     try:
         response = await get_client().messages.create(
             model=settings.anthropic_model,
             max_tokens=ANALYZE_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=build_system_prompt(SYSTEM_PROMPT, resolved_language),
             messages=[{"role": "user", "content": analysis_prompt}],
         )
         text = next(
@@ -1133,7 +1181,9 @@ async def analyze_recommendation(
         )
 
 
-async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
+async def analyze_portfolio(
+    user_id: str, language: str | None = None
+) -> PortfolioAnalysisResponse:
     """Analyze user's portfolio using Claude tool use to produce structured output.
 
     Fetches user vault positions and uses Claude's tool use capability to generate
@@ -1142,10 +1192,12 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
 
     Args:
         user_id: The authenticated user's ID.
+        language: The user's stored language preference, if any (#multilingual).
 
     Returns:
         PortfolioAnalysisResponse with structured analysis and narrative.
     """
+    resolved_language = resolve_language(language)
     vault_context_fetcher = get_vault_context_fetcher()
     user_vaults = await vault_context_fetcher.fetch_user_vaults(user_id)
 
@@ -1177,8 +1229,11 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
         balance = float(vault.get("balance_usd", 0) or 0)
         apy = float(vault.get("apy", 0) or 0)
         pct = (balance / total_value_usdc * 100) if total_value_usdc > 0 else 0
+        balance_str = format_amount(balance, "USD", resolved_language)
+        pct_str = format_percentage(pct, resolved_language, decimals=1)
+        apy_str = format_percentage(apy, resolved_language)
         allocation_context_lines.append(
-            f"- {vault_name}: ${balance:,.2f} ({pct:.1f}%), APY {apy:.2f}%"
+            f"- {vault_name}: {balance_str} ({pct_str}), APY {apy_str}"
         )
 
     allocation_context = "\n".join(allocation_context_lines)
@@ -1251,12 +1306,14 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
     ]
 
     # Build analysis prompt with portfolio context
+    total_value_str = format_amount(total_value_usdc, "USD", resolved_language)
+    total_yield_str = format_amount(total_yield_30d, "USD", resolved_language)
     analysis_prompt = (
         "Analyze this Nester user's portfolio and provide structured output "
         "using the provided tool.\n\n"
         f"Portfolio Overview:\n"
-        f"Total Value: ${total_value_usdc:,.2f} USDC\n"
-        f"30-day Yield Earned: ${total_yield_30d:,.2f} USDC\n"
+        f"Total Value: {total_value_str}\n"
+        f"30-day Yield Earned: {total_yield_str}\n"
         f"Vault Positions:\n{allocation_context}\n\n"
         f"Market Context:\n"
         f"- Platform supports: Aave, Blend, Compound\n"
@@ -1269,6 +1326,7 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
         "4. Top recommendation for optimization\n"
         "5. Whether rebalancing is suggested\n\n"
         "Base your analysis on the current positions shown above."
+        f"{structured_output_language_note(resolved_language)}"
     )
 
     client = get_client()
@@ -1279,7 +1337,7 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
         response = await client.messages.create(
             model=settings.anthropic_model,
             max_tokens=1000,
-            system=SYSTEM_PROMPT,
+            system=build_system_prompt(SYSTEM_PROMPT, resolved_language),
             tools=tools,  # type: ignore[arg-type]
             messages=[{"role": "user", "content": analysis_prompt}],
         )
@@ -1349,13 +1407,16 @@ async def analyze_portfolio(user_id: str) -> PortfolioAnalysisResponse:
         )
         confidence = "medium"
 
-    # Generate narrative explanation
-    narrative = (
-        f"Your Nester portfolio has a total value of ${total_value_usdc:,.2f} "
-        f"USDC across {len(user_vaults)} vault(s). Over the last 30 days, "
-        f"you've earned ${total_yield_30d:,.2f} in yield. "
-        f"Your portfolio risk level is {structured_data.risk_level}. "
-        f"{structured_data.top_recommendation}"
+    # Generate narrative explanation. The fixed-shape sentence is templated
+    # per language; structured_data.top_recommendation was generated by
+    # Claude in the same language (#multilingual).
+    narrative = build_portfolio_narrative(
+        total_value=format_amount(total_value_usdc, "USD", resolved_language),
+        vault_count=len(user_vaults),
+        yield_earned=format_amount(total_yield_30d, "USD", resolved_language),
+        risk_level=structured_data.risk_level,
+        top_recommendation=structured_data.top_recommendation,
+        language=resolved_language,
     )
 
     return PortfolioAnalysisResponse(
