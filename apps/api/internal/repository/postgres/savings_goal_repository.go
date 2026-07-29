@@ -78,8 +78,8 @@ func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
-		       min_contribution, max_contribution
-		FROM savings_goals WHERE share_token = $1
+		       min_contribution, max_contribution, deleted_at
+		FROM savings_goals WHERE share_token = $1 AND deleted_at IS NULL
 	`, token)
 	g, err := scanSavingsGoalWithShare(row)
 	if err != nil {
@@ -97,7 +97,7 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
-		       min_contribution, max_contribution
+		       min_contribution, max_contribution, deleted_at
 		FROM savings_goals
 		WHERE user_id = $1 AND deleted_at IS NULL
 	`
@@ -135,7 +135,29 @@ func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*sav
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
-		       min_contribution, max_contribution
+		       min_contribution, max_contribution, deleted_at
+		FROM savings_goals WHERE id = $1 AND deleted_at IS NULL
+	`, id)
+	g, err := scanSavingsGoalWithShare(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, savingsgoal.ErrGoalNotFound
+		}
+		return nil, err
+	}
+	return &g, nil
+}
+
+// GetByIDIncludingDeleted looks up a goal regardless of deleted_at (#924),
+// so Restore can inspect a soft-deleted goal's deleted_at to enforce the
+// recovery window.
+func (r *SavingsGoalRepository) GetByIDIncludingDeleted(ctx context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
+		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
+		       status, completed_at, completion_action, name, emoji,
+		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
+		       min_contribution, max_contribution, deleted_at
 		FROM savings_goals WHERE id = $1
 	`, id)
 	g, err := scanSavingsGoalWithShare(row)
@@ -153,7 +175,7 @@ func (r *SavingsGoalRepository) Update(ctx context.Context, goal *savingsgoal.Sa
 		UPDATE savings_goals
 		SET target_amount = $1, currency = $2, deadline = $3, description = $4, category = $5,
 		    vault_id = $6, name = $7, emoji = $8, min_contribution = $9, max_contribution = $10, updated_at = NOW()
-		WHERE id = $11 AND user_id = $12
+		WHERE id = $11 AND user_id = $12 AND deleted_at IS NULL
 	`, goal.TargetAmount.String(), goal.Currency, goal.Deadline, nullSQLString(goal.Description),
 		string(goal.Category), nullUUID(goal.VaultID), nullSQLString(goal.Name), nullSQLString(goal.Emoji),
 		nullDecimal(goal.MinContribution), nullDecimal(goal.MaxContribution),
@@ -219,7 +241,8 @@ func (r *SavingsGoalRepository) ListDeletedOlderThan(ctx context.Context, cutoff
 		SELECT id, user_id, vault_id, target_amount, currency, deadline, description, category,
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
-		       share_token, share_enabled_at, onchain_goal_id, onchain_status, deleted_at
+		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
+		       min_contribution, max_contribution, deleted_at
 		FROM savings_goals
 		WHERE deleted_at IS NOT NULL AND deleted_at < $1
 	`
@@ -315,7 +338,7 @@ func (r *SavingsGoalRepository) ListActiveApproachingDeadline(ctx context.Contex
 		       notified_milestones, deadline_reminders_sent, created_at, updated_at,
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
-		       min_contribution, max_contribution
+		       min_contribution, max_contribution, deleted_at
 		FROM savings_goals
 		WHERE (status = 'active' OR status IS NULL OR status = '')
 		  AND deleted_at IS NULL
@@ -546,13 +569,14 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		shareEnabledAt                            sql.NullTime
 		onchainGoalID, onchainStatus              sql.NullString
 		minContribution, maxContribution          sql.NullString
+		deletedAt                                 sql.NullTime
 	)
 	if err := row.Scan(
 		&id, &userID, &vaultID, &targetStr, &currency, &deadline, &description, &category,
 		&notifiedMilestones, &deadlineReminders, &createdAt, &updatedAt,
 		&status, &completedAt, &completionAction, &name, &emoji,
 		&shareToken, &shareEnabledAt, &onchainGoalID, &onchainStatus,
-		&minContribution, &maxContribution,
+		&minContribution, &maxContribution, &deletedAt,
 	); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -616,6 +640,11 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 			maxContributionPtr = &v
 		}
 	}
+	var deletedAtPtr *time.Time
+	if deletedAt.Valid {
+		t := deletedAt.Time
+		deletedAtPtr = &t
+	}
 	return savingsgoal.SavingsGoal{
 		ID:                    parsedID,
 		UserID:                parsedUserID,
@@ -641,6 +670,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		OnchainStatus:         onchainStatusPtr,
 		MinContribution:       minContributionPtr,
 		MaxContribution:       maxContributionPtr,
+		DeletedAt:             deletedAtPtr,
 	}, nil
 }
 
