@@ -1,6 +1,7 @@
 #![no_std]
 
 mod breaker;
+pub mod conversion;
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN, Env,
@@ -613,6 +614,68 @@ fn get_total_assets(env: &Env) -> i128 {
 
 fn set_total_assets(env: &Env, amount: i128) {
     env.storage().instance().set(&DataKey::TotalAssets, &amount);
+}
+
+/// Assets backing shares after already-accrued vault fees.
+fn get_net_total_assets(env: &Env) -> i128 {
+    get_total_assets(env).saturating_sub(get_accrued_fees(env))
+}
+
+/// Remaining assets that can be withdrawn without crossing the configured
+/// rolling circuit-breaker threshold. This helper is read-only and deliberately
+/// uses saturating arithmetic so `max_*` queries never fail.
+fn circuit_breaker_headroom(env: &Env) -> i128 {
+    let Some(config) = env
+        .storage()
+        .instance()
+        .get::<_, CircuitBreakerConfig>(&DataKey::CircuitBreakerConfig)
+    else {
+        return 0;
+    };
+
+    let threshold = nester_common::fees::mul_div(
+        get_total_assets(env),
+        config.threshold_bps as i128,
+        10_000,
+    )
+    .unwrap_or(0);
+    // A zero threshold disables the check in `check_circuit_breaker`.
+    if threshold == 0 {
+        return i128::MAX;
+    }
+
+    let window_start = env
+        .ledger()
+        .timestamp()
+        .saturating_sub(config.window_seconds);
+    let history: Vec<WithdrawalEntry> = env
+        .storage()
+        .instance()
+        .get(&DataKey::WithdrawalHistory)
+        .unwrap_or(Vec::new(env));
+    let mut used = 0_i128;
+    for entry in history.iter() {
+        if entry.timestamp >= window_start && entry.sum > 0 {
+            used = used.saturating_add(entry.sum);
+        }
+    }
+    threshold.saturating_sub(used)
+}
+
+/// Maximum gross assets the holder can presently redeem. Unlike the mutating
+/// withdrawal path this function never panics.
+fn max_withdrawable_assets(env: &Env, user: &Address) -> i128 {
+    if !env.storage().instance().has(&DataKey::Token) || is_paused(env) {
+        return 0;
+    }
+
+    let shares = get_shares(env, user);
+    let total_shares = vault_token_client(env).total_supply();
+    let total_assets = get_net_total_assets(env);
+    let holder_assets =
+        conversion::shares_to_assets_down(shares, total_assets, total_shares).unwrap_or(0);
+    let liquid = get_vault_liquid_reserves(env).saturating_sub(get_liquid_reserved(env));
+    holder_assets.min(liquid).min(circuit_breaker_headroom(env))
 }
 
 fn sync_vault_token_total_assets(env: &Env) {
@@ -2650,6 +2713,16 @@ impl VaultContract {
         user.require_auth();
         accrue_management_fee(&env);
 
+        // Validate the exchange-rate state before moving funds. In particular,
+        // a live share supply backed by zero assets is insolvent and must not
+        // fall back to the bootstrap 1:1 rate.
+        let _validated_conversion = conversion::assets_to_shares_down(
+            amount,
+            get_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e));
+
         let token_address = self::VaultContract::get_token(env.clone());
         let contract_address = env.current_contract_address();
 
@@ -3311,7 +3384,12 @@ impl VaultContract {
         if amount <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
-        vault_token_client(&env).shares_for_deposit(&amount)
+        conversion::assets_to_shares_down(
+            amount,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
     /// Returns the **gross**, pre-fee asset value of `shares` (the raw
@@ -3331,7 +3409,85 @@ impl VaultContract {
         if shares <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
-        vault_token_client(&env).amount_for_shares(&shares)
+        conversion::shares_to_assets_down(
+            shares,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e))
+    }
+
+    /// Convert assets to shares at the current exchange rate. Since this is the
+    /// amount the caller would receive, a non-zero remainder rounds down.
+    pub fn convert_to_shares(env: Env, assets: i128) -> i128 {
+        require_initialized(&env);
+        conversion::assets_to_shares_down(
+            assets,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e))
+    }
+
+    /// Convert shares to assets at the current exchange rate. Since this is the
+    /// amount the caller would receive, a non-zero remainder rounds down.
+    pub fn convert_to_assets(env: Env, shares: i128) -> i128 {
+        require_initialized(&env);
+        conversion::shares_to_assets_down(
+            shares,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e))
+    }
+
+    /// Total underlying assets currently backing outstanding shares.
+    pub fn total_assets(env: Env) -> i128 {
+        require_initialized(&env);
+        get_net_total_assets(&env)
+    }
+
+    /// Maximum assets accepted by one deposit. Returns zero rather than
+    /// reverting when deposits are unavailable.
+    pub fn max_deposit(env: Env, _user: Address) -> i128 {
+        if !env.storage().instance().has(&DataKey::Token) || is_paused(&env) {
+            return 0;
+        }
+        let cap: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxDeposit)
+            .unwrap_or(i128::MAX);
+        if cap <= 0 {
+            return 0;
+        }
+        // Refuse deposits in the insolvent live-supply state.
+        let total_shares = vault_token_client(&env).total_supply();
+        if total_shares > 0 && get_net_total_assets(&env) == 0 {
+            return 0;
+        }
+        cap
+    }
+
+    /// Maximum gross assets currently withdrawable by `user`.
+    pub fn max_withdraw(env: Env, user: Address) -> i128 {
+        max_withdrawable_assets(&env, &user)
+    }
+
+    /// Maximum shares currently redeemable by `user`.
+    pub fn max_redeem(env: Env, user: Address) -> i128 {
+        let max_assets = max_withdrawable_assets(&env, &user);
+        if max_assets == 0 {
+            return 0;
+        }
+        let balance = get_shares(&env, &user);
+        conversion::assets_to_shares_down(
+            max_assets,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or(0)
+        .min(balance)
     }
 
     /// Returns the amount the caller actually receives after all fees —
