@@ -4,9 +4,10 @@ import logging
 import re
 from datetime import datetime
 from typing import Optional
-import pytz
 
+import pytz
 from pydantic import BaseModel, Field
+
 from app.services.claude import get_client, get_model_id
 
 logger = logging.getLogger(__name__)
@@ -41,8 +42,14 @@ class GoalExtractionResult(BaseModel):
 
 class GoalExtractor:
     CATEGORIES = [
-        "savings", "vacation", "emergency", "education",
-        "car", "home", "investment", "other"
+        "savings",
+        "vacation",
+        "emergency",
+        "education",
+        "car",
+        "home",
+        "investment",
+        "other",
     ]
 
     def __init__(self):
@@ -97,12 +104,14 @@ class GoalExtractor:
     def _build_extraction_prompt(self, message: str) -> str:
         categories = ", ".join(self.CATEGORIES)
         return f"""Extract a structured savings goal from the user's message.
-Current date: {datetime.now().strftime('%Y-%m-%d')}
+Current date: {datetime.now().strftime("%Y-%m-%d")}
 User message: "{message}"
 Extract: name, target_amount (USDC), deadline (YYYY-MM-DD), category [{categories}], initial_deposit, is_recurring, recurring_amount.
 Rules: Do NOT guess missing fields. Return ONLY the structured extraction."""
 
-    def _validate_and_resolve(self, extracted: ExtractedGoal, user_timezone: str = "UTC") -> GoalExtractionResult:
+    def _validate_and_resolve(
+        self, extracted: ExtractedGoal, user_timezone: str = "UTC"
+    ) -> GoalExtractionResult:
         if extracted.target_amount <= 0:
             return GoalExtractionResult(
                 success=False,
@@ -119,10 +128,10 @@ Rules: Do NOT guess missing fields. Return ONLY the structured extraction."""
                 tz = pytz.timezone(user_timezone)
             except pytz.UnknownTimeZoneError:
                 tz = pytz.UTC
-            
+
             now = datetime.now(tz)
             deadline_date = datetime.fromisoformat(extracted.deadline).replace(tzinfo=tz)
-            
+
             if deadline_date < now:
                 return GoalExtractionResult(
                     success=False,
@@ -175,8 +184,11 @@ Rules: Do NOT guess missing fields. Return ONLY the structured extraction."""
                 ),
             )
 
-        if extracted.is_recurring and extracted.recurring_amount is not None and extracted.recurring_amount <= 0:
+        if (
+            extracted.is_recurring
+            and extracted.recurring_amount is not None
+            and extracted.recurring_amount <= 0
+        ):
             return GoalExtractionResult(success=False, error="Recurring amount must be positive.")
 
         return GoalExtractionResult(success=True, extracted=extracted)
-

@@ -16,7 +16,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _TTL_SECONDS = 86400  # 24 hours of inactivity
-_MAX_TURNS = 20       # keep the last N messages to cap token spend
+_MAX_TURNS = 20  # keep the last N messages to cap token spend
 _KEY_PREFIX = "prometheus:conv:"
 
 
@@ -24,10 +24,12 @@ _KEY_PREFIX = "prometheus:conv:"
 # Redis-backed store
 # ---------------------------------------------------------------------------
 
+
 class _RedisConversationStore:
     def __init__(self, redis_url: str) -> None:
         try:
             import redis as _redis
+
             self._client = _redis.from_url(redis_url, decode_responses=True)
             # Test connection
             self._client.ping()
@@ -95,6 +97,7 @@ class _RedisConversationStore:
 # In-memory fallback store
 # ---------------------------------------------------------------------------
 
+
 class _InMemoryConversationStore:
     """Stores chat history keyed by user_id with TTL eviction."""
 
@@ -116,7 +119,7 @@ class _InMemoryConversationStore:
             self._store[user_id] = []
         self._store[user_id].append({"role": role, "content": content})
         if len(self._store[user_id]) > self._max_turns:
-            self._store[user_id] = self._store[user_id][-self._max_turns:]
+            self._store[user_id] = self._store[user_id][-self._max_turns :]
         self._touched[user_id] = datetime.now(UTC)
 
     def clear(self, user_id: str) -> None:
@@ -135,6 +138,7 @@ class _InMemoryConversationStore:
 # Protocol type for type checking
 # ---------------------------------------------------------------------------
 
+
 class ConversationStore(Protocol):
     def get(self, user_id: str) -> List[Dict[str, str]]: ...
     def append(self, user_id: str, role: str, content: str) -> None: ...
@@ -144,6 +148,7 @@ class ConversationStore(Protocol):
 # ---------------------------------------------------------------------------
 # Module-level singleton — shared across all requests in this worker
 # ---------------------------------------------------------------------------
+
 
 def _build_store() -> Union[_RedisConversationStore, _InMemoryConversationStore]:
     redis_url = settings.redis_url

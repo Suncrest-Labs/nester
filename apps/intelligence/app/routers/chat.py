@@ -73,4 +73,3 @@ async def clear_conversation(
         )
     conversation_store.clear(user_id)
     return {"message": "Conversation history cleared"}
-

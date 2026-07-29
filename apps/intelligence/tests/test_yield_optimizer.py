@@ -157,9 +157,7 @@ class TestHardConstraintsSatisfied:
 
         assert result.feasible
         liquid_by_id = {s.id: s.liquid_fraction for s in sources}
-        liquid_weight = sum(
-            w.weight * liquid_by_id[w.source_id] for w in result.weights
-        )
+        liquid_weight = sum(w.weight * liquid_by_id[w.source_id] for w in result.weights)
         assert liquid_weight >= constraints.min_liquid_fraction - 1e-6
 
     def test_weights_sum_to_one_and_bps_to_ten_thousand(self) -> None:

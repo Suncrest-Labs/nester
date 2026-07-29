@@ -107,12 +107,8 @@ async def test_analyze_portfolio_with_tool_use(monkeypatch: Any) -> None:
         "rebalance_suggested": False,
     }
 
-    monkeypatch.setattr(
-        prometheus, "get_client", lambda: FakeAsyncClient(tool_input=tool_input)
-    )
-    monkeypatch.setattr(
-        prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher()
-    )
+    monkeypatch.setattr(prometheus, "get_client", lambda: FakeAsyncClient(tool_input=tool_input))
+    monkeypatch.setattr(prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher())
 
     result = await prometheus.analyze_portfolio(user_id="user-123")
 
@@ -151,9 +147,7 @@ async def test_analyze_portfolio_empty_vaults(monkeypatch: Any) -> None:
         async def fetch_market_rates(self) -> list[dict[str, Any]]:
             return []
 
-    monkeypatch.setattr(
-        prometheus, "get_vault_context_fetcher", lambda: EmptyVaultFetcher()
-    )
+    monkeypatch.setattr(prometheus, "get_vault_context_fetcher", lambda: EmptyVaultFetcher())
 
     result = await prometheus.analyze_portfolio(user_id="user-456")
 
@@ -177,9 +171,7 @@ async def test_analyze_portfolio_fallback_on_tool_error(monkeypatch: Any) -> Non
         messages = Messages()
 
     monkeypatch.setattr(prometheus, "get_client", lambda: ErrorClient())  # type: ignore[assignment]
-    monkeypatch.setattr(
-        prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher()
-    )
+    monkeypatch.setattr(prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher())
 
     result = await prometheus.analyze_portfolio(user_id="user-789")
 
@@ -205,12 +197,8 @@ async def test_analyze_portfolio_pydantic_validation(monkeypatch: Any) -> None:
         "rebalance_suggested": False,
     }
 
-    monkeypatch.setattr(
-        prometheus, "get_client", lambda: FakeAsyncClient(tool_input=tool_input)
-    )
-    monkeypatch.setattr(
-        prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher()
-    )
+    monkeypatch.setattr(prometheus, "get_client", lambda: FakeAsyncClient(tool_input=tool_input))
+    monkeypatch.setattr(prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher())
 
     result = await prometheus.analyze_portfolio(user_id="user-xyz")
 
@@ -262,17 +250,13 @@ async def test_analyze_portfolio_allocation_weighting(monkeypatch: Any) -> None:
         "rebalance_suggested": True,
     }
 
-    monkeypatch.setattr(
-        prometheus, "get_client", lambda: FakeAsyncClient(tool_input=tool_input)
-    )
-    monkeypatch.setattr(
-        prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher()
-    )
+    monkeypatch.setattr(prometheus, "get_client", lambda: FakeAsyncClient(tool_input=tool_input))
+    monkeypatch.setattr(prometheus, "get_vault_context_fetcher", lambda: FakeVaultContextFetcher())
 
     result = await prometheus.analyze_portfolio(user_id="user-weights")
 
     # Verify weights
-    assert sum(
-        alloc.weight for alloc in result.analysis.allocation_breakdown
-    ) == pytest.approx(100.0)
+    assert sum(alloc.weight for alloc in result.analysis.allocation_breakdown) == pytest.approx(
+        100.0
+    )
     assert result.analysis.rebalance_suggested is True

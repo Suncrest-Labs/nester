@@ -34,21 +34,59 @@ class Intent(str, Enum):
 # unlike an embedding classifier whose decisions cannot be explained.
 _INTENT_KEYWORDS: dict[Intent, tuple[str, ...]] = {
     Intent.GOALS: (
-        "goal", "goals", "target", "save for", "saving for", "deadline",
-        "car", "house", "home", "vacation", "wedding", "emergency fund", "tuition",
+        "goal",
+        "goals",
+        "target",
+        "save for",
+        "saving for",
+        "deadline",
+        "car",
+        "house",
+        "home",
+        "vacation",
+        "wedding",
+        "emergency fund",
+        "tuition",
     ),
     Intent.YIELD_LANDSCAPE: (
-        "best vault", "which vault", "recommend", "recommendation", "highest apy",
-        "best apy", "best yield", "opportunit", "where should i", "compare vault",
-        "top vault", "move my money", "switch vault",
+        "best vault",
+        "which vault",
+        "recommend",
+        "recommendation",
+        "highest apy",
+        "best apy",
+        "best yield",
+        "opportunit",
+        "where should i",
+        "compare vault",
+        "top vault",
+        "move my money",
+        "switch vault",
     ),
     Intent.TRANSACTIONS: (
-        "deposit", "deposited", "withdraw", "withdrawal", "transaction",
-        "last", "recent", "history", "activity", "transfer",
+        "deposit",
+        "deposited",
+        "withdraw",
+        "withdrawal",
+        "transaction",
+        "last",
+        "recent",
+        "history",
+        "activity",
+        "transfer",
     ),
     Intent.POSITIONS: (
-        "my vault", "my vaults", "my portfolio", "my balance", "my position",
-        "how much", "holdings", "net worth", "total value", "my yield", "my apy",
+        "my vault",
+        "my vaults",
+        "my portfolio",
+        "my balance",
+        "my position",
+        "how much",
+        "holdings",
+        "net worth",
+        "total value",
+        "my yield",
+        "my apy",
     ),
 }
 
@@ -177,9 +215,7 @@ class RetrievalService:
             bal = v.get("balance_usd", 0)
             apy = v.get("apy", 0)
             yield_earned = v.get("yield_earned", 0)
-            lines.append(
-                f"- {name}: ${bal} balance, {apy}% APY, ${yield_earned} yield earned"
-            )
+            lines.append(f"- {name}: ${bal} balance, {apy}% APY, ${yield_earned} yield earned")
             ctx._record_numbers(bal, apy, yield_earned)
         ctx.sections.append("### Your Vaults\n" + "\n".join(lines))
         ctx.citations.append(
@@ -196,9 +232,7 @@ class RetrievalService:
             target = g.get("target_amount", 0)
             current = g.get("current_amount", 0)
             progress = g.get("progress_pct", 0)
-            lines.append(
-                f"- {name}: {current}/{target} saved ({progress}% complete)"
-            )
+            lines.append(f"- {name}: {current}/{target} saved ({progress}% complete)")
             ctx._record_numbers(target, current, progress)
         ctx.sections.append("### Your Savings Goals\n" + "\n".join(lines))
         ctx.citations.append(Citation("goals", f"{len(goals)} savings goal(s)"))
@@ -217,9 +251,7 @@ class RetrievalService:
             lines.append(f"- {kind}: {amount} {currency} on {when}")
             ctx._record_numbers(amount)
         ctx.sections.append("### Your Recent Transactions\n" + "\n".join(lines))
-        ctx.citations.append(
-            Citation("transactions", f"{len(recent)} most recent transaction(s)")
-        )
+        ctx.citations.append(Citation("transactions", f"{len(recent)} most recent transaction(s)"))
 
     async def _add_yield_landscape(self, ctx: RetrievedContext) -> None:
         vaults = await self._source.available_vaults()
@@ -232,9 +264,7 @@ class RetrievalService:
                 lines.append(f"- {name}: {apy}% APY, {tier} risk")
                 ctx._record_numbers(apy)
             ctx.sections.append("### Available Vaults\n" + "\n".join(lines))
-            ctx.citations.append(
-                Citation("yield_landscape", f"{len(vaults)} available vault(s)")
-            )
+            ctx.citations.append(Citation("yield_landscape", f"{len(vaults)} available vault(s)"))
         rates = await self._source.market_rates()
         if rates:
             lines = []

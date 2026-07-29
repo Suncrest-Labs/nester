@@ -277,6 +277,7 @@ def append_disclaimer(text: str) -> str:
         return text
     return f"{text}\n\n{NON_ADVICE_DISCLAIMER}"
 
+
 def validate_numeric_grounding(text: str, allowed_facts: dict[str, str]) -> bool:
     """Reject generated copy that states a number not present in the facts
     it was given. Deliberately currency-symbol-agnostic: Nester is

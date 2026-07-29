@@ -8,10 +8,7 @@ from app.services.vault_context import VaultContextFetcher
 class TestVaultContextFetcher:
     @pytest.fixture
     def fetcher(self):
-        return VaultContextFetcher(
-            api_base_url="https://api.test.com",
-            service_api_key="test-key"
-        )
+        return VaultContextFetcher(api_base_url="https://api.test.com", service_api_key="test-key")
 
     @pytest.mark.asyncio
     async def test_fetch_user_vaults_success(self, fetcher):
@@ -25,14 +22,14 @@ class TestVaultContextFetcher:
                     "lock_period_days": 30,
                     "allocations": [
                         {"protocol": "Aave", "amount_usd": 600.0, "apy": 0.08},
-                        {"protocol": "Blend", "amount_usd": 400.0, "apy": 0.12}
+                        {"protocol": "Blend", "amount_usd": 400.0, "apy": 0.12},
                     ],
-                    "id": "vault-1"
+                    "id": "vault-1",
                 }
             ]
         }
 
-        with patch('aiohttp.ClientSession') as mock_session:
+        with patch("aiohttp.ClientSession") as mock_session:
             mock_response = AsyncMock()
             mock_response.status = 200
             mock_response.json = AsyncMock(return_value=mock_response_data)
@@ -59,7 +56,7 @@ class TestVaultContextFetcher:
 
     @pytest.mark.asyncio
     async def test_fetch_user_vaults_http_error(self, fetcher):
-        with patch('aiohttp.ClientSession') as mock_session:
+        with patch("aiohttp.ClientSession") as mock_session:
             mock_response = AsyncMock()
             mock_response.status = 500
 
@@ -82,33 +79,33 @@ class TestVaultContextFetcher:
                     "symbol": "aUSDC",
                     "apy": 0.065,
                     "tvlUsd": 1000000,
-                    "chain": "Ethereum"
+                    "chain": "Ethereum",
                 },
                 {
                     "project": "Blend",
                     "symbol": "blendUSDC",
                     "apy": 0.09,
                     "tvlUsd": 500000,
-                    "chain": "Stellar"
+                    "chain": "Stellar",
                 },
                 {
                     "project": "Compound",
                     "symbol": "cUSDC",
                     "apy": 0.058,
                     "tvlUsd": 800000,
-                    "chain": "Ethereum"
+                    "chain": "Ethereum",
                 },
                 {
                     "project": "SomeOther",
                     "symbol": "other",
                     "apy": 0.03,
                     "tvlUsd": 100000,
-                    "chain": "Polygon"
-                }
+                    "chain": "Polygon",
+                },
             ]
         }
 
-        with patch('aiohttp.ClientSession') as mock_session:
+        with patch("aiohttp.ClientSession") as mock_session:
             mock_response = AsyncMock()
             mock_response.status = 200
             mock_response.json = AsyncMock(return_value=mock_response_data)
@@ -129,7 +126,7 @@ class TestVaultContextFetcher:
 
     @pytest.mark.asyncio
     async def test_fetch_market_rates_http_error_fallback(self, fetcher):
-        with patch('aiohttp.ClientSession') as mock_session:
+        with patch("aiohttp.ClientSession") as mock_session:
             mock_response = AsyncMock()
             mock_response.status = 500
 
@@ -152,7 +149,7 @@ class TestVaultContextFetcher:
 
     @pytest.mark.asyncio
     async def test_fetch_market_rates_exception_fallback(self, fetcher):
-        with patch('aiohttp.ClientSession') as mock_session:
+        with patch("aiohttp.ClientSession") as mock_session:
             mock_session.side_effect = Exception("Network error")
 
             result = await fetcher.fetch_market_rates()
@@ -175,10 +172,10 @@ class TestVaultContextFetcher:
             "protocol_risk": 0.28,
             "yield_volatility": 0.15,
             "liquidity_risk": 0.09,
-            "computed_at": "2025-03-15T10:00:00Z"
+            "computed_at": "2025-03-15T10:00:00Z",
         }
 
-        with patch('aiohttp.ClientSession') as mock_session:
+        with patch("aiohttp.ClientSession") as mock_session:
             mock_response = AsyncMock()
             mock_response.status = 200
             mock_response.json = AsyncMock(return_value=mock_response_data)
@@ -200,7 +197,7 @@ class TestVaultContextFetcher:
 
     @pytest.mark.asyncio
     async def test_fetch_vault_risk_http_error(self, fetcher):
-        with patch('aiohttp.ClientSession') as mock_session:
+        with patch("aiohttp.ClientSession") as mock_session:
             mock_response = AsyncMock()
             mock_response.status = 500
 
@@ -223,22 +220,21 @@ class TestVaultContextFetcher:
                 "yield_earned": 50.0,
                 "allocation_breakdown": {"Aave": 60.0, "Blend": 40.0},
                 "lock_period_days": 30,
-                "id": "vault-1"
+                "id": "vault-1",
             }
         ]
 
         market_rates = [
             {"protocol": "aave", "apy": 0.065},
             {"protocol": "blend", "apy": 0.09},
-            {"protocol": "compound", "apy": 0.058}
+            {"protocol": "compound", "apy": 0.058},
         ]
 
         result = fetcher.build_context_block(vaults, market_rates)
 
         assert "## User Portfolio" in result
         expected = (
-            "- Test Vault: $1,000.00 balance, 8.50% APY, "
-            "Allocation: [Aave: 60.0%, Blend: 40.0%]"
+            "- Test Vault: $1,000.00 balance, 8.50% APY, Allocation: [Aave: 60.0%, Blend: 40.0%]"
         )
         assert expected in result
         assert "## Current Market Rates (Live)" in result
@@ -256,15 +252,17 @@ class TestVaultContextFetcher:
         assert "## Current Market Rates (Live)" in result
 
     def test_build_context_block_empty_market_rates(self, fetcher):
-        vaults = [{
-            "name": "Test Vault",
-            "balance_usd": 1000.0,
-            "apy": 8.5,
-            "yield_earned": 50.0,
-            "allocation_breakdown": {"Aave": 100.0},
-            "lock_period_days": 30,
-            "id": "vault-1"
-        }]
+        vaults = [
+            {
+                "name": "Test Vault",
+                "balance_usd": 1000.0,
+                "apy": 8.5,
+                "yield_earned": 50.0,
+                "allocation_breakdown": {"Aave": 100.0},
+                "lock_period_days": 30,
+                "id": "vault-1",
+            }
+        ]
         market_rates = []
 
         result = fetcher.build_context_block(vaults, market_rates)
@@ -281,7 +279,7 @@ class TestVaultContextFetcher:
                 "yield_earned": 50.0,
                 "allocation_breakdown": {"Aave": 60.0, "Blend": 40.0},
                 "lock_period_days": 30,
-                "id": "vault-1"
+                "id": "vault-1",
             }
         ]
 
@@ -292,7 +290,7 @@ class TestVaultContextFetcher:
                 "concentration_risk": 0.61,
                 "protocol_risk": 0.28,
                 "yield_volatility": 0.15,
-                "liquidity_risk": 0.09
+                "liquidity_risk": 0.09,
             }
         }
 
@@ -321,7 +319,7 @@ class TestVaultContextFetcher:
                 "yield_earned": 50.0,
                 "allocation_breakdown": {"Aave": 60.0, "Blend": 40.0},
                 "lock_period_days": 30,
-                "id": "vault-1"
+                "id": "vault-1",
             }
         ]
 

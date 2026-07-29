@@ -1,5 +1,5 @@
 """Core Prometheus AI logic — system prompt, streaming chat, and structured analysis."""
-
+import uuid
 import json
 import logging
 import time
@@ -494,12 +494,11 @@ async def stream_chat(
     # auditor can see what informed it, independent of whether tools are used.
     tool_invocations: list[ToolInvocation] = []
 
-    messages: list[anthropic.types.MessageParam] = (
-        context_injection
-        + _to_anthropic_messages(history)
-        _to_anthropic_messages(history)
-        + [{"role": "user", "content": guardrails.wrap_user_content(message)}]
-    )
+   messages: list[anthropic.types.MessageParam] = (
+    context_injection
+    + _to_anthropic_messages(history)
+    + [{"role": "user", "content": guardrails.wrap_user_content(message)}]
+)
 
     client = get_client()
     full_response = ""
@@ -559,7 +558,6 @@ async def stream_chat(
 
         yield "data: [DONE]\n\n"
 
-    import uuid
 
     from pydantic import ValidationError
 

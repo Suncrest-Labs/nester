@@ -54,9 +54,10 @@ async def record_audit_event(
                     text = await response.text()
                     logger.warning(
                         "tool-audit write failed tool=%s status=%s http_status=%s body=%s",
-                        tool_name, status, response.status, text,
+                        tool_name,
+                        status,
+                        response.status,
+                        text,
                     )
     except Exception:
-        logger.exception(
-            "tool-audit write raised tool=%s status=%s", tool_name, status
-        )
+        logger.exception("tool-audit write raised tool=%s status=%s", tool_name, status)

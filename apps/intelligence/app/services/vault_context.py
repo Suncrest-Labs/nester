@@ -1,9 +1,11 @@
 """Vault context fetcher for Prometheus AI."""
+
 import logging
 from typing import Any, Dict, List
 
 try:
     from cachetools import TTLCache
+
     HAS_CACHETOOLS = True
 except ImportError:
     HAS_CACHETOOLS = False
@@ -16,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class VaultContextFetcher:
     def __init__(self, api_base_url: str, service_api_key: str):
-        self.api_base_url = api_base_url.rstrip('/')
+        self.api_base_url = api_base_url.rstrip("/")
         self.service_api_key = service_api_key
         # Initialize market rates cache (TTL: 5 minutes)
         self._market_rates_cache: Any
@@ -35,7 +37,7 @@ class VaultContextFetcher:
         url = f"{self.api_base_url}/api/v1/user-vaults/{user_id}"
         headers = {
             "Authorization": f"Bearer {self.service_api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         try:
@@ -58,17 +60,19 @@ class VaultContextFetcher:
                                     percentage = (amount / total_balance) * 100
                                     allocation_breakdown[protocol] = round(percentage, 2)
 
-                            vaults.append({
-                                "name": vault.get(
-                                    "name", vault.get("contract_address", "Unknown Vault")
-                                ),
-                                "balance_usd": vault.get("total_balance_usd", 0),
-                                "apy": vault.get("average_apy", 0),
-                                "allocation_breakdown": allocation_breakdown,
-                                "yield_earned": vault.get("yield_earned_usd", 0),
-                                "lock_period_days": vault.get("lock_period_days", 0),
-                                "id": vault.get("id", ""),
-                            })
+                            vaults.append(
+                                {
+                                    "name": vault.get(
+                                        "name", vault.get("contract_address", "Unknown Vault")
+                                    ),
+                                    "balance_usd": vault.get("total_balance_usd", 0),
+                                    "apy": vault.get("average_apy", 0),
+                                    "allocation_breakdown": allocation_breakdown,
+                                    "yield_earned": vault.get("yield_earned_usd", 0),
+                                    "lock_period_days": vault.get("lock_period_days", 0),
+                                    "id": vault.get("id", ""),
+                                }
+                            )
                         return vaults
                     else:
                         logger.error(f"Failed to fetch user vaults: {response.status}")
@@ -90,7 +94,7 @@ class VaultContextFetcher:
         url = f"{self.api_base_url}/api/v1/vaults/{vault_id}/risk"
         headers = {
             "Authorization": f"Bearer {self.service_api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         try:
@@ -116,7 +120,7 @@ class VaultContextFetcher:
         url = f"{self.api_base_url}/api/v1/vaults/all"
         headers = {
             "Authorization": f"Bearer {self.service_api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         try:
@@ -135,23 +139,20 @@ class VaultContextFetcher:
                     for vault in raw_vaults:
                         if not isinstance(vault, dict):
                             continue
-                        vaults.append({
+                        vaults.append(
+                            {
                                 "id": vault.get("id", ""),
                                 "name": vault.get(
-                                    "name",
-                                    vault.get("contract_address", "Unknown Vault")
+                                    "name", vault.get("contract_address", "Unknown Vault")
                                 ),
                                 "apy": vault.get("average_apy", vault.get("apy", 0)),
                                 "balance_usd": vault.get(
-                                    "current_balance",
-                                    vault.get("total_balance_usd", 0)
+                                    "current_balance", vault.get("total_balance_usd", 0)
                                 ),
-                                "risk_tier": vault.get(
-                                    "risk_tier",
-                                    vault.get("status", "unknown")
-                                ),
+                                "risk_tier": vault.get("risk_tier", vault.get("status", "unknown")),
                                 "currency": vault.get("currency", "USDC"),
-                            })
+                            }
+                        )
                     return vaults
         except Exception as e:
             logger.warning(f"Error fetching available vaults: {e}")
@@ -170,9 +171,9 @@ class VaultContextFetcher:
                 return list(cached)
         else:
             import time
-            if (
-                time.time() < self._market_rates_cache_expiry
-                and self._market_rates_cache.get("data")
+
+            if time.time() < self._market_rates_cache_expiry and self._market_rates_cache.get(
+                "data"
             ):
                 return list(self._market_rates_cache["data"])
 
@@ -192,22 +193,25 @@ class VaultContextFetcher:
                         for pool in pools:
                             project = pool.get("project", "").lower()
                             if project in target_protocols:
-                                filtered_rates.append({
-                                    "protocol": project,
-                                    "symbol": pool.get("symbol", ""),
-                                    "apy": pool.get("apy", 0),
-                                    "tvlUsd": pool.get("tvlUsd", 0),
-                                    "chain": pool.get("chain", "")
-                                })
+                                filtered_rates.append(
+                                    {
+                                        "protocol": project,
+                                        "symbol": pool.get("symbol", ""),
+                                        "apy": pool.get("apy", 0),
+                                        "tvlUsd": pool.get("tvlUsd", 0),
+                                        "chain": pool.get("chain", ""),
+                                    }
+                                )
 
                         # Cache the result
                         if HAS_CACHETOOLS:
                             self._market_rates_cache["market_rates"] = filtered_rates
                         else:
                             import time
+
                             self._market_rates_cache = {
                                 "data": filtered_rates,
-                                "expiry": time.time() + 300  # 5 minutes
+                                "expiry": time.time() + 300,  # 5 minutes
                             }
                             self._market_rates_cache_expiry = float(time.time() + 300)
 
@@ -220,13 +224,7 @@ class VaultContextFetcher:
         # Fallback to hardcoded rates
         logger.warning("Using fallback market rates")
         fallback_rates = [
-            {
-                "protocol": "aave",
-                "symbol": "aUSDC",
-                "apy": 0.065,
-                "tvlUsd": 0,
-                "chain": "ethereum"
-            },
+            {"protocol": "aave", "symbol": "aUSDC", "apy": 0.065, "tvlUsd": 0, "chain": "ethereum"},
             {
                 "protocol": "blend",
                 "symbol": "blendUSDC",
@@ -248,10 +246,8 @@ class VaultContextFetcher:
             self._market_rates_cache["market_rates"] = fallback_rates
         else:
             import time
-            self._market_rates_cache = {
-                "data": fallback_rates,
-                "expiry": time.time() + 300
-            }
+
+            self._market_rates_cache = {"data": fallback_rates, "expiry": time.time() + 300}
             self._market_rates_cache_expiry = float(time.time() + 300)
 
         return fallback_rates
@@ -285,9 +281,7 @@ class VaultContextFetcher:
             logger.warning(f"Error fetching savings goals for user {user_id}: {e}")
             return []
 
-    async def fetch_vault_rebalance_suggestion(
-        self, vault_id: str, user_id: str
-    ) -> Dict[str, Any]:
+    async def fetch_vault_rebalance_suggestion(self, vault_id: str, user_id: str) -> Dict[str, Any]:
         """
         Fetch the deterministic rebalance suggestion already computed by the Go
         API's vault rebalance service (`scheduler.Decide`, issue #110). This
@@ -383,9 +377,7 @@ class VaultContextFetcher:
         risk_lines = []
         for vault in vaults:
             vault_id = vault.get("id", "")
-            vault_name = vault.get(
-                "name", vault.get("contract_address", "Unknown Vault")
-            )
+            vault_name = vault.get("name", vault.get("contract_address", "Unknown Vault"))
 
             # Get risk data for this vault
             vault_risk = risk_data.get(vault_id, {}) if risk_data else {}
@@ -403,7 +395,7 @@ class VaultContextFetcher:
                 "concentration_risk": vault_risk.get("concentration_risk", 0) * 0.35,
                 "protocol_risk": vault_risk.get("protocol_risk", 0) * 0.30,
                 "yield_volatility": vault_risk.get("yield_volatility", 0) * 0.20,
-                "liquidity_risk": vault_risk.get("liquidity_risk", 0) * 0.15
+                "liquidity_risk": vault_risk.get("liquidity_risk", 0) * 0.15,
             }
 
             primary_driver = (
@@ -415,7 +407,7 @@ class VaultContextFetcher:
                 "concentration_risk": "Concentration Risk",
                 "protocol_risk": "Protocol Risk",
                 "yield_volatility": "Yield Volatility",
-                "liquidity_risk": "Liquidity Risk"
+                "liquidity_risk": "Liquidity Risk",
             }.get(primary_driver, "Unknown Factor")
 
             # Generate recommendation based on tier and primary driver
@@ -447,10 +439,7 @@ class VaultContextFetcher:
                     "like Aave or Compound."
                 )
             elif primary_driver == "yield_volatility":
-                return (
-                    "Consider allocating to more stable vaults with lower "
-                    "APY variability."
-                )
+                return "Consider allocating to more stable vaults with lower APY variability."
             else:  # liquidity_risk
                 return (
                     "Your vault size may be large relative to protocol market size. "
@@ -469,8 +458,7 @@ class VaultContextFetcher:
                 )
             elif primary_driver == "yield_volatility":
                 return (
-                    "consider moving to more stable yield strategies to reduce "
-                    "volatility exposure."
+                    "consider moving to more stable yield strategies to reduce volatility exposure."
                 )
             else:  # liquidity_risk
                 return (

@@ -10,12 +10,12 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from app.routers import analyze, chat, coaching, health, savings, ws_chat, natural_language_goal
 from app.routers import (
     analyze,
     chat,
     coaching,
     health,
+    natural_language_goal,
     nudges,
     optimize,
     rebalance,

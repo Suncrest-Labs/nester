@@ -32,9 +32,7 @@ class TestGroundedPrompt:
 class TestValidation:
     def test_supported_numbers_pass(self):
         ctx = _ctx_with_facts("1200", "8.5")
-        ok, unsupported = validate_grounding(
-            "You have $1,200 earning 8.5% APY.", ctx
-        )
+        ok, unsupported = validate_grounding("You have $1,200 earning 8.5% APY.", ctx)
         assert ok
         assert unsupported == []
 

@@ -6,11 +6,13 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class CostGovernor:
     def __init__(self, redis_url: str):
         self._client: Any = None
         try:
             import redis
+
             self._client = redis.from_url(redis_url, decode_responses=True)
             self._client.ping()
             self._available = True
@@ -47,5 +49,6 @@ class CostGovernor:
         except Exception as e:
             logger.warning(f"CostGovernor: failed to record usage: {e}")
             self._available = False
+
 
 cost_governor = CostGovernor(settings.redis_url)

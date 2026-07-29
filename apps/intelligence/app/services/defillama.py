@@ -38,6 +38,7 @@ def _get_redis() -> Optional[Any]:
         import redis as _redis
 
         from app.config import settings
+
         _redis_client = _redis.from_url(settings.redis_url, decode_responses=True)
         _redis_client.ping()
         _redis_available = True
@@ -218,6 +219,7 @@ def get_client() -> DeFiLlamaClient:
     if _default_client is None:
         try:
             from app.config import settings
+
             base_url = getattr(settings, "defillama_base_url", None) or _DEFILLAMA_BASE
         except Exception:
             base_url = _DEFILLAMA_BASE

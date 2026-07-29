@@ -124,7 +124,7 @@ class SavingsService:
             "You are Prometheus, a DeFi-savvy financial advisor.\n"
             f"A user wants to save ${request.goal_usdc} in {request.time_horizon_months} months.\n"
             f"Their maximum monthly contribution is ${request.max_monthly_contribution_usdc}.\n"
-            f"The current applicable APY is {apy*100:.2f}%.\n"
+            f"The current applicable APY is {apy * 100:.2f}%.\n"
             f"The calculated required monthly deposit is ${required_deposit:.2f}.\n"
             f"The goal is {status_text} within their stated contribution limit.\n"
             f"The total yield they will earn is ${total_yield:.2f}.\n\n"
@@ -149,7 +149,7 @@ class SavingsService:
             logger.error(f"Error generating narrative from Claude: {e}")
             if achievable:
                 return (
-                    f"At the current {apy*100:.1f}% APY, you need to deposit "
+                    f"At the current {apy * 100:.1f}% APY, you need to deposit "
                     f"${required_deposit:.2f}/month. You'll earn ${total_yield:.2f} "
                     "in interest along the way!"
                 )

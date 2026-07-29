@@ -13,13 +13,16 @@ fetcher = VaultContextFetcher(
     service_api_key=settings.nester_service_api_key,
 )
 
+
 class EmptyArgs(BaseModel):
     pass
+
 
 async def get_balance_handler(ctx: ToolContext, **kwargs: Any) -> Any:
     vaults = await fetcher.fetch_user_vaults(ctx.user_id)
     total = sum(v.get("balance_usd", 0) for v in vaults)
     return wrap_context_block("balance", f"Total balance: ${total:,.2f}")
+
 
 get_balance = Tool(
     name="get_balance",
@@ -29,11 +32,13 @@ get_balance = Tool(
     handler=get_balance_handler,
 )
 
+
 async def get_portfolio_handler(ctx: ToolContext, **kwargs: Any) -> Any:
     vaults = await fetcher.fetch_user_vaults(ctx.user_id)
     market_rates = await fetcher.fetch_market_rates()
     block = fetcher.build_context_block(vaults, market_rates)
     return wrap_context_block("portfolio", block)
+
 
 get_portfolio = Tool(
     name="get_portfolio",
@@ -43,10 +48,12 @@ get_portfolio = Tool(
     handler=get_portfolio_handler,
 )
 
+
 async def get_market_rates_handler(ctx: ToolContext, **kwargs: Any) -> Any:
     market_rates = await fetcher.fetch_market_rates()
     block = fetcher.build_context_block([], market_rates)
     return wrap_context_block("market_rates", block)
+
 
 get_market_rates = Tool(
     name="get_market_rates",
@@ -56,6 +63,7 @@ get_market_rates = Tool(
     handler=get_market_rates_handler,
 )
 
+
 async def get_risk_profile_handler(ctx: ToolContext, **kwargs: Any) -> Any:
     vaults = await fetcher.fetch_user_vaults(ctx.user_id)
     risk_data = {}
@@ -64,6 +72,7 @@ async def get_risk_profile_handler(ctx: ToolContext, **kwargs: Any) -> Any:
     block = fetcher.build_risk_profile_block(vaults, risk_data)
     return wrap_context_block("risk_profile", block)
 
+
 get_risk_profile = Tool(
     name="get_risk_profile",
     description="Get risk profile assessment for the user's vaults.",
@@ -71,6 +80,7 @@ get_risk_profile = Tool(
     consequential=False,
     handler=get_risk_profile_handler,
 )
+
 
 async def list_goals_handler(ctx: ToolContext, **kwargs: Any) -> Any:
     url = f"{settings.nester_api_base_url}/api/v1/users/savings-goals"
@@ -95,6 +105,7 @@ async def list_goals_handler(ctx: ToolContext, **kwargs: Any) -> Any:
             return wrap_context_block(
                 "savings_goals", f"Failed to fetch goals: {response.status} {text}"
             )
+
 
 list_goals = Tool(
     name="list_goals",

@@ -11,6 +11,7 @@ for tool in TOOL_REGISTRY:
     # (Since URLs are inside handlers, we do a basic check on name/desc)
     assert "admin" not in tool.name.lower(), f"Tool {tool.name} appears to be an admin tool"
 
+
 def list_tool_schemas() -> List[Dict[str, Any]]:
     schemas = []
     for tool in TOOL_REGISTRY:
@@ -24,12 +25,11 @@ def list_tool_schemas() -> List[Dict[str, Any]]:
         if "required" in schema:
             input_schema["required"] = schema["required"]
 
-        schemas.append({
-            "name": tool.name,
-            "description": tool.description,
-            "input_schema": input_schema
-        })
+        schemas.append(
+            {"name": tool.name, "description": tool.description, "input_schema": input_schema}
+        )
     return schemas
+
 
 def get_tool(name: str) -> Tool:
     for tool in TOOL_REGISTRY:

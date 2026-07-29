@@ -1,4 +1,5 @@
 """Claude client configuration."""
+
 """Claude client and per-user tone/style prompt helpers (#927).
 
 Prometheus's base persona and scope rules live in
@@ -11,7 +12,6 @@ persona, grounding, or trust-boundary rules.
 
 import anthropic
 
-import anthropic
 from app.config import settings
 from app.models.preferences import ResponsePreferences
 
@@ -27,6 +27,7 @@ def get_client():
 
 def get_model_id():
     return MODEL_ID
+
 
 _LENGTH_INSTRUCTIONS: dict[str, str] = {
     "concise": (
@@ -63,9 +64,7 @@ def build_tone_instructions(preferences: ResponsePreferences | None) -> str:
     length_line = _LENGTH_INSTRUCTIONS.get(
         preferences.response_length, _LENGTH_INSTRUCTIONS["detailed"]
     )
-    tone_line = _TONE_INSTRUCTIONS.get(
-        preferences.response_tone, _TONE_INSTRUCTIONS["casual"]
-    )
+    tone_line = _TONE_INSTRUCTIONS.get(preferences.response_tone, _TONE_INSTRUCTIONS["casual"])
     return (
         "\n\n## User tone preference (applies to this response only)\n"
         f"- Length: {length_line}\n"
@@ -73,9 +72,7 @@ def build_tone_instructions(preferences: ResponsePreferences | None) -> str:
     )
 
 
-def apply_tone_preferences(
-    system_prompt: str, preferences: ResponsePreferences | None
-) -> str:
+def apply_tone_preferences(system_prompt: str, preferences: ResponsePreferences | None) -> str:
     """Append the user's tone/length preference instructions to a system prompt.
 
     A no-op (returns `system_prompt` unchanged) when `preferences` is None.

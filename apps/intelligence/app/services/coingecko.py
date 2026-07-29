@@ -11,7 +11,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 _COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-_TTL_PRICES = 300      # 5 min
+_TTL_PRICES = 300  # 5 min
 _TTL_SENTIMENT = 300
 
 _redis_client: Any = None
@@ -28,7 +28,7 @@ class PriceData:
 
 @dataclass
 class MarketSentiment:
-    signal: str               # "bull" | "bear" | "neutral"
+    signal: str  # "bull" | "bear" | "neutral"
     defi_market_cap_usd: float
     defi_dominance_pct: float
 

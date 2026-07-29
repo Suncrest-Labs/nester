@@ -231,8 +231,7 @@ def generate_yield_move_candidates(
             reason = str(suggestion.get("reason", "")).strip()
             risk_context = (
                 "Rebalancing shifts allocation across protocols; review the "
-                "suggested split before moving funds."
-                + (f" {reason}" if reason else "")
+                "suggested split before moving funds." + (f" {reason}" if reason else "")
             )
             summary = (
                 f'Rebalance "{position.name}" for an estimated +{gain_pct:.2f}% APY '
@@ -256,9 +255,7 @@ def generate_yield_move_candidates(
             continue
 
         pool = [
-            v
-            for v in available
-            if v.risk_tier_score <= risk_cap or risk_tolerance == "aggressive"
+            v for v in available if v.risk_tier_score <= risk_cap or risk_tolerance == "aggressive"
         ]
         if not pool:
             pool = list(available)
@@ -280,7 +277,7 @@ def generate_yield_move_candidates(
         )
         summary = (
             f'Move ${position.balance_usd:.2f} from "{position.name}" '
-            f"({position.apy:.2f}% APY) to \"{best.name}\" ({best.apy:.2f}% APY) for "
+            f'({position.apy:.2f}% APY) to "{best.name}" ({best.apy:.2f}% APY) for '
             f"about ${additional_yield:.2f} more over {horizon_months} months."
         )
         candidates.append(
@@ -312,9 +309,7 @@ def generate_term_lock_candidates(
     Nester's own naming convention -- "Fixed-30d", "Fixed-90d") offers a
     meaningfully higher APY than the user's current flexible position."""
     candidates: list[RecommendationCandidate] = []
-    locked_options = [
-        v for v in available if "fixed" in v.name.lower() or "lock" in v.name.lower()
-    ]
+    locked_options = [v for v in available if "fixed" in v.name.lower() or "lock" in v.name.lower()]
     if not locked_options:
         return candidates
 
@@ -569,17 +564,14 @@ candidate_id."""
 def _build_tool_schema(candidate_ids: list[str]) -> ToolParam:
     return {
         "name": "select_recommendations",
-        "description": (
-            "Select, order, and explain the most relevant savings recommendations."
-        ),
+        "description": ("Select, order, and explain the most relevant savings recommendations."),
         "input_schema": {
             "type": "object",
             "properties": {
                 "selections": {
                     "type": "array",
                     "description": (
-                        "2-4 selected candidates, ordered by priority "
-                        "(most important first)."
+                        "2-4 selected candidates, ordered by priority (most important first)."
                     ),
                     "items": {
                         "type": "object",
@@ -800,9 +792,7 @@ async def select_and_explain(
             logger.exception("recommendation selection call failed (attempt %d)", attempt)
             break
 
-    logger.warning(
-        "falling back to deterministic recommendation set for user %s", context.user_id
-    )
+    logger.warning("falling back to deterministic recommendation set for user %s", context.user_id)
     return _fallback_recommendation_set(prompt_candidates, context)
 
 
@@ -900,9 +890,7 @@ class RecommendationEngine:
         )
         self.engagement_store: EngagementStore = engagement_store or default_engagement_store
 
-    async def gather_context(
-        self, user_id: str, risk_tolerance: str = "moderate"
-    ) -> EngineContext:
+    async def gather_context(self, user_id: str, risk_tolerance: str = "moderate") -> EngineContext:
         user_vaults = await self.fetcher.fetch_user_vaults(user_id)
         available_vaults = await self.fetcher.fetch_available_vaults()
         goals_raw = await self.fetcher.fetch_savings_goals(user_id)
@@ -912,9 +900,7 @@ class RecommendationEngine:
             vault_id = str(v.get("id", "")).strip()
             rebalance: Optional[dict[str, Any]] = None
             if vault_id:
-                rebalance = await self.fetcher.fetch_vault_rebalance_suggestion(
-                    vault_id, user_id
-                )
+                rebalance = await self.fetcher.fetch_vault_rebalance_suggestion(vault_id, user_id)
             positions.append(
                 VaultPosition(
                     vault_id=vault_id,

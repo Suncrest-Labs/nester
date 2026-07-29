@@ -1,4 +1,5 @@
 """Unit tests for DeFiLlamaClient with mocked HTTP responses."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

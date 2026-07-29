@@ -121,9 +121,7 @@ async def analyze(
     """
     prompt = body.prompt.strip()
     if not prompt:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required")
     return await analyze_recommendation(
         prompt, claims.get("sub", ""), request_id=_request_id(request)
     )
@@ -137,9 +135,7 @@ async def recommend_vault(
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> VaultRecommendationResponse:
     """Return an AI-picked vault allocation based on live APY and risk data."""
-    return await recommend_vaults(
-        body, claims.get("sub", ""), request_id=_request_id(request)
-    )
+    return await recommend_vaults(body, claims.get("sub", ""), request_id=_request_id(request))
 
 
 @router.get("/vaults/{vault_id}/recommendations")

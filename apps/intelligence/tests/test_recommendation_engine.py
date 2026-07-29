@@ -139,9 +139,7 @@ class TestYieldMoveCandidates:
         assert "Aave offers better risk-adjusted yield" in candidate.risk_context
 
     def test_heuristic_comparison_against_best_available_vault(self):
-        position = VaultPosition(
-            vault_id="vault-2", name="Flex Vault", balance_usd=2000.0, apy=4.0
-        )
+        position = VaultPosition(vault_id="vault-2", name="Flex Vault", balance_usd=2000.0, apy=4.0)
         available = [
             AvailableVault(vault_id="a1", name="Balanced Growth", apy=9.0, risk_tier_score=30.0)
         ]
@@ -156,9 +154,7 @@ class TestYieldMoveCandidates:
         assert "30" in candidate.risk_context
 
     def test_no_candidate_when_apy_delta_too_small(self):
-        position = VaultPosition(
-            vault_id="vault-3", name="Vault", balance_usd=1000.0, apy=8.0
-        )
+        position = VaultPosition(vault_id="vault-3", name="Vault", balance_usd=1000.0, apy=8.0)
         available = [AvailableVault(vault_id="a2", name="Other", apy=8.2, risk_tier_score=40.0)]
         assert generate_yield_move_candidates([position], available, "moderate") == []
 
@@ -171,12 +167,13 @@ class TestYieldMoveCandidates:
 class TestTermLockCandidates:
     def test_fires_for_flexible_balance_against_fixed_term_vault(self):
         position = VaultPosition(
-            vault_id="vault-5", name="Flexible USDC", balance_usd=500.0, apy=5.0,
+            vault_id="vault-5",
+            name="Flexible USDC",
+            balance_usd=500.0,
+            apy=5.0,
             lock_period_days=0,
         )
-        available = [
-            AvailableVault(vault_id="a4", name="Fixed-90d", apy=8.0, risk_tier_score=20.0)
-        ]
+        available = [AvailableVault(vault_id="a4", name="Fixed-90d", apy=8.0, risk_tier_score=20.0)]
         candidates = generate_term_lock_candidates([position], available)
 
         assert len(candidates) == 1
@@ -189,18 +186,17 @@ class TestTermLockCandidates:
 
     def test_no_candidate_when_already_locked(self):
         position = VaultPosition(
-            vault_id="vault-6", name="Locked", balance_usd=500.0, apy=5.0,
+            vault_id="vault-6",
+            name="Locked",
+            balance_usd=500.0,
+            apy=5.0,
             lock_period_days=90,
         )
-        available = [
-            AvailableVault(vault_id="a5", name="Fixed-90d", apy=9.0, risk_tier_score=20.0)
-        ]
+        available = [AvailableVault(vault_id="a5", name="Fixed-90d", apy=9.0, risk_tier_score=20.0)]
         assert generate_term_lock_candidates([position], available) == []
 
     def test_no_candidate_when_no_fixed_term_vault_available(self):
-        position = VaultPosition(
-            vault_id="vault-7", name="Flexible", balance_usd=500.0, apy=5.0
-        )
+        position = VaultPosition(vault_id="vault-7", name="Flexible", balance_usd=500.0, apy=5.0)
         available = [AvailableVault(vault_id="a6", name="Balanced Growth", apy=12.0)]
         assert generate_term_lock_candidates([position], available) == []
 
@@ -392,9 +388,7 @@ class TestFabricationGuard:
         assert any("unknown candidate_id" in v for v in violations)
 
     @pytest.mark.asyncio
-    async def test_engine_regenerates_then_falls_back_on_persistent_fabrication(
-        self, monkeypatch
-    ):
+    async def test_engine_regenerates_then_falls_back_on_persistent_fabrication(self, monkeypatch):
         context, candidates = _sample_context_and_candidates()
         cid = candidates[0].candidate_id
 
@@ -429,9 +423,7 @@ class TestFabricationGuard:
 
         assert fake_client.messages.calls == 1
         assert len(result.recommendations) == 1
-        assert result.recommendations[0].explanation == (
-            "Raise your deposit to $114.70 per month."
-        )
+        assert result.recommendations[0].explanation == ("Raise your deposit to $114.70 per month.")
 
     @pytest.mark.asyncio
     async def test_no_candidates_short_circuits_without_calling_llm(self, monkeypatch):
@@ -498,9 +490,7 @@ class TestDismissedFiltering:
     async def test_engine_end_to_end_never_recommends_dismissed_candidate(self, monkeypatch):
         class FakeFetcher:
             async def fetch_user_vaults(self, user_id):
-                return [
-                    {"id": "vault-1", "name": "Flex Vault", "balance_usd": 1000.0, "apy": 4.0}
-                ]
+                return [{"id": "vault-1", "name": "Flex Vault", "balance_usd": 1000.0, "apy": 4.0}]
 
             async def fetch_available_vaults(self):
                 return [{"id": "a1", "name": "Growth", "apy": 9.0}]

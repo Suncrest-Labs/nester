@@ -155,9 +155,7 @@ class RebalanceEngine:
         live_apy = await _live_apy_by_protocol()
         data_is_live = bool(live_apy)
 
-        current_weighted_apy = sum(
-            (a.percentage / 100.0) * a.apy for a in request.allocations
-        )
+        current_weighted_apy = sum((a.percentage / 100.0) * a.apy for a in request.allocations)
 
         candidates = {a.protocol.strip().lower(): a.apy for a in request.allocations}
         for protocol in risk_model.PROTOCOL_RISK_FACTORS:
@@ -188,9 +186,7 @@ class RebalanceEngine:
             else []
         )
         rationale = (
-            await _generate_rationale(
-                current_weighted_apy, optimal_apy, optimal_protocol, actions
-            )
+            await _generate_rationale(current_weighted_apy, optimal_apy, optimal_protocol, actions)
             if should_rebalance
             else (
                 "Your current allocation is already close to the optimal risk-adjusted "
@@ -206,9 +202,7 @@ class RebalanceEngine:
             urgency=_urgency_for_gain(max(gain_pct, 0)),
             current_weighted_apy=round(current_weighted_apy, 4),
             optimal_weighted_apy=round(optimal_apy, 4),
-            yield_improvement_usd=round(
-                request.vault_balance_usd * max(gain_pct, 0) / 100.0, 2
-            ),
+            yield_improvement_usd=round(request.vault_balance_usd * max(gain_pct, 0) / 100.0, 2),
             actions=actions,
             rationale=rationale,
             confidence=confidence,

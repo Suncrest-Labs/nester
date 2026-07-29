@@ -219,9 +219,7 @@ def optimize(
     )
 
     if not result.success:
-        return _infeasible_result(
-            sources, [f"Optimizer failed to converge: {result.message}"]
-        )
+        return _infeasible_result(sources, [f"Optimizer failed to converge: {result.message}"])
 
     weights: NDArray[np.float64] = np.clip(result.x, 0.0, None)
     weight_sum = float(weights.sum())
@@ -242,7 +240,7 @@ def _largest_remainder_bps(weights: list[float]) -> list[int]:
     raw = [w * 10_000 for w in weights]
     floors = [int(x) for x in raw]
     remainder = 10_000 - sum(floors)
-    order = sorted(range(len(raw)), key=lambda i: (raw[i] - floors[i]), reverse=True)
+    order = sorted(range(len(raw)), key=lambda i: raw[i] - floors[i], reverse=True)
     for i in order[:remainder]:
         floors[i] += 1
     return floors

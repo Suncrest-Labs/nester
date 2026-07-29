@@ -37,9 +37,7 @@ def test_settings_accepts_jwt_in_production() -> None:
         os.environ,
         {
             "ENVIRONMENT": "production",
-            "INTELLIGENCE_JWT_SECRET": (
-                "test-secret-key-32chars-long!!!!"
-            ),
+            "INTELLIGENCE_JWT_SECRET": ("test-secret-key-32chars-long!!!!"),
         },
         clear=False,
     ):
