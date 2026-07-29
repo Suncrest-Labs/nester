@@ -313,3 +313,61 @@ Emitted when a matured WASM upgrade is executed, updating the contract WASM.
     }
     ```
 
+## Recurring Deposit Events (Contract Symbol: `MANDATE`)
+
+### MDT_CRTD (mandate_created)
+Emitted when a user creates a new recurring deposit authorization mandate.
+- **Topics**: `(MANDATE, MDT_CRTD, user: Address)`
+- **Data**:
+    ```rust
+    {
+        mandate_id: u64,
+        user: Address,
+        vault: Address,
+        token: Address,
+        amount_per_period: i128,
+        period_secs: u64,
+        expires_at: u64,
+        max_total: i128
+    }
+    ```
+
+### MDT_EXEC (mandate_executed)
+Emitted when a mandate execution is triggered.
+- **Topics**: `(MANDATE, MDT_EXEC, user: Address)`
+- **Data**:
+    ```rust
+    {
+        mandate_id: u64,
+        user: Address,
+        vault: Address,
+        amount: i128,
+        total_drawn: i128,
+        executor: Address
+    }
+    ```
+
+### MDT_CANC (mandate_cancelled)
+Emitted when a mandate is cancelled by its owner.
+- **Topics**: `(MANDATE, MDT_CANC, user: Address)`
+- **Data**:
+    ```rust
+    {
+        mandate_id: u64,
+        user: Address
+    }
+    ```
+
+### MDT_PAUSE (mandate_paused)
+Emitted when a mandate is paused or resumed.
+- **Topics**: `(MANDATE, MDT_PAUSE, user: Address)`
+- **Data**:
+    ```rust
+    {
+        mandate_id: u64,
+        user: Address,
+        paused: bool
+    }
+    ```
+
+

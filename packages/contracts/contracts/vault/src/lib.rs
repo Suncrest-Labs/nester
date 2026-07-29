@@ -1,5 +1,6 @@
 #![no_std]
 
+mod basket;
 mod breaker;
 pub mod conversion;
 
@@ -102,7 +103,7 @@ mod queue;
 mod rebalance;
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event, with_reentrancy_guard, CalleeAllowlist, ContractError};
+use nester_common::{emit_event, with_reentrancy_guard, CalleeAllowlist, ContractError, AssetConfig, BasketValuation, PriceInfo};
 use queue::{QueueEntry, QueuePosition, QueueStats};
 pub use rebalance::RebalanceLeg;
 
@@ -398,6 +399,12 @@ enum DataKey {
     SharePriceBaselineAt,
     SourceFailureCount,
     BreakerConfigV2,
+    // Multi-asset vault support (#804)
+    BasketAssets,         // Vec<AssetConfig> for multi-asset vaults
+    IsMultiAsset,         // bool flag indicating if vault is multi-asset
+    LastPrices,           // Vec<PriceInfo> for basket assets
+    MaxPriceAgeSecs,      // u64 maximum price age
+    MaxPriceDeviationBps, // u32 maximum price deviation
     // --- Referral integration (issue #818) ---
     ReferralContract,
 }

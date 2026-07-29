@@ -5,6 +5,7 @@ members = [
   "contracts/allocation_strategy",
   "contracts/lp_aggregator",
   "contracts/nester",
+  "contracts/recurring_deposit",
   "contracts/referral",
   "contracts/savings_goal",
   "contracts/timelock",

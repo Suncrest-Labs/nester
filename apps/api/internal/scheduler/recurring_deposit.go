@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -103,7 +104,8 @@ type RecurringDepositJobPayload struct {
 	// timestamp this specific occurrence represents. Used by the handler
 	// both to derive a stable per-occurrence transaction hash and to compute
 	// the next NextRunAt after a successful deposit.
-	OccurrenceAt time.Time `json:"occurrence_at"`
+	OccurrenceAt     time.Time `json:"occurrence_at"`
+	OnchainMandateID *int64    `json:"onchain_mandate_id,omitempty"`
 }
 
 // RecurringDepositJob processes due savings schedules and enqueues durable
@@ -248,15 +250,16 @@ func (j *RecurringDepositJob) processSchedule(ctx context.Context, schedule savi
 	}
 
 	payload, err := json.Marshal(RecurringDepositJobPayload{
-		ScheduleID:   schedule.ID,
-		UserID:       schedule.UserID,
-		VaultID:      schedule.VaultID,
-		GoalID:       schedule.GoalID,
-		Amount:       schedule.Amount,
-		Currency:     schedule.Currency,
-		Frequency:    string(schedule.Frequency),
-		GoalName:     goalName,
-		OccurrenceAt: schedule.NextRunAt,
+		ScheduleID:       schedule.ID,
+		UserID:           schedule.UserID,
+		VaultID:          schedule.VaultID,
+		GoalID:           schedule.GoalID,
+		Amount:           schedule.Amount,
+		Currency:         schedule.Currency,
+		Frequency:        string(schedule.Frequency),
+		GoalName:         goalName,
+		OccurrenceAt:     schedule.NextRunAt,
+		OnchainMandateID: schedule.OnchainMandateID,
 	})
 	if err != nil {
 		j.logger.Error("recurring deposit job: marshal payload failed", "schedule_id", schedule.ID, "error", err)
@@ -281,6 +284,7 @@ func (j *RecurringDepositJob) processSchedule(ctx context.Context, schedule savi
 		"schedule_id", schedule.ID,
 		"goal_id", schedule.GoalID,
 		"amount", schedule.Amount.String(),
+		"onchain_mandate_id", schedule.OnchainMandateID,
 	)
 }
 
@@ -304,6 +308,11 @@ func (j *RecurringDepositJob) LastTickEnd() time.Time {
 	return time.Unix(0, v)
 }
 
+// MandateExecutor executes on-chain recurring deposit mandates
+type MandateExecutor interface {
+	ExecuteMandate(ctx context.Context, userID uuid.UUID, mandateID int64) error
+}
+
 // RecurringDepositJobHandler adapts DepositRecorder/ScheduleStore/
 // DepositNotifier to the job-queue Handler interface, executing one
 // recurring-deposit occurrence. Registered on the shared jobqueue.Worker
@@ -311,6 +320,7 @@ func (j *RecurringDepositJob) LastTickEnd() time.Time {
 // this mirrors).
 type RecurringDepositJobHandler struct {
 	deposits  DepositRecorder
+	mandates  MandateExecutor
 	schedules ScheduleStore
 	notify    DepositNotifier
 	logger    *slog.Logger
@@ -318,6 +328,7 @@ type RecurringDepositJobHandler struct {
 
 // NewRecurringDepositJobHandler constructs a RecurringDepositJobHandler.
 // logger may be nil; notify may be nil (defaults to a no-op).
+// mandates may be nil for legacy support.
 func NewRecurringDepositJobHandler(
 	deposits DepositRecorder,
 	schedules ScheduleStore,
@@ -333,31 +344,72 @@ func NewRecurringDepositJobHandler(
 	return &RecurringDepositJobHandler{deposits: deposits, schedules: schedules, notify: notify, logger: logger}
 }
 
-// Handle decodes the payload, records the deposit, advances the schedule,
-// and notifies the user. A malformed payload is a permanent failure
-// (dead-lettered immediately); a transient failure recording the deposit or
-// advancing the schedule is returned as-is so the queue retries with
-// backoff — safe because RecordScheduledDeposit is idempotent per occurrence
-// (see DepositRecorder) and vault.ErrDuplicateTransaction from a retried,
-// already-applied deposit is treated as success rather than an error.
+// SetMandateExecutor sets the mandate executor for on-chain execution
+func (h *RecurringDepositJobHandler) SetMandateExecutor(executor MandateExecutor) {
+	h.mandates = executor
+}
+
+// Handle decodes the payload and executes either on-chain mandate or legacy
+// deposit recording. For on-chain mandates, it calls the recurring_deposit
+// contract's execute_mandate function. For legacy schedules, it uses the
+// existing RecordScheduledDeposit flow. A malformed payload is a permanent
+// failure (dead-lettered immediately); a transient failure is returned as-is
+// so the queue retries with backoff.
 func (h *RecurringDepositJobHandler) Handle(ctx context.Context, job jobqueue.Job) error {
 	var p RecurringDepositJobPayload
 	if err := json.Unmarshal(job.Payload, &p); err != nil {
 		return jobqueue.Permanent(err)
 	}
 
-	if err := h.deposits.RecordScheduledDeposit(ctx, p.UserID, p.VaultID, p.Amount, p.ScheduleID, p.OccurrenceAt); err != nil {
-		if !errors.Is(err, vault.ErrDuplicateTransaction) {
-			return err
+	// Check if this is an on-chain mandate or legacy schedule
+	if p.OnchainMandateID != nil && h.mandates != nil {
+		// Execute on-chain mandate
+		if err := h.mandates.ExecuteMandate(ctx, p.UserID, *p.OnchainMandateID); err != nil {
+			// Check if this is a mandate-specific error that should not retry
+			if isNonRetryableMandateError(err) {
+				h.logger.Warn("recurring deposit job: mandate execution failed with non-retryable error",
+					"schedule_id", p.ScheduleID,
+					"mandate_id", *p.OnchainMandateID,
+					"error", err,
+				)
+				// Still update schedule even if mandate fails - the mandate itself handles the failure
+				return h.updateScheduleAfterExecution(ctx, p)
+			}
+			return err // Retryable error
 		}
-		// A retried delivery of a job whose deposit already landed (e.g. the
-		// previous attempt recorded the deposit but crashed/timed out before
-		// UpdateAfterRun). The unique transaction_hash — built from
-		// scheduleID + OccurrenceAt — makes this detectable and safe to
-		// treat as already-applied rather than fail the whole job.
-		h.logger.Info("recurring deposit job: deposit already recorded, continuing", "schedule_id", p.ScheduleID)
+		
+		h.logger.Info("recurring deposit job: on-chain mandate executed",
+			"schedule_id", p.ScheduleID,
+			"mandate_id", *p.OnchainMandateID,
+			"amount", p.Amount.String(),
+		)
+	} else {
+		// Legacy off-chain deposit recording
+		if err := h.deposits.RecordScheduledDeposit(ctx, p.UserID, p.VaultID, p.Amount, p.ScheduleID, p.OccurrenceAt); err != nil {
+			if !errors.Is(err, vault.ErrDuplicateTransaction) {
+				return err
+			}
+			// A retried delivery of a job whose deposit already landed (e.g. the
+			// previous attempt recorded the deposit but crashed/timed out before
+			// UpdateAfterRun). The unique transaction_hash — built from
+			// scheduleID + OccurrenceAt — makes this detectable and safe to
+			// treat as already-applied rather than fail the whole job.
+			h.logger.Info("recurring deposit job: deposit already recorded, continuing", "schedule_id", p.ScheduleID)
+		}
+
+		h.logger.Info("recurring deposit job: legacy deposit recorded",
+			"schedule_id", p.ScheduleID,
+			"goal_id", p.GoalID,
+			"amount", p.Amount.String(),
+		)
 	}
 
+	// Update schedule and notify user
+	return h.updateScheduleAfterExecution(ctx, p)
+}
+
+// updateScheduleAfterExecution handles schedule advancement and user notification
+func (h *RecurringDepositJobHandler) updateScheduleAfterExecution(ctx context.Context, p RecurringDepositJobPayload) error {
 	nextRun := NextRunAt(p.OccurrenceAt, p.Frequency)
 	if err := h.schedules.UpdateAfterRun(ctx, p.ScheduleID, p.OccurrenceAt, nextRun); err != nil {
 		return err
@@ -371,12 +423,20 @@ func (h *RecurringDepositJobHandler) Handle(ctx context.Context, job jobqueue.Jo
 		)
 	}
 
-	h.logger.Info("recurring deposit job: deposit recorded",
-		"schedule_id", p.ScheduleID,
-		"goal_id", p.GoalID,
-		"amount", p.Amount.String(),
-	)
 	return nil
+}
+
+// isNonRetryableMandateError determines if a mandate execution error should
+// not be retried (e.g., mandate expired, insufficient balance)
+func isNonRetryableMandateError(err error) bool {
+	// This would need to be updated based on the actual error types
+	// returned by the Stellar contract execution
+	errStr := err.Error()
+	return strings.Contains(errStr, "MandateExpired") ||
+		strings.Contains(errStr, "MandateExhausted") ||
+		strings.Contains(errStr, "MandateNotDue") ||
+		strings.Contains(errStr, "MandateInactive") ||
+		strings.Contains(errStr, "MandatePaused")
 }
 
 type noopDepositNotifier struct{}
