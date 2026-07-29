@@ -67,3 +67,63 @@ async def confirm_and_create_goal(
         status_code=501,
         detail="Goal creation via API is not yet implemented. Please use the form."
     )
+
+
+@router.post("/confirm-goal")
+async def confirm_and_create_goal(
+    request: ConfirmGoalRequest,
+    claims: dict[str, Any] = Depends(verify_jwt),
+) -> Any:
+    """
+    Confirm and create a goal from extracted data.
+    
+    Validates the extracted goal data and prepares it for creation.
+    """
+    goal_data = request.goal_data
+
+    # Validate required fields
+    required = ["name", "target_amount", "deadline", "category"]
+    missing = [f for f in required if f not in goal_data]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing: {', '.join(missing)}")
+
+    # Re-validate with GoalExtractor
+    from app.services.goal_extractor import ExtractedGoal, GoalExtractor
+    
+    try:
+        extractor = GoalExtractor()
+        
+        # Convert dict to ExtractedGoal
+        extracted = ExtractedGoal(
+            name=goal_data["name"],
+            target_amount=float(goal_data["target_amount"]),
+            deadline=goal_data["deadline"],
+            category=goal_data.get("category", "savings"),
+            initial_deposit=float(goal_data.get("initial_deposit", 0)),
+            is_recurring=bool(goal_data.get("is_recurring", False)),
+            recurring_amount=float(goal_data.get("recurring_amount")) if goal_data.get("recurring_amount") else None,
+        )
+        
+        # Run validation
+        result = extractor._validate_and_resolve(extracted, "UTC")
+        
+        if not result.success:
+            raise HTTPException(
+                status_code=400,
+                detail=result.ambiguity.message if result.ambiguity else result.error
+            )
+        
+        # TODO: Replace with actual Go service call via relay
+        return {
+            "success": True,
+            "message": "Goal validated successfully",
+            "goal_id": f"goal_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "goal": result.extracted.model_dump() if result.extracted else goal_data,
+        }
+        
+    except ValueError as e:
+        logger.error(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid data: {str(e)}")
+    except Exception as e:
+        logger.error(f"Goal creation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create goal.")
