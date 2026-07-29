@@ -431,6 +431,8 @@ func run() error {
 	savingsStreakRepo := postgres.NewSavingsStreakRepository(db)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
 	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
+	// Honor each goal's auto_compound preference when its vault is harvested (#task1).
+	vaultService.SetGoalYieldRouter(savingsGoalSvc)
 
 	minDeposit, _ := decimal.NewFromString(cfg.RecurringDeposit().MinDepositAmount())
 	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)

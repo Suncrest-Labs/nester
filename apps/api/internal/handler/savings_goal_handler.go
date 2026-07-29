@@ -96,6 +96,7 @@ type updateSavingsGoalRequest struct {
 	Category     *string      `json:"category"`
 	Name         *string      `json:"name"`
 	Emoji        *string      `json:"emoji"`
+	AutoCompound *bool        `json:"auto_compound"`
 }
 
 func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -255,6 +256,7 @@ func (h *SavingsGoalHandler) update(w http.ResponseWriter, r *http.Request) {
 	in.Category = req.Category
 	in.Name = req.Name
 	in.Emoji = req.Emoji
+	in.AutoCompound = req.AutoCompound
 
 	goal, err := h.svc.Update(r.Context(), userID, goalID, in)
 	if err != nil {

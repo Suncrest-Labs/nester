@@ -191,6 +191,13 @@ type SavingsGoal struct {
 	ShareToken      *uuid.UUID `json:"share_token,omitempty"`
 	ShareEnabledAt  *time.Time `json:"share_enabled_at,omitempty"`
 	IsShared        bool       `json:"is_shared"`
+	// AutoCompound controls whether harvested yield is routed back into the
+	// goal's vault position (true, the default) or credited to YieldBalance
+	// instead of being reinvested (false).
+	AutoCompound bool `json:"auto_compound"`
+	// YieldBalance accumulates harvested yield that was NOT compounded because
+	// AutoCompound is false. It is held separately from CurrentAmount/vault balance.
+	YieldBalance decimal.Decimal `json:"yield_balance"`
 }
 
 // SharedGoalView is the read-only public projection of a savings goal exposed
@@ -252,6 +259,12 @@ type Repository interface {
 	ClearShareToken(ctx context.Context, goalID, userID uuid.UUID) error
 	// GetByShareToken returns the goal whose share_token matches. Returns ErrGoalNotFound if none.
 	GetByShareToken(ctx context.Context, token uuid.UUID) (*SavingsGoal, error)
+	// GetByVaultID returns the goal linked to the given vault, if any. Returns
+	// ErrGoalNotFound if no goal links to that vault.
+	GetByVaultID(ctx context.Context, vaultID uuid.UUID) (*SavingsGoal, error)
+	// CreditYieldBalance atomically adds amount to the goal's yield_balance,
+	// used when harvested yield is not auto-compounded back into the vault.
+	CreditYieldBalance(ctx context.Context, goalID uuid.UUID, amount decimal.Decimal) error
 }
 
 // categoryIconDefaults maps each GoalCategory to a default icon name and color
