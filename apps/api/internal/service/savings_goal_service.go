@@ -448,8 +448,37 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	return s.EnrichProgress(ctx, *goal)
 }
 
+// Delete soft-deletes the goal (#924): it stamps deleted_at rather than
+// destroying the row, leaving a SavingsGoalRecoveryWindow-long window during
+// which Restore can undo it before the scheduled purge job hard-deletes it.
 func (s *SavingsGoalService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
 	return s.repo.Delete(ctx, goalID, userID)
+}
+
+// Restore undoes a soft delete (#924), provided the goal was deleted less
+// than SavingsGoalRecoveryWindow ago. Returns ErrGoalNotFound if the goal
+// doesn't exist or isn't owned by userID, ErrGoalNotDeleted if it was never
+// deleted, and ErrRecoveryWindowExpired once the window has elapsed (the
+// goal may already be gone, or about to be purged).
+func (s *SavingsGoalService) Restore(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByIDIncludingDeleted(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.DeletedAt == nil {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotDeleted
+	}
+	if time.Since(*goal.DeletedAt) > savingsgoal.SavingsGoalRecoveryWindow {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrRecoveryWindowExpired
+	}
+	if err := s.repo.Restore(ctx, goalID, userID); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.DeletedAt = nil
+	return s.EnrichProgress(ctx, *goal)
 }
 
 func (s *SavingsGoalService) ListContributions(ctx context.Context, userID, goalID uuid.UUID, params listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error) {

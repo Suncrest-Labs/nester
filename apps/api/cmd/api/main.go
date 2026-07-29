@@ -759,6 +759,19 @@ func run() error {
 	defer cancelRecurring()
 	go recurringDepositJob.Run(recurringCtx)
 
+	// Savings goal soft-delete recovery purge (#924): hard-deletes goals
+	// whose deleted_at is older than savingsgoal.SavingsGoalRecoveryWindow.
+	// Runs daily; leader-elected like the other sweep jobs to avoid every
+	// instance racing to purge the same rows.
+	savingsGoalPurgeJob := scheduler.NewSavingsGoalPurgeJob(
+		savingsGoalRepo,
+		baseLogger.WithGroup("savings-goal-purge"),
+	)
+	savingsGoalPurgeJob.SetLeaderChecker(schedulerLeadership)
+	savingsGoalPurgeCtx, cancelSavingsGoalPurge := context.WithCancel(context.Background())
+	defer cancelSavingsGoalPurge()
+	go savingsGoalPurgeJob.Run(savingsGoalPurgeCtx, 24*time.Hour)
+
 	jobWorker := jobqueue.NewWorker(
 		jobQueueRepo,
 		jobqueue.Config{

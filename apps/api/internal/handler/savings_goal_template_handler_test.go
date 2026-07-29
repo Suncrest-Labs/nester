@@ -43,6 +43,9 @@ func (m *mockGoalTemplateService) Update(ctx context.Context, userID, goalID uui
 func (m *mockGoalTemplateService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
 	return nil
 }
+func (m *mockGoalTemplateService) Restore(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	return savingsgoal.SavingsGoal{}, nil
+}
 func (m *mockGoalTemplateService) Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {
 	return savingsgoal.SavingsGoalsSummary{}, nil
 }

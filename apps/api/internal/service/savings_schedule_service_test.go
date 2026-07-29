@@ -113,6 +113,14 @@ func (m *memoryGoalRepo) GetByID(_ context.Context, id uuid.UUID) (*savingsgoal.
 }
 func (m *memoryGoalRepo) Update(context.Context, *savingsgoal.SavingsGoal) error { return nil }
 func (m *memoryGoalRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error     { return nil }
+func (m *memoryGoalRepo) Restore(context.Context, uuid.UUID, uuid.UUID) error    { return nil }
+func (m *memoryGoalRepo) GetByIDIncludingDeleted(_ context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	return m.GetByID(context.Background(), id)
+}
+func (m *memoryGoalRepo) ListDeletedOlderThan(context.Context, time.Time) ([]savingsgoal.SavingsGoal, error) {
+	return nil, nil
+}
+func (m *memoryGoalRepo) HardDelete(context.Context, uuid.UUID) error { return nil }
 func (m *memoryGoalRepo) SumVaultBalance(context.Context, uuid.UUID, string) (decimal.Decimal, error) {
 	return decimal.Zero, nil
 }
