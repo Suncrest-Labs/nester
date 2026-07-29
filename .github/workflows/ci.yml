@@ -161,7 +161,7 @@ jobs:
       - name: Run gitleaks
         run: gitleaks detect --source . --no-git --redact --no-banner --config .gitleaks.toml
 
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
 
       - name: Install cargo-audit
@@ -419,7 +419,7 @@ else:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
 
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: wasm32-unknown-unknown
 
