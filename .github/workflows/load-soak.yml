@@ -16,7 +16,7 @@ jobs:
     if: ${{ secrets.STAGING_LOAD_API_BASE_URL != '' }}
     environment: staging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
       - name: Run isolated staging soak
         env:
           API_BASE_URL: ${{ secrets.STAGING_LOAD_API_BASE_URL }}
@@ -30,7 +30,7 @@ jobs:
             -e API_BASE_URL -e INTELLIGENCE_BASE_URL -e WS_URL -e VAULT_ID -e AUTH_TOKEN \
             -v "$PWD:/work" -w /work grafana/k6:latest \
             run --summary-export results/soak-summary.json tests/load/soak.js
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         if: always()
         with:
           name: k6-soak-summary-${{ github.run_id }}

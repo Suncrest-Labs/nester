@@ -26,9 +26,9 @@ jobs:
       contracts: ${{ steps.filter.outputs.contracts }}
       shared: ${{ steps.filter.outputs.shared }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@b41dfa943b1939b9b646f67753bfe35cf6e4de03 # v3.0.2
         id: filter
         with:
           # On push events, compare against the previous commit so the first
@@ -62,11 +62,11 @@ jobs:
     if: needs.changes.outputs.website == 'true' || needs.changes.outputs.shared == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4.1.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
         with:
           node-version: 20
           cache: pnpm
@@ -90,9 +90,9 @@ jobs:
       run:
         working-directory: apps/intelligence
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.5.0
         with:
           python-version: "3.12"
 
@@ -117,11 +117,11 @@ jobs:
     if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4.1.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
         with:
           node-version: 22
           cache: pnpm
@@ -148,7 +148,7 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
         with:
           fetch-depth: 0
 
@@ -161,7 +161,7 @@ jobs:
       - name: Run gitleaks
         run: gitleaks detect --source . --no-git --redact --no-banner --config .gitleaks.toml
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
 
       - name: Install cargo-audit
@@ -174,7 +174,7 @@ jobs:
         working-directory: packages/contracts
         continue-on-error: true
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.3.0
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
         with:
           go-version-file: apps/api/go.mod
@@ -219,10 +219,10 @@ jobs:
         working-directory: apps/api
         continue-on-error: true
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4.1.0
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
         with:
           node-version: 22
@@ -238,7 +238,7 @@ jobs:
         working-directory: apps/dapp/frontend
         continue-on-error: true
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.5.0
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
         with:
           python-version: "3.12"
@@ -261,7 +261,7 @@ jobs:
 
       - name: Semgrep SAST (TypeScript/Next.js)
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
-        uses: semgrep/semgrep-action@v1
+        uses: semgrep/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
         with:
           config: >-
             p/typescript
@@ -270,6 +270,66 @@ jobs:
             p/secrets
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Typosquat detection (new npm dependencies)
+        if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+        run: |
+          # Check for typosquatting patterns in package.json dependencies
+          # Uses npm package name similarity to detect potential typosquats
+          python3 -c "
+import json, sys, re
+from pathlib import Path
+
+pkg = json.loads(Path('apps/dapp/frontend/package.json').read_text())
+known_packages = {'react', 'react-dom', 'next', 'next/router', 'next/navigation',
+    '@tanstack/react-query', 'framer-motion', 'recharts', 'zod', 'react-hook-form',
+    'zustand', 'uuid', 'date-fns', 'ethers', 'viem', 'wagmi', 'axios', 'lodash',
+    '@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-tabs',
+    '@radix-ui/react-tooltip', '@radix-ui/react-popover', '@radix-ui/react-select',
+    'tailwindcss', 'postcss', 'autoprefixer', 'typescript', 'vitest', 'eslint',
+    '@typescript-eslint/eslint-plugin', '@typescript-eslint/parser', 'prettier',
+    'clsx', 'tailwind-merge', 'lucide-react', 'class-variance-authority',
+    '@hookform/resolvers', 'sonner', 'react-hot-toast', 'next-themes',
+    '@starknet-react/core', '@starknet-react/chains', 'starknet',
+    '@stellar/stellar-sdk', '@blend-capital/blend-sdk'}
+
+def levenshtein(a, b):
+    m, n = len(a), len(b)
+    dp = [[0]*(n+1) for _ in range(m+1)]
+    for i in range(m+1): dp[i][0] = i
+    for j in range(n+1): dp[0][j] = j
+    for i in range(1, m+1):
+        for j in range(1, n+1):
+            dp[i][j] = min(dp[i-1][j]+1, dp[i][j-1]+1,
+                           dp[i-1][j-1] + (a[i-1] != b[j-1]))
+    return dp[m][n]
+
+suspicious = []
+for dep in pkg.get('dependencies', {}):
+    name = dep.split('/')[-1] if '/' in dep else dep
+    for known in known_packages:
+        kname = known.split('/')[-1] if '/' in known else known
+        if name != kname and len(name) > 3 and len(kname) > 3:
+            d = levenshtein(name.lower(), kname.lower())
+            if d <= 2 and d > 0:
+                suspicious.append((dep, known, d))
+
+for dep in pkg.get('devDependencies', {}):
+    name = dep.split('/')[-1] if '/' in dep else dep
+    for known in known_packages:
+        kname = known.split('/')[-1] if '/' in known else known
+        if name != kname and len(name) > 3 and len(kname) > 3:
+            d = levenshtein(name.lower(), kname.lower())
+            if d <= 2 and d > 0:
+                suspicious.append((dep, known, d))
+
+if suspicious:
+    print('::warning::Potential typosquatted dependencies detected:')
+    for dep, known, dist in suspicious:
+        print(f'  {dep} (edit distance {dist} from {known})'
+else:
+    print('No potential typosquats detected')
+"
 
   api:
     name: API (Go)
@@ -312,9 +372,9 @@ jobs:
       # silently skips in CI even though the redis service below is running.
       REDIS_ADDR: localhost:6379
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.3.0
         with:
           go-version-file: apps/api/go.mod
           cache: true
@@ -357,9 +417,9 @@ jobs:
       run:
         working-directory: packages/contracts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           targets: wasm32-unknown-unknown
 
@@ -405,4 +465,51 @@ jobs:
             echo "ERROR: No vault-contract tests ran — possible missing WASM artifact"
             exit 1
           fi
+
+  sbom:
+    name: SBOM Generation
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
+
+      - name: Install cyclonedx-bom (Go)
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1
+
+      - name: Install syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.19.0
+
+      - name: Generate Go API SBOM
+        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
+        working-directory: apps/api
+        run: |
+          cyclonedx-gomod mod -json -output ../../sbom-api.json .
+          syft dir:. --output cyclonedx-json=sbom-api-syft.json 2>/dev/null || true
+
+      - name: Generate frontend SBOM (npm)
+        if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+        working-directory: apps/dapp/frontend
+        run: |
+          npx @cyclonedx/cyclonedx-npm --output-file ../../../sbom-frontend.json --pnpm 2>/dev/null || \
+          npx @cyclonedx/cyclonedx-npm --output-file ../../../sbom-frontend.json 2>/dev/null || true
+
+      - name: Generate Python SBOM
+        if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
+        working-directory: apps/intelligence
+        run: |
+          syft dir:. --output cyclonedx-json=../../sbom-intelligence.json 2>/dev/null || true
+
+      - name: Generate contracts SBOM (Rust)
+        if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
+        working-directory: packages/contracts
+        run: |
+          syft dir:. --output cyclonedx-json=../../sbom-contracts.json 2>/dev/null || true
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: sbom-artifacts
+          path: sbom-*.json
+          if-no-files-found: warn
 

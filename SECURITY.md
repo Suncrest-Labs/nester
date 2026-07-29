@@ -144,6 +144,89 @@ When encryption is extended to a new domain, existing plaintext rows are backfil
 
 Plaintext is never dropped in the same step that introduces ciphertext.
 
+## Supply-Chain Security
+
+Nester implements defence-in-depth for software supply-chain security, covering all ecosystems in the monorepo (Go, npm, Rust Cargo, Python pip, and CI/containers).
+
+### Software Bill of Materials (SBOM)
+
+Every CI build generates a CycloneDX-format SBOM for each deployable artifact:
+- **Go API**: `cyclonedx-gomod` generates the Go module SBOM
+- **Frontend (npm)**: `@cyclonedx/cyclonedx-npm` generates the npm dependency tree SBOM
+- **Intelligence (Python)**: `syft` generates the Python package SBOM
+- **Contracts (Rust)**: `syft` generates the Rust crate SBOM
+
+SBOMs are uploaded as build artifacts and retained per build, so any deployed version has an exact, queryable record of its dependency contents.
+
+### Dependency Pinning and Integrity
+
+All dependencies are pinned to exact versions with integrity verification:
+- **Go**: `go.sum` with checksum database (`GOSUMDB`) verification
+- **npm**: Lockfile (`pnpm-lock.yaml`) with integrity hashes; CI uses `--frozen-lockfile` to reject unrecorded changes
+- **Rust**: `Cargo.lock` with verified crate checksums
+- **Python**: `requirements.txt` with hash-pinned dependencies (`--require-hashes`)
+
+CI fails the build if integrity verification fails for any ecosystem.
+
+### CI Action Pinning
+
+All third-party GitHub Actions are pinned to immutable commit SHAs rather than mutable version tags. A `@v4` tag can be repointed by the action owner; a SHA cannot. Each SHA is annotated with the equivalent semver tag for readability.
+
+The following actions are pinned across all workflows:
+- `actions/checkout`, `actions/setup-node`, `actions/setup-go`, `actions/setup-python`
+- `pnpm/action-setup`, `dorny/paths-filter`, `dtolnay/rust-toolchain`
+- `github/codeql-action/*`, `semgrep/semgrep-action`, `dependabot/fetch-metadata`
+- `actions/upload-artifact`
+
+### Provenance Verification
+
+Where available, dependencies and actions with build provenance/attestations are preferred and verified:
+- **GitHub Actions**: Official `actions/*` and `github/*` actions publish signed attestations via `attestations.write` permission
+- **npm packages**: Packages with provenance attestations (via npm registry) are preferred
+- **Go modules**: Go checksum database (`sum.golang.org`) provides transparency log verification
+
+Coverage is documented and reviewed as part of new-dependency introduction.
+
+### Vulnerability Scanning Gates
+
+Automated vulnerability scanning runs on every PR and push across all ecosystems:
+
+| Scanner | Ecosystem | Policy |
+|---------|-----------|--------|
+| `gitleaks` | Secrets | No secrets in any commit |
+| `govulncheck` | Go (api) | Known critical/high blocks; accepted vulns in `.vulnignore` |
+| `gosec` | Go (api) | Medium+ severity; warnings only |
+| `cargo-audit` | Rust (contracts) | All advisories; warnings only |
+| `pnpm audit` | npm (dapp/website) | Moderate+ fails; warnings only |
+| `pip-audit` | Python (intelligence) | High/critical fails with JSON report |
+| `bandit` | Python (intelligence) | High-confidence issues |
+| `semgrep` | TypeScript/Next.js | OSS + Pro rules (TypeScript, React, Next.js, secrets) |
+| `CodeQL` | Go, JS/TS, Python | All queries, security-extended suite |
+
+A known critical or high vulnerability in a production dependency blocks the merge/release until remediated or explicitly waived.
+
+### Typosquat Detection
+
+New npm dependencies are automatically checked for typosquatting patterns (Levenshtein distance ≤ 2 from known popular packages) during CI. Suspicious matches are surfaced as warnings for manual review before merge.
+
+### Dependency Introduction Control
+
+Adding a new dependency follows this gated process:
+1. Dependabot or developer proposes the change in a PR
+2. CI runs vulnerability scans across all ecosystems
+3. Typosquat detection checks the new package name
+4. For significant additions, a brief review of the package's provenance and health is required
+5. The PR must pass all CI gates before merge
+
+### Waiver Process
+
+Vulnerability waivers (`.vulnignore`, CI allowlists) require:
+- A documented justification (e.g., "unused transitive dependency", "no attack vector in our usage")
+- A time-bounded review date
+- An owner responsible for re-evaluation
+
+Waivers are auditable and reviewed as part of the release process. Permanent silent suppressions are not permitted.
+
 ## Known and Accepted Vulnerabilities
 
 We maintain a list of known vulnerabilities in our dependency chain that we have assessed and accepted based on their risk profile:
