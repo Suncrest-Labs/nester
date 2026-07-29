@@ -197,6 +197,7 @@ func run() error {
 	settlementHandler := handler.NewSettlementHandler(settlementService, userService)
 
 	adminRepository := postgres.NewAdminRepository(db)
+	goalTemplateRepo := postgres.NewGoalTemplateRepository(db)
 
 	var chainInvoker service.VaultChainInvoker
 	if secret := cfg.Stellar().OperatorSecret(); secret != "" {
@@ -223,6 +224,7 @@ func run() error {
 		cfg.Stellar().AllocationStrategyAddress(),
 		cfg.Allocation().MinWeightPercent(),
 	)
+	adminService.SetTemplateRepository(goalTemplateRepo)
 	adminHandler := handler.NewAdminHandler(adminService, userService)
 	adminHandler.SetEventSyncer(&stellarpkg.EventSyncer{
 		DB:      db,
@@ -698,6 +700,7 @@ func run() error {
 	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
 	savingsGoalSvc.SetStreakNotifier(service.NudgeEngineStreakMilestoneNotifier{NudgeEngine: nudgeEngineSvc})
+	savingsGoalSvc.SetTemplateRepository(goalTemplateRepo)
 
 	minDeposit, _ := decimal.NewFromString(cfg.RecurringDeposit().MinDepositAmount())
 	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)

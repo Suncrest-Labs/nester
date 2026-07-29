@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Calculator, TrendingUp, Target } from "lucide-react";
+import { Calculator, TrendingUp, Target, Download, FileText } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -25,6 +25,8 @@ import {
 } from "@/lib/api/projection";
 import { useToast } from "@/components/ui/toast/toast-provider";
 import { WidgetErrorBoundary } from "@/components/ui/error-boundary/error-boundary";
+import { exportCsv } from "@/lib/export/csv";
+import { exportPdf } from "@/lib/export/pdf";
 
 interface SavingsCalculatorProps {
   className?: string;
@@ -135,6 +137,36 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
     range: [parseFloat(point.p10), parseFloat(point.p90)] as [number, number],
     p50: parseFloat(point.p50),
   })) || [];
+
+  // Export helpers (#918): reuse the existing lib/export CSV/PDF utilities,
+  // shaping each timeline point as a "transaction" row so the calculator
+  // doesn't need its own export format.
+  const projectionExportRows = (projectionQuery.data?.timeline ?? []).map((point) => ({
+    date: `Month ${point.month}`,
+    type: "Projected Balance",
+    vault: "Savings Calculator",
+    amount: parseFloat(point.total).toFixed(2),
+    status: `Principal $${parseFloat(point.principal).toFixed(2)} / Yield $${parseFloat(point.yield).toFixed(2)}`,
+  }));
+
+  const handleExportCsv = () => {
+    if (!projectionQuery.data) return;
+    exportCsv(projectionExportRows, "savings-projection.csv");
+  };
+
+  const handleExportPdf = () => {
+    if (!projectionQuery.data) return;
+    const { summary } = projectionQuery.data;
+    exportPdf({
+      transactions: projectionExportRows,
+      summary: {
+        totalYield: parseFloat(summary.total_yield),
+        totalDeposited: parseFloat(summary.total_deposited),
+        totalWithdrawn: 0,
+      },
+      title: "Nester Savings Projection",
+    });
+  };
 
   const goalSuccess = simulationQuery.data?.goal_success;
   const successPct = goalSuccess ? goalSuccess.probability : null;
@@ -291,6 +323,22 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
           <div className="space-y-6">
             {projectionQuery.data && (
               <>
+                {/* Export actions (#918) */}
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={handleExportCsv}
+                    className="inline-flex items-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+                  >
+                    <Download className="mr-1 h-4 w-4" /> CSV
+                  </button>
+                  <button
+                    onClick={handleExportPdf}
+                    className="inline-flex items-center rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900"
+                  >
+                    <FileText className="mr-1 h-4 w-4" /> PDF
+                  </button>
+                </div>
+
                 {/* Summary Cards */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-green-50 rounded-lg p-4">

@@ -30,6 +30,13 @@ var (
 	// or below MinTargetAmount (#692). Defined here so handlers don't have to
 	// import the vault domain to classify amount validation failures.
 	ErrInvalidAmount = errors.New("invalid target amount")
+	// ErrInvalidContributionLimits is returned when a goal's optional
+	// min/max per-contribution limits are invalid, e.g. negative, zero, or
+	// min greater than max (#922).
+	ErrInvalidContributionLimits = errors.New("invalid contribution limits")
+	// ErrContributionOutOfRange is returned when a deposit amount falls
+	// outside a goal's configured min/max per-contribution limits (#922).
+	ErrContributionOutOfRange = errors.New("contribution amount outside allowed range")
 )
 
 // MinTargetAmount is the smallest meaningful goal target (#692). Values above
@@ -170,6 +177,36 @@ func isEmojiRange(r rune) bool {
 		(r >= 0x200D && r <= 0x200D)       // zero-width joiner
 }
 
+// ValidateContributionLimits checks that a goal's optional min/max
+// per-contribution limits (#922) are individually positive and, when both
+// are set, that min does not exceed max. Either or both may be nil, meaning
+// "no limit" on that side.
+func ValidateContributionLimits(min, max *decimal.Decimal) error {
+	if min != nil && !min.IsPositive() {
+		return fmt.Errorf("%w: min_contribution must be greater than zero", ErrInvalidContributionLimits)
+	}
+	if max != nil && !max.IsPositive() {
+		return fmt.Errorf("%w: max_contribution must be greater than zero", ErrInvalidContributionLimits)
+	}
+	if min != nil && max != nil && min.GreaterThan(*max) {
+		return fmt.Errorf("%w: min_contribution must not exceed max_contribution", ErrInvalidContributionLimits)
+	}
+	return nil
+}
+
+// ValidateContributionAmount checks a deposit amount against a goal's
+// optional min/max per-contribution limits (#922). Either limit may be nil,
+// meaning that side is unconstrained.
+func ValidateContributionAmount(amount decimal.Decimal, min, max *decimal.Decimal) error {
+	if min != nil && amount.LessThan(*min) {
+		return fmt.Errorf("%w: contribution must be at least %s", ErrContributionOutOfRange, min.String())
+	}
+	if max != nil && amount.GreaterThan(*max) {
+		return fmt.Errorf("%w: contribution must not exceed %s", ErrContributionOutOfRange, max.String())
+	}
+	return nil
+}
+
 func ParseCategory(value string) (GoalCategory, error) {
 	category := GoalCategory(strings.ToLower(strings.TrimSpace(value)))
 	switch category {
@@ -229,6 +266,13 @@ type SavingsGoal struct {
 	// registration against the savings_goal contract succeeds.
 	OnchainGoalID  *string `json:"onchain_goal_id,omitempty"`
 	OnchainStatus  *string `json:"onchain_status,omitempty"`
+	// MinContribution/MaxContribution are optional per-contribution limits
+	// (#922), useful for merchants/employers seeding structured savings
+	// plans (e.g. "at least $50 per deposit" or "no more than $500 per
+	// deposit"). Nil means no limit on that side. Enforced at deposit time
+	// by ValidateContributionAmount.
+	MinContribution *decimal.Decimal `json:"min_contribution,omitempty"`
+	MaxContribution *decimal.Decimal `json:"max_contribution,omitempty"`
 }
 
 // SharedGoalView is the read-only public projection of a savings goal exposed
@@ -328,7 +372,10 @@ func DefaultColorForCategory(cat GoalCategory) string {
 	return "slate"
 }
 
-// GoalTemplate represents a pre-built savings goal configuration.
+// GoalTemplate represents a savings goal configuration a user can start
+// from. The original set (#778) ships hardcoded via a migration seed; admins
+// can additionally publish curated templates at runtime (#919) so the
+// catalog can grow without a redeploy.
 type GoalTemplate struct {
 	ID              uuid.UUID       `json:"id"`
 	Name            string          `json:"name"`
@@ -338,9 +385,25 @@ type GoalTemplate struct {
 	Currency        string          `json:"currency"`
 	SuggestedMonths int             `json:"suggested_months"`
 	Icon            string          `json:"icon"`
+	// IsCustom is true for templates published by an admin (#919) and false
+	// for the pre-built defaults seeded by migration 056.
+	IsCustom bool `json:"is_custom"`
+	// CreatedBy is the admin user who published the template. Nil for the
+	// pre-built defaults.
+	CreatedBy *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type TemplateRepository interface {
 	List(ctx context.Context) ([]GoalTemplate, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*GoalTemplate, error)
+	// Create persists an admin-published template (#919).
+	Create(ctx context.Context, template *GoalTemplate) error
+	// Update modifies an existing admin-published template (#919). Templates
+	// seeded as pre-built defaults (IsCustom == false) may still be edited by
+	// admins, matching how other admin-managed catalog data works.
+	Update(ctx context.Context, template *GoalTemplate) error
+	// Delete removes a template from the catalog (#919).
+	Delete(ctx context.Context, id uuid.UUID) error
 }
