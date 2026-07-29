@@ -38,6 +38,7 @@ type User struct {
 	SavingsGoal         *string     `json:"savings_goal,omitempty"`
 	OnboardingCompleted bool        `json:"onboarding_completed"`
 	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
+	Timezone           string     `json:"timezone"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
@@ -58,13 +59,26 @@ var (
 	ErrInvalidWallet     = errors.New("invalid wallet address")
 )
 
+// EncryptedKYCDoc holds the ciphertext and key version for each encrypted KYC
+// document field. The repository writes and reads these alongside the plaintext
+// fields; encryption and decryption happen in the service layer.
+// Nil byte slices indicate the encrypted column has not been backfilled yet
+// (legacy rows), and the caller should fall back to the plaintext column.
+type EncryptedKYCDoc struct {
+	IDNumberEncrypted   []byte
+	IDNumberFingerprint string
+	FrontKeyEncrypted   []byte
+	BackKeyEncrypted    []byte
+	KeyVersion          string
+}
+
 type UserRepository interface {
 	Create(ctx context.Context, user *User) error
 	GetByID(ctx context.Context, id uuid.UUID) (*User, error)
 	GetByWalletAddress(ctx context.Context, addr string) (*User, error)
 	GetRoles(ctx context.Context, id uuid.UUID) ([]string, error)
-	SaveKYCDocument(ctx context.Context, doc *KYCDocument) error
-	GetKYCDocument(ctx context.Context, userID uuid.UUID) (*KYCDocument, error)
+	SaveKYCDocument(ctx context.Context, doc *KYCDocument, encrypted *EncryptedKYCDoc) error
+	GetKYCDocument(ctx context.Context, userID uuid.UUID) (*KYCDocument, *EncryptedKYCDoc, error)
 	UpdateKYCStatus(ctx context.Context, userID uuid.UUID, status KYCStatus, reason *string, reviewedAt *time.Time) error
 	UpdateProfile(ctx context.Context, id uuid.UUID, patch ProfilePatch) (*User, error)
 }
@@ -74,4 +88,5 @@ type ProfilePatch struct {
 	RiskProfile         *RiskProfile
 	SavingsGoal         *string
 	OnboardingCompleted *bool
+	Timezone            *string
 }

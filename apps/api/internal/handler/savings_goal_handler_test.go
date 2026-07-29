@@ -97,6 +97,30 @@ func (m *mockSavingsGoalService) List(_ context.Context, userID uuid.UUID, categ
 	return out, nil
 }
 
+func (m *mockSavingsGoalService) ListPaginated(ctx context.Context, userID uuid.UUID, filter service.SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error) {
+	out, err := m.List(ctx, userID, filter.Category, filter.Status, filter.IncludeArchived)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(out)
+	page, perPage := filter.Page, filter.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = listquery.DefaultPerPage
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return out[start:end], total, nil
+}
+
 func (m *mockSavingsGoalService) Update(_ context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
 	g, ok := m.goals[goalID]
 	if !ok || g.UserID != userID {
@@ -138,8 +162,26 @@ func (m *mockSavingsGoalService) Delete(_ context.Context, userID, goalID uuid.U
 	if !ok || g.UserID != userID {
 		return savingsgoal.ErrGoalNotFound
 	}
-	delete(m.goals, goalID)
+	now := time.Now().UTC()
+	g.DeletedAt = &now
+	m.goals[goalID] = g
 	return nil
+}
+
+func (m *mockSavingsGoalService) Restore(_ context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if g.DeletedAt == nil {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotDeleted
+	}
+	if time.Since(*g.DeletedAt) > savingsgoal.SavingsGoalRecoveryWindow {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrRecoveryWindowExpired
+	}
+	g.DeletedAt = nil
+	m.goals[goalID] = g
+	return g, nil
 }
 
 func (m *mockSavingsGoalService) Summary(_ context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {
@@ -317,6 +359,104 @@ func TestSavingsGoalHandler_CRUD(t *testing.T) {
 	defer listResp.Body.Close()
 	if listResp.StatusCode != http.StatusOK {
 		t.Fatalf("list status = %d, want 200", listResp.StatusCode)
+	}
+}
+
+// TestSavingsGoalHandler_DeleteThenRestore covers the #924 soft-delete +
+// restore round trip: DELETE marks the goal deleted, and POST .../restore
+// clears it and returns the goal within the recovery window.
+func TestSavingsGoalHandler_DeleteThenRestore(t *testing.T) {
+	userID := uuid.New()
+	goalID := uuid.New()
+	svc := &mockSavingsGoalService{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+		goalID: {ID: goalID, UserID: userID},
+	}}
+	h := NewSavingsGoalHandler(svc, nil)
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, server.URL+"/api/v1/users/savings-goals/"+goalID.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", resp.StatusCode)
+	}
+	if svc.goals[goalID].DeletedAt == nil {
+		t.Fatalf("expected goal DeletedAt to be set after delete")
+	}
+
+	restoreResp, err := http.Post(server.URL+"/api/v1/users/savings-goals/"+goalID.String()+"/restore", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restoreResp.Body.Close()
+	if restoreResp.StatusCode != http.StatusOK {
+		t.Fatalf("restore status = %d, want 200", restoreResp.StatusCode)
+	}
+	if svc.goals[goalID].DeletedAt != nil {
+		t.Fatalf("expected goal DeletedAt to be cleared after restore")
+	}
+}
+
+// TestSavingsGoalHandler_Restore_ExpiredWindowReturnsConflict covers a
+// restore attempt after SavingsGoalRecoveryWindow has elapsed (#924): the
+// mock service's Restore returns ErrRecoveryWindowExpired, which the handler
+// must map to 409.
+func TestSavingsGoalHandler_Restore_ExpiredWindowReturnsConflict(t *testing.T) {
+	userID := uuid.New()
+	goalID := uuid.New()
+	longAgo := time.Now().UTC().Add(-31 * 24 * time.Hour)
+	svc := &mockSavingsGoalService{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+		goalID: {ID: goalID, UserID: userID, DeletedAt: &longAgo},
+	}}
+	h := NewSavingsGoalHandler(svc, nil)
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/api/v1/users/savings-goals/"+goalID.String()+"/restore", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("restore status = %d, want 409", resp.StatusCode)
+	}
+}
+
+// TestSavingsGoalHandler_Restore_NotDeletedReturnsConflict covers restoring a
+// goal that was never deleted (#924).
+func TestSavingsGoalHandler_Restore_NotDeletedReturnsConflict(t *testing.T) {
+	userID := uuid.New()
+	goalID := uuid.New()
+	svc := &mockSavingsGoalService{goals: map[uuid.UUID]savingsgoal.SavingsGoal{
+		goalID: {ID: goalID, UserID: userID},
+	}}
+	h := NewSavingsGoalHandler(svc, nil)
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/api/v1/users/savings-goals/"+goalID.String()+"/restore", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("restore status = %d, want 409", resp.StatusCode)
 	}
 }
 

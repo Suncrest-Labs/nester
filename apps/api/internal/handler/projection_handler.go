@@ -2,12 +2,15 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/projection"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
@@ -26,6 +29,12 @@ func NewProjectionHandler(service *service.ProjectionService) *ProjectionHandler
 func (h *ProjectionHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/tools/projection", h.calculateGenericProjection)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/projection", h.calculateVaultProjection)
+	// Monte Carlo savings forecast (#843): P10/P50/P90 band, goal-success
+	// probability, and a deposit/deadline sensitivity grid. Requires auth
+	// (unlike the deterministic generic-projection endpoint above) since a
+	// request can carry a goal_id, and goal-success resolution reads that
+	// goal's target amount and deadline.
+	mux.HandleFunc("POST /api/v1/tools/simulation", h.simulateProjection)
 }
 
 // genericProjectionRequest represents the JSON payload for generic projections
@@ -199,6 +208,143 @@ func (h *ProjectionHandler) calculateVaultProjection(w http.ResponseWriter, r *h
 
 	// Additional auth check: ensure vault belongs to user (if needed)
 	// This would require updating the service to return vault info or checking permissions
+
+	response.WriteJSON(w, http.StatusOK, response.OK(result))
+}
+
+// simulationRequest is the JSON payload for POST /api/v1/tools/simulation.
+// Amounts are wire-format strings (matching genericProjectionRequest above)
+// rather than the domain projection.SimulationInput's native decimal.Decimal
+// / projection.CompoundFrequency types, so the wire format stays consistent
+// with the rest of this handler (e.g. "monthly"/"daily" rather than a raw
+// enum int).
+type simulationRequest struct {
+	VaultID             string `json:"vault_id,omitempty"`
+	GoalID              string `json:"goal_id,omitempty"`
+	InitialDeposit      string `json:"initial_deposit"`
+	MonthlyContribution string `json:"monthly_contribution"`
+	APY                 string `json:"apy,omitempty"`
+	PeriodMonths        int    `json:"period_months,omitempty"`
+	CompoundFrequency   string `json:"compound_frequency,omitempty"`
+	TargetAmount        string `json:"target_amount,omitempty"`
+	DeadlineMonths      int    `json:"deadline_months,omitempty"`
+	PathCount           int    `json:"path_count,omitempty"`
+}
+
+// toSimulationInput converts the wire request into the domain type consumed
+// by ProjectionService.SimulateVaultProjection.
+func (r *simulationRequest) toSimulationInput() (projection.SimulationInput, error) {
+	var input projection.SimulationInput
+
+	if r.VaultID != "" {
+		id, err := uuid.Parse(r.VaultID)
+		if err != nil {
+			return input, errors.New("invalid vault_id")
+		}
+		input.VaultID = &id
+	}
+	if r.GoalID != "" {
+		id, err := uuid.Parse(r.GoalID)
+		if err != nil {
+			return input, errors.New("invalid goal_id")
+		}
+		input.GoalID = &id
+	}
+
+	if r.InitialDeposit != "" {
+		v, err := decimal.NewFromString(r.InitialDeposit)
+		if err != nil {
+			return input, projection.ErrInvalidAmount
+		}
+		input.InitialDeposit = v
+	}
+
+	if r.MonthlyContribution != "" {
+		v, err := decimal.NewFromString(r.MonthlyContribution)
+		if err != nil {
+			return input, projection.ErrInvalidAmount
+		}
+		input.MonthlyContribution = v
+	}
+
+	if r.APY != "" {
+		v, err := decimal.NewFromString(r.APY)
+		if err != nil {
+			return input, projection.ErrInvalidAPY
+		}
+		input.APY = &v
+	}
+
+	input.PeriodMonths = r.PeriodMonths
+
+	freqStr := r.CompoundFrequency
+	if freqStr == "" {
+		freqStr = "monthly"
+	}
+	freq, err := projection.ParseCompoundFrequency(freqStr)
+	if err != nil {
+		return input, err
+	}
+	input.CompoundFrequency = freq
+
+	if r.TargetAmount != "" {
+		v, err := decimal.NewFromString(r.TargetAmount)
+		if err != nil {
+			return input, errors.New("invalid target_amount")
+		}
+		input.TargetAmount = &v
+	}
+	if r.DeadlineMonths > 0 {
+		d := r.DeadlineMonths
+		input.DeadlineMonths = &d
+	}
+	input.PathCount = r.PathCount
+
+	return input, nil
+}
+
+// simulateProjection handles POST /api/v1/tools/simulation: the Monte Carlo
+// savings forecast (#843).
+func (h *ProjectionHandler) simulateProjection(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "authentication required"))
+		return
+	}
+	userID, err := uuid.Parse(user.ID)
+	if err != nil {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "invalid user ID"))
+		return
+	}
+
+	var req simulationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid JSON payload"))
+		return
+	}
+
+	input, err := req.toSimulationInput()
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+
+	result, err := h.service.SimulateVaultProjection(r.Context(), userID, input)
+	if err != nil {
+		switch {
+		case errors.Is(err, savingsgoal.ErrUnauthorized):
+			response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", err.Error()))
+		case errors.Is(err, vault.ErrVaultNotFound), errors.Is(err, savingsgoal.ErrGoalNotFound):
+			response.WriteJSON(w, http.StatusNotFound, response.NotFound("resource"))
+		case errors.Is(err, projection.ErrInvalidAmount),
+			errors.Is(err, projection.ErrInvalidAPY),
+			errors.Is(err, projection.ErrInvalidPeriod):
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		default:
+			response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "CALCULATION_ERROR", err.Error()))
+		}
+		return
+	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(result))
 }

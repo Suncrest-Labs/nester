@@ -34,11 +34,17 @@ func (m *mockGoalTemplateService) Get(ctx context.Context, userID, goalID uuid.U
 func (m *mockGoalTemplateService) List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
 	return nil, nil
 }
+func (m *mockGoalTemplateService) ListPaginated(ctx context.Context, userID uuid.UUID, filter service.SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error) {
+	return m.Goals, len(m.Goals), nil
+}
 func (m *mockGoalTemplateService) Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
 	return savingsgoal.SavingsGoal{}, nil
 }
 func (m *mockGoalTemplateService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
 	return nil
+}
+func (m *mockGoalTemplateService) Restore(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	return savingsgoal.SavingsGoal{}, nil
 }
 func (m *mockGoalTemplateService) Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {
 	return savingsgoal.SavingsGoalsSummary{}, nil

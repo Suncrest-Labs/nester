@@ -39,6 +39,71 @@ export interface VaultProjectionParams {
   apy?: string; // Optional APY override
 }
 
+// ── Monte Carlo savings forecast (#843) ────────────────────────────────────
+//
+// POST /tools/simulation runs many randomized paths over the horizon
+// (varying yield and contribution behavior within modeled distributions —
+// see apps/api/internal/domain/projection/README.md for the full write-up
+// of every distributional assumption) and returns a P10/P50/P90 band per
+// month, plus, when a target amount and deadline are known, the probability
+// of hitting the goal in time and a small deposit/deadline sensitivity grid.
+
+export interface SimulationInput {
+  vault_id?: string;
+  goal_id?: string;
+  initial_deposit: string;
+  monthly_contribution: string;
+  apy?: string; // optional override/explicit mean APY
+  period_months?: number;
+  compound_frequency?: "daily" | "monthly";
+  target_amount?: string;
+  deadline_months?: number;
+  path_count?: number;
+}
+
+export interface PercentileTimelinePoint {
+  month: number;
+  p10: string;
+  p50: string;
+  p90: string;
+}
+
+export interface PercentileBand {
+  p10: string;
+  p50: string;
+  p90: string;
+}
+
+export interface GoalSuccessProbability {
+  target_amount: string;
+  deadline_months: number;
+  probability: number; // 0..1
+}
+
+export interface SensitivityGridPoint {
+  monthly_contribution_delta: string;
+  deadline_months_delta: number;
+  success_probability: number; // 0..1
+}
+
+export interface SimulationOutput {
+  vault_id?: string;
+  currency: string;
+  input: SimulationInput;
+  expected_apy: number;
+  apy_std_dev: number;
+  contribution_skip_probability: number;
+  volatility_source: "historical" | "default_prior";
+  contribution_source: "schedule" | "default_prior";
+  path_count: number;
+  seed: number;
+  timeline: PercentileTimelinePoint[];
+  final_band: PercentileBand;
+  goal_success?: GoalSuccessProbability;
+  sensitivity_grid?: SensitivityGridPoint[];
+  calculated_at: string;
+}
+
 export const projectionApi = {
   // Generic projection calculation
   calculateProjection: (input: ProjectionInput) =>
@@ -58,7 +123,19 @@ export const projectionApi = {
 
     return apiRequest<ProjectionOutput>(`/vaults/${vaultId}/projection?${query}`);
   },
+
+  // Monte Carlo savings forecast (#843): P10/P50/P90 band + goal-success
+  // probability + sensitivity grid.
+  simulateProjection: (input: SimulationInput) =>
+    apiRequest<SimulationOutput>("/tools/simulation", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 };
+
+export function formatSuccessProbability(probability: number): string {
+  return `${Math.round(probability * 100)}%`;
+}
 
 // Helper functions for working with projection data
 

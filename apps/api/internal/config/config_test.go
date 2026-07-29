@@ -3,8 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"sync"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,9 +19,11 @@ func baseEnv(t *testing.T) {
 		"SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_SHUTDOWN_TIMEOUT",
 		"DATABASE_DSN", "DATABASE_POOL_SIZE", "DATABASE_CONNECTION_TIMEOUT",
 		"STELLAR_NETWORK_PASSPHRASE", "STELLAR_RPC_URL", "STELLAR_HORIZON_URL", "STELLAR_USDC_ISSUER",
-		"AUTH_JWT_SECRET", "AUTH_TOKEN_EXPIRY", "AUTH_CHALLENGE_EXPIRY",
+		"AUTH_JWT_SECRET", "AUTH_ACCESS_TOKEN_EXPIRY", "AUTH_REFRESH_TOKEN_EXPIRY", "AUTH_ABSOLUTE_SESSION_LIFETIME", "AUTH_CHALLENGE_EXPIRY",
 		"RATELIMIT_GLOBAL_LIMIT", "RATELIMIT_GLOBAL_WINDOW", "RATELIMIT_WRITE_LIMIT", "RATELIMIT_WRITE_WINDOW",
 		"RATELIMIT_WALLET_LIMIT", "RATELIMIT_WALLET_WINDOW",
+		"RATELIMIT_AUTH_LIMIT", "RATELIMIT_AUTH_WINDOW", "RATELIMIT_SETTLEMENT_LIMIT", "RATELIMIT_SETTLEMENT_WINDOW",
+		"RATELIMIT_TRUSTED_PROXY_COUNT",
 		"LOG_LEVEL", "LOG_FORMAT",
 		"ALLOWED_ORIGINS",
 		"RUN_MIGRATIONS", "MIGRATIONS_DIR", "STARTUP_DEPENDENCY_TIMEOUT",
@@ -348,10 +350,10 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 // only a subset of required fields are missing.
 func TestLoadMissingRequiredFieldsPartial(t *testing.T) {
 	cases := []struct {
-		name          string
-		set           func(t *testing.T)
-		wantMissing   []string
-		wantNotInErr  []string
+		name         string
+		set          func(t *testing.T)
+		wantMissing  []string
+		wantNotInErr []string
 	}{
 		{
 			name: "missing database dsn only",
@@ -446,6 +448,11 @@ func TestLoadAllDefaults(t *testing.T) {
 		{"ratelimit write window", cfg.RateLimit().WriteWindow(), 1 * time.Minute},
 		{"ratelimit wallet limit", cfg.RateLimit().WalletLimit(), 60},
 		{"ratelimit wallet window", cfg.RateLimit().WalletWindow(), 1 * time.Minute},
+		{"ratelimit auth limit", cfg.RateLimit().AuthLimit(), 10},
+		{"ratelimit auth window", cfg.RateLimit().AuthWindow(), 1 * time.Minute},
+		{"ratelimit settlement limit", cfg.RateLimit().SettlementLimit(), 5},
+		{"ratelimit settlement window", cfg.RateLimit().SettlementWindow(), 1 * time.Minute},
+		{"ratelimit trusted proxy count", cfg.RateLimit().TrustedProxyCount(), 0},
 	}
 
 	for _, tc := range cases {
@@ -788,6 +795,144 @@ func TestLoadWalletRateLimitOverrides(t *testing.T) {
 	}
 	if got := cfg.RateLimit().WalletWindow(); got != 15*time.Second {
 		t.Errorf("WalletWindow() = %s, want 15s", got)
+	}
+}
+
+// TestLoadSensitiveRateLimitRejectsNonPositiveValues verifies validation of the
+// strict auth and settlement rate-limit knobs.
+func TestLoadSensitiveRateLimitRejectsNonPositiveValues(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		val  string
+		want string
+	}{
+		{"zero auth limit", "RATELIMIT_AUTH_LIMIT", "0", "RATELIMIT_AUTH_LIMIT must be greater than 0"},
+		{"negative auth limit", "RATELIMIT_AUTH_LIMIT", "-1", "RATELIMIT_AUTH_LIMIT must be greater than 0"},
+		{"zero auth window", "RATELIMIT_AUTH_WINDOW", "0s", "RATELIMIT_AUTH_WINDOW must be greater than 0"},
+		{"zero settlement limit", "RATELIMIT_SETTLEMENT_LIMIT", "0", "RATELIMIT_SETTLEMENT_LIMIT must be greater than 0"},
+		{"zero settlement window", "RATELIMIT_SETTLEMENT_WINDOW", "0s", "RATELIMIT_SETTLEMENT_WINDOW must be greater than 0"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			t.Setenv(tc.key, tc.val)
+
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected Load() to fail for %s=%s", tc.key, tc.val)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error to contain %q, got %q", tc.want, err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadSensitiveRateLimitOverrides verifies env overrides for the strict auth
+// and settlement rate-limit knobs are honoured.
+func TestLoadSensitiveRateLimitOverrides(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_AUTH_LIMIT", "7")
+	t.Setenv("RATELIMIT_AUTH_WINDOW", "30s")
+	t.Setenv("RATELIMIT_SETTLEMENT_LIMIT", "3")
+	t.Setenv("RATELIMIT_SETTLEMENT_WINDOW", "45s")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.RateLimit().AuthLimit(); got != 7 {
+		t.Errorf("AuthLimit() = %d, want 7", got)
+	}
+	if got := cfg.RateLimit().AuthWindow(); got != 30*time.Second {
+		t.Errorf("AuthWindow() = %s, want 30s", got)
+	}
+	if got := cfg.RateLimit().SettlementLimit(); got != 3 {
+		t.Errorf("SettlementLimit() = %d, want 3", got)
+	}
+	if got := cfg.RateLimit().SettlementWindow(); got != 45*time.Second {
+		t.Errorf("SettlementWindow() = %s, want 45s", got)
+	}
+}
+
+// TestLoadRateLimitRejectsSubMillisecondWindows verifies that Redis-backed
+// limiter windows below 1ms are rejected: the Redis limiter converts the window
+// to whole milliseconds for PEXPIRE, so a sub-ms window truncates to 0 and would
+// silently disable enforcement.
+func TestLoadRateLimitRejectsSubMillisecondWindows(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{"global", "RATELIMIT_GLOBAL_WINDOW", "RATELIMIT_GLOBAL_WINDOW must be at least 1ms"},
+		{"auth", "RATELIMIT_AUTH_WINDOW", "RATELIMIT_AUTH_WINDOW must be at least 1ms"},
+		{"settlement", "RATELIMIT_SETTLEMENT_WINDOW", "RATELIMIT_SETTLEMENT_WINDOW must be at least 1ms"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			t.Setenv(tc.key, "500us")
+
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected Load() to fail for %s=500us", tc.key)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error to contain %q, got %q", tc.want, err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadTrustedProxyCountOverride verifies RATELIMIT_TRUSTED_PROXY_COUNT is
+// honoured and that a negative value is rejected.
+func TestLoadTrustedProxyCountOverride(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_TRUSTED_PROXY_COUNT", "2")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.RateLimit().TrustedProxyCount(); got != 2 {
+		t.Errorf("TrustedProxyCount() = %d, want 2", got)
+	}
+}
+
+func TestLoadTrustedProxyCountRejectsNegative(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_TRUSTED_PROXY_COUNT", "-1")
+
+	chdir(t, t.TempDir())
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load() to fail for RATELIMIT_TRUSTED_PROXY_COUNT=-1")
+	}
+	if !strings.Contains(err.Error(), "RATELIMIT_TRUSTED_PROXY_COUNT must be zero or greater") {
+		t.Fatalf("unexpected error: %q", err.Error())
 	}
 }
 

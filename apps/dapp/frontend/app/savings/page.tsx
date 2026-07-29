@@ -46,6 +46,7 @@ import {
 import { buildSavingsVaults } from "@/lib/savings/apply-live-apy";
 import { SavingsGoalsSection } from "@/components/savings/SavingsGoalsSection";
 import { CreateGoalModal } from "@/components/savings/CreateGoalModal";
+import { useLocale, useTranslations } from "@/context/locale-context";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -712,6 +713,8 @@ const CHART_PERIODS: APYHistoryPeriod[] = ["7d", "30d", "90d"];
 
 function SavingsOverview({ savingsVaults }: { savingsVaults: SavingsVault[] }) {
     const { positions } = usePortfolio();
+    const { formatCurrency } = useLocale();
+    const t = useTranslations();
     const [period, setPeriod] = useState<APYHistoryPeriod>("30d");
 
     const activeVaultPositions = useMemo(() => {
@@ -814,8 +817,8 @@ function SavingsOverview({ savingsVaults }: { savingsVaults: SavingsVault[] }) {
     );
 
     const stats = [
-        { label: "Total Deposited", value: `$${totalPrincipal.toLocaleString()}`, icon: ArrowDownLeftIcon, sub: "Principal" },
-        { label: "Yield Earned", value: `+$${totalYield.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, icon: Zap, sub: "Total profit" },
+        { label: t("savings.totalDeposited"), value: formatCurrency(totalPrincipal, "USD"), icon: ArrowDownLeftIcon, sub: "Principal" },
+        { label: t("savings.yieldEarned"), value: `+${formatCurrency(totalYield, "USD")}`, icon: Zap, sub: "Total profit" },
         { label: "Effective APY", value: `${effectiveApy.toFixed(1)}%`, icon: Activity, sub: "Annualised" },
         { label: "Days Saving", value: String(daysSaving), icon: Clock, sub: "Since first deposit" },
     ];
@@ -900,6 +903,7 @@ const FILTERS: { label: string; value: SavingsVaultType | "all" }[] = [
 export default function SavingsPage() {
     const { isConnected } = useWallet();
     const { positions } = usePortfolio();
+    const t = useTranslations();
     const [filter, setFilter] = useState<SavingsVaultType | "all">("all");
     const [selectedVault, setSelectedVault] = useState<SavingsVault | null>(null);
     const [viewMode, setViewMode] = useState<"products" | "goals">("products");
@@ -932,9 +936,9 @@ export default function SavingsPage() {
                 >
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                         <div>
-                            <h1 className="text-2xl text-black dark:text-white sm:text-3xl font-semibold">Savings</h1>
+                            <h1 className="text-2xl text-black dark:text-white sm:text-3xl font-semibold">{t("savings.title")}</h1>
                             <p className="mt-1 text-sm text-black/60 dark:text-white/60 font-medium">
-                                Choose a savings plan and start earning yield on your USDC.
+                                {t("savings.subtitle")}
                             </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -943,7 +947,7 @@ export default function SavingsPage() {
                                 className="flex items-center gap-2 rounded-xl bg-black dark:bg-blue-600 px-5 py-2.5 text-xs font-bold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
                             >
                                 <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                                Create Plan
+                                {t("savings.createPlan")}
                             </button>
                             <button
                                 onClick={() => setShowHowItWorks(!showHowItWorks)}

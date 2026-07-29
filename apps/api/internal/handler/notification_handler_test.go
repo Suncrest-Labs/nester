@@ -155,6 +155,52 @@ func TestNotificationHandler_UpdatePreferences(t *testing.T) {
 	}
 }
 
+func TestNotificationHandler_UpdatePreferencesDigestCadence(t *testing.T) {
+	store := newMemoryNotificationSettings()
+	handler := NewNotificationHandler(store)
+	userID := uuid.New()
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/v1/users/notification-preferences",
+		bytes.NewBufferString(`{"digest_cadence":"weekly"}`),
+	)
+	req = req.WithContext(auth.NewContext(req.Context(), auth.User{ID: userID.String()}))
+	res := httptest.NewRecorder()
+
+	handler.UpdatePreferences(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if got := store.prefs[userID]; got.DigestCadence != "weekly" {
+		t.Fatalf("stored digest_cadence = %q, want weekly", got.DigestCadence)
+	}
+}
+
+func TestNotificationHandler_UpdatePreferencesRejectsInvalidDigestCadence(t *testing.T) {
+	store := newMemoryNotificationSettings()
+	handler := NewNotificationHandler(store)
+	userID := uuid.New()
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/v1/users/notification-preferences",
+		bytes.NewBufferString(`{"digest_cadence":"daily"}`),
+	)
+	req = req.WithContext(auth.NewContext(req.Context(), auth.User{ID: userID.String()}))
+	res := httptest.NewRecorder()
+
+	handler.UpdatePreferences(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusBadRequest, res.Body.String())
+	}
+	if _, ok := store.prefs[userID]; ok {
+		t.Fatalf("invalid cadence should not have been persisted")
+	}
+}
+
 func TestNotificationHandler_StoreErrorReturnsInternalError(t *testing.T) {
 	store := newMemoryNotificationSettings()
 	store.err = errors.New("database down")

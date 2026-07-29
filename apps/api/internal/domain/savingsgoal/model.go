@@ -2,6 +2,8 @@ package savingsgoal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,7 +26,27 @@ var (
 	// ErrGoalArchived is returned when an operation is not allowed on an archived goal
 	// (e.g. adding a new contribution schedule).
 	ErrGoalArchived = errors.New("savings goal is archived")
+	// ErrInvalidAmount is returned when a goal's target amount is zero, negative,
+	// or below MinTargetAmount (#692). Defined here so handlers don't have to
+	// import the vault domain to classify amount validation failures.
+	ErrInvalidAmount = errors.New("invalid target amount")
+	// ErrInvalidContributionLimits is returned when a goal's optional
+	// min/max per-contribution limits are invalid, e.g. negative, zero, or
+	// min greater than max (#922).
+	ErrInvalidContributionLimits = errors.New("invalid contribution limits")
+	// ErrContributionOutOfRange is returned when a deposit amount falls
+	// outside a goal's configured min/max per-contribution limits (#922).
+	ErrContributionOutOfRange = errors.New("contribution amount outside allowed range")
 )
+
+// SavingsGoalRecoveryWindow is how long a soft-deleted savings goal (#924)
+// remains restorable via POST /savings-goals/{id}/restore before the
+// scheduled purge job (see internal/scheduler) hard-deletes it permanently.
+const SavingsGoalRecoveryWindow = 30 * 24 * time.Hour
+
+// MinTargetAmount is the smallest meaningful goal target (#692). Values above
+// zero but below this (e.g. 0.000000001) are rejected as no-op goals.
+var MinTargetAmount = decimal.RequireFromString("0.01")
 
 const (
 	GoalStatusActive    = "active"
@@ -34,6 +56,29 @@ const (
 	// after it completes) to hide it without deleting it (#684).
 	GoalStatusArchived = "archived"
 )
+
+// On-chain goal status values, mirroring the savings_goal contract's
+// GoalStatus enum (#807). Stored separately from Status: on-chain
+// registration happens asynchronously, so a goal can be backend-Active
+// while its on-chain twin is still nil (not yet registered), and the two
+// only need to agree once registration lands.
+const (
+	OnchainStatusActive    = "active"
+	OnchainStatusCompleted = "completed"
+	OnchainStatusAbandoned = "abandoned"
+	OnchainStatusExpired   = "expired"
+)
+
+// DeriveOnchainGoalID hashes a goal's UUID into the 32-byte identifier the
+// savings_goal contract's create_goal expects as goal_id, hex-encoded for
+// storage. The contract never generates goal IDs itself (#807): the backend
+// remains the source of truth for the ID, and this hash is the only stable,
+// deterministic way to turn a UUID into a BytesN<32> without a chain
+// round-trip.
+func DeriveOnchainGoalID(id uuid.UUID) string {
+	sum := sha256.Sum256(id[:])
+	return hex.EncodeToString(sum[:])
+}
 
 // ParseStatusFilter validates a status used to filter the goal list. An empty
 // value means "no filter" and returns ("", nil).
@@ -130,11 +175,41 @@ func isEmojiRange(r rune) bool {
 		(r >= 0x1F900 && r <= 0x1F9FF) || // supplemental symbols
 		(r >= 0x1FA00 && r <= 0x1FA6F) || // chess symbols
 		(r >= 0x1FA70 && r <= 0x1FAFF) || // symbols and pictographs extended
-		(r >= 0x2600 && r <= 0x26FF) ||   // misc symbols
-		(r >= 0x2700 && r <= 0x27BF) ||   // dingbats
-		r == 0xFE0F ||                     // variation selector-16
+		(r >= 0x2600 && r <= 0x26FF) || // misc symbols
+		(r >= 0x2700 && r <= 0x27BF) || // dingbats
+		r == 0xFE0F || // variation selector-16
 		(r >= 0x1F1E0 && r <= 0x1F1FF) || // flags
-		(r >= 0x200D && r <= 0x200D)       // zero-width joiner
+		(r >= 0x200D && r <= 0x200D) // zero-width joiner
+}
+
+// ValidateContributionLimits checks that a goal's optional min/max
+// per-contribution limits (#922) are individually positive and, when both
+// are set, that min does not exceed max. Either or both may be nil, meaning
+// "no limit" on that side.
+func ValidateContributionLimits(min, max *decimal.Decimal) error {
+	if min != nil && !min.IsPositive() {
+		return fmt.Errorf("%w: min_contribution must be greater than zero", ErrInvalidContributionLimits)
+	}
+	if max != nil && !max.IsPositive() {
+		return fmt.Errorf("%w: max_contribution must be greater than zero", ErrInvalidContributionLimits)
+	}
+	if min != nil && max != nil && min.GreaterThan(*max) {
+		return fmt.Errorf("%w: min_contribution must not exceed max_contribution", ErrInvalidContributionLimits)
+	}
+	return nil
+}
+
+// ValidateContributionAmount checks a deposit amount against a goal's
+// optional min/max per-contribution limits (#922). Either limit may be nil,
+// meaning that side is unconstrained.
+func ValidateContributionAmount(amount decimal.Decimal, min, max *decimal.Decimal) error {
+	if min != nil && amount.LessThan(*min) {
+		return fmt.Errorf("%w: contribution must be at least %s", ErrContributionOutOfRange, min.String())
+	}
+	if max != nil && amount.GreaterThan(*max) {
+		return fmt.Errorf("%w: contribution must not exceed %s", ErrContributionOutOfRange, max.String())
+	}
+	return nil
 }
 
 func ParseCategory(value string) (GoalCategory, error) {
@@ -155,18 +230,18 @@ func ParseCategory(value string) (GoalCategory, error) {
 }
 
 type SavingsGoal struct {
-	ID            uuid.UUID       `json:"id"`
-	UserID        uuid.UUID       `json:"user_id"`
-	VaultID       *uuid.UUID      `json:"vault_id,omitempty"`
-	TargetAmount  decimal.Decimal `json:"target_amount"`
-	Currency      string          `json:"currency"`
-	Deadline      time.Time       `json:"deadline"`
-	Description   string          `json:"description,omitempty"`
+	ID           uuid.UUID       `json:"id"`
+	UserID       uuid.UUID       `json:"user_id"`
+	VaultID      *uuid.UUID      `json:"vault_id,omitempty"`
+	TargetAmount decimal.Decimal `json:"target_amount"`
+	Currency     string          `json:"currency"`
+	Deadline     time.Time       `json:"deadline"`
+	Description  string          `json:"description,omitempty"`
 	// Name is a user-supplied display label (#738). Defaults to first 50 chars of Description.
-	Name  string `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
 	// Emoji is a single Unicode emoji icon (#738).
-	Emoji string `json:"emoji,omitempty"`
-	Category      GoalCategory    `json:"category"`
+	Emoji    string       `json:"emoji,omitempty"`
+	Category GoalCategory `json:"category"`
 	// Icon is an optional icon identifier (e.g. lucide icon name) displayed in the UI.
 	// When blank the UI falls back to the category default via DefaultIconForCategory.
 	Icon string `json:"icon,omitempty"`
@@ -174,38 +249,49 @@ type SavingsGoal struct {
 	// When blank the UI falls back to the category default.
 	Color string `json:"color,omitempty"`
 	// Status is one of "active", "paused", "completed" (#718, #716).
-	Status             string          `json:"status"`
-	CurrentAmount      decimal.Decimal `json:"current_amount"`
-	ProgressPct        float64         `json:"progress_pct"`
-	NotifiedMilestones []int           `json:"-"`
-	DeadlineRemindersSent []int        `json:"-"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
+	Status                string          `json:"status"`
+	CurrentAmount         decimal.Decimal `json:"current_amount"`
+	ProgressPct           float64         `json:"progress_pct"`
+	NotifiedMilestones    []int           `json:"-"`
+	DeadlineRemindersSent []int           `json:"-"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
 	// Completion fields (#716).
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	CompletionAction string    `json:"completion_action,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	CompletionAction string     `json:"completion_action,omitempty"`
 	// Velocity stats (#714).
-	AvgWeeklyDeposit       decimal.Decimal `json:"avg_weekly_deposit"`
+	AvgWeeklyDeposit        decimal.Decimal `json:"avg_weekly_deposit"`
 	ProjectedDaysToComplete *int            `json:"projected_days_to_completion,omitempty"`
-	OnTrack                bool            `json:"on_track"`
+	OnTrack                 bool            `json:"on_track"`
 	// Sharing fields.
-	ShareToken      *uuid.UUID `json:"share_token,omitempty"`
-	ShareEnabledAt  *time.Time `json:"share_enabled_at,omitempty"`
-	IsShared        bool       `json:"is_shared"`
+	ShareToken     *uuid.UUID `json:"share_token,omitempty"`
+	ShareEnabledAt *time.Time `json:"share_enabled_at,omitempty"`
+	IsShared       bool       `json:"is_shared"`
+	// On-chain linkage (#807). OnchainGoalID is nil until asynchronous
+	// registration against the savings_goal contract succeeds.
+	OnchainGoalID  *string `json:"onchain_goal_id,omitempty"`
+	OnchainStatus  *string `json:"onchain_status,omitempty"`
+	// MinContribution/MaxContribution are optional per-contribution limits
+	// (#922), useful for merchants/employers seeding structured savings
+	// plans (e.g. "at least $50 per deposit" or "no more than $500 per
+	// deposit"). Nil means no limit on that side. Enforced at deposit time
+	// by ValidateContributionAmount.
+	MinContribution *decimal.Decimal `json:"min_contribution,omitempty"`
+	MaxContribution *decimal.Decimal `json:"max_contribution,omitempty"`
 }
 
 // SharedGoalView is the read-only public projection of a savings goal exposed
 // via the unauthenticated share link. It deliberately omits user PII.
 type SharedGoalView struct {
-	Name        string          `json:"name"`
-	Emoji       string          `json:"emoji,omitempty"`
-	TargetAmount decimal.Decimal `json:"target_amount"`
-	Currency    string          `json:"currency"`
+	Name          string          `json:"name"`
+	Emoji         string          `json:"emoji,omitempty"`
+	TargetAmount  decimal.Decimal `json:"target_amount"`
+	Currency      string          `json:"currency"`
 	CurrentAmount decimal.Decimal `json:"current_amount"`
-	ProgressPct float64         `json:"progress_pct"`
-	Deadline    time.Time       `json:"deadline"`
-	Category    GoalCategory    `json:"category"`
-	Status      string          `json:"status"`
+	ProgressPct   float64         `json:"progress_pct"`
+	Deadline      time.Time       `json:"deadline"`
+	Category      GoalCategory    `json:"category"`
+	Status        string          `json:"status"`
 }
 
 // GoalDeposit records a single allocation in a multi-goal deposit split (#719).
@@ -230,7 +316,7 @@ type GoalContribution struct {
 
 type Repository interface {
 	Create(ctx context.Context, goal *SavingsGoal) error
-	ListByUser(ctx context.Context, userID uuid.UUID, category string) ([]SavingsGoal, error)
+	ListByUser(ctx context.Context, userID uuid.UUID, category, search string) ([]SavingsGoal, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*SavingsGoal, error)
 	Update(ctx context.Context, goal *SavingsGoal) error
 	Delete(ctx context.Context, id, userID uuid.UUID) error
@@ -255,6 +341,23 @@ type Repository interface {
 	ClearShareToken(ctx context.Context, goalID, userID uuid.UUID) error
 	// GetByShareToken returns the goal whose share_token matches. Returns ErrGoalNotFound if none.
 	GetByShareToken(ctx context.Context, token uuid.UUID) (*SavingsGoal, error)
+	// UpdateOnchainLink persists the result of asynchronously registering the
+	// goal against the savings_goal contract (#807).
+	UpdateOnchainLink(ctx context.Context, goalID uuid.UUID, onchainGoalID, onchainStatus string) error
+	// Restore clears deleted_at, undoing a soft delete (#924). Returns
+	// ErrGoalNotFound if no matching row exists for id/userID at all (deleted
+	// or not); callers should have already validated the recovery window.
+	Restore(ctx context.Context, id, userID uuid.UUID) error
+	// GetByIDIncludingDeleted looks up a goal by ID regardless of its
+	// deleted_at value (#924), so Restore can check the recovery window
+	// against a goal GetByID would otherwise filter out.
+	GetByIDIncludingDeleted(ctx context.Context, id uuid.UUID) (*SavingsGoal, error)
+	// ListDeletedOlderThan returns soft-deleted goals whose deleted_at is
+	// older than cutoff (#924), for the scheduled hard-delete purge job.
+	ListDeletedOlderThan(ctx context.Context, cutoff time.Time) ([]SavingsGoal, error)
+	// HardDelete permanently removes a goal row (#924). Used only by the
+	// recovery-window purge job, never from a user-facing request path.
+	HardDelete(ctx context.Context, id uuid.UUID) error
 }
 
 // categoryIconDefaults maps each GoalCategory to a default icon name and color
@@ -288,7 +391,10 @@ func DefaultColorForCategory(cat GoalCategory) string {
 	return "slate"
 }
 
-// GoalTemplate represents a pre-built savings goal configuration.
+// GoalTemplate represents a savings goal configuration a user can start
+// from. The original set (#778) ships hardcoded via a migration seed; admins
+// can additionally publish curated templates at runtime (#919) so the
+// catalog can grow without a redeploy.
 type GoalTemplate struct {
 	ID              uuid.UUID       `json:"id"`
 	Name            string          `json:"name"`
@@ -298,9 +404,25 @@ type GoalTemplate struct {
 	Currency        string          `json:"currency"`
 	SuggestedMonths int             `json:"suggested_months"`
 	Icon            string          `json:"icon"`
+	// IsCustom is true for templates published by an admin (#919) and false
+	// for the pre-built defaults seeded by migration 056.
+	IsCustom bool `json:"is_custom"`
+	// CreatedBy is the admin user who published the template. Nil for the
+	// pre-built defaults.
+	CreatedBy *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type TemplateRepository interface {
 	List(ctx context.Context) ([]GoalTemplate, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*GoalTemplate, error)
+	// Create persists an admin-published template (#919).
+	Create(ctx context.Context, template *GoalTemplate) error
+	// Update modifies an existing admin-published template (#919). Templates
+	// seeded as pre-built defaults (IsCustom == false) may still be edited by
+	// admins, matching how other admin-managed catalog data works.
+	Update(ctx context.Context, template *GoalTemplate) error
+	// Delete removes a template from the catalog (#919).
+	Delete(ctx context.Context, id uuid.UUID) error
 }

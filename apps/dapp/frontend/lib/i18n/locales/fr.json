@@ -1,0 +1,44 @@
+{
+  "common": {
+    "loading": "Chargement...",
+    "retry": "Réessayer",
+    "save": "Enregistrer",
+    "cancel": "Annuler"
+  },
+  "dashboard": {
+    "title": "Tableau de bord",
+    "subtitle": "Votre portefeuille en un coup d'œil",
+    "totalBalance": "Solde total",
+    "totalYieldEarned": "Rendement total gagné",
+    "activeVaults": "Coffres actifs",
+    "recentActivity": "Activité récente",
+    "noActivity": "Aucune activité pour l'instant"
+  },
+  "savings": {
+    "title": "Épargne",
+    "subtitle": "Choisissez un plan d'épargne et commencez à gagner un rendement sur votre USDC.",
+    "createPlan": "Créer un plan",
+    "totalDeposited": "Total déposé",
+    "yieldEarned": "Rendement gagné",
+    "newGoal": "Nouvel objectif",
+    "noGoals": "Vous n'avez pas encore d'objectif d'épargne",
+    "onTrack": "Sur la bonne voie",
+    "atRisk": "À risque",
+    "targetLabel": "Cible",
+    "deadlineLabel": "Échéance"
+  },
+  "offramp": {
+    "title": "Retrait",
+    "subtitle": "Convertissez vos cryptos en monnaie locale, directement sur votre compte bancaire",
+    "amountLabel": "Montant",
+    "bankLabel": "Banque",
+    "accountNumberLabel": "Numéro de compte",
+    "offlineMessage": "Vous êtes hors ligne — les retraits sont suspendus",
+    "enterAmount": "Entrez un montant",
+    "selectBank": "Choisissez une banque"
+  },
+  "settings": {
+    "language": "Langue",
+    "languageDescription": "Choisissez la langue utilisée dans l'application"
+  }
+}
