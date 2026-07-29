@@ -29,6 +29,7 @@ export interface AppNotification {
     actionLabel?: string;
     coalesceKey?: string;
     count?: number;
+    mergedIds?: string[];
     metadata?: Record<string, unknown>;
 }
 
@@ -134,6 +135,7 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         actionUrl: "/vaults",
         actionLabel: "Manage Vault Buffer",
         coalesceKey: "emergency_queue_fill_USDC",
+        mergedIds: ["seed-safety-1"],
     },
     {
         id: "seed-1",
@@ -146,6 +148,7 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         read: false,
         actionUrl: "/vaults",
         actionLabel: "View Vault",
+        mergedIds: ["seed-1"],
     },
     {
         id: "seed-2",
@@ -158,6 +161,7 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         read: false,
         actionUrl: "/vaults",
         actionLabel: "View Vault",
+        mergedIds: ["seed-2"],
     },
     {
         id: "seed-3",
@@ -170,6 +174,7 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         read: false,
         actionUrl: "/savings",
         actionLabel: "Review Strategy",
+        mergedIds: ["seed-3"],
     },
     {
         id: "seed-4",
@@ -180,6 +185,7 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         message: "Your Balanced Vault was rebalanced - new allocation: 45% Blend, 30% Aave, 25% Kamino",
         timestamp: isoMinutesAgo(145),
         read: true,
+        mergedIds: ["seed-4"],
     },
     {
         id: "seed-5",
@@ -192,6 +198,7 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         read: true,
         actionUrl: "/offramp",
         actionLabel: "View Off-ramp",
+        mergedIds: ["seed-5"],
     },
 ];
 
@@ -211,9 +218,14 @@ export function coalesceNotifications(notifications: AppNotification[]): AppNoti
             const timeDiff = Math.abs(
                 new Date(item.timestamp).getTime() - new Date(existing.timestamp).getTime()
             );
-            // Coalesce within 15 minutes (900,000 ms) or if explicitly set coalesceKey
-            if (item.coalesceKey || timeDiff < 15 * 60 * 1000) {
-                existing.count = (existing.count || 1) + 1;
+            // Coalesce within 15 minutes (900,000 ms)
+            if (timeDiff < 15 * 60 * 1000) {
+                existing.count = (existing.count || 1) + (item.count || 1);
+
+                const existingIds = existing.mergedIds || [existing.id];
+                const itemIds = item.mergedIds || [item.id];
+                existing.mergedIds = Array.from(new Set([...existingIds, ...itemIds]));
+
                 // keep the newest timestamp and read state if unread
                 if (new Date(item.timestamp).getTime() > new Date(existing.timestamp).getTime()) {
                     existing.timestamp = item.timestamp;
@@ -225,7 +237,10 @@ export function coalesceNotifications(notifications: AppNotification[]): AppNoti
             }
         }
 
-        const clone = { ...item };
+        const clone = {
+            ...item,
+            mergedIds: item.mergedIds ? [...item.mergedIds] : [item.id],
+        };
         seenMap.set(key, clone);
         result.push(clone);
     }
@@ -238,25 +253,46 @@ export function coalesceNotifications(notifications: AppNotification[]): AppNoti
 // ---------------------------------------------------------------------------
 
 const API_BASE = "/api/notifications";
-const NOTIF_STORAGE_KEY = "nester.notifications.v1";
-const PREFS_STORAGE_KEY = "nester.notification_preferences.v1";
+const NOTIF_STORAGE_KEY_PREFIX = "nester.notifications.v1";
+const PREFS_STORAGE_KEY_PREFIX = "nester.notification_preferences.v1";
 
-export async function fetchNotificationsApi(since?: string): Promise<AppNotification[]> {
+export function getStorageKey(prefix: string, address?: string) {
+    return `${prefix}.${address || "guest"}`;
+}
+
+export async function fetchNotificationsApi(
+    address?: string,
+    since?: string
+): Promise<AppNotification[]> {
+    let fetchError: Error | null = null;
     try {
-        const url = since ? `${API_BASE}?since=${encodeURIComponent(since)}` : API_BASE;
-        const res = await fetch(url, { headers: { Accept: "application/json" } });
+        const params = new URLSearchParams();
+        if (since) params.set("since", since);
+        if (address) params.set("address", address);
+        const queryString = params.toString() ? `?${params.toString()}` : "";
+
+        const signal = AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined;
+        const res = await fetch(`${API_BASE}${queryString}`, {
+            headers: { Accept: "application/json" },
+            signal,
+        });
+
         if (res.ok) {
             const data = await res.json();
             if (Array.isArray(data)) {
                 return data.map(normalizeNotification);
             }
+        } else {
+            fetchError = new Error(`Server returned status ${res.status}`);
         }
-    } catch {
-        // Fallback to local storage / seed data on network or backend unavailability
+    } catch (err: any) {
+        fetchError = err instanceof Error ? err : new Error("Network request failed");
     }
 
+    // Attempt fallback to local storage
     if (typeof window !== "undefined") {
-        const raw = window.localStorage.getItem(NOTIF_STORAGE_KEY);
+        const storageKey = getStorageKey(NOTIF_STORAGE_KEY_PREFIX, address);
+        const raw = window.localStorage.getItem(storageKey);
         if (raw) {
             try {
                 const parsed = JSON.parse(raw);
@@ -269,42 +305,50 @@ export async function fetchNotificationsApi(since?: string): Promise<AppNotifica
         }
     }
 
+    // If fetch failed and no local storage data exists, rethrow error to trigger provider Error UI
+    if (fetchError) {
+        throw fetchError;
+    }
+
     return INITIAL_NOTIFICATIONS;
 }
 
 export async function markNotificationReadApi(id: string): Promise<boolean> {
     try {
         const res = await fetch(`${API_BASE}/${id}/read`, { method: "POST" });
-        if (res.ok) return true;
+        return res.ok;
     } catch {
-        // Fallback sync handled locally
+        return false;
     }
-    return true;
 }
 
 export async function markAllNotificationsReadApi(): Promise<boolean> {
     try {
         const res = await fetch(`${API_BASE}/read-all`, { method: "POST" });
-        if (res.ok) return true;
+        return res.ok;
     } catch {
-        // Fallback sync handled locally
+        return false;
     }
-    return true;
 }
 
 export async function dismissNotificationApi(id: string): Promise<boolean> {
     try {
         const res = await fetch(`${API_BASE}/${id}`, { method: "DELETE" });
-        if (res.ok) return true;
+        return res.ok;
     } catch {
-        // Fallback sync handled locally
+        return false;
     }
-    return true;
 }
 
-export async function fetchNotificationPreferencesApi(): Promise<UserNotificationPreferences> {
+export async function fetchNotificationPreferencesApi(
+    address?: string
+): Promise<UserNotificationPreferences> {
     try {
-        const res = await fetch(`${API_BASE}/preferences`, { headers: { Accept: "application/json" } });
+        const signal = AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined;
+        const res = await fetch(`${API_BASE}/preferences`, {
+            headers: { Accept: "application/json" },
+            signal,
+        });
         if (res.ok) {
             const data = await res.json();
             if (data && data.categories) {
@@ -312,11 +356,12 @@ export async function fetchNotificationPreferencesApi(): Promise<UserNotificatio
             }
         }
     } catch {
-        // Fallback
+        // Fallback to local storage
     }
 
     if (typeof window !== "undefined") {
-        const raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
+        const key = getStorageKey(PREFS_STORAGE_KEY_PREFIX, address);
+        const raw = window.localStorage.getItem(key);
         if (raw) {
             try {
                 return sanitizePreferences(JSON.parse(raw));
@@ -330,14 +375,17 @@ export async function fetchNotificationPreferencesApi(): Promise<UserNotificatio
 }
 
 export async function updateNotificationPreferencesApi(
-    prefs: UserNotificationPreferences
+    prefs: UserNotificationPreferences,
+    address?: string
 ): Promise<UserNotificationPreferences> {
     const sanitized = sanitizePreferences(prefs);
     try {
+        const signal = AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined;
         const res = await fetch(`${API_BASE}/preferences`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(sanitized),
+            signal,
         });
         if (res.ok) {
             const updated = await res.json();
@@ -348,7 +396,8 @@ export async function updateNotificationPreferencesApi(
     }
 
     if (typeof window !== "undefined") {
-        window.localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(sanitized));
+        const key = getStorageKey(PREFS_STORAGE_KEY_PREFIX, address);
+        window.localStorage.setItem(key, JSON.stringify(sanitized));
     }
 
     return sanitized;
@@ -360,7 +409,6 @@ export function sanitizePreferences(
     const base = DEFAULT_NOTIFICATION_PREFERENCES;
     if (!input || !input.categories) return base;
 
-    const safety = input.categories.safety;
     const transactional = input.categories.transactional;
     const nudge = input.categories.nudge;
 
@@ -386,23 +434,52 @@ export function sanitizePreferences(
     };
 }
 
-export function normalizeNotification(item: any): AppNotification {
-    const type: NotificationType = item.type || "info";
+export function normalizeNotification(item: unknown): AppNotification {
+    const obj = item && typeof item === "object" ? (item as Record<string, any>) : {};
+
+    const type: NotificationType =
+        typeof obj.type === "string" ? (obj.type as NotificationType) : "info";
+
     const mapped = mapTypeToCategoryAndPriority(type);
 
+    const validCategories: NotificationCategory[] = ["safety", "transactional", "nudge"];
+    const category: NotificationCategory = validCategories.includes(obj.category)
+        ? obj.category
+        : mapped.category;
+
+    const validPriorities: NotificationPriority[] = ["safety", "transactional", "nudge"];
+    const priority: NotificationPriority = validPriorities.includes(obj.priority)
+        ? obj.priority
+        : mapped.priority;
+
+    let timestampStr = new Date().toISOString();
+    if (obj.timestamp) {
+        const parsedMs = new Date(obj.timestamp).getTime();
+        if (!isNaN(parsedMs)) {
+            timestampStr = new Date(parsedMs).toISOString();
+        }
+    }
+
+    const id = String(obj.id || `notif-${Date.now()}-${Math.random()}`);
+
+    const mergedIds = Array.isArray(obj.mergedIds)
+        ? Array.from(new Set(obj.mergedIds.map(String)))
+        : [id];
+
     return {
-        id: String(item.id || `notif-${Date.now()}-${Math.random()}`),
+        id,
         type,
-        category: item.category || mapped.category,
-        priority: item.priority || mapped.priority,
-        title: String(item.title || "Notification"),
-        message: String(item.message || ""),
-        timestamp: item.timestamp ? new Date(item.timestamp).toISOString() : new Date().toISOString(),
-        read: Boolean(item.read),
-        actionUrl: item.actionUrl,
-        actionLabel: item.actionLabel,
-        coalesceKey: item.coalesceKey,
-        count: item.count,
-        metadata: item.metadata,
+        category,
+        priority,
+        title: String(obj.title || "Notification"),
+        message: String(obj.message || ""),
+        timestamp: timestampStr,
+        read: Boolean(obj.read),
+        actionUrl: typeof obj.actionUrl === "string" ? obj.actionUrl : undefined,
+        actionLabel: typeof obj.actionLabel === "string" ? obj.actionLabel : undefined,
+        coalesceKey: typeof obj.coalesceKey === "string" ? obj.coalesceKey : undefined,
+        count: typeof obj.count === "number" ? obj.count : 1,
+        mergedIds,
+        metadata: obj.metadata && typeof obj.metadata === "object" ? obj.metadata : undefined,
     };
 }

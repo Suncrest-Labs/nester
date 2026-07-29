@@ -10,6 +10,7 @@ import {
     useState,
     type ReactNode,
 } from "react";
+import { useWallet } from "@/components/wallet-provider";
 import {
     DEFAULT_NOTIFICATION_PREFERENCES,
     INITIAL_NOTIFICATIONS,
@@ -17,10 +18,10 @@ import {
     dismissNotificationApi,
     fetchNotificationPreferencesApi,
     fetchNotificationsApi,
+    getStorageKey,
     mapTypeToCategoryAndPriority,
     markAllNotificationsReadApi,
     markNotificationReadApi,
-    normalizeNotification,
     updateNotificationPreferencesApi,
     type AppNotification,
     type NotificationCategory,
@@ -87,7 +88,7 @@ const NotificationsContext = createContext<NotificationsState>({
     refetch: async () => {},
 });
 
-const NOTIFICATIONS_STORAGE_KEY = "nester.notifications.v1";
+const NOTIFICATIONS_STORAGE_KEY_PREFIX = "nester.notifications.v1";
 
 function buildId(prefix: string) {
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -97,6 +98,8 @@ function buildId(prefix: string) {
 }
 
 export function NotificationsProvider({ children }: { children: ReactNode }) {
+    const { address } = useWallet();
+
     const [notifications, setNotifications] = useState<AppNotification[]>([]);
     const [preferences, setPreferences] = useState<UserNotificationPreferences>(
         DEFAULT_NOTIFICATION_PREFERENCES
@@ -108,8 +111,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
     const timerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
     const initialLoadedRef = useRef(false);
+    const isDisconnectedRef = useRef(false);
 
-    // Initial load from storage/REST and preferences
+    // Initial load from storage/REST and preferences scoped to address
     useEffect(() => {
         let isMounted = true;
 
@@ -119,15 +123,15 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
                 setError(null);
 
                 const [fetchedPrefs, fetchedNotifs] = await Promise.all([
-                    fetchNotificationPreferencesApi(),
-                    fetchNotificationsApi(),
+                    fetchNotificationPreferencesApi(address),
+                    fetchNotificationsApi(address),
                 ]);
 
                 if (!isMounted) return;
 
                 setPreferences(fetchedPrefs);
 
-                if (fetchedNotifs && fetchedNotifs.length > 0) {
+                if (Array.isArray(fetchedNotifs)) {
                     setNotifications(coalesceNotifications(fetchedNotifs));
                 } else {
                     setNotifications(coalesceNotifications(INITIAL_NOTIFICATIONS));
@@ -135,7 +139,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
             } catch (err) {
                 if (!isMounted) return;
                 setError("Failed to load notifications stream. Please try again.");
-                setNotifications(coalesceNotifications(INITIAL_NOTIFICATIONS));
+                setNotifications([]);
             } finally {
                 if (isMounted) {
                     setIsLoading(false);
@@ -149,20 +153,18 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         return () => {
             isMounted = false;
         };
-    }, []);
+    }, [address]);
 
-    // Sync notifications to localStorage
+    // Sync notifications to localStorage scoped to wallet address
     useEffect(() => {
         if (typeof window === "undefined" || !initialLoadedRef.current) return;
         try {
-            window.localStorage.setItem(
-                NOTIFICATIONS_STORAGE_KEY,
-                JSON.stringify(notifications)
-            );
+            const key = getStorageKey(NOTIFICATIONS_STORAGE_KEY_PREFIX, address);
+            window.localStorage.setItem(key, JSON.stringify(notifications));
         } catch {
             // Ignore quota errors
         }
-    }, [notifications]);
+    }, [notifications, address]);
 
     const dismissToast = useCallback((id: string) => {
         setToasts((prev) => prev.filter((toast) => toast.id !== id));
@@ -182,13 +184,13 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
             if (category !== "safety") {
                 const categoryPref = preferences.categories[category];
                 if (categoryPref && !categoryPref.in_app) {
-                    // Category suppressed by user preference
                     return;
                 }
             }
 
+            const id = buildId("notif");
             const newNotif: AppNotification = {
-                id: buildId("notif"),
+                id,
                 type: draft.type,
                 category,
                 priority,
@@ -199,6 +201,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
                 actionUrl: draft.actionUrl,
                 actionLabel: draft.actionLabel,
                 coalesceKey: draft.coalesceKey,
+                count: 1,
+                mergedIds: [id],
                 metadata: draft.metadata,
             };
 
@@ -229,10 +233,23 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     );
 
     const markAsRead = useCallback((id: string) => {
-        setNotifications((prev) =>
-            prev.map((notif) => (notif.id === id ? { ...notif, read: true } : notif))
-        );
-        markNotificationReadApi(id);
+        setNotifications((prev) => {
+            const target = prev.find(
+                (n) => n.id === id || (n.mergedIds && n.mergedIds.includes(id))
+            );
+            const idsToMark = target?.mergedIds || [id];
+
+            idsToMark.forEach((mId) => {
+                markNotificationReadApi(mId);
+            });
+
+            return prev.map((notif) => {
+                if (notif.id === id || (notif.mergedIds && notif.mergedIds.includes(id))) {
+                    return { ...notif, read: true };
+                }
+                return notif;
+            });
+        });
     }, []);
 
     const markAllAsRead = useCallback(() => {
@@ -241,20 +258,38 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const dismissNotification = useCallback((id: string) => {
-        setNotifications((prev) => prev.filter((notif) => notif.id !== id));
-        dismissNotificationApi(id);
+        setNotifications((prev) => {
+            const target = prev.find(
+                (n) => n.id === id || (n.mergedIds && n.mergedIds.includes(id))
+            );
+            const idsToDismiss = target?.mergedIds || [id];
+
+            idsToDismiss.forEach((mId) => {
+                dismissNotificationApi(mId);
+            });
+
+            return prev.filter(
+                (notif) => notif.id !== id && (!notif.mergedIds || !notif.mergedIds.includes(id))
+            );
+        });
     }, []);
 
     const clearAll = useCallback(() => {
-        // Keep unread safety notifications when clearing all
-        setNotifications((prev) =>
-            prev.filter((notif) => notif.priority === "safety" && !notif.read)
-        );
+        setNotifications((prev) => {
+            const toRemove = prev.filter((notif) => notif.category !== "safety");
+            toRemove.forEach((notif) => {
+                const ids = notif.mergedIds || [notif.id];
+                ids.forEach((mId) => dismissNotificationApi(mId));
+            });
+
+            // Preserve ALL safety notifications (read and unread)
+            return prev.filter((notif) => notif.category === "safety");
+        });
     }, []);
 
     const reconcileWithREST = useCallback(async () => {
         try {
-            const latest = await fetchNotificationsApi();
+            const latest = await fetchNotificationsApi(address);
             setNotifications((prev) => {
                 const existingMap = new Map(prev.map((n) => [n.id, n]));
                 const merged = [...prev];
@@ -263,7 +298,6 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
                     if (!existingMap.has(item.id)) {
                         merged.push(item);
                     } else {
-                        // preserve read state if read locally
                         const existing = existingMap.get(item.id)!;
                         if (existing.read && !item.read) {
                             item.read = true;
@@ -282,19 +316,21 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         } catch {
             // Reconcile failed silently
         }
-    }, []);
+    }, [address]);
 
     const setConnectionState = useCallback(
         (connected: boolean) => {
-            const wasDisconnected = isDisconnected;
-            setIsDisconnected(!connected);
+            const wasDisconnected = isDisconnectedRef.current;
+            const newDisconnected = !connected;
 
-            // Reconcile when transitioning back to connected or when running in disconnected mode
+            isDisconnectedRef.current = newDisconnected;
+            setIsDisconnected(newDisconnected);
+
             if (!connected || wasDisconnected) {
                 reconcileWithREST();
             }
         },
-        [isDisconnected, reconcileWithREST]
+        [reconcileWithREST]
     );
 
     const updatePreference = useCallback(
@@ -303,41 +339,45 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
             channel: NotificationChannel,
             enabled: boolean
         ) => {
-            // Safety notifications are ALWAYS ON
             if (category === "safety") {
                 return;
             }
 
-            setPreferences((prev) => {
-                const updated: UserNotificationPreferences = {
-                    ...prev,
-                    categories: {
-                        ...prev.categories,
-                        [category]: {
-                            ...prev.categories[category],
-                            [channel]: enabled,
-                        },
+            const updatedPreferences: UserNotificationPreferences = {
+                ...preferences,
+                categories: {
+                    ...preferences.categories,
+                    [category]: {
+                        ...preferences.categories[category],
+                        [channel]: enabled,
                     },
-                };
-                updateNotificationPreferencesApi(updated);
-                return updated;
-            });
+                },
+            };
+
+            setPreferences(updatedPreferences);
+
+            try {
+                await updateNotificationPreferencesApi(updatedPreferences, address);
+            } catch {
+                // Ignore API sync errors
+            }
         },
-        []
+        [preferences, address]
     );
 
     const refetch = useCallback(async () => {
         setIsLoading(true);
         setError(null);
         try {
-            const data = await fetchNotificationsApi();
+            const data = await fetchNotificationsApi(address);
             setNotifications(coalesceNotifications(data));
         } catch (err) {
             setError("Failed to reload notifications. Please try again.");
+            setNotifications([]);
         } finally {
             setIsLoading(false);
         }
-    }, []);
+    }, [address]);
 
     useEffect(() => {
         return () => {
@@ -356,7 +396,6 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         [notifications]
     );
 
-    // Sorted notifications: Safety at the top, then by timestamp descending
     const sortedNotifications = useMemo(() => {
         return [...notifications].sort((a, b) => {
             if (a.priority === "safety" && b.priority !== "safety") return -1;

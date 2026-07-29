@@ -12,6 +12,8 @@ import {
     coalesceNotifications,
     mapTypeToCategoryAndPriority,
     sanitizePreferences,
+    fetchNotificationsApi,
+    INITIAL_NOTIFICATIONS,
     type AppNotification,
 } from "@/lib/notifications";
 
@@ -35,7 +37,14 @@ vi.mock("@/components/app-shell", () => ({
     AppShell: ({ children }: { children: React.ReactNode }) => <div data-testid="app-shell">{children}</div>,
 }));
 
-// Test helper component
+vi.mock("@/lib/notifications", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@/lib/notifications")>();
+    return {
+        ...actual,
+        fetchNotificationsApi: vi.fn().mockResolvedValue(actual.INITIAL_NOTIFICATIONS),
+    };
+});
+
 function TestConsumer() {
     const {
         notifications,
@@ -43,6 +52,7 @@ function TestConsumer() {
         safetyCount,
         isDisconnected,
         isLoading,
+        error,
         addNotification,
         markAsRead,
         markAllAsRead,
@@ -56,6 +66,7 @@ function TestConsumer() {
     return (
         <div>
             <span data-testid="is-loading">{isLoading ? "loading" : "done"}</span>
+            <span data-testid="error-state">{error || "none"}</span>
             <span data-testid="unread-count">{unreadCount}</span>
             <span data-testid="safety-count">{safetyCount}</span>
             <span data-testid="is-disconnected">{isDisconnected ? "yes" : "no"}</span>
@@ -143,6 +154,7 @@ describe("Notification Center & Preferences Suite (#870)", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         window.localStorage.clear();
+        vi.mocked(fetchNotificationsApi).mockResolvedValue(INITIAL_NOTIFICATIONS);
     });
 
     describe("1. Pure logic & Helper utilities", () => {
@@ -182,6 +194,7 @@ describe("Notification Center & Preferences Suite (#870)", () => {
                     timestamp: nowIso,
                     read: false,
                     coalesceKey: "eq_1",
+                    mergedIds: ["n1"],
                 },
                 {
                     id: "n2",
@@ -193,12 +206,14 @@ describe("Notification Center & Preferences Suite (#870)", () => {
                     timestamp: nowIso,
                     read: false,
                     coalesceKey: "eq_1",
+                    mergedIds: ["n2"],
                 },
             ];
 
             const coalesced = coalesceNotifications(items);
             expect(coalesced).toHaveLength(1);
             expect(coalesced[0].count).toBe(2);
+            expect(coalesced[0].mergedIds).toEqual(["n1", "n2"]);
         });
 
         it("sanitizes preferences ensuring safety category is always on", () => {
@@ -304,6 +319,21 @@ describe("Notification Center & Preferences Suite (#870)", () => {
 
             expect(screen.getByTestId("is-disconnected").textContent).toBe("no");
 
+            const mockedFetch = vi.mocked(fetchNotificationsApi);
+            mockedFetch.mockResolvedValueOnce([
+                {
+                    id: "reconciled-new-1",
+                    type: "security_event",
+                    category: "safety",
+                    priority: "safety",
+                    title: "Reconciled Security Event",
+                    message: "Security breach checked on reconnect",
+                    timestamp: new Date().toISOString(),
+                    read: false,
+                    mergedIds: ["reconciled-new-1"],
+                },
+            ]);
+
             fireEvent.click(screen.getByTestId("set-disconnected"));
 
             await waitFor(() => {
@@ -314,6 +344,40 @@ describe("Notification Center & Preferences Suite (#870)", () => {
 
             await waitFor(() => {
                 expect(screen.getByTestId("is-disconnected").textContent).toBe("no");
+                expect(screen.getByTestId("notif-item-reconciled-new-1")).toBeDefined();
+                expect(screen.getByText("Reconciled Security Event")).toBeDefined();
+            });
+        });
+
+        it("surfaces error state when initial notification load fails", async () => {
+            const mockedFetch = vi.mocked(fetchNotificationsApi);
+            mockedFetch.mockRejectedValueOnce(new Error("Network connection error"));
+
+            render(
+                <NotificationsProvider>
+                    <TestConsumer />
+                </NotificationsProvider>
+            );
+
+            await waitFor(() => {
+                expect(screen.getByTestId("error-state").textContent).toContain(
+                    "Failed to load notifications stream"
+                );
+            });
+        });
+
+        it("renders empty state UI when notification load returns an empty list", async () => {
+            const mockedFetch = vi.mocked(fetchNotificationsApi);
+            mockedFetch.mockResolvedValueOnce([]);
+
+            render(
+                <NotificationsProvider>
+                    <NotificationsPage />
+                </NotificationsProvider>
+            );
+
+            await waitFor(() => {
+                expect(screen.getByText("You are all caught up")).toBeDefined();
             });
         });
     });
@@ -355,10 +419,8 @@ describe("Notification Center & Preferences Suite (#870)", () => {
                 expect(screen.getByText(/Notification Center/i)).toBeDefined();
             });
 
-            // Stream tab active by default
             expect(screen.getByRole("tab", { name: /Notifications Stream/i })).toBeDefined();
 
-            // Switch to Preferences tab
             const prefTab = screen.getByRole("tab", { name: /Preferences & Delivery/i });
             fireEvent.click(prefTab);
 
@@ -383,7 +445,10 @@ describe("Notification Center & Preferences Suite (#870)", () => {
             fireEvent.click(safetyBtn);
 
             await waitFor(() => {
-                expect(safetyBtn.className).toContain("bg-foreground");
+                expect(safetyBtn.getAttribute("aria-pressed")).toBe("true");
+                expect(screen.getByTestId("notif-item-seed-safety-1")).toBeDefined();
+                expect(screen.queryByTestId("notif-item-seed-1")).toBeNull();
+                expect(screen.queryByTestId("notif-item-seed-3")).toBeNull();
             });
         });
     });

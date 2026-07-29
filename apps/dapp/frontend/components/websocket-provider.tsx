@@ -21,6 +21,7 @@ import {
     type YieldAccruedPayload,
     type SettlementStatusChangedPayload,
     type VaultPausedPayload,
+    type VaultUnpausedPayload,
     type EmergencyQueueFillPayload,
     type SecurityEventPayload,
     type BreakerTripPayload,
@@ -170,6 +171,23 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                     break;
                 }
 
+                case "vault_unpaused": {
+                    const p = event.payload as unknown as VaultUnpausedPayload;
+                    addNotification(
+                        {
+                            type: "rebalance_event",
+                            category: "transactional",
+                            priority: "transactional",
+                            title: "Vault Resumed",
+                            message: `Vault ${p.vaultId || "operations"} has been resumed. Deposits and withdrawals are active.`,
+                            actionUrl: "/vaults",
+                            actionLabel: "View Vault",
+                        },
+                        { showToast: true }
+                    );
+                    break;
+                }
+
                 case "emergency_queue_fill": {
                     const p = event.payload as unknown as EmergencyQueueFillPayload;
                     addNotification(
@@ -178,10 +196,12 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                             category: "safety",
                             priority: "safety",
                             title: "Emergency Queue Warning",
-                            message: p.message || `Emergency queue ${p.queueId} (${p.asset}) fill level reached ${p.fillPercentage}%.`,
+                            message:
+                                p.message ||
+                                `Emergency queue ${p.queueId} (${p.asset}) fill level reached ${p.fillPercentage}%.`,
                             actionUrl: "/vaults",
                             actionLabel: "Manage Emergency Queue",
-                            coalesceKey: `emergency_queue_${p.queueId}`,
+                            coalesceKey: `emergency_queue_fill_${p.asset}`,
                         },
                         { showToast: true }
                     );
@@ -196,7 +216,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                             category: "safety",
                             priority: "safety",
                             title: "Security Event Detected",
-                            message: p.details || `Security event ${p.eventType} flagged on account.`,
+                            message:
+                                p.details || `Security event ${p.eventType} flagged on account.`,
                             actionUrl: "/settings",
                             actionLabel: "Security Settings",
                         },
@@ -213,7 +234,9 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                             category: "safety",
                             priority: "safety",
                             title: "Circuit Breaker Tripped",
-                            message: p.reason || `Circuit breaker ${p.breakerId} tripped for ${p.asset || "vault"}.`,
+                            message:
+                                p.reason ||
+                                `Circuit breaker ${p.breakerId} tripped for ${p.asset || "vault"}.`,
                             actionUrl: "/vaults",
                             actionLabel: "Review Circuit Breaker",
                         },
@@ -227,10 +250,10 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                     addNotification(
                         {
                             type: "goal_milestone",
-                            category: "transactional",
-                            priority: "transactional",
                             title: "Goal Milestone Reached!",
-                            message: p.message || `Congratulations! You reached ${p.progress}% of your ${p.goalTitle} goal.`,
+                            message:
+                                p.message ||
+                                `Congratulations! You reached ${p.progress}% of your ${p.goalTitle} goal.`,
                             actionUrl: "/savings",
                             actionLabel: "View Savings Goal",
                         },
@@ -244,8 +267,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                     addNotification(
                         {
                             type: "nudge_recommendation",
-                            category: "nudge",
-                            priority: "nudge",
                             title: p.title,
                             message: p.message,
                             actionUrl: p.actionUrl || "/savings",
@@ -279,7 +300,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         onPoll: refreshBalances,
     });
 
-    // Keep NotificationsProvider updated on WS connection state for REST fallback & reconciliation
     useEffect(() => {
         setConnectionState(WS_URL ? isConnected : false);
     }, [isConnected, setConnectionState]);

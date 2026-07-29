@@ -1,19 +1,17 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, ShieldAlert, X } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { ShieldAlert, X } from "lucide-react";
 import { useNotifications } from "@/components/notifications-provider";
+import { NotificationActionLink } from "@/components/notification-action-link";
 import { cn } from "@/lib/utils";
 
 export function NotificationsToaster() {
     const { toasts, dismissToast } = useNotifications();
+    const shouldReduceMotion = useReducedMotion();
 
     return (
-        <div
-            aria-live="polite"
-            aria-atomic="true"
-            className="pointer-events-none fixed right-4 top-20 z-70 flex w-[min(92vw,24rem)] flex-col gap-2"
-        >
+        <div className="pointer-events-none fixed right-4 top-20 z-70 flex w-[min(92vw,24rem)] flex-col gap-2">
             <AnimatePresence>
                 {toasts.map((toast) => {
                     const isSafety = toast.priority === "safety";
@@ -22,9 +20,19 @@ export function NotificationsToaster() {
                         <motion.div
                             key={toast.id}
                             role={isSafety ? "alert" : "status"}
-                            initial={{ opacity: 0, x: 24, scale: 0.96 }}
+                            aria-live={isSafety ? "assertive" : "polite"}
+                            aria-atomic="true"
+                            initial={
+                                shouldReduceMotion
+                                    ? { opacity: 0 }
+                                    : { opacity: 0, x: 24, scale: 0.96 }
+                            }
                             animate={{ opacity: 1, x: 0, scale: 1 }}
-                            exit={{ opacity: 0, x: 24, scale: 0.96 }}
+                            exit={
+                                shouldReduceMotion
+                                    ? { opacity: 0 }
+                                    : { opacity: 0, x: 24, scale: 0.96 }
+                            }
                             transition={{ duration: 0.2 }}
                             className={cn(
                                 "pointer-events-auto rounded-2xl border p-4 shadow-xl shadow-black/8 transition-colors",
@@ -47,11 +55,25 @@ export function NotificationsToaster() {
                                                     CRITICAL SAFETY
                                                 </span>
                                             )}
-                                            <p className={cn("text-sm font-medium", isSafety ? "text-red-950 dark:text-red-100" : "text-foreground")}>
+                                            <p
+                                                className={cn(
+                                                    "text-sm font-medium",
+                                                    isSafety
+                                                        ? "text-red-950 dark:text-red-100"
+                                                        : "text-foreground"
+                                                )}
+                                            >
                                                 {toast.title}
                                             </p>
                                         </div>
-                                        <p className={cn("mt-1 text-xs leading-relaxed", isSafety ? "text-red-900/90 dark:text-red-200/90" : "text-muted-foreground")}>
+                                        <p
+                                            className={cn(
+                                                "mt-1 text-xs leading-relaxed",
+                                                isSafety
+                                                    ? "text-red-900/90 dark:text-red-200/90"
+                                                    : "text-muted-foreground"
+                                            )}
+                                        >
                                             {toast.message}
                                         </p>
                                     </div>
@@ -59,7 +81,7 @@ export function NotificationsToaster() {
                                 <button
                                     onClick={() => dismissToast(toast.id)}
                                     className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                                    aria-label="Dismiss toast"
+                                    aria-label={`Dismiss ${toast.title}`}
                                 >
                                     <X className="h-3.5 w-3.5" />
                                 </button>
@@ -67,7 +89,7 @@ export function NotificationsToaster() {
 
                             {toast.actionUrl && (
                                 <div className="mt-3 flex items-center justify-end">
-                                    <a
+                                    <NotificationActionLink
                                         href={toast.actionUrl}
                                         className={cn(
                                             "inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
@@ -77,7 +99,7 @@ export function NotificationsToaster() {
                                         )}
                                     >
                                         {toast.actionLabel || "View Details"}
-                                    </a>
+                                    </NotificationActionLink>
                                 </div>
                             )}
                         </motion.div>

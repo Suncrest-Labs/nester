@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CheckCheck, ShieldAlert, Sparkles, ArrowRightLeft } from "lucide-react";
-import { AnimatePresence, motion } from "framer-motion";
+import { Bell, CheckCheck, ShieldAlert } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useNotifications } from "@/components/notifications-provider";
+import { NotificationActionLink } from "@/components/notification-action-link";
 
 function formatRelativeTime(timestamp: string) {
     const diffMs = Date.now() - new Date(timestamp).getTime();
@@ -23,6 +24,8 @@ function formatRelativeTime(timestamp: string) {
 
 export function NotificationBell() {
     const [open, setOpen] = useState(false);
+    const shouldReduceMotion = useReducedMotion();
+
     const {
         notifications,
         unreadCount,
@@ -61,12 +64,19 @@ export function NotificationBell() {
                         ? "border-red-500/60 bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-400"
                         : "border-border bg-white dark:bg-[#100F0F] text-foreground/70 hover:border-black/20 dark:hover:border-white/20"
                 )}
-                aria-label={`Notifications, ${unreadCount} unread${safetyCount > 0 ? `, ${safetyCount} critical safety alerts` : ""}`}
+                aria-label={`Notifications, ${unreadCount} unread${
+                    safetyCount > 0 ? `, ${safetyCount} critical safety alerts` : ""
+                }`}
                 aria-expanded={open}
                 aria-haspopup="true"
             >
                 {safetyCount > 0 ? (
-                    <ShieldAlert className="h-4 w-4 text-red-600 dark:text-red-400 animate-pulse" />
+                    <ShieldAlert
+                        className={cn(
+                            "h-4 w-4 text-red-600 dark:text-red-400",
+                            !shouldReduceMotion && "animate-pulse"
+                        )}
+                    />
                 ) : (
                     <Bell className="h-4 w-4 text-foreground/70" />
                 )}
@@ -75,7 +85,9 @@ export function NotificationBell() {
                     <span
                         className={cn(
                             "absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm",
-                            safetyCount > 0 ? "bg-red-600 animate-bounce" : "bg-foreground text-background"
+                            safetyCount > 0
+                                ? cn("bg-red-600", !shouldReduceMotion && "animate-bounce")
+                                : "bg-foreground text-background"
                         )}
                     >
                         {unreadCount > 9 ? "9+" : unreadCount}
@@ -86,9 +98,17 @@ export function NotificationBell() {
             <AnimatePresence>
                 {open && (
                     <motion.div
-                        initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                        initial={
+                            shouldReduceMotion
+                                ? { opacity: 0 }
+                                : { opacity: 0, y: 8, scale: 0.96 }
+                        }
                         animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                        exit={
+                            shouldReduceMotion
+                                ? { opacity: 0 }
+                                : { opacity: 0, y: 8, scale: 0.96 }
+                        }
                         transition={{ duration: 0.15 }}
                         role="region"
                         aria-label="Recent notifications"
@@ -150,7 +170,9 @@ export function NotificationBell() {
                                                     >
                                                         {notification.title}
                                                     </p>
-                                                    {notification.count && notification.count > 1 && (
+                                                    {Boolean(
+                                                        notification.count && notification.count > 1
+                                                    ) && (
                                                         <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
                                                             x{notification.count}
                                                         </span>
@@ -173,12 +195,13 @@ export function NotificationBell() {
                                                     {formatRelativeTime(notification.timestamp)}
                                                 </span>
                                                 {notification.actionUrl && (
-                                                    <a
+                                                    <NotificationActionLink
                                                         href={notification.actionUrl}
+                                                        onClick={() => setOpen(false)}
                                                         className="text-[11px] font-medium text-foreground/80 underline-offset-2 transition-colors hover:underline hover:text-foreground"
                                                     >
                                                         {notification.actionLabel || "View"}
-                                                    </a>
+                                                    </NotificationActionLink>
                                                 )}
                                             </div>
                                         </div>

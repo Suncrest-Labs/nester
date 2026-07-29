@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "framer-motion";
 import {
@@ -21,6 +21,7 @@ import {
 import { useWallet } from "@/components/wallet-provider";
 import { AppShell } from "@/components/app-shell";
 import { useNotifications } from "@/components/notifications-provider";
+import { NotificationActionLink } from "@/components/notification-action-link";
 import {
     CATEGORY_METADATA,
     type NotificationCategory,
@@ -31,7 +32,7 @@ import { cn } from "@/lib/utils";
 function formatDateLocale(timestamp: string) {
     try {
         const date = new Date(timestamp);
-        return new Intl.DateTimeFormat(undefined, {
+        return new Intl.DateTimeFormat("en-US", {
             month: "short",
             day: "numeric",
             hour: "numeric",
@@ -42,6 +43,13 @@ function formatDateLocale(timestamp: string) {
     }
 }
 
+const CATEGORY_FILTERS: { id: "all" | NotificationCategory; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "safety", label: "Safety & Security" },
+    { id: "transactional", label: "Transactions" },
+    { id: "nudge", label: "Nudges & Milestones" },
+];
+
 export default function NotificationsPage() {
     const { isConnected: walletConnected } = useWallet();
     const router = useRouter();
@@ -50,7 +58,6 @@ export default function NotificationsPage() {
     const {
         notifications,
         unreadCount,
-        safetyCount,
         preferences,
         isLoading,
         error,
@@ -75,7 +82,6 @@ export default function NotificationsPage() {
 
     if (!walletConnected) return null;
 
-    // Filter notifications based on tab selection
     const filteredNotifications = notifications.filter((item) => {
         if (unreadOnly && item.read) return false;
         if (categoryFilter !== "all" && item.category !== categoryFilter) return false;
@@ -83,6 +89,16 @@ export default function NotificationsPage() {
     });
 
     const safetyNotifications = notifications.filter((n) => n.priority === "safety");
+
+    const handleTabKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+        if (e.key === "ArrowRight") {
+            e.preventDefault();
+            setActiveTab("preferences");
+        } else if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            setActiveTab("stream");
+        }
+    };
 
     return (
         <AppShell>
@@ -118,7 +134,7 @@ export default function NotificationsPage() {
                         {unreadCount > 0 && (
                             <button
                                 onClick={markAllAsRead}
-                                className="inline-flex items-center gap-2 rounded-full border border-border bg-white dark:bg-[#100F0F] px-4 py-2 text-xs font-medium text-foreground/80 transition-colors hover:bg-secondary hover:text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/20"
+                                className="inline-flex items-center gap-2 rounded-full border border-border bg-white dark:bg-[#100F0F] px-4 py-2 text-xs font-medium text-foreground/80 transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground focus-visible:outline-none"
                                 aria-label="Mark all notifications as read"
                             >
                                 <CheckCheck className="h-4 w-4" />
@@ -127,7 +143,7 @@ export default function NotificationsPage() {
                         )}
                         <button
                             onClick={clearAll}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-white dark:bg-[#100F0F] px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/20"
+                            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-white dark:bg-[#100F0F] px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground focus-visible:outline-none"
                             aria-label="Clear non-safety read notifications"
                         >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -136,7 +152,7 @@ export default function NotificationsPage() {
                     </div>
                 </motion.div>
 
-                {/* Safety Critical Banner Callout (Surfaces prominently if active safety items exist) */}
+                {/* Safety Critical Banner Callout */}
                 {safetyNotifications.length > 0 && (
                     <motion.div
                         initial={shouldReduceMotion ? false : { opacity: 0, scale: 0.98 }}
@@ -169,13 +185,21 @@ export default function NotificationsPage() {
                 )}
 
                 {/* Main Tabs Navigation */}
-                <div className="mb-6 flex border-b border-border" role="tablist" aria-label="Notification center tabs">
+                <div
+                    className="mb-6 flex border-b border-border"
+                    role="tablist"
+                    aria-label="Notification center tabs"
+                    onKeyDown={handleTabKeyDown}
+                >
                     <button
+                        id="tab-stream"
                         role="tab"
                         aria-selected={activeTab === "stream"}
+                        aria-controls="panel-stream"
+                        tabIndex={activeTab === "stream" ? 0 : -1}
                         onClick={() => setActiveTab("stream")}
                         className={cn(
-                            "flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors focus:outline-none",
+                            "flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-foreground focus-visible:outline-none",
                             activeTab === "stream"
                                 ? "border-foreground text-foreground"
                                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -191,11 +215,14 @@ export default function NotificationsPage() {
                     </button>
 
                     <button
+                        id="tab-preferences"
                         role="tab"
                         aria-selected={activeTab === "preferences"}
+                        aria-controls="panel-preferences"
+                        tabIndex={activeTab === "preferences" ? 0 : -1}
                         onClick={() => setActiveTab("preferences")}
                         className={cn(
-                            "flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors focus:outline-none",
+                            "flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-foreground focus-visible:outline-none",
                             activeTab === "preferences"
                                 ? "border-foreground text-foreground"
                                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -208,23 +235,21 @@ export default function NotificationsPage() {
 
                 {/* TAB 1: NOTIFICATIONS STREAM */}
                 {activeTab === "stream" && (
-                    <div>
+                    <div
+                        id="panel-stream"
+                        role="tabpanel"
+                        aria-labelledby="tab-stream"
+                    >
                         {/* Filters bar */}
                         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-3">
                             <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Category filters">
-                                {(
-                                    [
-                                        { id: "all", label: "All" },
-                                        { id: "safety", label: "Safety & Security" },
-                                        { id: "transactional", label: "Transactions" },
-                                        { id: "nudge", label: "Nudges & Milestones" },
-                                    ] as const
-                                ).map((cat) => (
+                                {CATEGORY_FILTERS.map((cat) => (
                                     <button
                                         key={cat.id}
-                                        onClick={() => setCategoryFilter(cat.id as any)}
+                                        aria-pressed={categoryFilter === cat.id}
+                                        onClick={() => setCategoryFilter(cat.id)}
                                         className={cn(
-                                            "rounded-xl px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none",
+                                            "rounded-xl px-3 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-foreground focus-visible:outline-none",
                                             categoryFilter === cat.id
                                                 ? "bg-foreground text-background"
                                                 : "text-muted-foreground hover:bg-secondary hover:text-foreground"
@@ -290,6 +315,7 @@ export default function NotificationsPage() {
                                         return (
                                             <article
                                                 key={notification.id}
+                                                data-testid={`notif-item-${notification.id}`}
                                                 className={cn(
                                                     "p-5 transition-colors",
                                                     isSafety
@@ -312,7 +338,7 @@ export default function NotificationsPage() {
                                                         <h2 className={cn("text-sm font-semibold", isSafety ? "text-red-950 dark:text-red-100" : "text-foreground")}>
                                                             {notification.title}
                                                         </h2>
-                                                        {notification.count && notification.count > 1 && (
+                                                        {Boolean(notification.count && notification.count > 1) && (
                                                             <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
                                                                 {notification.count} coalesced
                                                             </span>
@@ -347,7 +373,7 @@ export default function NotificationsPage() {
                                                     </div>
 
                                                     {notification.actionUrl && (
-                                                        <a
+                                                        <NotificationActionLink
                                                             href={notification.actionUrl}
                                                             className={cn(
                                                                 "inline-flex items-center gap-1 font-medium transition-colors hover:underline",
@@ -358,7 +384,7 @@ export default function NotificationsPage() {
                                                         >
                                                             {notification.actionLabel || "View Action"}
                                                             <ExternalLink className="h-3 w-3" />
-                                                        </a>
+                                                        </NotificationActionLink>
                                                     )}
                                                 </div>
                                             </article>
@@ -372,95 +398,101 @@ export default function NotificationsPage() {
 
                 {/* TAB 2: PREFERENCES & DELIVERY */}
                 {activeTab === "preferences" && (
-                    <motion.div
-                        initial={shouldReduceMotion ? false : { opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="space-y-6"
+                    <div
+                        id="panel-preferences"
+                        role="tabpanel"
+                        aria-labelledby="tab-preferences"
                     >
-                        <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-6 shadow-sm">
-                            <h2 className="text-lg font-medium text-foreground mb-1">
-                                Notification Channel Preferences
-                            </h2>
-                            <p className="text-xs text-muted-foreground mb-6">
-                                Manage how and where you receive notifications across categories. Safety notifications are mandatory to protect system integrity.
-                            </p>
+                        <motion.div
+                            initial={shouldReduceMotion ? false : { opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="space-y-6"
+                        >
+                            <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-6 shadow-sm">
+                                <h2 className="text-lg font-medium text-foreground mb-1">
+                                    Notification Channel Preferences
+                                </h2>
+                                <p className="text-xs text-muted-foreground mb-6">
+                                    Manage how and where you receive notifications across categories. Safety notifications are mandatory to protect system integrity.
+                                </p>
 
-                            <div className="divide-y divide-border">
-                                {(["safety", "transactional", "nudge"] as NotificationCategory[]).map(
-                                    (catKey) => {
-                                        const meta = CATEGORY_METADATA[catKey];
-                                        const catPrefs = preferences.categories[catKey];
+                                <div className="divide-y divide-border">
+                                    {(["safety", "transactional", "nudge"] as NotificationCategory[]).map(
+                                        (catKey) => {
+                                            const meta = CATEGORY_METADATA[catKey];
+                                            const catPrefs = preferences.categories[catKey];
 
-                                        return (
-                                            <div key={catKey} className="py-6 first:pt-0 last:pb-0">
-                                                <div className="flex items-start justify-between gap-4 mb-4">
-                                                    <div>
-                                                        <div className="flex items-center gap-2">
-                                                            <h3 className="text-base font-semibold text-foreground">
-                                                                {meta.label}
-                                                            </h3>
-                                                            {meta.alwaysOn && (
-                                                                <span className="inline-flex items-center gap-1 rounded-full bg-red-100 dark:bg-red-950/80 px-2.5 py-0.5 text-[10px] font-bold text-red-800 dark:text-red-300">
-                                                                    <Lock className="h-3 w-3" /> ALWAYS ON
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                        <p className="mt-1 text-xs text-muted-foreground">
-                                                            {meta.description}
-                                                        </p>
-                                                    </div>
-                                                </div>
-
-                                                {meta.alwaysOn && (
-                                                    <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 p-3 text-xs text-amber-900 dark:text-amber-200">
-                                                        Safety alerts cannot be suppressed or disabled via preferences.
-                                                    </div>
-                                                )}
-
-                                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                                    {(["in_app", "email", "push"] as NotificationChannel[]).map(
-                                                        (channel) => {
-                                                            const isChecked = catPrefs?.[channel] ?? true;
-                                                            const isDisabled = meta.alwaysOn;
-
-                                                            return (
-                                                                <label
-                                                                    key={channel}
-                                                                    className={cn(
-                                                                        "flex items-center justify-between rounded-2xl border border-border p-3.5 transition-colors",
-                                                                        isDisabled
-                                                                            ? "bg-secondary/40 cursor-not-allowed opacity-80"
-                                                                            : "cursor-pointer hover:bg-secondary/20"
-                                                                    )}
-                                                                >
-                                                                    <span className="text-xs font-medium text-foreground capitalize">
-                                                                        {channel.replace("_", " ")}
+                                            return (
+                                                <div key={catKey} className="py-6 first:pt-0 last:pb-0">
+                                                    <div className="flex items-start justify-between gap-4 mb-4">
+                                                        <div>
+                                                            <div className="flex items-center gap-2">
+                                                                <h3 className="text-base font-semibold text-foreground">
+                                                                    {meta.label}
+                                                                </h3>
+                                                                {meta.alwaysOn && (
+                                                                    <span className="inline-flex items-center gap-1 rounded-full bg-red-100 dark:bg-red-950/80 px-2.5 py-0.5 text-[10px] font-bold text-red-800 dark:text-red-300">
+                                                                        <Lock className="h-3 w-3" /> ALWAYS ON
                                                                     </span>
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        disabled={isDisabled}
-                                                                        checked={isChecked}
-                                                                        onChange={(e) =>
-                                                                            updatePreference(
-                                                                                catKey,
-                                                                                channel,
-                                                                                e.target.checked
-                                                                            )
-                                                                        }
-                                                                        className="h-4 w-4 rounded border-border text-foreground focus:ring-foreground disabled:opacity-60"
-                                                                    />
-                                                                </label>
-                                                            );
-                                                        }
+                                                                )}
+                                                            </div>
+                                                            <p className="mt-1 text-xs text-muted-foreground">
+                                                                {meta.description}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+
+                                                    {meta.alwaysOn && (
+                                                        <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 p-3 text-xs text-amber-900 dark:text-amber-200">
+                                                            Safety alerts cannot be suppressed or disabled via preferences.
+                                                        </div>
                                                     )}
+
+                                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                                        {(["in_app", "email", "push"] as NotificationChannel[]).map(
+                                                            (channel) => {
+                                                                const isChecked = catPrefs?.[channel] ?? true;
+                                                                const isDisabled = meta.alwaysOn;
+
+                                                                return (
+                                                                    <label
+                                                                        key={channel}
+                                                                        className={cn(
+                                                                            "flex items-center justify-between rounded-2xl border border-border p-3.5 transition-colors",
+                                                                            isDisabled
+                                                                                ? "bg-secondary/40 cursor-not-allowed opacity-80"
+                                                                                : "cursor-pointer hover:bg-secondary/20"
+                                                                        )}
+                                                                    >
+                                                                        <span className="text-xs font-medium text-foreground capitalize">
+                                                                            {channel.replace("_", " ")}
+                                                                        </span>
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            disabled={isDisabled}
+                                                                            checked={isChecked}
+                                                                            onChange={(e) =>
+                                                                                updatePreference(
+                                                                                    catKey,
+                                                                                    channel,
+                                                                                    e.target.checked
+                                                                                )
+                                                                            }
+                                                                            className="h-4 w-4 rounded border-border text-foreground focus:ring-foreground disabled:opacity-60"
+                                                                        />
+                                                                    </label>
+                                                                );
+                                                            }
+                                                        )}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        );
-                                    }
-                                )}
+                                            );
+                                        }
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    </motion.div>
+                        </motion.div>
+                    </div>
                 )}
             </div>
         </AppShell>
