@@ -153,7 +153,13 @@ func (s *NudgeEngineService) evaluate(ctx context.Context, userID uuid.UUID, hin
 		return err
 	}
 
-	dedupKey := fmt.Sprintf("%s-%s-%s", best.Candidate.Type, userID, now.Format("2006-01-02"))
+	// Dedup on the user's local calendar date, not the server's UTC date
+	// (#923): a user whose timezone offset places them ahead of or behind
+	// UTC (e.g. UTC+14 or UTC-11) can have their local calendar day span a
+	// UTC day boundary. Keying on now.UTC()'s date let two scheduler ticks
+	// that fall on the same local day but different UTC days both pass the
+	// dedup check, double-firing the reminder.
+	dedupKey := fmt.Sprintf("%s-%s-%s", best.Candidate.Type, userID, localCalendarDate(now, s.userTimezone(ctx, userID)))
 	if err := s.historyRepo.RecordDispatch(ctx, nudge.DispatchRecord{
 		ID:         uuid.New(),
 		UserID:     userID,
@@ -204,6 +210,32 @@ func (s *NudgeEngineService) gatherCandidates(ctx context.Context, userID uuid.U
 	}
 
 	return candidates
+}
+
+// userTimezone looks up the user's saved IANA timezone (#078_add_user_timezone)
+// for local-date computations. Falls back to "UTC" if the user can't be
+// loaded or hasn't set one, matching the default the users table itself uses.
+func (s *NudgeEngineService) userTimezone(ctx context.Context, userID uuid.UUID) string {
+	if s.userRepo == nil {
+		return "UTC"
+	}
+	u, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil || u == nil || u.Timezone == "" {
+		return "UTC"
+	}
+	return u.Timezone
+}
+
+// localCalendarDate returns now's calendar date (YYYY-MM-DD) in the given
+// IANA timezone. Falls back to UTC if the timezone can't be loaded, so a bad
+// or unknown zone degrades to the old (safe, if imprecise) behavior rather
+// than erroring the whole dispatch.
+func localCalendarDate(now time.Time, timezone string) string {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	return now.In(loc).Format("2006-01-02")
 }
 
 func (s *NudgeEngineService) lastDepositAt(ctx context.Context, userID uuid.UUID) time.Time {
