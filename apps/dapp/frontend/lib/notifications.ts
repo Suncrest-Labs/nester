@@ -205,6 +205,8 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
 /**
  * Deduplicates / coalesces notifications with matching `coalesceKey` or
  * identical type + title within a 15-minute window.
+ * When a newer item is merged in, its title, message, actionUrl, and
+ * actionLabel are copied to keep the displayed content up-to-date.
  */
 export function coalesceNotifications(notifications: AppNotification[]): AppNotification[] {
     const result: AppNotification[] = [];
@@ -226,9 +228,13 @@ export function coalesceNotifications(notifications: AppNotification[]): AppNoti
                 const itemIds = item.mergedIds || [item.id];
                 existing.mergedIds = Array.from(new Set([...existingIds, ...itemIds]));
 
-                // keep the newest timestamp and read state if unread
+                // Keep the newest timestamp and copy content from the newer item
                 if (new Date(item.timestamp).getTime() > new Date(existing.timestamp).getTime()) {
                     existing.timestamp = item.timestamp;
+                    existing.title = item.title;
+                    existing.message = item.message;
+                    existing.actionUrl = item.actionUrl;
+                    existing.actionLabel = item.actionLabel;
                 }
                 if (!item.read) {
                     existing.read = false;
@@ -253,7 +259,7 @@ export function coalesceNotifications(notifications: AppNotification[]): AppNoti
 // ---------------------------------------------------------------------------
 
 const API_BASE = "/api/notifications";
-const NOTIF_STORAGE_KEY_PREFIX = "nester.notifications.v1";
+export const NOTIF_STORAGE_KEY_PREFIX = "nester.notifications.v1";
 const PREFS_STORAGE_KEY_PREFIX = "nester.notification_preferences.v1";
 
 export function getStorageKey(prefix: string, address?: string) {
@@ -282,10 +288,14 @@ export async function fetchNotificationsApi(
             if (Array.isArray(data)) {
                 return data.map(normalizeNotification);
             }
+            // Successful response but non-array body — treat as an error so
+            // malformed payloads cannot silently reach the INITIAL_NOTIFICATIONS
+            // return path or a stale localStorage cache.
+            fetchError = new Error("Server returned unexpected non-array response");
         } else {
             fetchError = new Error(`Server returned status ${res.status}`);
         }
-    } catch (err: any) {
+    } catch (err: unknown) {
         fetchError = err instanceof Error ? err : new Error("Network request failed");
     }
 
@@ -389,7 +399,13 @@ export async function updateNotificationPreferencesApi(
         });
         if (res.ok) {
             const updated = await res.json();
-            return sanitizePreferences(updated);
+            const result = sanitizePreferences(updated);
+            // Also refresh the address-scoped localStorage cache on success
+            if (typeof window !== "undefined") {
+                const key = getStorageKey(PREFS_STORAGE_KEY_PREFIX, address);
+                window.localStorage.setItem(key, JSON.stringify(result));
+            }
+            return result;
         }
     } catch {
         // Fallback to local persistence
@@ -435,7 +451,8 @@ export function sanitizePreferences(
 }
 
 export function normalizeNotification(item: unknown): AppNotification {
-    const obj = item && typeof item === "object" ? (item as Record<string, any>) : {};
+    const obj =
+        item && typeof item === "object" ? (item as Record<string, unknown>) : {};
 
     const type: NotificationType =
         typeof obj.type === "string" ? (obj.type as NotificationType) : "info";
@@ -443,18 +460,22 @@ export function normalizeNotification(item: unknown): AppNotification {
     const mapped = mapTypeToCategoryAndPriority(type);
 
     const validCategories: NotificationCategory[] = ["safety", "transactional", "nudge"];
-    const category: NotificationCategory = validCategories.includes(obj.category)
-        ? obj.category
+    const category: NotificationCategory = validCategories.includes(
+        obj.category as NotificationCategory
+    )
+        ? (obj.category as NotificationCategory)
         : mapped.category;
 
     const validPriorities: NotificationPriority[] = ["safety", "transactional", "nudge"];
-    const priority: NotificationPriority = validPriorities.includes(obj.priority)
-        ? obj.priority
+    const priority: NotificationPriority = validPriorities.includes(
+        obj.priority as NotificationPriority
+    )
+        ? (obj.priority as NotificationPriority)
         : mapped.priority;
 
     let timestampStr = new Date().toISOString();
     if (obj.timestamp) {
-        const parsedMs = new Date(obj.timestamp).getTime();
+        const parsedMs = new Date(obj.timestamp as string).getTime();
         if (!isNaN(parsedMs)) {
             timestampStr = new Date(parsedMs).toISOString();
         }
@@ -462,9 +483,15 @@ export function normalizeNotification(item: unknown): AppNotification {
 
     const id = String(obj.id || `notif-${Date.now()}-${Math.random()}`);
 
-    const mergedIds = Array.isArray(obj.mergedIds)
-        ? Array.from(new Set(obj.mergedIds.map(String)))
-        : [id];
+    // Ensure mergedIds always contains at least the notification's own id.
+    // An empty array is treated the same as a missing value.
+    const rawMergedIds = Array.isArray(obj.mergedIds)
+        ? (obj.mergedIds as unknown[]).map(String).filter(Boolean)
+        : [];
+    const mergedIds =
+        rawMergedIds.length > 0
+            ? Array.from(new Set(rawMergedIds))
+            : [id];
 
     return {
         id,
@@ -480,6 +507,9 @@ export function normalizeNotification(item: unknown): AppNotification {
         coalesceKey: typeof obj.coalesceKey === "string" ? obj.coalesceKey : undefined,
         count: typeof obj.count === "number" ? obj.count : 1,
         mergedIds,
-        metadata: obj.metadata && typeof obj.metadata === "object" ? obj.metadata : undefined,
+        metadata:
+            obj.metadata && typeof obj.metadata === "object"
+                ? (obj.metadata as Record<string, unknown>)
+                : undefined,
     };
 }

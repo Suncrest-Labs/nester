@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, CheckCheck, ShieldAlert } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -25,6 +25,7 @@ function formatRelativeTime(timestamp: string) {
 export function NotificationBell() {
     const [open, setOpen] = useState(false);
     const shouldReduceMotion = useReducedMotion();
+    const triggerRef = useRef<HTMLButtonElement>(null);
 
     const {
         notifications,
@@ -42,7 +43,10 @@ export function NotificationBell() {
 
         const handleClick = () => setOpen(false);
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === "Escape") setOpen(false);
+            if (e.key === "Escape") {
+                setOpen(false);
+                triggerRef.current?.focus();
+            }
         };
 
         document.addEventListener("click", handleClick);
@@ -57,6 +61,7 @@ export function NotificationBell() {
     return (
         <div className="relative" onClick={(e) => e.stopPropagation()}>
             <button
+                ref={triggerRef}
                 onClick={() => setOpen((prev) => !prev)}
                 className={cn(
                     "relative inline-flex h-10 w-10 items-center justify-center rounded-full border transition-all hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-foreground/20",

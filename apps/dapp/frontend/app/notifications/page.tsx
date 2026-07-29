@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "framer-motion";
 import {
@@ -37,6 +37,7 @@ function formatDateLocale(timestamp: string) {
             day: "numeric",
             hour: "numeric",
             minute: "2-digit",
+            timeZone: "UTC",
         }).format(date);
     } catch {
         return timestamp;
@@ -74,6 +75,9 @@ export default function NotificationsPage() {
     const [categoryFilter, setCategoryFilter] = useState<"all" | NotificationCategory>("all");
     const [unreadOnly, setUnreadOnly] = useState<boolean>(false);
 
+    const streamTabRef = useRef<HTMLButtonElement>(null);
+    const preferencesTabRef = useRef<HTMLButtonElement>(null);
+
     useEffect(() => {
         if (!walletConnected) {
             router.push("/");
@@ -94,9 +98,11 @@ export default function NotificationsPage() {
         if (e.key === "ArrowRight") {
             e.preventDefault();
             setActiveTab("preferences");
+            preferencesTabRef.current?.focus();
         } else if (e.key === "ArrowLeft") {
             e.preventDefault();
             setActiveTab("stream");
+            streamTabRef.current?.focus();
         }
     };
 
@@ -193,6 +199,7 @@ export default function NotificationsPage() {
                 >
                     <button
                         id="tab-stream"
+                        ref={streamTabRef}
                         role="tab"
                         aria-selected={activeTab === "stream"}
                         aria-controls="panel-stream"
@@ -216,6 +223,7 @@ export default function NotificationsPage() {
 
                     <button
                         id="tab-preferences"
+                        ref={preferencesTabRef}
                         role="tab"
                         aria-selected={activeTab === "preferences"}
                         aria-controls="panel-preferences"

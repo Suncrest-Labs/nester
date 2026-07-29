@@ -6,6 +6,7 @@ import {
     useContext,
     useEffect,
     useMemo,
+    useRef,
     type ReactNode,
 } from "react";
 import { useWallet } from "@/components/wallet-provider";
@@ -267,7 +268,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
                     addNotification(
                         {
                             type: "nudge_recommendation",
-                            title: p.title,
+                            title: p.title || "New Nudge",
                             message: p.message,
                             actionUrl: p.actionUrl || "/savings",
                             actionLabel: p.actionLabel || "Learn More",
@@ -300,7 +301,16 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         onPoll: refreshBalances,
     });
 
+    const hasMountedRef = useRef(false);
     useEffect(() => {
+        // Skip the initial invocation on mount so that merely mounting the
+        // provider (or a wallet-address change) does not trigger a redundant
+        // reconciliation fetch.  Only actual connection-state transitions
+        // (true→false or false→true) should be reported.
+        if (!hasMountedRef.current) {
+            hasMountedRef.current = true;
+            return;
+        }
         setConnectionState(WS_URL ? isConnected : false);
     }, [isConnected, setConnectionState]);
 

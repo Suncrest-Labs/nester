@@ -14,6 +14,7 @@ import { useWallet } from "@/components/wallet-provider";
 import {
     DEFAULT_NOTIFICATION_PREFERENCES,
     INITIAL_NOTIFICATIONS,
+    NOTIF_STORAGE_KEY_PREFIX,
     coalesceNotifications,
     dismissNotificationApi,
     fetchNotificationPreferencesApi,
@@ -88,8 +89,6 @@ const NotificationsContext = createContext<NotificationsState>({
     refetch: async () => {},
 });
 
-const NOTIFICATIONS_STORAGE_KEY_PREFIX = "nester.notifications.v1";
-
 function buildId(prefix: string) {
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
         return `${prefix}-${crypto.randomUUID()}`;
@@ -113,6 +112,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     const timerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
     const initialLoadedRef = useRef(false);
     const isDisconnectedRef = useRef(false);
+    // Track whether the last load was successful and non-empty to gate persistence
+    const lastLoadSuccessful = useRef(false);
 
     // Initial load from storage/REST and preferences scoped to address
     useEffect(() => {
@@ -122,6 +123,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
             try {
                 setIsLoading(true);
                 setError(null);
+                lastLoadSuccessful.current = false;
 
                 const [fetchedPrefs, fetchedNotifs] = await Promise.all([
                     fetchNotificationPreferencesApi(address),
@@ -133,14 +135,18 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
                 setPreferences(fetchedPrefs);
 
                 if (Array.isArray(fetchedNotifs)) {
-                    setNotifications(coalesceNotifications(fetchedNotifs));
+                    const coalesced = coalesceNotifications(fetchedNotifs);
+                    setNotifications(coalesced);
+                    lastLoadSuccessful.current = true;
                 } else {
                     setNotifications(coalesceNotifications(INITIAL_NOTIFICATIONS));
+                    lastLoadSuccessful.current = true;
                 }
-            } catch (err) {
+            } catch {
                 if (!isMounted) return;
                 setError("Failed to load notifications stream. Please try again.");
                 setNotifications([]);
+                lastLoadSuccessful.current = false;
             } finally {
                 if (isMounted) {
                     setIsLoading(false);
@@ -156,11 +162,14 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         };
     }, [address]);
 
-    // Sync notifications to localStorage scoped to wallet address
+    // Sync notifications to localStorage scoped to wallet address.
+    // Only persist when the last load was successful and the list is non-empty
+    // to avoid overwriting a valid cache with an error-state empty array.
     useEffect(() => {
         if (typeof window === "undefined" || !initialLoadedRef.current) return;
+        if (!lastLoadSuccessful.current || notifications.length === 0) return;
         try {
-            const key = getStorageKey(NOTIFICATIONS_STORAGE_KEY_PREFIX, address);
+            const key = getStorageKey(NOTIF_STORAGE_KEY_PREFIX, address);
             window.localStorage.setItem(key, JSON.stringify(notifications));
         } catch {
             // Ignore quota errors
@@ -233,56 +242,59 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         [preferences, dismissToast]
     );
 
-    const markAsRead = useCallback((id: string) => {
-        setNotifications((prev) => {
-            const target = prev.find(
-                (n) => n.id === id || (n.mergedIds && n.mergedIds.includes(id))
-            );
-            const idsToMark = target?.mergedIds || [id];
+    // Move API calls outside the setNotifications updater to keep updaters
+    // purely transformational and avoid side-effects inside React state batches.
+    const markAsRead = useCallback(
+        (id: string) => {
+            setNotifications((prev) => {
+                const target = prev.find(
+                    (n) => n.id === id || (n.mergedIds && n.mergedIds.includes(id))
+                );
+                const idsToMark = target?.mergedIds?.length ? target.mergedIds : [id];
+                idsToMark.forEach((mId) => markNotificationReadApi(mId));
 
-            idsToMark.forEach((mId) => {
-                markNotificationReadApi(mId);
+                return prev.map((notif) => {
+                    if (notif.id === id || (notif.mergedIds && notif.mergedIds.includes(id))) {
+                        return { ...notif, read: true };
+                    }
+                    return notif;
+                });
             });
-
-            return prev.map((notif) => {
-                if (notif.id === id || (notif.mergedIds && notif.mergedIds.includes(id))) {
-                    return { ...notif, read: true };
-                }
-                return notif;
-            });
-        });
-    }, []);
+        },
+        []
+    );
 
     const markAllAsRead = useCallback(() => {
-        setNotifications((prev) => prev.map((notif) => ({ ...notif, read: true })));
         markAllNotificationsReadApi();
+        setNotifications((prev) => prev.map((notif) => ({ ...notif, read: true })));
     }, []);
 
-    const dismissNotification = useCallback((id: string) => {
-        setNotifications((prev) => {
-            const target = prev.find(
-                (n) => n.id === id || (n.mergedIds && n.mergedIds.includes(id))
-            );
-            const idsToDismiss = target?.mergedIds || [id];
+    const dismissNotification = useCallback(
+        (id: string) => {
+            setNotifications((prev) => {
+                const target = prev.find(
+                    (n) => n.id === id || (n.mergedIds && n.mergedIds.includes(id))
+                );
+                const idsToDismiss = target?.mergedIds?.length ? target.mergedIds : [id];
+                idsToDismiss.forEach((mId) => dismissNotificationApi(mId));
 
-            idsToDismiss.forEach((mId) => {
-                dismissNotificationApi(mId);
+                return prev.filter(
+                    (notif) =>
+                        notif.id !== id &&
+                        (!notif.mergedIds || !notif.mergedIds.includes(id))
+                );
             });
-
-            return prev.filter(
-                (notif) => notif.id !== id && (!notif.mergedIds || !notif.mergedIds.includes(id))
-            );
-        });
-    }, []);
+        },
+        []
+    );
 
     const clearAll = useCallback(() => {
         setNotifications((prev) => {
             const toRemove = prev.filter((notif) => notif.category !== "safety");
             toRemove.forEach((notif) => {
-                const ids = notif.mergedIds || [notif.id];
+                const ids = notif.mergedIds?.length ? notif.mergedIds : [notif.id];
                 ids.forEach((mId) => dismissNotificationApi(mId));
             });
-
             // Preserve ALL safety notifications (read and unread)
             return prev.filter((notif) => notif.category === "safety");
         });
@@ -292,16 +304,27 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         try {
             const latest = await fetchNotificationsApi(address);
             setNotifications((prev) => {
-                const existingMap = new Map(prev.map((n) => [n.id, n]));
-                const merged = [...prev];
+                // Build an expanded index covering the notification's own id AND
+                // every id in its mergedIds collection so that server items already
+                // represented by a coalesced group are correctly skipped.
+                const existingMap = new Map<string, AppNotification>();
+                for (const n of prev) {
+                    existingMap.set(n.id, n);
+                    if (n.mergedIds) {
+                        for (const mid of n.mergedIds) {
+                            existingMap.set(mid, n);
+                        }
+                    }
+                }
 
+                const merged = [...prev];
                 for (const item of latest) {
                     if (!existingMap.has(item.id)) {
                         merged.push(item);
                     } else {
                         const existing = existingMap.get(item.id)!;
                         if (existing.read && !item.read) {
-                            item.read = true;
+                            existing.read = false;
                         }
                     }
                 }
@@ -372,7 +395,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         try {
             const data = await fetchNotificationsApi(address);
             setNotifications(coalesceNotifications(data));
-        } catch (err) {
+        } catch {
             setError("Failed to reload notifications. Please try again.");
             setNotifications([]);
         } finally {
