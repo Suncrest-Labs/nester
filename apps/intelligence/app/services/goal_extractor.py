@@ -117,7 +117,7 @@ Rules: Do NOT guess missing fields. Return ONLY the structured extraction."""
             # Use user's timezone
             try:
                 tz = pytz.timezone(user_timezone)
-            except:
+            except pytz.UnknownTimeZoneError:
                 tz = pytz.UTC
             
             now = datetime.now(tz)
