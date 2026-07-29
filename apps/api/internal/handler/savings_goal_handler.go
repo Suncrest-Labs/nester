@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/goalnotification"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsschedule"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
@@ -41,16 +42,29 @@ type SavingsGoalManager interface {
 }
 
 type SavingsGoalHandler struct {
-	svc       SavingsGoalManager
-	schedules SavingsScheduleActiveReader
+	svc         SavingsGoalManager
+	schedules   SavingsScheduleActiveReader
+	notifyPrefs GoalNotificationPreferenceManager
 }
 
 type SavingsScheduleActiveReader interface {
 	GetActive(ctx context.Context, userID, goalID uuid.UUID) (*savingsschedule.SavingsSchedule, error)
 }
 
+// GoalNotificationPreferenceManager manages per-goal mute/digest-frequency settings.
+type GoalNotificationPreferenceManager interface {
+	Get(ctx context.Context, userID, goalID uuid.UUID) (goalnotification.Preference, error)
+	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateGoalNotificationPreferenceInput) (goalnotification.Preference, error)
+}
+
 func NewSavingsGoalHandler(svc SavingsGoalManager, schedules SavingsScheduleActiveReader) *SavingsGoalHandler {
 	return &SavingsGoalHandler{svc: svc, schedules: schedules}
+}
+
+// SetNotificationPreferenceManager wires the optional per-goal notification
+// preference endpoints (mute/frequency). Left unset, those endpoints respond 501.
+func (h *SavingsGoalHandler) SetNotificationPreferenceManager(m GoalNotificationPreferenceManager) {
+	h.notifyPrefs = m
 }
 
 func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
@@ -64,6 +78,9 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/pause", h.pause)
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/resume", h.resume)
 	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}/contributions", h.listContributions)
+	// Per-goal notification preferences (mute/digest frequency).
+	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}/notification-preferences", h.getNotificationPreference)
+	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/notification-preferences", h.updateNotificationPreference)
 	// #716 manual completion
 	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/complete", h.complete)
 	// #684 archive / #721 unarchive
@@ -486,6 +503,68 @@ func (h *SavingsGoalHandler) listContributions(w http.ResponseWriter, r *http.Re
 	response.WriteJSON(w, http.StatusOK, response.PaginatedOK(contributions, params.Page, params.PerPage, total, nextCursor))
 }
 
+func (h *SavingsGoalHandler) getNotificationPreference(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	if h.notifyPrefs == nil {
+		response.WriteJSON(w, http.StatusNotImplemented, response.Err(http.StatusNotImplemented, "NOT_IMPLEMENTED", "notification preferences are not available"))
+		return
+	}
+	pref, err := h.notifyPrefs.Get(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(pref))
+}
+
+type updateGoalNotificationPreferenceRequest struct {
+	Muted           *bool   `json:"muted"`
+	DigestFrequency *string `json:"digest_frequency"`
+}
+
+func (h *SavingsGoalHandler) updateNotificationPreference(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	if h.notifyPrefs == nil {
+		response.WriteJSON(w, http.StatusNotImplemented, response.Err(http.StatusNotImplemented, "NOT_IMPLEMENTED", "notification preferences are not available"))
+		return
+	}
+	body, err := readJSONBody(r)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	var req updateGoalNotificationPreferenceRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid JSON"))
+		return
+	}
+	pref, err := h.notifyPrefs.Update(r.Context(), userID, goalID, service.UpdateGoalNotificationPreferenceInput{
+		Muted:           req.Muted,
+		DigestFrequency: req.DigestFrequency,
+	})
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(pref))
+}
+
 func (h *SavingsGoalHandler) authenticatedUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -513,6 +592,8 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 	case errors.Is(err, savingsgoal.ErrUnauthorized):
 		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "vault does not belong to you"))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	case errors.Is(err, goalnotification.ErrInvalidPreference):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:
 		logpkg.FromContext(r.Context()).Error("savings goal handler failed", "error", err.Error())

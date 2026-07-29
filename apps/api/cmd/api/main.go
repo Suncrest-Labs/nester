@@ -418,12 +418,18 @@ func run() error {
 	webhookSvc := service.NewWebhookService(webhookRepo)
 	webhookHandler := handler.NewWebhookHandler(webhookSvc)
 	webhookHandler.Register(mux)
+	// Per-goal notification preferences (mute/digest frequency).
+	goalNotificationRepo := postgres.NewGoalNotificationRepository(db)
+	goalNotificationPrefSvc := service.NewGoalNotificationPreferenceService(goalNotificationRepo, savingsGoalRepo)
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
 		vaultRepository,
 		service.CompositeGoalMilestoneNotifier{
 			Notifiers: []service.GoalMilestoneNotifier{
-				service.DispatcherGoalMilestoneNotifier{Dispatcher: notificationDispatcher2},
+				service.DispatcherGoalMilestoneNotifier{
+					Dispatcher:  notificationDispatcher2,
+					Preferences: goalNotificationRepo,
+				},
 				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
 			},
 		},
@@ -438,7 +444,18 @@ func run() error {
 	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)
 	savingsScheduleSvc := service.NewSavingsScheduleService(savingsScheduleRepo, savingsGoalRepo, vaultRepository, minDeposit)
 	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc, savingsScheduleSvc)
+	savingsGoalHandler.SetNotificationPreferenceManager(goalNotificationPrefSvc)
 	savingsGoalHandler.Register(mux)
+
+	goalNotificationDigestJob := scheduler.NewGoalNotificationDigestJob(
+		scheduler.GoalNotificationDigestConfig{Enabled: true, Interval: time.Hour},
+		goalNotificationRepo,
+		notificationDispatcher2,
+		baseLogger.WithGroup("goal-notification-digest"),
+	)
+	goalDigestCtx, cancelGoalDigest := context.WithCancel(context.Background())
+	defer cancelGoalDigest()
+	go goalNotificationDigestJob.Run(goalDigestCtx)
 
 	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
 	savingsScheduleHandler.Register(mux)
