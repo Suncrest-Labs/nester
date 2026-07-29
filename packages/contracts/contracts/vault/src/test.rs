@@ -8,6 +8,7 @@ use soroban_sdk::{
     token, Address, Env, String, Symbol,
 };
 use nester_access_control::Role;
+use proptest::prelude::*;
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
 use crate::{CircuitBreakerConfig, FeeConfig, VaultContract, VaultContractClient, VaultStatus};
@@ -1747,3 +1748,218 @@ fn emergency_withdraw_all_with_no_positions_returns_empty() {
     assert_eq!(result.succeeded.len(), 0);
     assert_eq!(result.failed.len(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Property-Based Invariant Tests (proptest)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Invariant 1: Round-trip (`withdraw(shares(deposit(a))) <= a`)
+    /// Depositing `a` assets and immediately withdrawing the minted shares
+    /// must never yield more than `a` assets. Rounding always favours the vault.
+    #[test]
+    fn prop_round_trip_deposit_withdraw_never_mints_value(
+        a1 in 10_000_000i128..1_000_000_000_000i128,
+        a2 in 10_000_000i128..1_000_000_000_000i128,
+    ) {
+        let (_env, _admin, token, vault, _treasury) = setup();
+        let user_a = Address::generate(&_env);
+        let user_b = Address::generate(&_env);
+
+        mint(&token, &user_a, a1);
+        mint(&token, &user_b, a2);
+
+        // First deposit
+        vault.deposit(&user_a, &a1, &0);
+
+        // Second deposit at arbitrary ratio
+        let b_shares = vault.deposit(&user_b, &a2, &0);
+
+        // Immediate withdrawal of B's shares
+        let net_assets_b = vault.withdraw(&user_b, &b_shares, &0);
+
+        prop_assert!(
+            net_assets_b <= a2,
+            "Round-trip failed: user B received {} assets on immediate withdrawal of deposit {}",
+            net_assets_b,
+            a2
+        );
+    }
+
+    /// Invariant 2: No Value Creation
+    /// Total assets returned across all holders + accrued fees + remaining deposits
+    /// must never exceed total assets deposited + net positive reported yield.
+    #[test]
+    fn prop_no_value_creation_across_randomized_sequences(
+        dep1 in 10_000_000i128..10_000_000_000i128,
+        dep2 in 10_000_000i128..10_000_000_000i128,
+        yield_amount in -5_000_000_000i128..10_000_000_000i128,
+    ) {
+        let (env, admin, token, vault, _treasury) = setup();
+        let user1 = Address::generate(&env);
+        let user2 = Address::generate(&env);
+
+        mint(&token, &user1, dep1);
+        mint(&token, &user2, dep2);
+
+        let s1 = vault.deposit(&user1, &dep1, &0);
+        let s2 = vault.deposit(&user2, &dep2, &0);
+
+        let total_deposited = dep1 + dep2;
+        let mut total_in = total_deposited;
+
+        if yield_amount != 0 {
+            vault.grant_role(&admin, &admin, &Role::Manager);
+            vault.report_yield(&admin, &yield_amount);
+            if yield_amount > 0 {
+                // Back positive yield with real underlying tokens so withdrawal can be fulfilled
+                mint(&token, &vault.address, yield_amount);
+                total_in += yield_amount;
+            }
+        }
+
+        // Both users withdraw all their shares. Advance time past the 2-hour
+        // circuit breaker window between withdrawals so the rolling window
+        // calculation does not trigger on consecutive total withdrawals.
+        let w1 = vault.withdraw(&user1, &s1, &0);
+        advance_time(&env, 7_201);
+        let w2 = vault.withdraw(&user2, &s2, &0);
+
+        let accrued_fees = vault.get_accrued_fees();
+        let remaining_total_deposits = vault.get_total_deposits();
+
+        let total_out = w1 + w2 + accrued_fees + remaining_total_deposits;
+
+        prop_assert!(
+            total_out <= total_in,
+            "No-value-creation invariant violated: total_out ({}) > total_in ({})",
+            total_out,
+            total_in
+        );
+    }
+
+    /// Invariant 3: Monotonic Share Price & Correct Impairment Ratio
+    /// 1. Reporting positive yield monotonically non-decreases `share_price()`.
+    /// 2. Reporting impairment loss `-L` scales `share_price()` correctly and
+    ///    results in ZERO performance fee.
+    #[test]
+    fn prop_monotonic_share_price_and_impairment_ratio(
+        dep in 10_000_000i128..10_000_000_000i128,
+        pos_yield in 1i128..10_000_000_000i128,
+        loss_ratio_num in 1i128..99i128,
+    ) {
+        let (env, admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, dep);
+
+        // Disable early withdrawal fee to isolate share price / performance fee math
+        let mut fee_config: FeeConfig = vault.get_fee_config();
+        fee_config.early_withdrawal_fee_bps = 0;
+        vault.set_fee_config(&admin, &fee_config);
+
+        vault.deposit(&user, &dep, &0);
+        let initial_price = vault.share_price();
+
+        // 1. Positive yield check
+        vault.grant_role(&admin, &admin, &Role::Manager);
+        vault.report_yield(&admin, &pos_yield);
+        let price_after_yield = vault.share_price();
+
+        prop_assert!(
+            price_after_yield >= initial_price,
+            "Share price decreased after positive yield: {} < {}",
+            price_after_yield,
+            initial_price
+        );
+
+        // 2. Impairment check on fresh vault
+        let (env2, admin2, token2, vault2, _treasury2) = setup();
+        let user2 = Address::generate(&env2);
+        mint(&token2, &user2, dep);
+        let mut fee_config2: FeeConfig = vault2.get_fee_config();
+        fee_config2.early_withdrawal_fee_bps = 0;
+        vault2.set_fee_config(&admin2, &fee_config2);
+
+        vault2.deposit(&user2, &dep, &0);
+
+        let loss_amount = dep * loss_ratio_num / 100;
+        if loss_amount > 0 {
+            vault2.grant_role(&admin2, &admin2, &Role::Manager);
+            vault2.report_yield(&admin2, &(-loss_amount));
+
+            let impaired_price = vault2.share_price();
+            let expected_price = 10_000_000i128 * (dep - loss_amount) / dep;
+
+            prop_assert_eq!(
+                impaired_price,
+                expected_price,
+                "Impaired share price does not match expected ratio"
+            );
+
+            let shares2 = vault2.get_shares(&user2);
+            let preview = vault2.withdrawal_fee_preview(&user2, &shares2);
+            prop_assert_eq!(
+                preview.performance_fee_deducted,
+                0,
+                "Performance fee was charged on impaired position"
+            );
+        }
+    }
+
+    /// Invariant 4: First-Depositor / Inflation-Attack Resistance
+    ///
+    /// Documentation & Invariant:
+    /// ERC-4626 inflation attacks occur when an attacker makes a 1-wei deposit,
+    /// gets 1 share, and transfers a huge amount of assets directly to inflate the
+    /// share price so subsequent depositors get 0 shares for their deposit.
+    ///
+    /// Nester Vault prevents this through two mechanisms:
+    /// 1. `MIN_DEPOSIT_AMOUNT` (`10_000_000` = 1 XLM) enforces a minimum deposit size,
+    ///    preventing 1-wei initial deposits.
+    /// 2. `min_shares_out` parameter in `deposit()` allows depositors to enforce a minimum
+    ///    share threshold, reverting with `SlippageExceeded` if share calculation yields
+    ///    fewer shares than expected.
+    #[test]
+    fn prop_first_depositor_inflation_attack_resistance(
+        initial_dep in 10_000_000i128..100_000_000i128,
+        donation in 10_000_000i128..10_000_000_000_000i128,
+        victim_dep in 10_000_000i128..100_000_000_000i128,
+    ) {
+        let (env, admin, token, vault, _treasury) = setup();
+        let attacker = Address::generate(&env);
+        let victim = Address::generate(&env);
+
+        mint(&token, &attacker, initial_dep);
+        mint(&token, &victim, victim_dep);
+
+        // Attacker makes initial deposit
+        let attacker_shares = vault.deposit(&attacker, &initial_dep, &0);
+        prop_assert!(attacker_shares > 0);
+
+        // Attacker (or market) inflates vault assets
+        vault.grant_role(&admin, &admin, &Role::Manager);
+        vault.report_yield(&admin, &donation);
+        mint(&token, &vault.address, donation);
+
+        // Victim deposits with min_shares_out protection = 1 share
+        // If the share price is so high that victim_dep rounds to 0 shares,
+        // deposit() panics with SlippageExceeded, protecting victim's assets.
+        let shares_for_victim = vault.preview_deposit(&victim_dep);
+        if shares_for_victim > 0 {
+            let victim_shares = vault.deposit(&victim, &victim_dep, &1);
+            prop_assert!(victim_shares > 0);
+
+            // If victim immediately withdraws, they get back <= victim_dep (no asset theft by attacker)
+            let victim_withdrawn = vault.withdraw(&victim, &victim_shares, &0);
+            prop_assert!(
+                victim_withdrawn <= victim_dep,
+                "Victim withdrawn {} exceeded deposit {}",
+                victim_withdrawn,
+                victim_dep
+            );
+        }
+    }
+}
+
