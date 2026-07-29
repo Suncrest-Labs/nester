@@ -40,13 +40,26 @@ vi.mock("@/lib/api/intelligence", () => ({
 }))
 
 function renderWithQuery(ui: React.ReactElement) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } })
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>)
 }
 
 describe("InsightsDashboard", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear()
+    const { intelligence: intel } = await import("@/lib/api/intelligence")
+    vi.mocked(intel.getPortfolioInsights).mockReset()
+    vi.mocked(intel.getPortfolioInsights).mockResolvedValue([
+      { id: "insight-1", title: "High Yield Opportunity", body: "Consider switching to USDC Vault B for +1.5% APY.", confidence: 0.85, action: { label: "View Vault", href: "/vaults/usdc-b" } },
+      { id: "insight-2", title: "Rebalance Suggested", body: "Your allocation is overweight in stablecoins.", confidence: 0.72, action: { label: "Review Allocation", href: "/dashboard" } },
+    ])
+    vi.mocked(intel.getMarketSentiment).mockReset()
+    vi.mocked(intel.getMarketSentiment).mockResolvedValue({
+      signal: "bull" as const,
+      summary: "Market conditions are favorable.",
+      confidence: 0.78,
+      updatedAt: new Date().toISOString(),
+    })
   })
 
   it("renders prioritized insights with actions", async () => {
@@ -70,7 +83,8 @@ describe("InsightsDashboard", () => {
 
   it("renders empty state when no insights", async () => {
     const { intelligence } = await import("@/lib/api/intelligence")
-    vi.mocked(intelligence.getPortfolioInsights).mockResolvedValueOnce([])
+    vi.mocked(intelligence.getPortfolioInsights).mockResolvedValue([])
+    vi.mocked(intelligence.getMarketSentiment).mockResolvedValue(null)
 
     renderWithQuery(<InsightsDashboard />)
 
@@ -81,7 +95,7 @@ describe("InsightsDashboard", () => {
 
   it("renders error state when API fails", async () => {
     const { intelligence } = await import("@/lib/api/intelligence")
-    vi.mocked(intelligence.getPortfolioInsights).mockRejectedValueOnce(new Error("API Error"))
+    vi.mocked(intelligence.getPortfolioInsights).mockRejectedValue(new Error("API Error"))
 
     renderWithQuery(<InsightsDashboard />)
 
@@ -105,8 +119,9 @@ describe("InsightsDashboard", () => {
     })
   })
 
-  it("shows connect wallet prompt when no address", () => {
-    vi.mocked(require("@/components/wallet-provider").useWallet).mockReturnValueOnce({
+  it("shows connect wallet prompt when no address", async () => {
+    const { useWallet: mockUseWallet } = await import("@/components/wallet-provider")
+    vi.mocked(mockUseWallet).mockReturnValueOnce({
       address: null,
       isConnected: false,
     })
