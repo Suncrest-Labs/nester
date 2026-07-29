@@ -59,6 +59,17 @@ services:
       retries: 5
       start_period: 15s
 
+  seed:
+    image: postgres:16-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: nester_dev_password
+    volumes:
+      - ./scripts/seed.sql:/seed.sql:ro
+    command: ["psql", "-h", "postgres", "-U", "nester", "-d", "nester_dev", "-v", "ON_ERROR_STOP=1", "-f", "/seed.sql"]
+
   frontend:
     build:
       context: ./apps/dapp/frontend
