@@ -38,19 +38,35 @@ migrate -path apps/api/migrations -database "$DATABASE_DSN" down N
 
 ## Adding a New Migration
 
+Claim your number when you **open** the PR, not when you start work. Several
+PRs developed in parallel each grabbed what was "the next" number at the time,
+which is how the collisions at 060/061/069/070/081 happened.
+
 1. Find the next available sequential number:
    ```bash
    ls apps/api/migrations/ | sed 's/_.*//' | sort -n | uniq | tail -1
    ```
 2. Check for conflicts (should print nothing):
    ```bash
-   ls apps/api/migrations/ | sed 's/_.*//' | sort | uniq -d
+   ls apps/api/migrations/*.sql \
+     | sed -E 's/\.(up|down)\.sql$//' \
+     | sort -u \
+     | sed -E 's/.*\/([0-9]+)_.*/\1/' \
+     | sort | uniq -d
    ```
+   This is the exact check CI runs. It strips the `.up`/`.down` suffix before
+   deduplicating, so a half-renamed pair is still caught — a naive
+   `sed 's/_.*//' | uniq -d` sees `.up` and `.down` as distinct entries and
+   reports nothing.
 3. Create the pair:
    ```
    NNN_descriptive_name.up.sql   — forward change
    NNN_descriptive_name.down.sql — exact reverse (no-op is acceptable if irreversible)
    ```
+4. If your migration depends on an earlier one (e.g. an index on a column another
+   migration adds), make sure your number is higher than the one it depends on.
+   Renumbering later is not always safe: once a version is recorded in
+   `schema_migrations`, renaming the file causes golang-migrate to re-run or skip it.
 
 ## ⚠️ Re-auth Required After Migration 009_add_user_roles
 
@@ -60,5 +76,8 @@ After deploying migration `009_add_user_roles`, **all existing admin JWT tokens 
 
 ## Known Issues
 
-- Numbering collisions exist at prefixes 007, 009, and 010. See [#523](https://github.com/Suncrest-Labs/nester/issues/523) for the fix tracking these conflicts.
+None currently. The prefix collisions previously recorded here (007, 009, 010 —
+[#523](https://github.com/Suncrest-Labs/nester/issues/523)) and the later set at
+060, 061, 069, 070 and 081 ([#995](https://github.com/Suncrest-Labs/nester/issues/995))
+have all been resolved. CI enforces uniqueness on every push.
 - There are gaps in the sequence at 004 and 013 — these are expected (migrations were removed) and do not affect operation.
