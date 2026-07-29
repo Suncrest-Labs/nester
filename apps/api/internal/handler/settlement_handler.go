@@ -207,6 +207,7 @@ func (h *SettlementHandler) listUserSettlements(w http.ResponseWriter, r *http.R
 		MinAmount:           params.MinAmount,
 		DestinationProvider: params.DestinationProvider,
 		FiatCurrency:        params.FiatCurrency,
+		Search:              params.Search,
 	})
 	if err != nil {
 		h.writeDomainError(w, r, err)

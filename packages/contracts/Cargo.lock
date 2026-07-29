@@ -333,6 +333,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "dummy-vault-fixture"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -689,6 +696,7 @@ dependencies = [
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",
+ "treasury-contract",
  "vault-contract",
  "vault-token-contract",
  "yield-registry-contract",
@@ -889,6 +897,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "referral-contract"
+version = "0.1.0"
+dependencies = [
+ "nester-access-control",
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "rfc6979"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -924,6 +942,18 @@ name = "ryu"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
+
+[[package]]
+name = "savings-goal-contract"
+version = "0.1.0"
+dependencies = [
+ "dummy-vault-fixture",
+ "nester-access-control",
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+ "vault-factory-contract",
+]
 
 [[package]]
 name = "sec1"
@@ -1388,6 +1418,18 @@ dependencies = [
  "nester-test-utils",
  "soroban-sdk",
  "vault-token-contract",
+]
+
+[[package]]
+name = "vault-factory-contract"
+version = "0.1.0"
+dependencies = [
+ "dummy-vault-fixture",
+ "nester-access-control",
+ "nester-common",
+ "nester-test-utils",
+ "nester-timelock",
+ "soroban-sdk",
 ]
 
 [[package]]

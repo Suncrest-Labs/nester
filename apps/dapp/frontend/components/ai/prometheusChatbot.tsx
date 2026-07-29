@@ -55,7 +55,7 @@ function renderBold(text: string): React.ReactNode[] {
   )
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, onConfirm }: { message: ChatMessage; onConfirm?: (id: string, approved: boolean) => void }) {
   const isUser = message.role === 'user'
   const paragraphs = message.content.split('\n').filter((p) => p.trim() !== '')
   return (
@@ -77,6 +77,31 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             {renderBold(p)}
           </p>
         ))}
+        {message.proposal && (
+          <div className="mt-3 rounded-xl border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 p-3">
+            <p className="mb-3 font-semibold">{message.proposal.text}</p>
+            {message.proposal.status === 'pending' ? (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onConfirm?.(message.proposal!.id, true)}
+                  className="flex-1 rounded-lg bg-black dark:bg-white px-3 py-1.5 text-center font-semibold text-white dark:text-black transition-opacity hover:opacity-90 active:scale-95"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => onConfirm?.(message.proposal!.id, false)}
+                  className="flex-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] px-3 py-1.5 text-center font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5 active:scale-95"
+                >
+                  Decline
+                </button>
+              </div>
+            ) : (
+              <p className="text-center font-semibold opacity-70">
+                {message.proposal.status === 'executed' ? 'Executed' : 'Declined'}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -141,6 +166,37 @@ export function PrometheusChatbot() {
 
   if (!isConnected || !address) return null
 
+  const handleConfirm = async (proposalId: string, approved: boolean) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.proposal?.id === proposalId
+          ? { ...m, proposal: { ...m.proposal, status: approved ? 'executed' : 'declined' } }
+          : m
+      )
+    )
+    
+    // Set streaming to true to show typing indicator while confirming
+    setStreaming(true)
+    setMessages((prev) => [...prev, { role: 'assistant', content: '' }])
+
+    try {
+      const res = await intelligence.confirmToolAction(proposalId, approved)
+      setMessages((prev) => {
+        const updated = [...prev]
+        updated[updated.length - 1] = { role: 'assistant', content: res.assistant_message }
+        return updated
+      })
+    } catch (err: any) {
+      setMessages((prev) => {
+        const updated = [...prev]
+        updated[updated.length - 1] = { role: 'assistant', content: `Error: ${err.message}` }
+        return updated
+      })
+    } finally {
+      setStreaming(false)
+    }
+  }
+
   const sendMessage = (text: string) => {
     const trimmed = text.trim()
     if (!trimmed || streaming) return
@@ -152,6 +208,23 @@ export function PrometheusChatbot() {
 
     const source = intelligence.sendMessage(address, trimmed)
     eventSourceRef.current = source
+
+    source.addEventListener('pending_confirmation', (e: any) => {
+      source.close()
+      setStreaming(false)
+      const data = JSON.parse(e.data)
+      setMessages((prev) => {
+        const updated = [...prev]
+        const last = updated[updated.length - 1]
+        if (last?.role === 'assistant') {
+          updated[updated.length - 1] = {
+            ...last,
+            proposal: { id: data.proposal_id, text: data.text, status: 'pending' },
+          }
+        }
+        return updated
+      })
+    })
 
     source.onmessage = (e: MessageEvent) => {
       if (e.data === '[DONE]') {
@@ -239,7 +312,7 @@ export function PrometheusChatbot() {
                   return isLastAndEmpty ? (
                     <TypingDots key={i} />
                   ) : (
-                    <MessageBubble key={i} message={msg} />
+                    <MessageBubble key={i} message={msg} onConfirm={handleConfirm} />
                   )
                 })
               )}

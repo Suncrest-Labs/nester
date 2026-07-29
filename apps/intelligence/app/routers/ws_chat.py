@@ -7,6 +7,7 @@ import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
+from app.models.preferences import ResponsePreferences
 from app.services import guardrails
 from app.services.prometheus import stream_chat
 
@@ -80,6 +81,17 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
             request_id = str(uuid.uuid4())
             async for chunk in stream_chat(user_id, message, request_id=request_id):
+            raw_preferences = data.get("preferences")
+            preferences: Optional[ResponsePreferences] = None
+            if isinstance(raw_preferences, dict):
+                try:
+                    preferences = ResponsePreferences(**raw_preferences)
+                except Exception:
+                    preferences = None
+
+            async for chunk in stream_chat(
+                user_id, message, request_id=request_id, preferences=preferences
+            ):
                 # Strip SSE "data: " prefix — WS clients get raw text
                 if chunk.startswith("data: "):
                     chunk = chunk[6:].rstrip("\n")

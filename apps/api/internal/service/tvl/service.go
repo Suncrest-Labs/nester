@@ -71,8 +71,8 @@ func (s *Service) GetVaultTVL(ctx context.Context, vaultID uuid.UUID) (tvldom.Va
 
 	return tvldom.VaultTVL{
 		VaultID:         vaultID,
-		TVLUSDC:         latest.TVLUSDC.StringFixed(6),
-		TVLUSD:          latest.TVLUSDC.StringFixed(2),
+		TVLUSDC:         tvldom.FormatUSDC(latest.TVLUSDC),
+		TVLUSD:          tvldom.FormatUSD(latest.TVLUSDC),
 		TotalDepositors: latest.TotalDepositors,
 		LastUpdated:     latest.SnapshotAt,
 		Change24hPct:    change,
@@ -116,8 +116,8 @@ func (s *Service) GetAggregateTVL(ctx context.Context) (tvldom.AggregateTVL, err
 	}
 
 	return tvldom.AggregateTVL{
-		TVLUSDC:         total.StringFixed(6),
-		TVLUSD:          total.StringFixed(2),
+		TVLUSDC:         tvldom.FormatUSDC(total),
+		TVLUSD:          tvldom.FormatUSD(total),
 		TotalDepositors: depositors,
 		VaultCount:      len(snapshots),
 		LastUpdated:     latestAt,

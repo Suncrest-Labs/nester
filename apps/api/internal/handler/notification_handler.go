@@ -88,9 +88,10 @@ func (h *NotificationHandler) GetPreferences(w http.ResponseWriter, r *http.Requ
 }
 
 type updateNotificationPreferencesRequest struct {
-	Email     *bool `json:"email"`
-	WebSocket *bool `json:"websocket"`
-	Push      *bool `json:"push"`
+	Email         *bool   `json:"email"`
+	WebSocket     *bool   `json:"websocket"`
+	Push          *bool   `json:"push"`
+	DigestCadence *string `json:"digest_cadence"`
 }
 
 func (h *NotificationHandler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +120,15 @@ func (h *NotificationHandler) UpdatePreferences(w http.ResponseWriter, r *http.R
 	}
 	if req.Push != nil {
 		prefs.Push = *req.Push
+	}
+	if req.DigestCadence != nil {
+		if !notifications.ValidDigestCadence(*req.DigestCadence) {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(
+				"digest_cadence must be one of: off, weekly, monthly",
+			))
+			return
+		}
+		prefs.DigestCadence = *req.DigestCadence
 	}
 
 	prefs, err = h.store.Set(r.Context(), userID, prefs)

@@ -45,6 +45,10 @@ func (s *stubVaultRepository) UpdateVault(_ context.Context, id uuid.UUID, contr
 	return errors.New("not implemented")
 }
 
+func (s *stubVaultRepository) UpdateHarvestFrequency(_ context.Context, id uuid.UUID, frequency string) error {
+	return errors.New("not implemented")
+}
+
 func (s *stubVaultRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, record vault.TransactionRecord) error {
 	return errors.New("not implemented")
 }
@@ -108,6 +112,10 @@ func (s *stubVaultRepositoryWithCount) ReplaceAllocations(_ context.Context, vau
 }
 
 func (s *stubVaultRepositoryWithCount) UpdateVault(_ context.Context, id uuid.UUID, contractAddress string, status vault.VaultStatus) error {
+	return errors.New("not implemented")
+}
+
+func (s *stubVaultRepositoryWithCount) UpdateHarvestFrequency(_ context.Context, id uuid.UUID, frequency string) error {
 	return errors.New("not implemented")
 }
 

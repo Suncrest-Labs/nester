@@ -11,17 +11,37 @@ const (
 	fiatTTL   = 5 * time.Minute
 )
 
-// RateService resolves exchange rates using a priority-ordered set of providers
-// and an in-memory TTL cache. On source failure it serves stale cached data
-// rather than propagating an error.
-type RateService struct {
-	cache       *RateCache
-	xlmFetchers []Provider // tried in order: first success wins
-	fiatFetcher Provider
+// xlmAggregationOptions governs XLM/USD consensus (#830). MaxDeviationBPS
+// of 300 (3%) is wide enough to tolerate normal cross-venue spread while
+// still catching a genuinely bad or manipulated print; MinAgreeingSources
+// is 1 rather than len(xlmFetchers) because this price's two sources
+// (Horizon, DeFiLlama) were originally registered purely as primary/
+// fallback for *availability* — requiring both to agree would regress
+// uptime whenever either source is briefly down, which is exactly the
+// failure mode having two sources was meant to protect against. Confidence
+// still correctly reflects "only one of two responded" as lower than "both
+// agreed" (see confidenceFor), so a caller that genuinely needs full
+// two-source consensus can gate on Confidence instead.
+var xlmAggregationOptions = AggregationOptions{
+	MaxDeviationBPS:    300,
+	MinAgreeingSources: 1,
+	PerSourceTimeout:   3 * time.Second,
 }
 
-// NewRateService constructs a RateService with Horizon (primary) and DeFiLlama
-// (fallback) for crypto rates and the open.er-api.com feed for fiat rates.
+// RateService resolves exchange rates using a multi-source consensus
+// aggregator (#830) for crypto rates and an in-memory TTL cache. On source
+// failure it serves stale cached data rather than propagating an error.
+type RateService struct {
+	cache       *RateCache
+	xlmFetchers []Provider // reconciled via Aggregate, not tried in priority order
+	fiatFetcher Provider
+	health      *HealthTracker
+}
+
+// NewRateService constructs a RateService with Horizon and DeFiLlama as
+// independent XLM/USD sources (reconciled via consensus, not priority
+// failover — see xlmAggregationOptions) and the open.er-api.com feed for
+// fiat rates.
 func NewRateService(horizonURL, usdcIssuer string) *RateService {
 	return NewRateServiceWithFetchers(
 		[]Provider{NewStellarProvider(horizonURL, usdcIssuer), NewDefiLlamaProvider()},
@@ -35,8 +55,13 @@ func NewRateServiceWithFetchers(xlmFetchers []Provider, fiatFetcher Provider) *R
 		cache:       NewRateCache(),
 		xlmFetchers: xlmFetchers,
 		fiatFetcher: fiatFetcher,
+		health:      NewHealthTracker(),
 	}
 }
+
+// Health returns the source-health tracker backing XLM/USD aggregation, for
+// a metrics endpoint to scrape (#830).
+func (s *RateService) Health() *HealthTracker { return s.health }
 
 // Cache returns the underlying cache so tests can pre-fill or inspect entries.
 func (s *RateService) Cache() *RateCache { return s.cache }
@@ -99,31 +124,30 @@ func (s *RateService) fetch(ctx context.Context, base, quote string) (ExchangeRa
 // Sanity bounds for XLM/USD price. These are intentionally wide — they exist
 // to catch feed corruption (e.g. a 1000× spike), not to predict the market.
 const (
-	xlmMinUSD = 0.001  // XLM has never traded this low
-	xlmMaxUSD = 100.0  // XLM at $100 would be an unprecedented 200× from its ATH
+	xlmMinUSD = 0.001 // XLM has never traded this low
+	xlmMaxUSD = 100.0 // XLM at $100 would be an unprecedented 200× from its ATH
 )
 
 func (s *RateService) fetchXLM(ctx context.Context) (ExchangeRate, error) {
-	var lastErr error
-	for _, p := range s.xlmFetchers {
-		rate, err := p.Fetch(ctx, "XLM", "USD")
-		if err == nil && rate >= xlmMinUSD && rate <= xlmMaxUSD {
-			now := time.Now().UTC()
-			return ExchangeRate{
-				Base: "XLM", Quote: "USD", Rate: rate,
-				Source: p.Name(), FetchedAt: now, ExpiresAt: now.Add(cryptoTTL),
-			}, nil
-		}
-		if err != nil {
-			lastErr = err
-		} else {
-			lastErr = fmt.Errorf("xlm: rate %v outside sanity bounds [%v, %v]", rate, xlmMinUSD, xlmMaxUSD)
-		}
+	agg, err := Aggregate(ctx, "XLM", "USD", s.xlmFetchers, s.health, xlmAggregationOptions)
+	if err != nil {
+		return ExchangeRate{}, fmt.Errorf("xlm: %w", err)
 	}
-	if lastErr == nil {
-		lastErr = ErrNoSource
+	// The sanity bounds remain as a second, independent line of defense
+	// beyond deviation-band outlier rejection: they catch the case where
+	// every registered source is simultaneously corrupted or manipulated in
+	// the same direction (deviation-band rejection alone can't catch that,
+	// since nothing would look like an outlier relative to the others).
+	if agg.Value < xlmMinUSD || agg.Value > xlmMaxUSD {
+		return ExchangeRate{}, fmt.Errorf("xlm: consensus rate %v outside sanity bounds [%v, %v]", agg.Value, xlmMinUSD, xlmMaxUSD)
 	}
-	return ExchangeRate{}, fmt.Errorf("xlm: all sources failed: %w", lastErr)
+
+	now := time.Now().UTC()
+	return ExchangeRate{
+		Base: "XLM", Quote: "USD", Rate: agg.Value,
+		Source: agg.SourceName(), FetchedAt: now, ExpiresAt: now.Add(cryptoTTL),
+		Confidence: agg.Confidence, SourcesUsed: agg.SourcesUsed,
+	}, nil
 }
 
 func (s *RateService) fetchFiat(ctx context.Context, quote string) (float64, string, error) {

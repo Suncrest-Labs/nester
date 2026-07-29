@@ -14,6 +14,10 @@ on:
       - ".github/workflows/contract-audit.yml"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   x402-audit:
     name: x402 Heuristic Contract Audit
@@ -31,6 +35,45 @@ jobs:
           CONTRACT_AUDIT_API_URL: ${{ vars.CONTRACT_AUDIT_API_URL }}
         run: ./scripts/contract-audit.sh
 
+      - name: Build contracts and calculate WASM hashes
+        run: |
+          cd packages/contracts
+          rustup target add wasm32-unknown-unknown
+          # Build only workspace-member contracts (excludes non-member dirs like rent_escrow)
+          # Use cargo metadata to enumerate workspace package names, then filter to those
+          # whose manifest path lives under contracts/.
+          cargo metadata --no-deps --format-version 1 \
+            | python3 -c "
+import sys, json
+meta = json.load(sys.stdin)
+for pkg in meta['packages']:
+    if '/contracts/' in pkg['manifest_path'].replace('\\\\','/') and \
+       '/test_fixtures/' not in pkg['manifest_path'].replace('\\\\','/') and \
+       '/tests/' not in pkg['manifest_path'].replace('\\\\','/'):
+        print(pkg['name'])
+" | while read pkg_name; do
+            echo "Building $pkg_name..."
+            cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
+          done
+          mkdir -p ../../wasm-hashes
+          echo "# Reproducible WASM Hashes" > ../../wasm-hashes/wasm-hashes.txt
+          echo "Generated on: $(date -u)" >> ../../wasm-hashes/wasm-hashes.txt
+          echo "" >> ../../wasm-hashes/wasm-hashes.txt
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            if [ -f "$wasm" ]; then
+              hash=$(sha256sum "$wasm" | awk '{print $1}')
+              name=$(basename "$wasm")
+              echo "$hash  $name" >> ../../wasm-hashes/wasm-hashes.txt
+            fi
+          done
+          cat ../../wasm-hashes/wasm-hashes.txt
+
+      - name: Upload WASM Hashes Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-wasm-hashes
+          path: wasm-hashes/wasm-hashes.txt
+
       - name: Upload audit reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -38,3 +81,4 @@ jobs:
           name: contract-audit-reports
           path: audit-report-*.json
           if-no-files-found: ignore
+

@@ -35,8 +35,8 @@ func TestCreateVaultMapsForeignKeyViolationToUserNotFound(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO vaults (
-			id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, harvest_frequency
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING created_at, updated_at
 	`)).
 		WillReturnError(&pgconn.PgError{Code: "23503", ConstraintName: "vaults_user_id_fkey"})
@@ -99,14 +99,14 @@ func TestGetVaultLoadsAllocations(t *testing.T) {
 	createdAt := time.Now().UTC()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, last_synced_at, deleted_at, created_at, updated_at
+		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, harvest_frequency, last_harvested_at, last_synced_at, deleted_at, created_at, updated_at
 		FROM vaults
 		WHERE id = $1 AND deleted_at IS NULL
 	`)).
 		WithArgs(vaultID.String()).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "user_id", "contract_address", "total_deposited", "current_balance", "currency", "status", "yield_earned", "fees_paid", "last_synced_at", "deleted_at", "created_at", "updated_at",
-		}).AddRow(vaultID.String(), userID.String(), "CA-001", "100.00", "105.50", "USDC", "active", "0", "0", nil, nil, createdAt, createdAt))
+			"id", "user_id", "contract_address", "total_deposited", "current_balance", "currency", "status", "yield_earned", "fees_paid", "harvest_frequency", "last_harvested_at", "last_synced_at", "deleted_at", "created_at", "updated_at",
+		}).AddRow(vaultID.String(), userID.String(), "CA-001", "100.00", "105.50", "USDC", "active", "0", "0", "daily", nil, nil, nil, createdAt, createdAt))
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, vault_id, protocol, amount, apy, status, allocated_at, updated_at FROM allocations WHERE vault_id = $1 ORDER BY allocated_at DESC`)).
 		WithArgs(vaultID.String()).

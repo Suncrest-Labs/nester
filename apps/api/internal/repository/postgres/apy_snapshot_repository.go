@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,23 +22,32 @@ func NewAPYSnapshotRepository(db *sql.DB) *APYSnapshotRepository {
 }
 
 func (r *APYSnapshotRepository) Upsert(ctx context.Context, snap apysnapshot.APYSnapshot) error {
+	// Conflict on (protocol_slug, captured_at) so that duplicate oracle reports
+	// for the same protocol+timestamp are silently ignored rather than inserted
+	// as separate rows. The unique constraint uq_apy_snapshots_protocol_time
+	// enforces this at the DB level (migration 069).
 	const q = `
-		INSERT INTO apy_snapshots (id, protocol_slug, apy, tvl, captured_at)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT DO NOTHING`
+		INSERT INTO apy_snapshots (id, protocol_slug, apy, tvl, captured_at, flagged, flag_reason)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
+		ON CONFLICT (protocol_slug, captured_at) DO NOTHING`
 	_, err := r.db.ExecContext(ctx, q,
 		snap.ID,
 		snap.ProtocolSlug,
 		snap.APY.String(),
 		snap.TVL.String(),
 		snap.CapturedAt,
+		snap.Flagged,
+		snap.FlagReason,
 	)
+	if err != nil && strings.Contains(err.Error(), "uq_apy_snapshots_protocol_time") {
+		return apysnapshot.ErrDuplicateSnapshot
+	}
 	return err
 }
 
 func (r *APYSnapshotRepository) ListByProtocol(ctx context.Context, slug string, since time.Time) ([]apysnapshot.APYSnapshot, error) {
 	const q = `
-		SELECT id, protocol_slug, apy, tvl, captured_at
+		SELECT id, protocol_slug, apy, tvl, captured_at, flagged, COALESCE(flag_reason, '')
 		FROM apy_snapshots
 		WHERE protocol_slug = $1
 		  AND captured_at >= $2
@@ -79,8 +89,10 @@ func scanAPYSnapshot(row interface {
 		apy          string
 		tvl          string
 		capturedAt   time.Time
+		flagged      bool
+		flagReason   string
 	)
-	if err := row.Scan(&id, &protocolSlug, &apy, &tvl, &capturedAt); err != nil {
+	if err := row.Scan(&id, &protocolSlug, &apy, &tvl, &capturedAt, &flagged, &flagReason); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return apysnapshot.APYSnapshot{}, apysnapshot.ErrProtocolNotFound
 		}
@@ -106,5 +118,7 @@ func scanAPYSnapshot(row interface {
 		APY:          apyDec,
 		TVL:          tvlDec,
 		CapturedAt:   capturedAt,
+		Flagged:      flagged,
+		FlagReason:   flagReason,
 	}, nil
 }

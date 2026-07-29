@@ -11,6 +11,19 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.routers import analyze, chat, coaching, health, savings, ws_chat, natural_language_goal
+from app.routers import (
+    analyze,
+    chat,
+    coaching,
+    health,
+    nudges,
+    optimize,
+    rebalance,
+    recommendations,
+    savings,
+    tool_actions,
+    ws_chat,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -79,3 +92,8 @@ app.include_router(analyze.router)
 app.include_router(ws_chat.router)
 app.include_router(savings.router, prefix="/intelligence")
 app.include_router(natural_language_goal.router, prefix="/intelligence")
+app.include_router(rebalance.router)
+app.include_router(optimize.router, prefix="/intelligence")
+app.include_router(recommendations.router, prefix="/intelligence")
+app.include_router(nudges.router, prefix="/intelligence/nudges")
+app.include_router(tool_actions.router, prefix="/intelligence")
