@@ -98,7 +98,8 @@ function buildId(prefix: string) {
 }
 
 export function NotificationsProvider({ children }: { children: ReactNode }) {
-    const { address } = useWallet();
+    const { address: addressRaw } = useWallet();
+    const address = addressRaw ?? undefined;
 
     const [notifications, setNotifications] = useState<AppNotification[]>([]);
     const [preferences, setPreferences] = useState<UserNotificationPreferences>(
