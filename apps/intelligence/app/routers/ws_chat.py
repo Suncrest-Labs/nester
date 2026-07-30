@@ -34,28 +34,15 @@ async def _authenticate(websocket: WebSocket) -> Optional[str]:
         return None
 
     try:
-        claims: dict[str, Any] = jwt.decode(
-            token,
-            settings.jwt_secret,
-            algorithms=["HS256"],
-        )
-    except jwt.ExpiredSignatureError:
-        await websocket.send_json({"type": "auth_error", "message": "Token expired"})
-        await websocket.close(code=1008)
-        return None
-    except jwt.InvalidTokenError:
+        payload = jwt.decode(token, settings.anthropic_jwt_secret, algorithms=["HS256"])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise ValueError("missing sub claim")
+        return user_id
+    except Exception:
         await websocket.send_json({"type": "auth_error", "message": "Invalid token"})
         await websocket.close(code=1008)
         return None
-
-    user_id: str = claims.get("sub", "")
-    if not user_id:
-        await websocket.send_json({"type": "auth_error", "message": "Token missing subject"})
-        await websocket.close(code=1008)
-        return None
-
-    await websocket.send_json({"type": "auth_success"})
-    return user_id
 
 
 @router.websocket("/ws/chat")
@@ -73,6 +60,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             if not message:
                 await websocket.send_json({"type": "error", "message": "message is required"})
                 continue
+
             if len(message) > guardrails.MAX_USER_MESSAGE_CHARS:
                 await websocket.send_json(
                     {"type": "error", "message": "message is too long"}
@@ -94,8 +82,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 # Strip SSE "data: " prefix — WS clients get raw text
                 if chunk.startswith("data: "):
                     chunk = chunk[6:].rstrip("\n")
-                if chunk:
-                    await websocket.send_text(chunk)
+                await websocket.send_text(chunk)
 
     except WebSocketDisconnect:
         pass

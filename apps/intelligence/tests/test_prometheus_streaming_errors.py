@@ -6,7 +6,6 @@ with the generic "trouble connecting" catch-all, or propagating as a raw
 500 to the caller.
 """
 
-from types import SimpleNamespace
 from typing import Any
 
 import anthropic
@@ -66,7 +65,9 @@ def _stub_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_error_yields_friendly_retry_message(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_rate_limit_error_yields_friendly_retry_message(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
     exc = _make_status_error(429)
     monkeypatch.setattr(prometheus, "get_client", lambda: FakeClient(exc))
 
@@ -80,7 +81,9 @@ async def test_rate_limit_error_yields_friendly_retry_message(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_overloaded_error_yields_friendly_retry_message(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_overloaded_error_yields_friendly_retry_message(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
     exc = _make_status_error(529)
     monkeypatch.setattr(prometheus, "get_client", lambda: FakeClient(exc))
 
