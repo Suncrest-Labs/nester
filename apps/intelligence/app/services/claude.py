@@ -1,3 +1,8 @@
+import anthropic
+
+from app.config import settings
+from app.models.preferences import ResponsePreferences
+
 """Claude client configuration."""
 
 """Claude client and per-user tone/style prompt helpers (#927).
@@ -10,10 +15,7 @@ facts get reworded to match the user's taste without touching the base
 persona, grounding, or trust-boundary rules.
 """
 
-import anthropic
 
-from app.config import settings
-from app.models.preferences import ResponsePreferences
 
 client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
