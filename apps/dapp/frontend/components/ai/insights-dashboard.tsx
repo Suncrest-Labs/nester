@@ -179,7 +179,6 @@ export function InsightsDashboard({ showHeader = true }: Props) {
     queryKey: ["market-sentiment"],
     queryFn: () => intelligence.getMarketSentiment(),
     staleTime: 300_000,
-    retry: 2,
   })
 
   const handleDismiss = useCallback((id: string) => {
