@@ -6,10 +6,7 @@ import Link from "next/link"
 import {
   AlertTriangle,
   ArrowRight,
-  ChevronDown,
-  ChevronUp,
   GraduationCap,
-  Loader2,
   Newspaper,
   RefreshCw,
   Sparkles,
@@ -20,7 +17,7 @@ import {
 import { intelligence, type PortfolioInsight } from "@/lib/api/intelligence"
 import { useWallet } from "@/components/wallet-provider"
 import { useAuth } from "@/components/auth-provider"
-import { InsightCard, InsightCardSkeleton, getInsightDismissKey } from "@/components/ai/insightCard"
+import { InsightCard, InsightCardSkeleton } from "@/components/ai/insightCard"
 import { MarketSentimentWidget } from "@/components/ai/marketSentiment"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
@@ -72,7 +69,7 @@ interface ProjectionData {
 }
 
 function ProjectionChart({ data }: { data: ProjectionData }) {
-  if (!data.bands.length) return null
+  if (data.bands.length < 2) return null
 
   const values = data.bands.flatMap((b) => [b.lower, b.upper, b.median])
   const minV = Math.min(...values)
@@ -141,6 +138,11 @@ interface Props {
   showHeader?: boolean
 }
 
+type InsightItem = {
+  type: "recommendation" | "projection" | "coaching" | "digest"
+  data: PortfolioInsight | ProjectionData | CoachingContent | DigestContent
+}
+
 export function InsightsDashboard({ showHeader = true }: Props) {
   const { address } = useWallet()
   const { userId } = useAuth()
@@ -154,7 +156,6 @@ export function InsightsDashboard({ showHeader = true }: Props) {
     queryFn: () => intelligence.getPortfolioInsights(userId || address || ""),
     enabled: !!(userId || address),
     staleTime: 60_000,
-    retry: 2,
   })
 
   const coachingQuery = useQuery({
@@ -178,7 +179,6 @@ export function InsightsDashboard({ showHeader = true }: Props) {
     queryKey: ["market-sentiment"],
     queryFn: () => intelligence.getMarketSentiment(),
     staleTime: 300_000,
-    retry: 2,
   })
 
   const handleDismiss = useCallback((id: string) => {
@@ -192,8 +192,8 @@ export function InsightsDashboard({ showHeader = true }: Props) {
     )
   }, [insightsQuery.data, dismissedIds])
 
-  const allItems: Array<{ type: "recommendation" | "projection" | "coaching" | "digest"; data: PortfolioInsight | ProjectionData | CoachingContent | DigestContent }> = useMemo(() => {
-    const items: typeof allItems = []
+  const allItems: InsightItem[] = useMemo(() => {
+    const items: InsightItem[] = []
 
     if (filteredInsights.length > 0) {
       for (const insight of filteredInsights) {
@@ -227,11 +227,20 @@ export function InsightsDashboard({ showHeader = true }: Props) {
 
   const isLoading = insightsQuery.isLoading
   const isError = insightsQuery.isError
-  const isEmpty = !isLoading && !isError && allItems.length === 0 && !marketSentimentQuery.data
+  const isEmpty = !isLoading && !isError && allItems.length === 0
 
   const handleRetry = () => {
     insightsQuery.refetch()
   }
+
+  useEffect(() => {
+    if (!showPrometheus) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowPrometheus(false)
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [showPrometheus])
 
   if (!address) {
     return (
@@ -453,7 +462,7 @@ export function InsightsDashboard({ showHeader = true }: Props) {
       )}
 
       {showPrometheus && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-lg rounded-2xl bg-card border border-border p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-sm">Ask Prometheus</h3>
@@ -461,6 +470,7 @@ export function InsightsDashboard({ showHeader = true }: Props) {
                 type="button"
                 onClick={() => setShowPrometheus(false)}
                 className="rounded-lg p-1 text-muted-foreground hover:bg-secondary"
+                aria-label="Close Ask Prometheus modal"
               >
                 <X className="h-4 w-4" />
               </button>
