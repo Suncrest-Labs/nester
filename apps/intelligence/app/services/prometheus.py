@@ -14,12 +14,12 @@ from app.config import settings
 from app.models.coaching import CoachingRequest, CoachingResponse
 from app.models.explainability import DocumentUsed, ExplainabilityTrace, ToolInvocation
 from app.models.nudge import NudgeCopyResponse
-from app.models.preferences import ResponsePreferences
 from app.models.portfolio import (
     AllocationItem,
     PortfolioAnalysisResponse,
     PortfolioBreakdown,
 )
+from app.models.preferences import ResponsePreferences
 from app.models.recommendation import (
     ConfidenceLevel,
     Recommendation,

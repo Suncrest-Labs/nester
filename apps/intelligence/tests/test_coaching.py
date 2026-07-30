@@ -98,7 +98,10 @@ async def test_generate_coaching_preference_wins_over_incidental_description_lan
     """A stored language preference is authoritative even when the goal's
     free-text description happens to be written in a different language.
     """
-    payload = '{"progress_assessment": "ok", "deposit_schedule": [], "nudges": [], "confidence": "high"}'
+    payload = (
+        '{"progress_assessment": "ok", "deposit_schedule": [], '
+        '"nudges": [], "confidence": "high"}'
+    )
     fake_client = FakeClient(payload)
     monkeypatch.setattr(prometheus, "get_client", lambda: fake_client)
     monkeypatch.setattr(prometheus.anthropic.types, "TextBlock", DummyTextBlock, raising=False)

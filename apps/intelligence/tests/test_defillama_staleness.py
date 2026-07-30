@@ -105,7 +105,10 @@ async def test_outage_after_ttl_expiry_serves_stale_data_on_non_200(client):
 async def test_outage_after_ttl_expiry_serves_stale_data_on_exception(client):
     await _prime_cache_and_expire_short_ttl(client)
 
-    with patch("aiohttp.ClientSession", return_value=_make_failing_session(Exception("network down"))):
+    with patch(
+        "aiohttp.ClientSession",
+        return_value=_make_failing_session(Exception("network down")),
+    ):
         result = await client.get_yield_pools(chain="Stellar")
 
     assert result, "expected stale fallback data, got empty list"
