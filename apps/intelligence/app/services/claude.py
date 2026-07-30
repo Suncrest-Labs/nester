@@ -23,11 +23,11 @@ client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 MODEL_ID = settings.anthropic_model
 
 
-def get_client():
+def get_client() -> anthropic.Anthropic:
     return client
 
 
-def get_model_id():
+def get_model_id() -> str:
     return MODEL_ID
 
 

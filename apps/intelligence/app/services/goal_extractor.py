@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Optional
 
-import pytz
+import pytz  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
 from app.services.claude import get_client, get_model_id

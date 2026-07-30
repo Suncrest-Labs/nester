@@ -79,8 +79,8 @@ async def _prime_cache_and_expire_short_ttl(client: DeFiLlamaClient) -> None:
     successful fetch, then simulate the short-TTL entry expiring (an
     outage happening *after* the normal cache would already be a miss)
     without waiting out the real 15-minute TTL."""
-    mock_resp = _make_mock_response(200, _POOLS_RESPONSE)
-    with patch("aiohttp.ClientSession", return_value=_make_session(mock_resp)):
+    resp = _make_mock_response(200, _POOLS_RESPONSE)
+    with patch("aiohttp.ClientSession", return_value=_make_session(resp)):
         result = await client.get_yield_pools(chain="Stellar")
     assert result  # sanity: the priming fetch actually returned data
 
@@ -95,8 +95,8 @@ async def _prime_cache_and_expire_short_ttl(client: DeFiLlamaClient) -> None:
 async def test_outage_after_ttl_expiry_serves_stale_data_on_non_200(client):
     await _prime_cache_and_expire_short_ttl(client)
 
-    mock_resp = _make_mock_response(500, {})
-    with patch("aiohttp.ClientSession", return_value=_make_session(mock_resp)):
+    resp = _make_mock_response(500, {})
+    with patch("aiohttp.ClientSession", return_value=_make_session(resp)):
         result = await client.get_yield_pools(chain="Stellar")
 
     assert result, "expected stale fallback data, got empty list"
@@ -121,8 +121,8 @@ async def test_outage_after_ttl_expiry_serves_stale_data_on_exception(client):
 async def test_outage_with_no_prior_successful_fetch_still_returns_empty(client):
     # No priming fetch — nothing to fall back to, so behavior must be
     # unchanged from before the staleness guard: an empty list, not an error.
-    mock_resp = _make_mock_response(500, {})
-    with patch("aiohttp.ClientSession", return_value=_make_session(mock_resp)):
+    resp = _make_mock_response(500, {})
+    with patch("aiohttp.ClientSession", return_value=_make_session(resp)):
         result = await client.get_yield_pools(chain="Stellar")
 
     assert result == []
@@ -133,8 +133,8 @@ async def test_stale_fallback_is_not_used_when_a_fresh_cache_entry_exists(client
     # Prime the cache and do NOT expire it — the fresh, non-stale path
     # should serve normally and never even attempt a live fetch, let alone
     # need the fallback.
-    mock_resp = _make_mock_response(200, _POOLS_RESPONSE)
-    with patch("aiohttp.ClientSession", return_value=_make_session(mock_resp)) as mock_session:
+    resp = _make_mock_response(200, _POOLS_RESPONSE)
+    with patch("aiohttp.ClientSession", return_value=_make_session(resp)) as mock_session:
         await client.get_yield_pools(chain="Stellar")
         result = await client.get_yield_pools(chain="Stellar")
 
