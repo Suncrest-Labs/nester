@@ -15,4 +15,5 @@ type UserListFilter struct {
 	MinAmount           *string
 	DestinationProvider string
 	FiatCurrency        string
+	Search              string
 }

@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["*"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Detect which areas of the monorepo changed so downstream jobs can skip
   # work they don't need to run. Each filter is an OR of globs; if ANY match,
@@ -301,6 +305,12 @@ jobs:
     env:
       DATABASE_URL: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
       REDIS_URL: redis://localhost:6379
+      # Redis-backed tests (internal/cache, internal/notifications,
+      # internal/ws) skip via t.Skip when this is unset, following the
+      # convention in internal/middleware/ratelimit_backend_test.go. REDIS_URL
+      # above is what the app itself reads; without this, every such test
+      # silently skips in CI even though the redis service below is running.
+      REDIS_ADDR: localhost:6379
     steps:
       - uses: actions/checkout@v4
 

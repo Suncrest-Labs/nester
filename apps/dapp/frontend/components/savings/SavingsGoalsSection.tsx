@@ -21,6 +21,8 @@ import { useSavingsGoals } from "@/hooks/useSavingsGoals";
 import { useWallet } from "@/components/wallet-provider";
 import { DeadlineBadge } from "@/components/savings/DeadlineBadge";
 import { SavingsOnboardingWizard } from "@/components/savings/SavingsOnboardingWizard";
+import { ProgressVisualization } from "@/components/savings/ProgressVisualization";
+import type { GoalProgressData } from "@/lib/types/progress";
 
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   emergency_fund: Target,
@@ -43,6 +45,45 @@ function goalDisplayName(goal: SavingsGoal): string {
 
 function toNumber(value: string | number): number {
   return typeof value === "number" ? value : parseFloat(value) || 0;
+}
+
+function buildProgressData(goal: SavingsGoal): GoalProgressData {
+  const current = toNumber(goal.current_amount);
+  const target = toNumber(goal.target_amount);
+  const principal = goal.principal_amount != null ? toNumber(goal.principal_amount) : current;
+  const yieldAmt = goal.yield_amount != null ? toNumber(goal.yield_amount) : 0;
+  const locked = goal.locked_positions?.map((p) => ({
+    id: p.id,
+    amount: toNumber(p.amount),
+    currency: goal.currency,
+    locked_at: p.locked_at,
+    matures_at: p.matures_at,
+    boost_percent: p.boost_percent,
+    yield_earned: toNumber(p.yield_earned),
+  })) ?? [];
+  const flexible = goal.flexible_amount != null ? toNumber(goal.flexible_amount) : Math.max(0, current - locked.reduce((s, p) => s + p.amount, 0));
+
+  return {
+    current_amount: current,
+    target_amount: target,
+    currency: goal.currency,
+    principal_amount: principal,
+    yield_amount: yieldAmt,
+    locked_positions: locked,
+    flexible_amount: flexible,
+    projection: goal.projection ? {
+      vault_id: goal.vault_id,
+      currency: goal.currency,
+      current_apy: 0,
+      timeline: goal.projection.timeline,
+      success_probability: goal.projection.success_probability,
+      on_track: goal.projection.on_track,
+      monthly_gap: goal.projection.monthly_gap,
+    } : undefined,
+    asset_composition: goal.asset_composition,
+    deadline: goal.deadline,
+    status: goal.status,
+  };
 }
 
 function GoalsSkeleton() {
@@ -69,6 +110,7 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
   const progress = Math.min(100, Math.max(0, goal.progress_pct ?? 0));
   const isPaused = goal.status === "paused";
   const isCompleted = goal.status === "completed";
+  const hasRichData = goal.principal_amount != null || goal.locked_positions?.length;
 
   return (
     <div
@@ -109,17 +151,23 @@ function GoalCard({ goal }: { goal: SavingsGoal }) {
           <p className="text-[10px] text-black/50 dark:text-white/50 uppercase font-bold tracking-wide">Saved</p>
         </div>
       </div>
-      <div className="mb-2 h-2 overflow-hidden rounded-full bg-black/8 dark:bg-white/8">
-        <div
-          className={cn("h-full rounded-full transition-all", isCompleted ? "bg-emerald-500" : "bg-black dark:bg-white")}
-          style={{ width: `${progress}%` }}
-          role="progressbar"
-          aria-valuenow={progress}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        />
-      </div>
-      <div className="flex items-center justify-between text-[11px] text-black/50 dark:text-white/50 font-medium">
+
+      {hasRichData ? (
+        <ProgressVisualization progress={buildProgressData(goal)} compact />
+      ) : (
+        <div className="mb-2 h-2 overflow-hidden rounded-full bg-black/8 dark:bg-white/8">
+          <div
+            className={cn("h-full rounded-full transition-all", isCompleted ? "bg-emerald-500" : "bg-black dark:bg-white")}
+            style={{ width: `${progress}%` }}
+            role="progressbar"
+            aria-valuenow={progress}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          />
+        </div>
+      )}
+
+      <div className="flex items-center justify-between text-[11px] text-black/50 dark:text-white/50 font-medium mt-2">
         <span>{progress.toFixed(0)}% complete</span>
         <div className="flex items-center gap-2">
           {goal.on_track != null && !isCompleted && (

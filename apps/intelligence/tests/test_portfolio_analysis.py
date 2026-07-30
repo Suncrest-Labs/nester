@@ -39,7 +39,7 @@ class FakeAsyncMessages:
 
     async def create(self, *args: Any, **kwargs: Any) -> Any:
         """Return a mock response with either text or tool_use block."""
-        content = []
+        content: list[Any] = []
         if self.payload:
             content.append(DummyTextBlock(self.payload))
         if self.tool_input:

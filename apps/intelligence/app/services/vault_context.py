@@ -11,6 +11,8 @@ except ImportError:
 
 import aiohttp
 
+from app.services.i18n import DEFAULT_LANGUAGE, format_amount, format_percentage
+
 logger = logging.getLogger(__name__)
 
 
@@ -256,11 +258,88 @@ class VaultContextFetcher:
 
         return fallback_rates
 
+    async def fetch_savings_goals(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Fetch the user's savings goals from the Nester API.
+
+        Returns a list of goal dicts with fields such as id, name, target_amount,
+        current_amount, currency, deadline, avg_weekly_deposit, vault_id, status.
+        """
+        url = f"{self.api_base_url}/api/v1/users/savings-goals"
+        headers = {
+            "Authorization": f"Bearer {self.service_api_key}",
+            "Content-Type": "application/json",
+            "X-User-Id": user_id,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(f"Failed to fetch savings goals: {response.status}")
+                        return []
+                    payload = await response.json()
+                    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+                    return list(data) if isinstance(data, list) else []
+        except Exception as e:
+            logger.warning(f"Error fetching savings goals for user {user_id}: {e}")
+            return []
+
+    async def fetch_vault_rebalance_suggestion(
+        self, vault_id: str, user_id: str
+    ) -> Dict[str, Any]:
+        """
+        Fetch the deterministic rebalance suggestion already computed by the Go
+        API's vault rebalance service (`scheduler.Decide`, issue #110). This
+        does not re-derive the suggestion -- it surfaces the existing computed
+        output as one grounding signal for yield-related recommendations.
+
+        Returns a dict such as {has_suggestion, current_allocations,
+        recommended_allocations, expected_apy_gain_bps, expected_apy_gain_pct,
+        confidence, reason}, or {} if unavailable.
+        """
+        if not vault_id or not user_id:
+            return {}
+
+        url = f"{self.api_base_url}/api/v1/vaults/{vault_id}/rebalance-suggestion"
+        headers = {
+            "Authorization": f"Bearer {self.service_api_key}",
+            "Content-Type": "application/json",
+            "X-User-Id": user_id,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            f"Failed to fetch rebalance suggestion for vault {vault_id}: "
+                            f"{response.status}"
+                        )
+                        return {}
+                    payload = await response.json()
+                    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+                    return dict(data) if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning(f"Error fetching rebalance suggestion for vault {vault_id}: {e}")
+            return {}
+
     def build_context_block(
-        self, vaults: List[Dict[str, Any]], market_rates: List[Dict[str, Any]]
+        self,
+        vaults: List[Dict[str, Any]],
+        market_rates: List[Dict[str, Any]],
+        language: str = DEFAULT_LANGUAGE,
     ) -> str:
         """
         Build a formatted string block to be injected into the system prompt.
+
+        Amounts and percentages are formatted deterministically for
+        `language` here (#multilingual) so Prometheus can reference them
+        verbatim instead of formatting numbers itself.
         """
         if not vaults:
             vault_context = "The user has no active vaults."
@@ -278,8 +357,11 @@ class VaultContextFetcher:
                     else "No allocation data"
                 )
 
+                balance_str = format_amount(balance, "USD", language)
+                apy_str = format_percentage(apy, language)
                 vault_lines.append(
-                    f"- {name}: ${balance:,.2f} balance, {apy:.2f}% APY, Allocation: [{alloc_str}]"
+                    f"- {name}: {balance_str} balance, {apy_str} APY, "
+                    f"Allocation: [{alloc_str}]"
                 )
 
             vault_context = f"""## User Portfolio
@@ -292,7 +374,8 @@ class VaultContextFetcher:
             for rate in market_rates:
                 protocol = rate.get("protocol", "unknown").upper()
                 apy = rate.get("apy", 0)
-                market_lines.append(f"- {protocol}: {apy * 100:.2f}% APY")
+                apy_str = format_percentage(apy * 100, language)
+                market_lines.append(f"- {protocol}: {apy_str} APY")
 
             market_context = f"""## Current Market Rates (Live)
 {chr(10).join(market_lines)}"""
@@ -302,7 +385,10 @@ class VaultContextFetcher:
 {market_context}"""
 
     def build_risk_profile_block(
-        self, vaults: List[Dict[str, Any]], risk_data: Dict[str, Dict[str, Any]]
+        self,
+        vaults: List[Dict[str, Any]],
+        risk_data: Dict[str, Dict[str, Any]],
+        language: str = DEFAULT_LANGUAGE,
     ) -> str:
         """
         Build a risk profile block to be injected into the system prompt.

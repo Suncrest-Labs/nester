@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_vault_transactions_user_type_created;
+DROP INDEX IF EXISTS idx_vault_transactions_user_created;

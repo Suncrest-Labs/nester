@@ -1,56 +1,70 @@
-import { PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
+import { PieChart, Pie, Cell } from "recharts";
+
+interface RiskFactor {
+  name: string;
+  score: number;
+  weight: number;
+  reason: string;
+  available: boolean;
+  confidence: number;
+}
 
 interface RiskGaugeChartProps {
   data: {
     overall: number;
+    confidence: number;
     tier: string;
-    concentration_risk: number;
-    protocol_risk: number;
-    yield_volatility: number;
-    liquidity_risk: number;
+    factors: RiskFactor[];
   };
 }
 
 const RiskGaugeChart = ({ data }: RiskGaugeChartProps) => {
   const getColor = (score: number): string => {
     if (score >= 0 && score <= 33) {
-      return "#10b981"; // green-500
+      return "#10b981";
     } else if (score >= 34 && score <= 66) {
-      return "#f59e0b"; // amber-500
+      return "#f59e0b";
     } else {
-      return "#ef4444"; // red-500
+      return "#ef4444";
     }
   };
 
+  const confidencePercent = Math.round(data.confidence * 100);
+
   return (
-    <div className="relative w-[100px] h-[100px] mx-auto">
-      <PieChart className="w-full h-full">
-        <Pie
-          data={[
-            { name: "score", value: data.overall },
-            { name: "background", value: 100 - data.overall },
-          ]}
-          dataKey="value"
-          nameKey="name"
-          cx="50%"
-          cy="50%"
-          innerRadius={60}
-          outerRadius={80}
-        >
-          {[
-            { name: "score", value: data.overall },
-            { name: "background", value: 100 - data.overall },
-          ].map((entry, index) => (
-            <Cell
-              key={`cell-${index}`}
-              fill={entry.name === "score" ? getColor(data.overall) : "#e5e7eb"}
-            />
-          ))}
-        </Pie>
-      </PieChart>
-      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-        <div className="text-2xl font-bold">{Math.round(data.overall)}</div>
-        <div className="text-sm text-gray-500">{data.tier}</div>
+    <div className="flex flex-col items-center gap-4">
+      <div className="relative w-[100px] h-[100px] mx-auto">
+        <PieChart className="w-full h-full">
+          <Pie
+            data={[
+              { name: "score", value: data.overall },
+              { name: "background", value: 100 - data.overall },
+            ]}
+            dataKey="value"
+            nameKey="name"
+            cx="50%"
+            cy="50%"
+            innerRadius={60}
+            outerRadius={80}
+          >
+            {[
+              { name: "score", value: data.overall },
+              { name: "background", value: 100 - data.overall },
+            ].map((entry, index) => (
+              <Cell
+                key={`cell-${index}`}
+                fill={entry.name === "score" ? getColor(data.overall) : "#e5e7eb"}
+              />
+            ))}
+          </Pie>
+        </PieChart>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <div className="text-2xl font-bold">{Math.round(data.overall)}</div>
+          <div className="text-sm text-gray-500">{data.tier}</div>
+        </div>
+      </div>
+      <div className="text-sm text-muted-foreground">
+        Confidence: {confidencePercent}%
       </div>
     </div>
   );
@@ -59,45 +73,29 @@ const RiskGaugeChart = ({ data }: RiskGaugeChartProps) => {
 interface RiskDimensionsTableProps {
   data: {
     overall: number;
+    confidence: number;
     tier: string;
-    concentration_risk: number;
-    protocol_risk: number;
-    yield_volatility: number;
-    liquidity_risk: number;
+    factors: RiskFactor[];
   };
 }
 
 const RiskDimensionsTable = ({ data }: RiskDimensionsTableProps) => {
-  const dimensions = [
-    {
-      name: "Concentration",
-      score: data.concentration_risk,
-      weight: "35%",
-      explanation:
-        "Measures how concentrated your vault is across different protocols. Higher concentration means higher risk.",
-    },
-    {
-      name: "Protocol Risk",
-      score: data.protocol_risk,
-      weight: "30%",
-      explanation:
-        "Based on the inherent risk of the protocols you are invested in (Aave, Blend, Compound).",
-    },
-    {
-      name: "Yield Volatility",
-      score: data.yield_volatility,
-      weight: "20%",
-      explanation:
-        "Measures the variability of your vault's APY over time. Higher volatility means higher risk.",
-    },
-    {
-      name: "Liquidity Risk",
-      score: data.liquidity_risk,
-      weight: "15%",
-      explanation:
-        "Measures the size of your vault relative to the total market size of the protocol. Higher ratio means higher risk.",
-    },
-  ];
+  const formatFactorName = (name: string): string => {
+    return name
+      .split("_")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  };
+
+  const getScoreColor = (score: number): string => {
+    if (score >= 0 && score <= 33) {
+      return "text-green-600";
+    } else if (score >= 34 && score <= 66) {
+      return "text-amber-600";
+    } else {
+      return "text-red-600";
+    }
+  };
 
   return (
     <div className="overflow-x-auto">
@@ -105,7 +103,7 @@ const RiskDimensionsTable = ({ data }: RiskDimensionsTableProps) => {
         <thead>
           <tr className="border-b">
             <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">
-              Dimension
+              Factor
             </th>
             <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">
               Score
@@ -113,25 +111,37 @@ const RiskDimensionsTable = ({ data }: RiskDimensionsTableProps) => {
             <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">
               Weight
             </th>
+            <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">
+              Status
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-200">
-          {dimensions.map((dimension, index) => (
-            <tr key={index} className="hover:bg-gray-50">
-              <td className="p-3 flex items-center">
-                <span className="mr-2">{dimension.name}</span>
-                <div className="relative inline-block">
-                  <button
-                    onMouseEnter={() => {}} // Tooltip handled in parent component
-                    onMouseLeave={() => {}}
-                    className="text-xs text-gray-400 hover:text-gray-600"
-                  >
-                    (?)
-                  </button>
+          {data.factors.map((factor, index) => (
+            <tr key={index} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+              <td className="p-3">
+                <div className="flex flex-col">
+                  <span className="font-medium">{formatFactorName(factor.name)}</span>
+                  <span className="text-xs text-muted-foreground">{factor.reason}</span>
                 </div>
               </td>
-              <td className="p-3 text-left">{dimension.score.toFixed(1)}</td>
-              <td className="p-3 text-left">{dimension.weight}</td>
+              <td className={`p-3 text-left font-medium ${factor.available ? getScoreColor(factor.score) : "text-gray-400"}`}>
+                {factor.available ? factor.score.toFixed(1) : "N/A"}
+              </td>
+              <td className="p-3 text-left">
+                {(factor.weight * 100).toFixed(0)}%
+              </td>
+              <td className="p-3 text-left">
+                {factor.available ? (
+                  <span className="text-xs px-2 py-1 rounded bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                    Available
+                  </span>
+                ) : (
+                  <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                    Unavailable
+                  </span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

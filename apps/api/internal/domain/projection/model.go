@@ -14,6 +14,11 @@ var (
 	ErrInvalidAmount          = errors.New("amount must be greater than zero")
 	ErrInvalidPeriod          = errors.New("period must be greater than zero")
 	ErrInvalidAPY             = errors.New("APY must be greater than zero")
+	// ErrPeriodTooLong is returned when a caller-supplied period/deadline
+	// exceeds MaxPeriodMonths (simulation.go). Rejecting it here, rather than
+	// only clamping deep inside the simulation engine, gives the caller a
+	// clear error instead of a silently-truncated result.
+	ErrPeriodTooLong = errors.New("period exceeds the maximum supported number of months")
 )
 
 // CompoundFrequency represents how often compound interest is calculated

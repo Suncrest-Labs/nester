@@ -1,6 +1,7 @@
 // lib/api/bank.ts
 // All bank-related API calls go through the Go API so provider secrets
 // (Paystack / Flutterwave keys) are never exposed to the browser.
+import { getAccessToken as getStoredToken } from "@/lib/auth/token-store";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
@@ -130,10 +131,4 @@ export async function resolveAccountName(
     // Network error — treat as provider error so the UI shows the yellow warning.
     return { status: "provider_error" };
   }
-}
-
-/** Pull the JWT from wherever the app stores it (localStorage key used by auth). */
-function getStoredToken(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem("nester_token") ?? "";
 }

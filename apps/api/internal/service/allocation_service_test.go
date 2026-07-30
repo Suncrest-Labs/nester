@@ -82,6 +82,9 @@ func (r *allocationVaultRepository) ReplaceAllocations(_ context.Context, _ uuid
 func (r *allocationVaultRepository) UpdateVault(context.Context, uuid.UUID, string, vault.VaultStatus) error {
 	return nil
 }
+func (r *allocationVaultRepository) UpdateHarvestFrequency(context.Context, uuid.UUID, string) error {
+	return nil
+}
 func (r *allocationVaultRepository) RecordWithdrawal(context.Context, uuid.UUID, vault.TransactionRecord) error {
 	return nil
 }

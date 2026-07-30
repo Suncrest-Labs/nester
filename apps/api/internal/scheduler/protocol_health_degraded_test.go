@@ -32,17 +32,20 @@ func (fakeTVL) ProtocolTVL(_ context.Context, _ string) (float64, error) {
 	return 0, errors.New("no tvl")
 }
 
-type fakeTVLRepo struct{}
+type degradedFakeTVLRepo struct{}
 
-func (fakeTVLRepo) InsertSnapshot(context.Context, string, float64) error { return nil }
-func (fakeTVLRepo) SnapshotAt(context.Context, string, time.Time) (*protocoltvl.Snapshot, error) {
+func (degradedFakeTVLRepo) InsertSnapshot(context.Context, string, float64) error { return nil }
+func (degradedFakeTVLRepo) SnapshotAt(context.Context, string, time.Time) (*protocoltvl.Snapshot, error) {
 	return nil, nil
 }
-func (fakeTVLRepo) LatestSnapshot(context.Context, string) (*protocoltvl.Snapshot, error) {
+func (degradedFakeTVLRepo) LatestSnapshot(context.Context, string) (*protocoltvl.Snapshot, error) {
 	return nil, nil
 }
-func (fakeTVLRepo) CanAlert(context.Context, string) (bool, error) { return true, nil }
-func (fakeTVLRepo) RecordAlert(context.Context, string) error      { return nil }
+func (degradedFakeTVLRepo) ListSince(context.Context, string, time.Time) ([]protocoltvl.Snapshot, error) {
+	return nil, nil
+}
+func (degradedFakeTVLRepo) CanAlert(context.Context, string) (bool, error) { return true, nil }
+func (degradedFakeTVLRepo) RecordAlert(context.Context, string) error      { return nil }
 
 type noopHealthNotifier struct{}
 
@@ -103,7 +106,7 @@ func checkerWithDegraded(
 
 	j := NewProtocolHealthChecker(
 		ProtocolHealthConfig{Enabled: true, Interval: time.Minute},
-		vaults, fakeTVL{}, fakeTVLRepo{}, noopHealthNotifier{}, nil,
+		vaults, fakeTVL{}, degradedFakeTVLRepo{}, noopHealthNotifier{}, nil,
 	).WithDegradedSources(lister, notifier)
 
 	return j, userID
@@ -200,7 +203,7 @@ func TestCheckerWorksWithoutDegradedFeed(t *testing.T) {
 			UserID:      uuid.New(),
 			Allocations: []vault.Allocation{{Protocol: "blend"}},
 		}}},
-		fakeTVL{}, fakeTVLRepo{}, noopHealthNotifier{}, nil,
+		fakeTVL{}, degradedFakeTVLRepo{}, noopHealthNotifier{}, nil,
 	)
 	j.Tick(context.Background())
 }

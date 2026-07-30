@@ -1,23 +1,58 @@
 'use client'
 
 import Link from 'next/link'
-import { ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronDown, ChevronUp, Sparkles, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { type PortfolioInsight } from '@/lib/api/intelligence'
+
+export const INSIGHT_DISMISSAL_KEY_PREFIX = 'nester_ai_insight_dismissed_'
+
+export function getInsightDismissKey(id?: string, title?: string): string {
+  const keyIdentifier = id || title || 'unknown'
+  return `${INSIGHT_DISMISSAL_KEY_PREFIX}${keyIdentifier}`
+}
 
 interface InsightCardProps extends PortfolioInsight {
   /** Optional AI reasoning text shown in the expandable toggle. */
   reasoning?: string
+  /** Optional callback fired when card is dismissed */
+  onDismiss?: () => void
 }
 
 export function InsightCard({
+  id,
   title,
   body,
   confidence,
   action,
   reasoning,
+  onDismiss,
 }: InsightCardProps) {
   const [showReasoning, setShowReasoning] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+
+  const storageKey = getInsightDismissKey(id, title)
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const isDismissed = localStorage.getItem(storageKey) === 'true'
+      if (isDismissed) {
+        setDismissed(true)
+      }
+    }
+  }, [storageKey])
+
+  const handleDismiss = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(storageKey, 'true')
+    }
+    setDismissed(true)
+    onDismiss?.()
+  }
+
+  if (dismissed) {
+    return null
+  }
 
   const confidencePct = Math.round(confidence * 100)
 
@@ -39,10 +74,21 @@ export function InsightCard({
           </div>
           <p className="text-sm font-medium text-foreground">{title}</p>
         </div>
-        {/* Confidence badge */}
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeClass}`}>
-          {confidencePct}% confidence
-        </span>
+        <div className="flex items-center gap-2">
+          {/* Confidence badge */}
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${badgeClass}`}>
+            {confidencePct}% confidence
+          </span>
+          {/* Dismiss button */}
+          <button
+            type="button"
+            onClick={handleDismiss}
+            aria-label="Dismiss insight"
+            className="rounded-lg p-1 text-foreground/40 hover:bg-secondary hover:text-foreground transition-colors"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Body */}

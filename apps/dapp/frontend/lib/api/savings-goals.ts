@@ -40,6 +40,35 @@ export interface SavingsGoal {
   /** Sharing. */
   share_token?: string;
   is_shared?: boolean;
+  /** Progress visualization fields (#869). */
+  principal_amount?: string | number;
+  yield_amount?: string | number;
+  locked_positions?: Array<{
+    id: string;
+    amount: string | number;
+    locked_at: string;
+    matures_at: string;
+    boost_percent: number;
+    yield_earned: string | number;
+  }>;
+  flexible_amount?: string | number;
+  projection?: {
+    success_probability: number;
+    on_track: boolean;
+    monthly_gap?: number;
+    timeline: Array<{
+      date: string;
+      median: number;
+      upper_bound: number;
+      lower_bound: number;
+    }>;
+  };
+  asset_composition?: Array<{
+    asset: string;
+    value: number;
+    percentage: number;
+    color: string;
+  }>;
 }
 
 export interface SharedGoalView {
@@ -92,12 +121,7 @@ export const savingsGoals = {
       body: JSON.stringify(input),
     }),
   delete: (id: string) =>
-    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1"}/users/savings-goals/${id}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("nester_token") ?? "" : ""}`,
-      },
-    }),
+    apiRequest<void>(`/users/savings-goals/${id}`, { method: "DELETE" }),
   pause: (id: string) =>
     apiRequest<SavingsGoal>(`/users/savings-goals/${id}/pause`, { method: "PATCH" }),
   resume: (id: string) =>
@@ -112,12 +136,7 @@ export const savingsGoals = {
   share: (id: string) =>
     apiRequest<SavingsGoal>(`/users/savings-goals/${id}/share`, { method: "POST" }),
   unshare: (id: string) =>
-    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1"}/users/savings-goals/${id}/share`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("nester_token") ?? "" : ""}`,
-      },
-    }),
+    apiRequest<void>(`/users/savings-goals/${id}/share`, { method: "DELETE" }),
   getShared: (token: string) =>
     apiRequest<SharedGoalView>(`/savings-goals/shared/${token}`),
 };

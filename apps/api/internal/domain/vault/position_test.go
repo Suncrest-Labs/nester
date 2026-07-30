@@ -100,3 +100,62 @@ func TestBuildUserVaultPositionAccountsForWithdrawals(t *testing.T) {
 		t.Fatalf("expected pnl -160 after withdrawal, got %s", position.UnrealizedPnLUSDC)
 	}
 }
+
+func TestBuildUserVaultPositionManySmallDepositsAndHarvestsLimitRoundingDrift(t *testing.T) {
+	const operationCount = 5000
+
+	vaultID := uuid.New()
+	userID := uuid.New()
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	oneMillion := decimal.RequireFromString("1000000")
+	depositAmount := decimal.RequireFromString("0.01")
+	harvestAmount := decimal.RequireFromString("0.000001")
+
+	v := Vault{
+		ID:             vaultID,
+		TotalDeposited: oneMillion,
+		CurrentBalance: oneMillion,
+	}
+	initialShares := oneMillion
+	txns := []VaultTransaction{{
+		VaultID:              vaultID,
+		UserID:               &userID,
+		Type:                 "deposit",
+		Amount:               oneMillion,
+		SharesMintedOrBurned: &initialShares,
+		CreatedAt:            at,
+	}}
+	sharesHeld := initialShares
+
+	for i := 1; i <= operationCount; i++ {
+		// Apply a small harvest before each deposit and mint shares at the
+		// unrounded live price used by the ledger.
+		v.CurrentBalance = v.CurrentBalance.Add(harvestAmount)
+		sharePrice := v.CurrentBalance.Div(v.TotalDeposited)
+		shares := depositAmount.Div(sharePrice)
+
+		at = at.Add(time.Minute)
+		txns = append(txns, VaultTransaction{
+			VaultID:              vaultID,
+			UserID:               &userID,
+			Type:                 "deposit",
+			Amount:               depositAmount,
+			SharesMintedOrBurned: &shares,
+			CreatedAt:            at,
+		})
+		sharesHeld = sharesHeld.Add(shares)
+		v.TotalDeposited = v.TotalDeposited.Add(depositAmount)
+		v.CurrentBalance = v.CurrentBalance.Add(depositAmount)
+	}
+
+	position := BuildUserVaultPosition(v, userID, txns)
+	got, err := decimal.NewFromString(position.CurrentValueUSDC)
+	if err != nil {
+		t.Fatalf("parse current value %q: %v", position.CurrentValueUSDC, err)
+	}
+	expected := sharesHeld.Mul(v.CurrentBalance.Div(v.TotalDeposited)).Round(positionDecimalPlaces)
+	epsilon := decimal.RequireFromString("0.000001")
+	if got.Sub(expected).Abs().GreaterThan(epsilon) {
+		t.Fatalf("current value drifted: got %s, expected %s, epsilon %s", got, expected, epsilon)
+	}
+}
