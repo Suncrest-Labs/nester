@@ -18,6 +18,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/systemstate"
+	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
 )
 
 func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, rpcURL string) {
@@ -55,6 +56,10 @@ func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sys
 				if err != nil {
 					logger.Error("event indexer fetch failed", "error", err)
 					continue
+				}
+
+				if latestLedger >= startLedger {
+					metrics.SetIndexerLag(float64(latestLedger - startLedger))
 				}
 
 				for _, event := range events {

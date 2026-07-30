@@ -14,6 +14,11 @@ import (
 	"github.com/stellar/go/strkey"
 	"github.com/stellar/go/txnbuild"
 	"github.com/stellar/go/xdr"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/tracing"
 )
 
 var (
@@ -232,7 +237,19 @@ type rpcResponse[T any] struct {
 	} `json:"error,omitempty"`
 }
 
-func (c *ContractInvoker) rpcCall(ctx context.Context, method string, params, result any) error {
+func (c *ContractInvoker) rpcCall(ctx context.Context, method string, params, result any) (err error) {
+	ctx, span := tracing.Tracer().Start(ctx, "soroban.rpc/"+method,
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attribute.String("rpc.method", method)),
+	)
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: 1, Method: method, Params: params})
 	if err != nil {
 		return err

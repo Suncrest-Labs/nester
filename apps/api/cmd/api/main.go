@@ -28,6 +28,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
+	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
@@ -39,6 +40,7 @@ import (
 	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
 	"github.com/suncrestlabs/nester/apps/api/internal/services"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
+	"github.com/suncrestlabs/nester/apps/api/internal/tracing"
 	"github.com/suncrestlabs/nester/apps/api/internal/valuation"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
@@ -72,6 +74,26 @@ func run() error {
 	// of only unwinding via defer after the HTTP server finishes draining.
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Tracing is opt-in: Init returns a no-op shutdown when no OTLP endpoint is
+	// configured, so the application starts normally with tracing disabled.
+	tracingShutdown, err := tracing.Init(shutdownCtx, tracing.Config{
+		Endpoint:    cfg.Tracing().OTLPEndpoint(),
+		ServiceName: cfg.Tracing().ServiceName(),
+		Insecure:    cfg.Tracing().Insecure(),
+		SampleRatio: cfg.Tracing().SampleRatio(),
+		Environment: cfg.Environment(),
+	})
+	if err != nil {
+		return fmt.Errorf("init tracing: %w", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracingShutdown(ctx); err != nil {
+			baseLogger.Error("tracing shutdown failed", "error", err.Error())
+		}
+	}()
 
 	pgPool, err := repository.NewPostgresDB(cfg.Database())
 	if err != nil {
@@ -827,25 +849,19 @@ func run() error {
 	)
 	cors := middleware.CORS(cfg.AllowedOrigins())
 
-	server := &http.Server{
-		Addr: cfg.Server().Address(),
-		// cors is outermost of the request-processing middleware (after only
-		// SecurityHeaders/RecoverPanic) so that rate-limit 429 responses from
-		// globalLimiter and authRouteLimiter still carry CORS headers and remain
-		// readable to browser clients. OPTIONS preflights are short-circuited by
-		// cors and never reach the limiters.
-		Handler: middleware.SecurityHeaders(cfg.Environment())(
-			middleware.RecoverPanic(baseLogger)(
-				cors(
-					globalLimiter(
-						authRouteLimiter(
-							writeLimiter(
-								authenticator(
-									settlementLimiter(
-										walletLimiter(
-											middleware.LimitRequestBody(1 * 1024 * 1024)(
-												middleware.Logging(baseLogger)(mux),
-											),
+	// The application middleware chain (auth, rate limiting, CORS, logging, etc.)
+	// wraps the API mux.
+	appHandler := middleware.SecurityHeaders(cfg.Environment())(
+		middleware.RecoverPanic(baseLogger)(
+			cors(
+				globalLimiter(
+					authRouteLimiter(
+						writeLimiter(
+							authenticator(
+								settlementLimiter(
+									walletLimiter(
+										middleware.LimitRequestBody(1 * 1024 * 1024)(
+											middleware.Logging(baseLogger)(middleware.Metrics()(mux)),
 										),
 									),
 								),
@@ -855,6 +871,24 @@ func run() error {
 				),
 			),
 		),
+	)
+
+	// The Prometheus scrape endpoint is served by a top-level dispatch mux so it
+	// bypasses the application middleware chain entirely: it must not be
+	// authenticated and must not be rate limited. All other routes flow through
+	// the full middleware chain above.
+	rootMux := http.NewServeMux()
+	rootMux.Handle("GET /metrics", metrics.Handler())
+	rootMux.Handle("/", appHandler)
+
+	server := &http.Server{
+		Addr: cfg.Server().Address(),
+		// cors is outermost of the request-processing middleware (after only
+		// SecurityHeaders/RecoverPanic) so that rate-limit 429 responses from
+		// globalLimiter and authRouteLimiter still carry CORS headers and remain
+		// readable to browser clients. OPTIONS preflights are short-circuited by
+		// cors and never reach the limiters.
+		Handler:           rootMux,
 		ReadTimeout:       cfg.Server().ReadTimeout(),
 		ReadHeaderTimeout: cfg.Server().ReadHeaderTimeout(),
 		WriteTimeout:      cfg.Server().WriteTimeout(),
@@ -873,6 +907,40 @@ func run() error {
 	)
 
 	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, cfg.Stellar().RPCURL())
+
+	// Periodically refresh runtime gauges (pgx pool stats, Redis health) so the
+	// /metrics endpoint reflects current state without instrumenting every call
+	// site. The goroutine is tied to shutdownCtx and exits on shutdown.
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+
+		refresh := func() {
+			stat := pgPool.Pool.Stat()
+			metrics.SetDBConnections(
+				float64(stat.AcquiredConns()),
+				float64(stat.IdleConns()),
+				float64(stat.TotalConns()),
+			)
+
+			if redisClient != nil {
+				pingCtx, cancel := context.WithTimeout(shutdownCtx, 2*time.Second)
+				err := redisClient.Ping(pingCtx).Err()
+				cancel()
+				metrics.SetRedisUp(err == nil)
+			}
+		}
+
+		refresh()
+		for {
+			select {
+			case <-shutdownCtx.Done():
+				return
+			case <-ticker.C:
+				refresh()
+			}
+		}
+	}()
 
 	serverErr := make(chan error, 1)
 	go func() {

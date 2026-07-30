@@ -47,6 +47,7 @@ type Config struct {
 	harvest               HarvestConfig
 	rebalancer            RebalancerConfig
 	schedulerLeadership   SchedulerLeadershipConfig
+	tracing               TracingConfig
 }
 
 // AccountCipherConfig holds the versioned key set used to encrypt sensitive
@@ -184,6 +185,16 @@ type LogConfig struct {
 
 type RedisConfig struct {
 	addr string
+}
+
+// TracingConfig holds OpenTelemetry tracing settings. Tracing is opt-in: it is
+// only enabled when an OTLP exporter endpoint is configured, and the
+// application starts normally as a no-op when it is not.
+type TracingConfig struct {
+	otlpEndpoint string
+	serviceName  string
+	insecure     bool
+	sampleRatio  float64
 }
 
 type BankConfig struct {
@@ -331,6 +342,12 @@ func Load() (*Config, error) {
 			lockKey:           int64(loader.intDefault("SCHEDULER_LEADER_LOCK_KEY", 846000)),
 			heartbeatInterval: loader.durationDefault("SCHEDULER_LEADER_HEARTBEAT_INTERVAL", 3*time.Second),
 		},
+		tracing: TracingConfig{
+			otlpEndpoint: strings.TrimSpace(loader.stringDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "")),
+			serviceName:  loader.stringDefault("OTEL_SERVICE_NAME", "nester-api"),
+			insecure:     loader.boolDefault("OTEL_EXPORTER_OTLP_INSECURE", false),
+			sampleRatio:  loader.floatDefault("OTEL_TRACES_SAMPLER_ARG", 1.0),
+		},
 	}
 
 	if cfg.bankAccountCipherKey == "" && environment == "development" {
@@ -410,6 +427,38 @@ func (c Config) Log() LogConfig {
 
 func (c Config) Redis() RedisConfig {
 	return c.redis
+}
+
+// Tracing returns the OpenTelemetry tracing configuration.
+func (c Config) Tracing() TracingConfig {
+	return c.tracing
+}
+
+// Enabled reports whether tracing should be initialised. Tracing is opt-in and
+// only enabled when an OTLP exporter endpoint has been configured.
+func (t TracingConfig) Enabled() bool {
+	return t.otlpEndpoint != ""
+}
+
+// OTLPEndpoint returns the configured OTLP exporter endpoint (host:port), or an
+// empty string when tracing is disabled.
+func (t TracingConfig) OTLPEndpoint() string {
+	return t.otlpEndpoint
+}
+
+// ServiceName returns the service name reported on emitted spans.
+func (t TracingConfig) ServiceName() string {
+	return t.serviceName
+}
+
+// Insecure reports whether the OTLP exporter should connect without TLS.
+func (t TracingConfig) Insecure() bool {
+	return t.insecure
+}
+
+// SampleRatio returns the trace sampling ratio in the range [0, 1].
+func (t TracingConfig) SampleRatio() float64 {
+	return t.sampleRatio
 }
 
 func (c Config) Performance() PerformanceConfig {
@@ -771,6 +820,10 @@ func (c *Config) validate(loader *envLoader) {
 		c.bank.paystackKey == "" && c.bank.flutterwaveKey == "" {
 		loader.addError("at least one of PAYSTACK_SECRET_KEY or FLUTTERWAVE_SECRET_KEY must be set in production")
 	}
+
+	if c.tracing.sampleRatio < 0 || c.tracing.sampleRatio > 1 {
+		loader.addError("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1")
+	}
 }
 
 func validateAllowedOrigins(environment string, origins []string, loader *envLoader) {
@@ -1037,6 +1090,19 @@ func (l *envLoader) durationDefault(key string, fallback time.Duration) time.Dur
 	value, err := time.ParseDuration(raw)
 	if err != nil {
 		l.addError(fmt.Sprintf("%s must be a valid duration, got %q", key, raw))
+		return fallback
+	}
+	return value
+}
+
+func (l *envLoader) floatDefault(key string, fallback float64) float64 {
+	raw, ok := l.lookup(key)
+	if !ok {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		l.addError(fmt.Sprintf("%s must be a number, got %q", key, raw))
 		return fallback
 	}
 	return value
