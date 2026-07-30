@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,11 +23,20 @@ import (
 type fakeIdempotencyStore struct {
 	mu      sync.Mutex
 	records map[string]IdempotencyRecord
+
+	// completeFailuresRemaining, when > 0, makes the next that-many calls to
+	// Complete return errCompleteFailed instead of succeeding — simulates a
+	// transient DB hiccup for completeWithRetry tests.
+	completeFailuresRemaining int
+	completeCalls             int
+	releaseCalls              int
 }
 
 func newFakeIdempotencyStore() *fakeIdempotencyStore {
 	return &fakeIdempotencyStore{records: make(map[string]IdempotencyRecord)}
 }
+
+var errCompleteFailed = errors.New("simulated transient Complete failure")
 
 func fakeKey(userID uuid.UUID, key string) string { return userID.String() + ":" + key }
 
@@ -44,6 +54,11 @@ func (s *fakeIdempotencyStore) Claim(_ context.Context, userID uuid.UUID, key, f
 func (s *fakeIdempotencyStore) Complete(_ context.Context, userID uuid.UUID, key string, status int, body []byte, contentType string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.completeCalls++
+	if s.completeFailuresRemaining > 0 {
+		s.completeFailuresRemaining--
+		return errCompleteFailed
+	}
 	k := fakeKey(userID, key)
 	rec := s.records[k]
 	rec.Status = "completed"
@@ -57,6 +72,7 @@ func (s *fakeIdempotencyStore) Complete(_ context.Context, userID uuid.UUID, key
 func (s *fakeIdempotencyStore) Release(_ context.Context, userID uuid.UUID, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.releaseCalls++
 	delete(s.records, fakeKey(userID, key))
 	return nil
 }
@@ -258,6 +274,110 @@ func TestIdempotencyMiddleware_FailsClosedWithoutAuthenticatedUser(t *testing.T)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("got %d, want 500 when auth context is missing (fail closed)", rec.Code)
+	}
+}
+
+func TestIdempotencyMiddleware_RejectsOversizedBodyWithoutTruncating(t *testing.T) {
+	store := newFakeIdempotencyStore()
+	var calls int32
+	handler := IdempotencyMiddleware(store, idempotencyRoutes())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusCreated)
+	}))
+
+	// One byte over maxIdempotencyBodyBytes: must be rejected outright, not
+	// silently truncated to the limit and forwarded as a shorter-but-valid
+	// body — see the maxIdempotencyBodyBytes+1 read in the middleware.
+	oversized := strings.Repeat("a", maxIdempotencyBodyBytes+1)
+	req := withTestUser(httptest.NewRequest(http.MethodPost, "/api/v1/transactions", strings.NewReader(oversized)))
+	req.Header.Set("Idempotency-Key", "key-1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("got %d, want 413 for a body over maxIdempotencyBodyBytes", rec.Code)
+	}
+	if atomic.LoadInt32(&calls) != 0 {
+		t.Fatalf("expected handler NOT to run for a rejected oversized body, got %d calls", calls)
+	}
+}
+
+func TestIdempotencyMiddleware_AcceptsBodyAtExactSizeLimit(t *testing.T) {
+	store := newFakeIdempotencyStore()
+	var calls int32
+	handler := IdempotencyMiddleware(store, idempotencyRoutes())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusCreated)
+	}))
+
+	exact := strings.Repeat("a", maxIdempotencyBodyBytes)
+	req := withTestUser(httptest.NewRequest(http.MethodPost, "/api/v1/transactions", strings.NewReader(exact)))
+	req.Header.Set("Idempotency-Key", "key-1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201 for a body exactly at maxIdempotencyBodyBytes", rec.Code)
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("expected handler called once, got %d", calls)
+	}
+}
+
+func TestIdempotencyMiddleware_CompleteRetriesThroughTransientFailures(t *testing.T) {
+	store := newFakeIdempotencyStore()
+	store.completeFailuresRemaining = completeMaxRetries - 1 // succeeds on the last attempt
+	handler := IdempotencyMiddleware(store, idempotencyRoutes())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+
+	req := withTestUser(httptest.NewRequest(http.MethodPost, "/api/v1/transactions", strings.NewReader(`{}`)))
+	req.Header.Set("Idempotency-Key", "key-1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201", rec.Code)
+	}
+	if store.completeCalls != completeMaxRetries {
+		t.Errorf("expected %d Complete attempts, got %d", completeMaxRetries, store.completeCalls)
+	}
+	if store.releaseCalls != 0 {
+		t.Errorf("expected no Release once Complete eventually succeeds, got %d calls", store.releaseCalls)
+	}
+
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("retry after successful Complete: got %d, want the stored 201", rec2.Code)
+	}
+	if store.completeCalls != completeMaxRetries {
+		t.Errorf("a replayed request must not call Complete again, got %d total calls", store.completeCalls)
+	}
+}
+
+func TestIdempotencyMiddleware_CompleteFallsBackToReleaseAfterExhaustingRetries(t *testing.T) {
+	store := newFakeIdempotencyStore()
+	store.completeFailuresRemaining = completeMaxRetries + 5 // never succeeds within the retry budget
+	handler := IdempotencyMiddleware(store, idempotencyRoutes())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+
+	req := withTestUser(httptest.NewRequest(http.MethodPost, "/api/v1/transactions", strings.NewReader(`{}`)))
+	req.Header.Set("Idempotency-Key", "key-1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// The client still gets the real response — Complete failing is a
+	// persistence problem, not a request failure.
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201 even though Complete never persisted", rec.Code)
+	}
+	if store.completeCalls != completeMaxRetries {
+		t.Errorf("expected exactly %d Complete attempts before giving up, got %d", completeMaxRetries, store.completeCalls)
+	}
+	if store.releaseCalls != 1 {
+		t.Errorf("expected exactly one Release after exhausting Complete retries, got %d", store.releaseCalls)
 	}
 }
 

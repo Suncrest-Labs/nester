@@ -11,17 +11,26 @@ same "explain, never compute" split `yield_explanation.py` already
 established for the optimizer.
 """
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 DeteriorationLevel = Literal["none", "mild", "moderate", "severe"]
 
+# Matches the lowercase-slug shape every protocol identifier already uses
+# elsewhere in this codebase (e.g. "aave", "blend"), plus room for hyphenated
+# multi-word names. protocol_slug is interpolated directly into the
+# Anthropic prompt in deterioration_summary.py — a valid-JWT caller with an
+# unbounded/arbitrary value here could otherwise inject prompt directives or
+# inflate prompt token usage.
+_PROTOCOL_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
 
 class DeteriorationAssessment(BaseModel):
     """A single scored protocol-health assessment, computed on the Go side."""
 
-    protocol_slug: str
+    protocol_slug: str = Field(pattern=_PROTOCOL_SLUG_RE.pattern, max_length=64)
     probability: float = Field(ge=0.0, le=1.0)
     level: DeteriorationLevel
     tvl_outflow_velocity_pct: float

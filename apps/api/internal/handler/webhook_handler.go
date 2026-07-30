@@ -111,8 +111,8 @@ func (h *WebhookHandler) delete(w http.ResponseWriter, r *http.Request) {
 
 // listDeliveries exposes the per-attempt delivery log to the subscription
 // owner (#836) — status, latency, response snippet per attempt, newest
-// first. ?limit caps how many rows are returned (default/max enforced by
-// the service+repository layer).
+// first. ?limit caps how many rows are returned; the service layer clamps
+// it to maxWebhookDeliveriesLimit regardless of what's requested here.
 func (h *WebhookHandler) listDeliveries(w http.ResponseWriter, r *http.Request) {
 	userID, ok := webhookAuthenticatedUserID(w, r)
 	if !ok {

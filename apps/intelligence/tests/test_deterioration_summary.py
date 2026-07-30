@@ -115,7 +115,8 @@ async def test_llm_failure_falls_back_to_grounded_deterministic_summary() -> Non
 @pytest.mark.asyncio
 async def test_user_audience_produces_reassuring_fund_move_explanation() -> None:
     assessment = _deteriorating_assessment()
-    client = RaisingClient()  # force the fallback path, which is deterministic and easy to assert on
+    # Force the fallback path, which is deterministic and easy to assert on.
+    client = RaisingClient()
 
     summary = await deterioration_summary.summarize_assessment(
         assessment, audience="user", client=client  # type: ignore[arg-type]

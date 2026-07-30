@@ -63,8 +63,15 @@ func (r *DeteriorationRepository) ListActionsByProtocol(ctx context.Context, slu
 		if err := rows.Scan(&idStr, &protocolSlug, &level, &probability, &kind, &vaultIDStr, &rebalanceIDStr, &explanation, &errText, &createdAt); err != nil {
 			return nil, err
 		}
+		// uuid.Parse rather than MustParse: a malformed stored value (legacy
+		// row, manual edit, migration drift) should fail this read, not
+		// panic the process — this is an audit-trail table.
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, err
+		}
 		action := deterioration.Action{
-			ID:           uuid.MustParse(idStr),
+			ID:           id,
 			ProtocolSlug: protocolSlug,
 			Level:        deterioration.Level(level),
 			Probability:  probability,
@@ -73,11 +80,17 @@ func (r *DeteriorationRepository) ListActionsByProtocol(ctx context.Context, slu
 			CreatedAt:    createdAt,
 		}
 		if vaultIDStr.Valid {
-			v := uuid.MustParse(vaultIDStr.String)
+			v, err := uuid.Parse(vaultIDStr.String)
+			if err != nil {
+				return nil, err
+			}
 			action.VaultID = &v
 		}
 		if rebalanceIDStr.Valid {
-			v := uuid.MustParse(rebalanceIDStr.String)
+			v, err := uuid.Parse(rebalanceIDStr.String)
+			if err != nil {
+				return nil, err
+			}
 			action.RebalanceID = &v
 		}
 		if errText.Valid {

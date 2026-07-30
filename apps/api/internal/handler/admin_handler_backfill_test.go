@@ -10,9 +10,23 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/backfill"
 	"github.com/suncrestlabs/nester/apps/api/internal/stellar"
 )
+
+// authedBackfillRequest attaches an authenticated principal to the request
+// context, the way the real auth middleware would — startBackfill derives
+// initiated_by from this rather than the request body (see admin_handler.go).
+func authedBackfillRequest(method, target string, body []byte) *http.Request {
+	var req *http.Request
+	if body != nil {
+		req = httptest.NewRequest(method, target, bytes.NewReader(body))
+	} else {
+		req = httptest.NewRequest(method, target, nil)
+	}
+	return req.WithContext(auth.NewContext(req.Context(), auth.User{ID: "operator-1"}))
+}
 
 type stubBackfillTrigger struct {
 	startRun  *backfill.Run
@@ -58,7 +72,11 @@ func newAdminHandlerForBackfillTest() (*AdminHandler, *stubBackfillTrigger, *stu
 	return h, trigger, runs
 }
 
-func TestAdminHandler_StartBackfill_RequiresInitiatedBy(t *testing.T) {
+func TestAdminHandler_StartBackfill_RequiresAuthenticatedPrincipal(t *testing.T) {
+	// initiated_by is derived from the request's authenticated principal
+	// (see admin_handler.go), not the request body — an unauthenticated
+	// request must be rejected rather than falling back to an empty/absent
+	// audit identity.
 	h, _, _ := newAdminHandlerForBackfillTest()
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -68,8 +86,8 @@ func TestAdminHandler_StartBackfill_RequiresInitiatedBy(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for an unauthenticated request, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -78,8 +96,8 @@ func TestAdminHandler_StartBackfill_RejectsInvalidMode(t *testing.T) {
 	mux := http.NewServeMux()
 	h.Register(mux)
 
-	body, _ := json.Marshal(map[string]any{"from_ledger": 100, "to_ledger": 200, "initiated_by": "op", "mode": "delete_everything"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/backfill", bytes.NewReader(body))
+	body, _ := json.Marshal(map[string]any{"from_ledger": 100, "to_ledger": 200, "mode": "delete_everything"})
+	req := authedBackfillRequest(http.MethodPost, "/api/v1/admin/backfill", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -95,9 +113,9 @@ func TestAdminHandler_StartBackfill_Success(t *testing.T) {
 	h.Register(mux)
 
 	body, _ := json.Marshal(map[string]any{
-		"from_ledger": 100, "to_ledger": 200, "initiated_by": "operator-1", "contract_ids": []string{"C1"},
+		"from_ledger": 100, "to_ledger": 200, "contract_ids": []string{"C1"},
 	})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/backfill", bytes.NewReader(body))
+	req := authedBackfillRequest(http.MethodPost, "/api/v1/admin/backfill", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -105,7 +123,7 @@ func TestAdminHandler_StartBackfill_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if trigger.lastStart.InitiatedBy != "operator-1" {
-		t.Errorf("expected initiated_by to be passed through, got %q", trigger.lastStart.InitiatedBy)
+		t.Errorf("expected initiated_by to come from the authenticated principal, got %q", trigger.lastStart.InitiatedBy)
 	}
 	if trigger.lastStart.Mode != backfill.ModeBackfill {
 		t.Errorf("expected mode to default to backfill, got %q", trigger.lastStart.Mode)
@@ -118,8 +136,8 @@ func TestAdminHandler_StartBackfill_PropagatesRunnerError(t *testing.T) {
 	mux := http.NewServeMux()
 	h.Register(mux)
 
-	body, _ := json.Marshal(map[string]any{"from_ledger": 100, "to_ledger": 200, "initiated_by": "op"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/backfill", bytes.NewReader(body))
+	body, _ := json.Marshal(map[string]any{"from_ledger": 100, "to_ledger": 200})
+	req := authedBackfillRequest(http.MethodPost, "/api/v1/admin/backfill", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -219,8 +237,8 @@ func TestAdminHandler_Backfill_NotConfiguredByDefault(t *testing.T) {
 	mux := http.NewServeMux()
 	h.Register(mux)
 
-	body, _ := json.Marshal(map[string]any{"from_ledger": 100, "to_ledger": 200, "initiated_by": "op"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/backfill", bytes.NewReader(body))
+	body, _ := json.Marshal(map[string]any{"from_ledger": 100, "to_ledger": 200})
+	req := authedBackfillRequest(http.MethodPost, "/api/v1/admin/backfill", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

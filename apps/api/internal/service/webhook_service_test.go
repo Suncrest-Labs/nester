@@ -21,6 +21,10 @@ type recordingEnqueuer struct {
 		payload service.WebhookDeliveryJobPayload
 		opts    []jobqueue.EnqueueOption
 	}
+	// err, when set, makes every EnqueueJSON call fail — for testing that a
+	// dropped enqueue error is at least logged (FireForUser has no return
+	// value, so this is the only failure signal a caller could ever see).
+	err error
 }
 
 func (e *recordingEnqueuer) EnqueueJSON(_ context.Context, jobType string, payload any, opts ...jobqueue.EnqueueOption) (jobqueue.Job, error) {
@@ -32,6 +36,9 @@ func (e *recordingEnqueuer) EnqueueJSON(_ context.Context, jobType string, paylo
 		payload service.WebhookDeliveryJobPayload
 		opts    []jobqueue.EnqueueOption
 	}{jobType, p, opts})
+	if e.err != nil {
+		return jobqueue.Job{}, e.err
+	}
 	return jobqueue.Job{ID: uuid.New(), Type: jobType}, nil
 }
 
@@ -205,6 +212,48 @@ func TestWebhookService_ListDeliveries_ReturnsOwnersLog(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("expected 1 delivery, got %d", len(got))
+	}
+}
+
+func TestWebhookService_ListDeliveries_ClampsExcessiveLimit(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, deliveries, _ := newServiceForTest(t, wh)
+
+	if _, err := svc.ListDeliveries(context.Background(), owner, wh.ID, 10_000_000); err != nil {
+		t.Fatalf("ListDeliveries: %v", err)
+	}
+	if deliveries.lastLimit != 200 {
+		t.Errorf("expected an excessive limit to be clamped to 200, repository received %d", deliveries.lastLimit)
+	}
+}
+
+func TestWebhookService_ListDeliveries_ClampsNonPositiveLimitToDefault(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, deliveries, _ := newServiceForTest(t, wh)
+
+	if _, err := svc.ListDeliveries(context.Background(), owner, wh.ID, 0); err != nil {
+		t.Fatalf("ListDeliveries: %v", err)
+	}
+	if deliveries.lastLimit != 200 {
+		t.Errorf("expected a non-positive limit to fall back to the max, repository received %d", deliveries.lastLimit)
+	}
+}
+
+func TestWebhookService_FireForUser_LogsEnqueueFailureWithoutPanicking(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive, EventTypes: []string{"goal.milestone.50"}}
+	svc, _, _, enqueuer := newServiceForTest(t, wh)
+	enqueuer.err = errors.New("job queue unavailable")
+
+	// Must not panic despite the enqueue failure — FireForUser has no
+	// return value for the caller to check, so a dropped error here would
+	// otherwise be completely invisible.
+	svc.FireForUser(context.Background(), owner, "goal.milestone.50", []byte(`{}`))
+
+	if enqueuer.count() != 1 {
+		t.Fatalf("expected the failed enqueue attempt to still be recorded, got %d calls", enqueuer.count())
 	}
 }
 

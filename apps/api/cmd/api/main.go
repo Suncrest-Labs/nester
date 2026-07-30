@@ -733,6 +733,7 @@ func run() error {
 	webhookRepo := postgres.NewWebhookRepository(db)
 	webhookDeliveryRepo := postgres.NewWebhookDeliveryRepository(db)
 	webhookSvc := service.NewWebhookService(webhookRepo, webhookDeliveryRepo, accountCipher, jobQueueClient)
+	webhookSvc.SetLogger(baseLogger.WithGroup("webhook-service"))
 	webhookHandler := handler.NewWebhookHandler(webhookSvc)
 	webhookHandler.Register(mux)
 	webhookLimiter := middleware.NewLimiter(redisClient, "webhook-delivery", cfg.JobQueue().DefaultConcurrency()*2, time.Minute)

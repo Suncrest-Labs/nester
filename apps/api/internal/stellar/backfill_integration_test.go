@@ -58,8 +58,8 @@ func applyBackfillIntegrationMigrations(t *testing.T, db *sql.DB) {
 		"063_create_penalty_events.up.sql",
 		"064_create_vault_rebalance_legs.up.sql",
 		"065_create_vault_rebalance_completions.up.sql",
-		"071_create_backfill_runs.up.sql",
-		"072_add_ledger_sequence_to_derived_events.up.sql",
+		"092_create_backfill_runs.up.sql",
+		"093_add_ledger_sequence_to_derived_events.up.sql",
 	} {
 		path := filepath.Join("..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)

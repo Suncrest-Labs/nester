@@ -111,8 +111,9 @@ func (r *fakeWebhookRepo) RecordDeliveryOutcome(_ context.Context, webhookID uui
 }
 
 type fakeDeliveryRepo struct {
-	mu  sync.Mutex
-	log []webhook.Delivery
+	mu        sync.Mutex
+	log       []webhook.Delivery
+	lastLimit int // limit received by the most recent ListByWebhook call
 }
 
 func (r *fakeDeliveryRepo) Log(_ context.Context, d *webhook.Delivery) error {
@@ -124,9 +125,10 @@ func (r *fakeDeliveryRepo) Log(_ context.Context, d *webhook.Delivery) error {
 	r.log = append(r.log, *d)
 	return nil
 }
-func (r *fakeDeliveryRepo) ListByWebhook(_ context.Context, webhookID uuid.UUID, _ int) ([]webhook.Delivery, error) {
+func (r *fakeDeliveryRepo) ListByWebhook(_ context.Context, webhookID uuid.UUID, limit int) ([]webhook.Delivery, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.lastLimit = limit
 	var out []webhook.Delivery
 	for _, d := range r.log {
 		if d.WebhookID == webhookID {
@@ -226,6 +228,12 @@ func TestWebhookDeliveryJobHandler_SuccessfulDelivery(t *testing.T) {
 	}
 	if gotEvent != "goal.milestone.50" {
 		t.Errorf("event header = %q", gotEvent)
+	}
+	if deliveries.count() != 1 {
+		t.Fatalf("expected the successful attempt to be logged, got %d log entries", deliveries.count())
+	}
+	if got := deliveries.log[0].Outcome; got != webhook.DeliverySucceeded {
+		t.Errorf("logged delivery outcome = %q, want %q", got, webhook.DeliverySucceeded)
 	}
 }
 

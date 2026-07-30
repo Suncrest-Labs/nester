@@ -170,6 +170,20 @@ func TestRunner_Start_RequiresInitiatedBy(t *testing.T) {
 	}
 }
 
+func TestRunner_Start_RejectsUnrecognizedMode(t *testing.T) {
+	// admin_handler.go validates mode too, but cmd/backfill/main.go passes
+	// backfill.Mode(*mode) straight through from an unchecked CLI flag — Start
+	// is the one place both callers go through, so it must reject an unknown
+	// mode itself rather than silently treating it as a plain backfill.
+	r := &Runner{Repo: newFakeBackfillRepo()}
+	_, err := r.Start(context.Background(), StartInput{
+		FromLedger: 100, ToLedger: 200, ContractIDs: []string{"C1"}, InitiatedBy: "op", Mode: "rebild",
+	})
+	if err == nil {
+		t.Fatal("expected an error for an unrecognized mode")
+	}
+}
+
 func TestRunner_Start_DryRunReportsWithoutTouchingDB(t *testing.T) {
 	srv := newMockRPCServer(t, []mockRPCEvent{
 		{ID: "e1", ContractID: "C1", Ledger: 105, EventType: "pnlty_chg", Data: map[string]any{"user": "GABC", "amount": "10"}},

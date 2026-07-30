@@ -188,6 +188,10 @@ func (h *WebhookDeliveryJobHandler) Handle(ctx context.Context, job jobqueue.Job
 	permanentFailure := job.Attempts >= job.MaxAttempts
 
 	if final {
+		outcome.Outcome = webhook.DeliverySucceeded
+		if logErr := h.deliveries.Log(ctx, &outcome); logErr != nil {
+			h.logger.Error("webhook delivery: log attempt failed", "webhook_id", wh.ID, "error", logErr)
+		}
 		if _, err := h.webhooks.RecordDeliveryOutcome(ctx, wh.ID, webhook.DeliverySucceeded); err != nil {
 			h.logger.Error("webhook delivery: record success failed", "webhook_id", wh.ID, "error", err)
 		}

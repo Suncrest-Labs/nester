@@ -146,6 +146,9 @@ func (r *Runner) Start(ctx context.Context, in StartInput) (*backfill.Run, error
 	if in.Mode == "" {
 		in.Mode = backfill.ModeBackfill
 	}
+	if in.Mode != backfill.ModeBackfill && in.Mode != backfill.ModeRebuild {
+		return nil, fmt.Errorf("unknown mode %q (want %q or %q)", in.Mode, backfill.ModeBackfill, backfill.ModeRebuild)
+	}
 
 	contractIDs := in.ContractIDs
 	if len(contractIDs) == 0 {

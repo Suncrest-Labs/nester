@@ -133,7 +133,8 @@ def _build_prompt(assessment: DeteriorationAssessment) -> str:
         f"- TVL outflow velocity: {assessment.tvl_outflow_velocity_pct:.2f}%\n"
         f"- APY abnormality z-score: {assessment.apy_abnormality_z_score:.2f}\n"
         f"- Reported-vs-derived APY gap: {assessment.reported_vs_derived_gap_pct:.2f}%\n"
-        f"- TVL price instability (coefficient of variation): {assessment.price_instability:.2f}\n\n"
+        "- TVL price instability (coefficient of variation): "
+        f"{assessment.price_instability:.2f}\n\n"
         "Summarize this assessment."
     )
 

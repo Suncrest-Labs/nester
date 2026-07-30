@@ -31,7 +31,7 @@ type IdempotencyRecord struct {
 // IdempotencyStore is the persistence port the middleware uses. The
 // concrete implementation (postgres.IdempotencyRepository) is
 // Postgres-backed so completed keys survive a Redis flush/restart — see
-// migrations/069_create_idempotency_keys.up.sql.
+// migrations/090_create_idempotency_keys.up.sql.
 type IdempotencyStore interface {
 	// Claim atomically claims (userID, key). claimed=true means the caller
 	// now owns the key and must execute the handler and call Complete
@@ -46,6 +46,10 @@ type IdempotencyStore interface {
 const (
 	// idempotencyHeader is the client-supplied opaque key.
 	idempotencyHeader = "Idempotency-Key"
+	// maxIdempotencyBodyBytes bounds how much of the request body is read
+	// for fingerprinting/replay. Bodies over this are rejected with 413
+	// rather than silently truncated — see the read below.
+	maxIdempotencyBodyBytes = 1 << 20 // 1MiB
 	// defaultIdempotencyTTL is how long a completed key's response is
 	// replayed for a repeated request — long enough to cover realistic
 	// client retries (24h is the value the issue itself calls standard).
@@ -56,7 +60,33 @@ const (
 	// blocking indefinitely or executing the handler a second time.
 	concurrentWaitTotal = 2 * time.Second
 	concurrentWaitPoll  = 100 * time.Millisecond
+	// completeMaxRetries/-Backoff bound the retry window for a transient
+	// Complete failure (see completeWithRetry) before falling back to
+	// Release, which allows a full re-execution of the handler.
+	completeMaxRetries = 3
+	completeBackoff    = 50 * time.Millisecond
 )
+
+// completeWithRetry retries store.Complete a bounded number of times with a
+// fixed backoff, so a brief DB hiccup doesn't immediately fall back to
+// Release (and therefore a duplicate handler execution on the client's next
+// retry) — see the call site's comment for why that matters.
+func completeWithRetry(ctx context.Context, store IdempotencyStore, userID uuid.UUID, key string, status int, body []byte, contentType string) error {
+	var err error
+	for attempt := 0; attempt < completeMaxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(completeBackoff):
+			}
+		}
+		if err = store.Complete(ctx, userID, key, status, body, contentType); err == nil {
+			return nil
+		}
+	}
+	return err
+}
 
 // IdempotencyMiddleware makes every request matching routes safe to retry:
 // a client-supplied Idempotency-Key header is required on those routes: the
@@ -99,9 +129,19 @@ func IdempotencyMiddleware(store IdempotencyStore, routes []RouteMatch) func(htt
 				return
 			}
 
-			bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			// Read one byte past the limit so an oversized body can be told
+			// apart from one that lands exactly at maxIdempotencyBodyBytes —
+			// io.LimitReader's synthetic EOF makes ReadAll return nil error
+			// either way, so without this a >1MiB body would be silently
+			// truncated and fingerprinted/forwarded incomplete instead of
+			// rejected.
+			bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxIdempotencyBodyBytes+1))
 			if err != nil {
 				http.Error(w, "failed to read request body", http.StatusBadRequest)
+				return
+			}
+			if len(bodyBytes) > maxIdempotencyBodyBytes {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
 			r.Body.Close()
@@ -137,12 +177,16 @@ func IdempotencyMiddleware(store IdempotencyStore, routes []RouteMatch) func(htt
 				next.ServeHTTP(rec, r)
 			}()
 
-			if err := store.Complete(r.Context(), userID, key, rec.status, rec.body.Bytes(), rec.header.Get("Content-Type")); err != nil {
-				// The response was already sent to the client at this
-				// point (rec wraps the real ResponseWriter and forwards
-				// writes through immediately) — a failure to persist here
-				// only means a *future* retry might re-execute the
-				// handler, not that this request's response was lost.
+			// The handler has already run (possibly with real side effects —
+			// e.g. creating a transaction) and its response was already sent
+			// to the client at this point (rec forwards writes through
+			// immediately). Releasing on the first Complete failure would
+			// turn a transient DB hiccup into a full handler re-execution on
+			// the client's next retry — a duplicate write, not a safe
+			// replay, which is the one failure mode idempotency exists to
+			// prevent. Retry Complete a few times before falling back to
+			// Release, to shrink that window.
+			if err := completeWithRetry(r.Context(), store, userID, key, rec.status, rec.body.Bytes(), rec.header.Get("Content-Type")); err != nil {
 				_ = store.Release(context.Background(), userID, key)
 			}
 		})

@@ -148,6 +148,12 @@ func (e *DeteriorationEngine) triggerAutomaticRebalances(ctx context.Context, as
 }
 
 func vaultHasAllocation(v vault.Vault, protocolSlug string) bool {
+	// Normalize both sides — protocolSlug (assessment.ProtocolSlug from the
+	// caller) isn't guaranteed to already match a.Protocol's casing/
+	// whitespace, and this is the one matcher gating the severe-path
+	// automatic rebalance: a silent mismatch here means the protective
+	// action is silently skipped despite a severe assessment.
+	protocolSlug = strings.ToLower(strings.TrimSpace(protocolSlug))
 	for _, a := range v.Allocations {
 		if strings.ToLower(strings.TrimSpace(a.Protocol)) == protocolSlug {
 			return true
@@ -196,10 +202,18 @@ func (e *DeteriorationEngine) notifyVaultOwner(ctx context.Context, v vault.Vaul
 	}
 	title := "We moved your funds to reduce risk"
 	body := "Your vault's allocation to " + assessment.ProtocolSlug + " showed signs of rising risk (" + assessment.Explanation + "), so we automatically reduced your exposure."
-	_ = e.notify.Send(ctx, v.UserID, notifications.EventProtocolHealthAlert, title, body, map[string]any{
+	if err := e.notify.Send(ctx, v.UserID, notifications.EventProtocolHealthAlert, title, body, map[string]any{
 		"protocol":    assessment.ProtocolSlug,
 		"vault_id":    v.ID.String(),
 		"probability": assessment.Probability,
 		"explanation": assessment.Explanation,
-	})
+	}); err != nil {
+		// The audit record (recordAction) is already persisted before this
+		// is called, so the compliance trail survives — but a failed
+		// delivery of "we moved your funds and why" (the explicit
+		// user-facing explainability goal for this feature) must not go
+		// unnoticed by operators.
+		e.logger.Error("deterioration engine: failed to notify vault owner of automatic rebalance",
+			"protocol", assessment.ProtocolSlug, "vault_id", v.ID, "error", err)
+	}
 }

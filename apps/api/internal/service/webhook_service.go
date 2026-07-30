@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -17,6 +19,11 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/webhook"
 	"github.com/suncrestlabs/nester/apps/api/internal/webhookssrf"
 )
+
+// maxWebhookDeliveriesLimit caps ListDeliveries' page size regardless of what
+// a caller requests — without this, ?limit=10000000 becomes one unbounded
+// query plus full JSON serialisation.
+const maxWebhookDeliveriesLimit = 200
 
 // WebhookDeliveryJobType is the job-queue type webhook deliveries are
 // enqueued under (#836), driven by the same durable at-least-once worker
@@ -55,13 +62,30 @@ type WebhookService struct {
 	cipher       *crypto.AccountCipher
 	enqueue      WebhookDeliveryEnqueuer
 	ssrfResolver webhookssrf.Resolver
+	logger       *slog.Logger
 }
 
 // cipher may be nil when AccountCipher is not configured for this
 // deployment; Register fails with ErrWebhookCipherNotConfigured rather than
 // panicking, matching bankaccount_service.go's convention.
 func NewWebhookService(repo webhook.Repository, deliveries webhook.DeliveryRepository, cipher *crypto.AccountCipher, enqueue WebhookDeliveryEnqueuer) *WebhookService {
-	return &WebhookService{repo: repo, deliveries: deliveries, cipher: cipher, enqueue: enqueue, ssrfResolver: webhookssrf.DefaultResolver}
+	return &WebhookService{
+		repo:         repo,
+		deliveries:   deliveries,
+		cipher:       cipher,
+		enqueue:      enqueue,
+		ssrfResolver: webhookssrf.DefaultResolver,
+		logger:       slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+}
+
+// SetLogger wires a real logger. Call this from main after construction;
+// without it, FireForUser's enqueue failures are discarded silently rather
+// than merely unlogged.
+func (s *WebhookService) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		s.logger = logger
+	}
 }
 
 type RegisterWebhookInput struct {
@@ -141,13 +165,18 @@ func (s *WebhookService) FireForUser(ctx context.Context, userID uuid.UUID, even
 			EventType:  eventType,
 			Payload:    payload,
 		}
-		// Idempotency key scopes dedupe to this exact (subscription, event,
-		// payload-instance) delivery: a re-enqueue attempt for the same
-		// logical delivery (e.g. a caller retry) reuses the same job rather
-		// than creating a duplicate, while two different deliveries to the
-		// same webhook never collide.
-		_, _ = s.enqueue.EnqueueJSON(ctx, WebhookDeliveryJobType, jobPayload,
-			jobqueue.WithIdempotencyKey(jobPayload.DeliveryID.String()))
+		// DeliveryID is freshly generated above on every call, so this
+		// idempotency key only guards against double-enqueuing this exact
+		// in-flight payload instance (e.g. a duplicate EnqueueJSON call
+		// within this loop) — it does NOT dedupe a caller retry of the same
+		// logical event, since that retry would go through FireForUser
+		// again with a new DeliveryID. Deduping across caller retries would
+		// require deriving the key from stable inputs (subscription ID +
+		// event type + a caller-supplied event ID) instead.
+		if _, err := s.enqueue.EnqueueJSON(ctx, WebhookDeliveryJobType, jobPayload,
+			jobqueue.WithIdempotencyKey(jobPayload.DeliveryID.String())); err != nil {
+			s.logger.Error("webhook: failed to enqueue delivery", "webhook_id", wh.ID, "event_type", eventType, "error", err)
+		}
 	}
 }
 
@@ -162,6 +191,9 @@ func (s *WebhookService) ListDeliveries(ctx context.Context, userID, webhookID u
 	}
 	if wh.UserID != userID {
 		return nil, webhook.ErrWebhookNotFound
+	}
+	if limit <= 0 || limit > maxWebhookDeliveriesLimit {
+		limit = maxWebhookDeliveriesLimit
 	}
 	return s.deliveries.ListByWebhook(ctx, webhookID, limit)
 }

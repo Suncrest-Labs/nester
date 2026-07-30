@@ -36,7 +36,7 @@ func applyDeteriorationIntegrationMigrations(t *testing.T, db *sql.DB) {
 		"002_create_vaults_table.up.sql",
 		"030_create_vault_rebalances.up.sql",
 		"051_create_protocol_tvl_snapshots.up.sql",
-		"073_create_deterioration_actions.up.sql",
+		"094_create_deterioration_actions.up.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/backfill"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
@@ -237,7 +238,6 @@ type startBackfillRequest struct {
 	ContractIDs []string `json:"contract_ids"`
 	Mode        string   `json:"mode"`
 	DryRun      bool     `json:"dry_run"`
-	InitiatedBy string   `json:"initiated_by"`
 }
 
 // startBackfill handles POST /api/v1/admin/backfill (#840).
@@ -245,16 +245,20 @@ type startBackfillRequest struct {
 // Runs synchronously and returns once the run reaches a terminal state
 // (completed/failed) — for a large range an operator is expected to run
 // this with a long client timeout, or split into smaller ranges. Every run
-// is audited via initiated_by (required) and persisted to backfill_runs
-// regardless of outcome.
+// is audited via initiated_by (persisted to backfill_runs regardless of
+// outcome), sourced from the authenticated principal rather than the
+// request body — this field is the audit trail for a destructive rebuild,
+// so a client-supplied value would let any admin attribute a run to an
+// arbitrary identity.
 func (h *AdminHandler) startBackfill(w http.ResponseWriter, r *http.Request) {
 	var req startBackfillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid JSON"))
 		return
 	}
-	if strings.TrimSpace(req.InitiatedBy) == "" {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("initiated_by is required"))
+	principal, ok := auth.GetUserFromContext(r.Context())
+	if !ok || strings.TrimSpace(principal.ID) == "" {
+		response.WriteJSON(w, http.StatusInternalServerError, response.ValidationErr("backfill requires an authenticated request"))
 		return
 	}
 
@@ -273,7 +277,7 @@ func (h *AdminHandler) startBackfill(w http.ResponseWriter, r *http.Request) {
 		ContractIDs: req.ContractIDs,
 		Mode:        mode,
 		DryRun:      req.DryRun,
-		InitiatedBy: req.InitiatedBy,
+		InitiatedBy: principal.ID,
 	})
 	if err != nil {
 		h.writeBackfillError(w, run, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -92,8 +93,11 @@ func (r *WebhookDeliveryRepository) GetByID(ctx context.Context, id uuid.UUID) (
 		}
 		return nil, err
 	}
-	d := deliveryFromScan(idStr, webhookIDStr, deliveryIDStr, eventType, attempt, outcome,
+	d, err := deliveryFromScan(idStr, webhookIDStr, deliveryIDStr, eventType, attempt, outcome,
 		responseStatus, responseBodySnippet, errText, durationMS, createdAt)
+	if err != nil {
+		return nil, err
+	}
 	d.Payload = payload
 	return &d, nil
 }
@@ -120,9 +124,12 @@ func scanDelivery(row deliveryScanner) (webhook.Delivery, error) {
 		return webhook.Delivery{}, err
 	}
 	return deliveryFromScan(idStr, webhookIDStr, deliveryIDStr, eventType, attempt, outcome,
-		responseStatus, responseBodySnippet, errText, durationMS, createdAt), nil
+		responseStatus, responseBodySnippet, errText, durationMS, createdAt)
 }
 
+// deliveryFromScan returns an error instead of panicking on malformed UUID
+// columns — a legacy/corrupted row must not take down the request goroutine
+// (owner-facing GET /webhooks/{id}/deliveries) or the delivery worker.
 func deliveryFromScan(
 	idStr, webhookIDStr, deliveryIDStr, eventType string,
 	attempt int,
@@ -131,11 +138,24 @@ func deliveryFromScan(
 	responseBodySnippet, errText sql.NullString,
 	durationMS int,
 	createdAt time.Time,
-) webhook.Delivery {
+) (webhook.Delivery, error) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return webhook.Delivery{}, fmt.Errorf("parse delivery id: %w", err)
+	}
+	webhookID, err := uuid.Parse(webhookIDStr)
+	if err != nil {
+		return webhook.Delivery{}, fmt.Errorf("parse webhook id: %w", err)
+	}
+	deliveryID, err := uuid.Parse(deliveryIDStr)
+	if err != nil {
+		return webhook.Delivery{}, fmt.Errorf("parse delivery event id: %w", err)
+	}
+
 	d := webhook.Delivery{
-		ID:         uuid.MustParse(idStr),
-		WebhookID:  uuid.MustParse(webhookIDStr),
-		DeliveryID: uuid.MustParse(deliveryIDStr),
+		ID:         id,
+		WebhookID:  webhookID,
+		DeliveryID: deliveryID,
 		EventType:  eventType,
 		Attempt:    attempt,
 		Outcome:    webhook.DeliveryOutcome(outcome),
@@ -152,7 +172,7 @@ func deliveryFromScan(
 	if errText.Valid {
 		d.Error = errText.String
 	}
-	return d
+	return d, nil
 }
 
 func nullSQLInt(p *int) sql.NullInt64 {

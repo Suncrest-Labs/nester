@@ -4,7 +4,7 @@
 -- last_ledger_done rather than restarting the whole range.
 CREATE TABLE IF NOT EXISTS backfill_runs (
     id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    from_ledger       BIGINT      NOT NULL,
+    from_ledger       BIGINT      NOT NULL CHECK (from_ledger >= 0),
     to_ledger         BIGINT      NOT NULL CHECK (to_ledger >= from_ledger),
     -- Empty means "all vault contracts", matching the forward indexer's
     -- loadVaultContractIDs default.
@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS backfill_runs (
                                    CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
     -- Resumability checkpoint: the last ledger whose events were fully
     -- applied and committed. A resumed run starts from last_ledger_done + 1.
-    last_ledger_done  BIGINT,
+    last_ledger_done  BIGINT      CHECK (
+                                       last_ledger_done IS NULL
+                                       OR last_ledger_done BETWEEN from_ledger AND to_ledger
+                                   ),
     events_processed  BIGINT      NOT NULL DEFAULT 0,
     events_skipped_duplicate BIGINT NOT NULL DEFAULT 0,
     last_error        TEXT,
