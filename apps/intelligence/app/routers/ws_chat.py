@@ -80,10 +80,26 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 continue
 
             request_id = str(uuid.uuid4())
-            stream = stream_chat(user_id, message, request_id=request_id)
+            raw_preferences = data.get("preferences")
+            preferences: Optional[ResponsePreferences] = None
+            if isinstance(raw_preferences, dict):
+                try:
+                    preferences = ResponsePreferences(**raw_preferences)
+                except Exception:
+                    preferences = None
+
+            language: Optional[str] = data.get("language")
+
+            stream = stream_chat(
+                user_id,
+                message,
+                request_id=request_id,
+                preferences=preferences,
+                language=language,
+            )
             try:
                 async for chunk in stream:
-                    # Strip SSE "data: " prefix — WS clients get raw text
+                    # Strip SSE "data: " prefix -- WS clients get raw text
                     if chunk.startswith("data: "):
                         chunk = chunk[6:].rstrip("\n")
                     if chunk:
@@ -91,9 +107,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
             finally:
                 # If the client disconnects (or any other error interrupts
                 # the loop above) while a response is still streaming, close
-                # the generator explicitly rather than leaving it to
-                # garbage collection. This throws GeneratorExit into
-                # stream_chat at its current suspension point, unwinding the
+                # the generator explicitly rather than leaving it to garbage
+                # collection. This throws GeneratorExit into stream_chat at
+                # its current suspension point, unwinding the
                 # `async with client.messages.stream(...)` block immediately
                 # so we stop consuming (and paying for) tokens nobody reads.
                 await stream.aclose()

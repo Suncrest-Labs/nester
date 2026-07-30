@@ -105,6 +105,7 @@ type CoachingResponse struct {
 	DepositSchedule    []DepositScheduleItem `json:"deposit_schedule"`
 	Nudges             []string              `json:"nudges"`
 	Confidence         string                `json:"confidence"`
+	SessionSummary     string                `json:"session_summary,omitempty"`
 }
 
 // DigestGenerateRequest mirrors the intelligence service's

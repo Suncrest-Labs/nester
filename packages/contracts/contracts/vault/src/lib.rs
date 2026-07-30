@@ -1,10 +1,13 @@
 #![no_std]
 
+mod basket;
 mod breaker;
 pub mod conversion;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN, Env,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN,
+    Env,
     IntoVal, Symbol, Val, Vec,
 };
 
@@ -102,7 +105,10 @@ mod queue;
 mod rebalance;
 
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event, with_reentrancy_guard, CalleeAllowlist, ContractError};
+use nester_common::{
+    emit_event, emit_event_with_sym, with_reentrancy_guard, AssetConfig, BasketValuation,
+    CalleeAllowlist, ContractError, PriceInfo, SourceStatus,
+};
 use queue::{QueueEntry, QueuePosition, QueueStats};
 pub use rebalance::RebalanceLeg;
 
@@ -112,6 +118,8 @@ const WITHDRAW: Symbol = symbol_short!("WITHDRAW");
 const PAUSE: Symbol = symbol_short!("PAUSE");
 const UNPAUSE: Symbol = symbol_short!("UNPAUSE");
 const REBALANCE: Symbol = symbol_short!("REBAL");
+/// Emitted when a rebalance skips a source because its adapter failed.
+const SOURCE_SKIPPED: Symbol = symbol_short!("SRC_SKIP");
 const HARVEST: Symbol = symbol_short!("HARVEST");
 const HARVEST_VLT: Symbol = symbol_short!("HARV_VLT");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
@@ -369,6 +377,7 @@ enum DataKey {
     EmergencyQueue,
     LiquidReserved, // total amount committed to the emergency queue but not yet paid
     AllocationStrategy,
+    YieldRegistry,
     SourceAllocation(Symbol),
     AllocatedSources,
     LastRebalanceAt,
@@ -398,6 +407,12 @@ enum DataKey {
     SharePriceBaselineAt,
     SourceFailureCount,
     BreakerConfigV2,
+    // Multi-asset vault support (#804)
+    BasketAssets,         // Vec<AssetConfig> for multi-asset vaults
+    IsMultiAsset,         // bool flag indicating if vault is multi-asset
+    LastPrices,           // Vec<PriceInfo> for basket assets
+    MaxPriceAgeSecs,      // u64 maximum price age
+    MaxPriceDeviationBps, // u32 maximum price deviation
     // --- Referral integration (issue #818) ---
     ReferralContract,
 }
@@ -489,6 +504,17 @@ pub struct AllocationDeltaView {
 #[derive(Clone, Debug)]
 pub struct RebalancedEventData {
     pub source_deltas: Vec<AllocationDeltaView>,
+    /// Sources skipped because their adapter failed. A non-empty list means
+    /// the rebalance completed across the remainder rather than aborting.
+    pub skipped_sources: Vec<Symbol>,
+    pub timestamp: u64,
+}
+
+/// Emitted per source skipped during a rebalance due to adapter failure.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SourceSkippedEventData {
+    pub attempted_delta: i128,
     pub timestamp: u64,
 }
 
@@ -568,6 +594,241 @@ fn rebalance_min_assets_out(env: &Env, gross: i128, slippage_bps: u32) -> i128 {
     }
     let net = VaultContract::preview_withdraw_net(env.clone(), shares_equiv);
     nester_common::fees::mul_div(net, (10_000 - slippage_bps) as i128, 10_000).unwrap_or(0)
+}
+
+/// Outcome of attempting to move value through a source's adapter.
+enum AdapterOutcome {
+    /// The source has no adapter — bookkeeping-only, pre-adapter behaviour.
+    NoAdapter,
+    /// The adapter moved value and enforced its minimum-output floor. Carries
+    /// the **realised** asset-denominated delta the protocol actually
+    /// confirmed, signed like the requested delta. Bookkeeping records this
+    /// rather than the requested figure, so the vault never books an amount the
+    /// protocol did not acknowledge.
+    Moved(i128),
+    /// The adapter (or the registry lookup) reverted. Isolate this source.
+    Failed,
+}
+
+/// The YieldRegistry bound to this vault, if any.
+fn get_yield_registry(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::YieldRegistry)
+}
+
+/// Look up `source_id`'s adapter and move `delta` through it: a positive delta
+/// deposits into the protocol, a negative delta withdraws from it.
+///
+/// Every step — the registry read, the status check, and the adapter call
+/// itself — uses `try_invoke_contract` so a reverting third-party protocol can
+/// never abort the whole rebalance. Any failure returns
+/// [`AdapterOutcome::Failed`] and the caller isolates that one source.
+///
+/// Sources that are not `Active` (paused, degraded, deprecated) are reported
+/// as `Failed` so the caller skips them without touching allocations.
+fn move_via_adapter(
+    env: &Env,
+    registry_id: &Address,
+    source_id: &Symbol,
+    delta: i128,
+    slippage_bps: u32,
+) -> AdapterOutcome {
+    let source_args: Vec<Val> = soroban_sdk::vec![env, source_id.clone().into_val(env)];
+
+    let status = match env.try_invoke_contract::<SourceStatus, ContractError>(
+        registry_id,
+        &Symbol::new(env, "get_source_status"),
+        source_args.clone(),
+    ) {
+        Ok(Ok(s)) => s,
+        _ => return AdapterOutcome::Failed,
+    };
+    if !matches!(status, SourceStatus::Active) {
+        return AdapterOutcome::Failed;
+    }
+
+    let adapter = match env.try_invoke_contract::<Option<Address>, ContractError>(
+        registry_id,
+        &Symbol::new(env, "get_source_adapter"),
+        source_args,
+    ) {
+        Ok(Ok(Some(a))) => a,
+        // No adapter configured: legacy bookkeeping-only source.
+        Ok(Ok(None)) => return AdapterOutcome::NoAdapter,
+        _ => return AdapterOutcome::Failed,
+    };
+
+    // Adapters call third-party protocol code, so they are gated by the same
+    // callee allowlist as every other external callee (#811). An unregistered
+    // adapter is treated as a per-source failure rather than an assert, so an
+    // un-allowlisted source is skipped instead of aborting the whole rebalance
+    // — the same blast-radius rule the rest of this path follows. Register an
+    // adapter with `register_callee` before it can move value.
+    if !CalleeAllowlist::is_registered(env, &adapter) {
+        return AdapterOutcome::Failed;
+    }
+
+    let me = env.current_contract_address();
+    if delta > 0 {
+        // Pre-authorize the adapter to pull exactly `delta` of the underlying
+        // from this vault for this call, and nothing else.
+        //
+        // The pull happens inside the adapter's invocation, so if the adapter
+        // reverts, `try_invoke_contract` rolls the transfer back with it. A
+        // push before the call would leave the funds stranded at a broken
+        // adapter — a fund-loss bug in exactly the failure path this design
+        // exists to survive.
+        let underlying = VaultContract::get_token(env.clone());
+        CalleeAllowlist::assert_allowed(env, &underlying);
+        authorize_adapter_pull(env, &underlying, &adapter, delta);
+
+        // Floor the position units on the same slippage tolerance used for
+        // withdrawals, priced off the adapter's own valuation of what it
+        // already holds. With no prior position there is no rate to price
+        // against, so require only that the protocol mints something.
+        let min_units_out = deposit_min_units_out(env, &adapter, delta, slippage_bps);
+
+        let args: Vec<Val> = soroban_sdk::vec![
+            env,
+            me.into_val(env),
+            delta.into_val(env),
+            min_units_out.into_val(env),
+        ];
+        match env.try_invoke_contract::<i128, ContractError>(
+            &adapter,
+            &Symbol::new(env, "deposit"),
+            args,
+        ) {
+            // The adapter returns units; the vault books assets. The assets it
+            // actually parted with is `delta`, which the push above realised.
+            Ok(Ok(_)) => AdapterOutcome::Moved(delta),
+            // The authorized pull is rolled back with the failed invocation,
+            // so no funds have left the vault.
+            _ => AdapterOutcome::Failed,
+        }
+    } else {
+        let gross = -delta;
+        let min_out = rebalance_min_assets_out(env, gross, slippage_bps);
+
+        // `withdraw` is denominated in position units, not assets. Convert
+        // using the adapter's own valuation of the position it holds:
+        //     units_to_burn = units_held * gross / position_value
+        // Passing the asset figure straight into the units slot would burn an
+        // arbitrary and usually wrong fraction of the position.
+        let units = match assets_to_units(env, &adapter, gross) {
+            Some(u) if u > 0 => u,
+            _ => return AdapterOutcome::Failed,
+        };
+
+        let args: Vec<Val> = soroban_sdk::vec![
+            env,
+            me.into_val(env),
+            units.into_val(env),
+            min_out.into_val(env),
+        ];
+        match env.try_invoke_contract::<i128, ContractError>(
+            &adapter,
+            &Symbol::new(env, "withdraw"),
+            args,
+        ) {
+            // Book the proceeds the protocol actually paid, not the request.
+            Ok(Ok(received)) => AdapterOutcome::Moved(-received),
+            _ => AdapterOutcome::Failed,
+        }
+    }
+}
+
+/// Authorize `adapter` to `transfer` exactly `amount` of `token` out of this
+/// vault, scoped to the next invocation only.
+///
+/// This is the canonical Soroban mechanism for a contract to permit a nested
+/// transfer from its own address. The grant names the token, the exact
+/// arguments, and nothing else, so the adapter cannot move a different amount,
+/// a different asset, or anyone else's funds.
+fn authorize_adapter_pull(env: &Env, token: &Address, adapter: &Address, amount: i128) {
+    let me = env.current_contract_address();
+    let args: Vec<Val> = soroban_sdk::vec![
+        env,
+        me.clone().into_val(env),
+        adapter.clone().into_val(env),
+        amount.into_val(env),
+    ];
+
+    env.authorize_as_current_contract(soroban_sdk::vec![
+        env,
+        InvokerContractAuthEntry::Contract(SubContractInvocation {
+            context: ContractContext {
+                contract: token.clone(),
+                fn_name: Symbol::new(env, "transfer"),
+                args,
+            },
+            sub_invocations: Vec::new(env),
+        }),
+    ]);
+}
+
+/// Convert an asset amount into adapter position units, pro-rata against the
+/// adapter's current position. Returns `None` when the adapter cannot be read
+/// or holds nothing to value against — callers treat that as a failure and
+/// skip the source rather than guessing a unit count.
+fn assets_to_units(env: &Env, adapter: &Address, assets: i128) -> Option<i128> {
+    let me = env.current_contract_address();
+    let owner_args: Vec<Val> = soroban_sdk::vec![env, me.into_val(env)];
+    let no_args: Vec<Val> = Vec::new(env);
+
+    let value = match env.try_invoke_contract::<i128, ContractError>(
+        adapter,
+        &Symbol::new(env, "position_value"),
+        owner_args,
+    ) {
+        Ok(Ok(v)) if v > 0 => v,
+        _ => return None,
+    };
+    let units_held = match env.try_invoke_contract::<i128, ContractError>(
+        adapter,
+        &Symbol::new(env, "max_withdraw"),
+        no_args,
+    ) {
+        Ok(Ok(u)) if u > 0 => u,
+        _ => return None,
+    };
+
+    // Withdrawing the whole position must burn every unit, not a rounded-down
+    // share of them.
+    if assets >= value {
+        return Some(units_held);
+    }
+    units_held.checked_mul(assets).map(|n| n / value)
+}
+
+/// Minimum position units to accept for a deposit of `assets`, derived from
+/// the adapter's existing position and the configured slippage tolerance.
+/// Falls back to 1 (the protocol must mint something) when there is no prior
+/// position to price against.
+fn deposit_min_units_out(env: &Env, adapter: &Address, assets: i128, slippage_bps: u32) -> i128 {
+    match assets_to_units(env, adapter, assets) {
+        Some(expected) if expected > 0 => {
+            nester_common::fees::mul_div(expected, (10_000 - slippage_bps) as i128, 10_000)
+                .unwrap_or(1)
+                .max(1)
+        }
+        _ => 1,
+    }
+}
+
+/// Tell the registry that this source's adapter failed. Best-effort: a
+/// registry that rejects the report must not abort the rebalance that is
+/// already skipping the source.
+fn report_source_failure(env: &Env, registry_id: &Address, source_id: &Symbol) {
+    let args: Vec<Val> = soroban_sdk::vec![
+        env,
+        env.current_contract_address().into_val(env),
+        source_id.clone().into_val(env),
+    ];
+    let _ = env.try_invoke_contract::<(), ContractError>(
+        registry_id,
+        &Symbol::new(env, "report_source_failure"),
+        args,
+    );
 }
 
 /// Reverts with `SlippageExceeded` when realised proceeds fall below the floor.
@@ -1612,6 +1873,36 @@ impl VaultContract {
         get_allocation_strategy(&env)
     }
 
+    /// Bind this vault to the YieldRegistry so `rebalance` can resolve each
+    /// source's adapter and report adapter failures. Admin only.
+    ///
+    /// Optional: with no registry configured the vault falls back to pure
+    /// bookkeeping (pre-adapter behaviour) rather than refusing to rebalance.
+    ///
+    /// **Deployment requirement:** grant this vault the `Operator` role on the
+    /// registry (`registry.grant_role(admin, vault, Operator)`). The vault
+    /// reports the adapter failures it observes during rebalance, and without
+    /// that role those reports are rejected and silently dropped — sources
+    /// would then never reach `Degraded`.
+    pub fn set_yield_registry(env: Env, caller: Address, registry: Address) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::YieldRegistry, &registry);
+    }
+
+    /// Return the configured YieldRegistry, if any.
+    pub fn get_yield_registry(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::YieldRegistry)
+    }
+
+    /// Amount currently booked against a single yield source.
+    pub fn get_source_allocation(env: Env, source_id: Symbol) -> i128 {
+        get_source_allocation(&env, &source_id)
+    }
+
     pub fn set_rebalance_cooldown(env: Env, caller: Address, seconds: u64) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -2174,16 +2465,57 @@ impl VaultContract {
 
         // Apply each delta to source-allocation bookkeeping. Min-rebalance
         // skip is per-source so we don't pay tx fees for dust adjustments.
+        //
+        // Failure isolation (#812): each source's adapter interaction is
+        // attempted independently. A reverting adapter degrades only its own
+        // source — it is skipped, reported to the registry (which flips the
+        // source to Degraded once the failure threshold is exceeded), and the
+        // rebalance continues across the remaining sources.
+        let registry = get_yield_registry(&env);
         let mut applied = Vec::new(&env);
+        let mut skipped = Vec::new(&env);
         let mut total_delta: i128 = 0;
         for d in deltas.iter() {
             if d.delta.abs() < MIN_REBALANCE_AMOUNT {
                 continue;
             }
 
+            // Move value through the source's adapter when one is configured.
+            // Any failure isolates to this source.
+            //
+            // `effective_delta` is what actually moved: for an adapter-backed
+            // source that is the amount the protocol confirmed, which can differ
+            // from the requested delta. Bookkeeping follows the realised figure.
+            let mut adapter_handled = false;
+            let mut effective_delta = d.delta;
+            if let Some(registry_id) = registry.clone() {
+                match move_via_adapter(&env, &registry_id, &d.source_id, d.delta, slippage_bps) {
+                    AdapterOutcome::NoAdapter => {}
+                    AdapterOutcome::Moved(realised) => {
+                        adapter_handled = true;
+                        effective_delta = realised;
+                    }
+                    AdapterOutcome::Failed => {
+                        report_source_failure(&env, &registry_id, &d.source_id);
+                        emit_event_with_sym(
+                            &env,
+                            VAULT,
+                            SOURCE_SKIPPED,
+                            d.source_id.clone(),
+                            SourceSkippedEventData {
+                                attempted_delta: d.delta,
+                                timestamp: now,
+                            },
+                        );
+                        skipped.push_back(d.source_id.clone());
+                        continue;
+                    }
+                }
+            }
+
             let current_amount = get_source_allocation(&env, &d.source_id);
             let new_amount = current_amount
-                .checked_add(d.delta)
+                .checked_add(effective_delta)
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
             if new_amount < 0 {
@@ -2199,7 +2531,10 @@ impl VaultContract {
             // current accounting model the full gross is moved internally
             // (actual == gross); once rebalance performs real LP/protocol
             // withdrawals, pass the call's returned amount as `actual_received`.
-            if d.delta < 0 {
+            // When an adapter performed the move it already enforced the
+            // minimum-output floor against the real protocol proceeds, so
+            // re-checking the bookkeeping identity here would be redundant.
+            if d.delta < 0 && !adapter_handled {
                 let gross = -d.delta;
                 let min_assets_out = rebalance_min_assets_out(&env, gross, slippage_bps);
                 let actual_received = gross;
@@ -2207,8 +2542,11 @@ impl VaultContract {
             }
 
             set_source_allocation(&env, &d.source_id, new_amount);
-            total_delta += d.delta;
-            applied.push_back(d);
+            total_delta += effective_delta;
+            applied.push_back(AllocationDeltaView {
+                source_id: d.source_id.clone(),
+                delta: effective_delta,
+            });
         }
 
         if total_delta < 0 {
@@ -2227,6 +2565,7 @@ impl VaultContract {
             caller,
             RebalancedEventData {
                 source_deltas: applied.clone(),
+                skipped_sources: skipped,
                 timestamp: now,
             },
         );
@@ -2454,7 +2793,19 @@ impl VaultContract {
     /// Operator hook used by deposit/yield-routing flows to record that a
     /// known amount has been deployed to a specific yield source. Keeps the
     /// vault's per-source bookkeeping in sync with off-chain settlement.
-    pub fn record_source_allocation(env: Env, caller: Address, source_id: Symbol, amount: i128) {
+    ///
+    /// Returns `true` when the allocation was recorded and `false` when the
+    /// source was skipped because it is not `Active` (paused, degraded,
+    /// deprecated) or its registry lookup failed. Skipping is silent-by-return
+    /// rather than a panic so a caller recording several sources in sequence
+    /// is not aborted by one unhealthy source — the same blast-radius rule
+    /// `rebalance` follows.
+    pub fn record_source_allocation(
+        env: Env,
+        caller: Address,
+        source_id: Symbol,
+        amount: i128,
+    ) -> bool {
         require_initialized(&env);
         caller.require_auth();
         if !AccessControl::has_role(&env, &caller, Role::Admin)
@@ -2465,7 +2816,36 @@ impl VaultContract {
         if amount < 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
+
+        // With a registry configured, refuse to grow bookkeeping for a source
+        // that is not healthy. Without one, keep pre-adapter behaviour.
+        if let Some(registry_id) = get_yield_registry(&env) {
+            let args: Vec<Val> = soroban_sdk::vec![&env, source_id.clone().into_val(&env)];
+            let healthy = matches!(
+                env.try_invoke_contract::<SourceStatus, ContractError>(
+                    &registry_id,
+                    &Symbol::new(&env, "get_source_status"),
+                    args,
+                ),
+                Ok(Ok(SourceStatus::Active))
+            );
+            if !healthy {
+                emit_event_with_sym(
+                    &env,
+                    VAULT,
+                    SOURCE_SKIPPED,
+                    source_id,
+                    SourceSkippedEventData {
+                        attempted_delta: amount,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+                return false;
+            }
+        }
+
         set_source_allocation(&env, &source_id, amount);
+        true
     }
 
     pub fn collect_fees(env: Env, caller: Address) {

@@ -177,7 +177,12 @@ async def test_generate_narrative_uses_claude_response_when_available():
         return_value=mock_response,
     ):
         narrative = await service._generate_narrative(
-            request, apy=0.12, required_deposit=95.58, achievable=True, total_yield=45.8
+            request,
+            apy=0.12,
+            required_deposit=95.58,
+            achievable=True,
+            total_yield=45.8,
+            language="en",
         )
 
     assert narrative == "You're on track to hit your goal comfortably."
@@ -197,12 +202,18 @@ async def test_generate_narrative_falls_back_when_claude_call_fails_achievable()
         side_effect=Exception("Claude unavailable"),
     ):
         narrative = await service._generate_narrative(
-            request, apy=0.12, required_deposit=95.58, achievable=True, total_yield=45.8
+            request,
+            apy=0.12,
+            required_deposit=95.58,
+            achievable=True,
+            total_yield=45.8,
+            language="en",
         )
 
     assert "95.58" in narrative
     assert "45.80" in narrative
-    assert "12.0%" in narrative
+    # Percentages now render through i18n format_percentage ("12.00%").
+    assert "12.00%" in narrative
 
 
 @pytest.mark.asyncio
@@ -219,9 +230,15 @@ async def test_generate_narrative_falls_back_when_claude_call_fails_not_achievab
         side_effect=Exception("Claude unavailable"),
     ):
         narrative = await service._generate_narrative(
-            request, apy=0.0, required_deposit=100.0, achievable=False, total_yield=0.0
+            request,
+            apy=0.0,
+            required_deposit=100.0,
+            achievable=False,
+            total_yield=0.0,
+            language="en",
         )
 
-    assert "1000" in narrative
+    # Amounts now render through i18n format_amount ("1,000.00").
+    assert "1,000.00" in narrative
     assert "100.00" in narrative
     assert "above your limit" in narrative

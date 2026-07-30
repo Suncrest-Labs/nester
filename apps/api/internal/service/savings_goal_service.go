@@ -99,13 +99,16 @@ type UpdateSavingsGoalInput struct {
 	Category     *string          `json:"category"`
 	Name         *string          `json:"name"`
 	Emoji        *string          `json:"emoji"`
+	// AutoCompound toggles whether harvested yield is reinvested into the
+	// goal's vault position or credited to yield_balance instead.
+	AutoCompound *bool `json:"auto_compound"`
 	// MinContribution/MaxContribution update a goal's per-contribution
 	// limits (#922) when non-nil. Setting either to a zero decimal (rather
 	// than leaving it nil) clears that limit.
-	MinContribution    *decimal.Decimal `json:"min_contribution,omitempty"`
-	MaxContribution    *decimal.Decimal `json:"max_contribution,omitempty"`
-	ClearMinContribution bool `json:"-"`
-	ClearMaxContribution bool `json:"-"`
+	MinContribution      *decimal.Decimal `json:"min_contribution,omitempty"`
+	MaxContribution      *decimal.Decimal `json:"max_contribution,omitempty"`
+	ClearMinContribution bool             `json:"-"`
+	ClearMaxContribution bool             `json:"-"`
 }
 
 func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
@@ -423,6 +426,9 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 			return savingsgoal.SavingsGoal{}, err
 		}
 		goal.Emoji = e
+	}
+	if in.AutoCompound != nil {
+		goal.AutoCompound = *in.AutoCompound
 	}
 	if in.ClearMinContribution {
 		goal.MinContribution = nil
@@ -818,6 +824,28 @@ func (s *SavingsGoalService) Archive(ctx context.Context, userID, goalID uuid.UU
 	}
 	goal.Status = savingsgoal.GoalStatusArchived
 	return s.EnrichProgress(ctx, *goal)
+}
+
+// GetAutoCompoundForVault looks up the goal linked to vaultID and reports its
+// auto_compound preference. found is false when no goal is linked to the
+// vault, in which case callers should fall back to their own default.
+// Implements the GoalYieldRouter seam VaultService uses at harvest time.
+func (s *SavingsGoalService) GetAutoCompoundForVault(ctx context.Context, vaultID uuid.UUID) (goalID uuid.UUID, autoCompound bool, found bool, err error) {
+	goal, err := s.repo.GetByVaultID(ctx, vaultID)
+	if err != nil {
+		if errors.Is(err, savingsgoal.ErrGoalNotFound) {
+			return uuid.Nil, false, false, nil
+		}
+		return uuid.Nil, false, false, err
+	}
+	return goal.ID, goal.AutoCompound, true, nil
+}
+
+// CreditGoalYieldBalance adds amount to the goal's yield_balance. Called by
+// VaultService when a linked goal's auto_compound is false, so harvested
+// yield is tracked on the goal instead of being reinvested into the vault.
+func (s *SavingsGoalService) CreditGoalYieldBalance(ctx context.Context, goalID uuid.UUID, amount decimal.Decimal) error {
+	return s.repo.CreditYieldBalance(ctx, goalID, amount)
 }
 
 // Unarchive restores an archived goal to active status (#721).

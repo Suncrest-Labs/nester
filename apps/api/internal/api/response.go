@@ -18,9 +18,10 @@ import (
 // Data intentionally has no omitempty: a nil payload must still produce
 // "data":null rather than omitting the field entirely.
 type envelope struct {
-	Success bool      `json:"success"`
-	Data    any       `json:"data"`
-	Error   *apiError `json:"error,omitempty"`
+	Success   bool      `json:"success"`
+	Data      any       `json:"data"`
+	Error     *apiError `json:"error,omitempty"`
+	RequestID string    `json:"request_id,omitempty"`
 }
 
 // apiError carries the HTTP status code and a human-readable message.
@@ -32,10 +33,19 @@ type apiError struct {
 // JSON writes a success envelope with the given status code and data payload.
 // If data is nil, the response body will be {"success":true,"data":null}.
 func JSON(w http.ResponseWriter, status int, data any) {
+	JSONWithRequestID(w, status, data, "")
+}
+
+// JSONWithRequestID writes a success envelope and, when provided, echoes the
+// request ID in the response header for correlation with logs.
+func JSONWithRequestID(w http.ResponseWriter, status int, data any, requestID string) {
+	if requestID != "" {
+		w.Header().Set("X-Request-ID", requestID)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 
-	resp := envelope{Success: true, Data: data}
+	resp := envelope{Success: true, Data: data, RequestID: requestID}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		// Encoding already started — we cannot change the status code.
 		// Write a minimal fallback so the body is not empty.
@@ -47,12 +57,22 @@ func JSON(w http.ResponseWriter, status int, data any) {
 // The message should be safe to expose to clients (no stack traces or
 // internal details).
 func Error(w http.ResponseWriter, status int, message string) {
+	ErrorWithRequestID(w, status, message, "")
+}
+
+// ErrorWithRequestID writes an error envelope and, when provided, echoes the
+// request ID in the response header for correlation with logs.
+func ErrorWithRequestID(w http.ResponseWriter, status int, message string, requestID string) {
+	if requestID != "" {
+		w.Header().Set("X-Request-ID", requestID)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 
 	resp := envelope{
-		Success: false,
-		Error:   &apiError{Code: status, Message: message},
+		Success:   false,
+		Error:     &apiError{Code: status, Message: message},
+		RequestID: requestID,
 	}
 	// If encoding fails here we cannot do much — headers are already sent.
 	_ = json.NewEncoder(w).Encode(resp)

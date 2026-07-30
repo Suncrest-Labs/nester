@@ -10,10 +10,13 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from app.middleware.request_id import RequestIDMiddleware, install_request_id_log_filter
 from app.routers import (
     analyze,
     chat,
     coaching,
+    deterioration,
+    feedback,
     health,
     nudges,
     optimize,
@@ -24,8 +27,19 @@ from app.routers import (
     ws_chat,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+class RequestIDFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:  # noqa: A003
+        record.request_id = getattr(record, "request_id", "")
+        return super().format(record)
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s [request_id=%(request_id)s]: %(message)s",
+)
 logger = logging.getLogger(__name__)
+install_request_id_log_filter()
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -45,6 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Nester Intelligence", lifespan=lifespan)
 app.state.limiter = limiter
+app.add_middleware(RequestIDMiddleware)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 
@@ -94,4 +109,6 @@ app.include_router(rebalance.router)
 app.include_router(optimize.router, prefix="/intelligence")
 app.include_router(recommendations.router, prefix="/intelligence")
 app.include_router(nudges.router, prefix="/intelligence/nudges")
+app.include_router(feedback.router, prefix="/intelligence")
 app.include_router(tool_actions.router, prefix="/intelligence")
+app.include_router(deterioration.router, prefix="/intelligence")

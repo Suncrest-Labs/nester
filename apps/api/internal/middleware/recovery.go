@@ -27,7 +27,8 @@ func RecoverPanic(logger *slog.Logger) func(http.Handler) http.Handler {
 						"stack", stack,
 					)
 					
-					resp := response.Err(http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
+					requestID := logpkg.RequestIDFromContext(r.Context())
+					resp := response.ErrWithRequestID(http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error", requestID)
 					response.WriteJSON(w, http.StatusInternalServerError, resp)
 				}
 			}()

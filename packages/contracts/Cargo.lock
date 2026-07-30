@@ -3,6 +3,24 @@
 version = 4
 
 [[package]]
+name = "adapter-lending-contract"
+version = "0.1.0"
+dependencies = [
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "adapter-pool-contract"
+version = "0.1.0"
+dependencies = [
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -750,11 +768,24 @@ dependencies = [
  "nester-access-control",
  "nester-common",
  "nester-test-utils",
+ "proptest",
  "soroban-sdk",
  "treasury-contract",
  "vault-contract",
  "vault-token-contract",
  "yield-registry-contract",
+]
+
+[[package]]
+name = "nester-recurring-deposit"
+version = "0.1.0"
+dependencies = [
+ "nester-access-control",
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+ "vault-contract",
+ "vault-token-contract",
 ]
 
 [[package]]

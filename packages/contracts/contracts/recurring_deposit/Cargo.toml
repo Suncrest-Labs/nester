@@ -1,0 +1,23 @@
+[package]
+name = "nester-recurring-deposit"
+version = "0.1.0"
+authors = ["Nester Team"]
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+rust-version = "1.79.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+nester-common = { path = "../../libs/common" }
+nester-access-control = { path = "../access_control" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+nester-test-utils = { path = "../../libs/test_utils" }
+vault-contract = { path = "../vault" }
+vault-token-contract = { path = "../vault_token" }

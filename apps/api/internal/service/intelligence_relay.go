@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 const (
@@ -137,6 +139,15 @@ func (h *RelayHandler) RelayChat(w http.ResponseWriter, r *http.Request) {
 	upstreamReq.Header.Set("Accept", "application/json")
 	if h.cfg.APIKey != "" {
 		upstreamReq.Header.Set("Authorization", "Bearer "+h.cfg.APIKey)
+	}
+	// Propagate the correlation ID so the intelligence service can bind it to
+	// its own structured logs and echo it back in responses.
+	// Prefer the context value (set by the Logging middleware) over the raw
+	// inbound header so the ID is always the canonical one for this request.
+	if rid := logpkg.RequestIDFromContext(r.Context()); rid != "" {
+		upstreamReq.Header.Set("X-Request-ID", rid)
+	} else if rid = r.Header.Get("X-Request-ID"); rid != "" {
+		upstreamReq.Header.Set("X-Request-ID", rid)
 	}
 
 	resp, err := h.doer.Do(upstreamReq)

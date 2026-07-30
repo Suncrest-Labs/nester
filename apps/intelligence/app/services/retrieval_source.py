@@ -1,59 +1,86 @@
-"""Source attribution for on-chain and market data cited in Prometheus responses.
+"""Concrete, API-backed DataSource for the retrieval layer (#852).
 
-Tracks which protocol/API a TVL or APY figure came from and the timestamp it
-was retrieved, so a response can cite provenance instead of presenting a
-number as if it were always live and current.
+Adapts the existing VaultContextFetcher (vaults, available vaults, market rates)
+and adds user-scoped savings-goal and transaction fetches against the Nester API.
+Every user fetch sends the user_id the caller passed (from the JWT subject) — the
+service key authenticates the intelligence service, and the user scope is fixed
+by the caller, so a query can never retrieve another user's data.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
+import logging
+from typing import Any
+
+import aiohttp
+
+from app.services.retrieval import DataSource
+from app.services.vault_context import VaultContextFetcher
+
+logger = logging.getLogger(__name__)
+
+_TIMEOUT = aiohttp.ClientTimeout(total=5)
 
 
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+class ApiDataSource(DataSource):
+    """DataSource implementation over the Nester REST API."""
 
+    def __init__(self, api_base_url: str, service_api_key: str) -> None:
+        self._base = api_base_url.rstrip("/")
+        self._key = service_api_key
+        self._fetcher = VaultContextFetcher(api_base_url, service_api_key)
 
-@dataclass(frozen=True)
-class RetrievalSource:
-    """One attributable data point: what it is, where it came from, and when."""
+    def _headers(self, user_id: str | None = None) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self._key}",
+            "Content-Type": "application/json",
+        }
+        if user_id:
+            headers["X-User-Id"] = user_id
+        return headers
 
-    label: str
-    protocol: str
-    as_of: datetime
+    async def user_vaults(self, user_id: str) -> list[dict[str, Any]]:
+        return await self._fetcher.fetch_user_vaults(user_id)
 
-    def citation(self) -> str:
-        """Render as an inline citation, e.g. '(source: defillama, as of 2026-07-27 14:03 UTC)'."""
-        stamp = self.as_of.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        return f"(source: {self.protocol}, as of {stamp})"
+    async def available_vaults(self) -> list[dict[str, Any]]:
+        return await self._fetcher.fetch_available_vaults()
 
+    async def market_rates(self) -> list[dict[str, Any]]:
+        return await self._fetcher.fetch_market_rates()
 
-def parse_as_of(value: str | None) -> datetime:
-    """Parse an ISO timestamp, falling back to the current time if missing/invalid."""
-    if value:
+    async def savings_goals(self, user_id: str) -> list[dict[str, Any]]:
+        url = f"{self._base}/api/v1/users/savings-goals"
         try:
-            parsed = datetime.fromisoformat(value)
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except ValueError:
-            pass
-    return now_utc()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, headers=self._headers(user_id), timeout=_TIMEOUT
+                ) as resp:
+                    if resp.status != 200:
+                        return []
+                    payload = await resp.json()
+                    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+                    return list(data) if isinstance(data, list) else []
+        except Exception as exc:  # noqa: BLE001 — degrade to no data, never raise into chat
+            logger.warning("retrieval: savings goals fetch failed for %s: %s", user_id, exc)
+            return []
 
-
-def format_sources_block(sources: list[RetrievalSource]) -> str:
-    """Render a de-duplicated '## Data Sources' block for prompt context.
-
-    Keeps only the most recent as_of per (protocol, label) pair.
-    """
-    if not sources:
-        return ""
-
-    latest: dict[tuple[str, str], RetrievalSource] = {}
-    for source in sources:
-        key = (source.protocol, source.label)
-        existing = latest.get(key)
-        if existing is None or source.as_of > existing.as_of:
-            latest[key] = source
-
-    lines = [f"- {source.label}: {source.citation()}" for source in latest.values()]
-    return "## Data Sources\n" + "\n".join(lines)
+    async def recent_transactions(self, user_id: str) -> list[dict[str, Any]]:
+        url = f"{self._base}/api/v1/transactions"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=self._headers(user_id),
+                    params={"limit": "10"},
+                    timeout=_TIMEOUT,
+                ) as resp:
+                    if resp.status != 200:
+                        return []
+                    payload = await resp.json()
+                    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+                    if isinstance(data, dict):
+                        data = data.get("transactions", [])
+                    return list(data) if isinstance(data, list) else []
+        except Exception as exc:  # noqa: BLE001 — degrade to no data, never raise into chat
+            logger.warning("retrieval: transactions fetch failed for %s: %s", user_id, exc)
+            return []

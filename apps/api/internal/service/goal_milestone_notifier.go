@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/goalnotification"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 )
@@ -19,9 +20,21 @@ type noopGoalMilestoneNotifier struct{}
 
 func (noopGoalMilestoneNotifier) SendGoalMilestone(context.Context, uuid.UUID, savingsgoal.SavingsGoal, int) {}
 
+// GoalNotificationPreferenceReader is the read/write seam DispatcherGoalMilestoneNotifier
+// uses to respect a goal's mute + digest-frequency preference (mute/frequency per goal).
+type GoalNotificationPreferenceReader interface {
+	Get(ctx context.Context, goalID uuid.UUID) (*goalnotification.Preference, error)
+	EnqueueDigestItem(ctx context.Context, item goalnotification.DigestItem) error
+}
+
 // DispatcherGoalMilestoneNotifier sends milestone notifications via the notifications dispatcher.
 type DispatcherGoalMilestoneNotifier struct {
 	Dispatcher *notifications.Dispatcher
+	// Preferences is optional; when nil every milestone is delivered
+	// immediately (the pre-existing behavior). When set, a muted goal is
+	// skipped entirely and a non-immediate frequency queues the notification
+	// for later batched delivery instead of sending it now.
+	Preferences GoalNotificationPreferenceReader
 }
 
 func (n DispatcherGoalMilestoneNotifier) SendGoalMilestone(
@@ -34,11 +47,33 @@ func (n DispatcherGoalMilestoneNotifier) SendGoalMilestone(
 		return
 	}
 	title, body := milestoneNotificationContent(milestone, savingsgoal.GoalDisplayName(goal))
-	_ = n.Dispatcher.Send(ctx, userID, notifications.EventGoalMilestone, title, body, map[string]any{
+	payload := map[string]any{
 		"goal_id":   goal.ID.String(),
 		"milestone": milestone,
 		"currency":  goal.Currency,
-	})
+	}
+
+	if n.Preferences != nil {
+		pref, err := n.Preferences.Get(ctx, goal.ID)
+		if err == nil && pref != nil {
+			if pref.Muted {
+				return
+			}
+			if pref.DigestFrequency != goalnotification.FrequencyImmediate {
+				_ = n.Preferences.EnqueueDigestItem(ctx, goalnotification.DigestItem{
+					ID:      uuid.New(),
+					GoalID:  goal.ID,
+					UserID:  userID,
+					Title:   title,
+					Body:    body,
+					Payload: payload,
+				})
+				return
+			}
+		}
+	}
+
+	_ = n.Dispatcher.Send(ctx, userID, notifications.EventGoalMilestone, title, body, payload)
 }
 
 func milestoneNotificationContent(milestone int, goalName string) (string, string) {
