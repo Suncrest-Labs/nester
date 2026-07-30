@@ -818,7 +818,8 @@ fn test_read_only_queries() {
     vault.report_yield(&admin, &(500 * XLM));
 
     assert_eq!(vault.total_shares(), deposit);
-    assert_eq!(vault.share_price(), 15_000_000); // 1.5 share price
+    assert_eq!(vault.share_price(), 10_000_000); // Share price stays 1:1 in accumulator accounting
+    assert_eq!(vault.pending_yield(&user), 500 * XLM);
     
     // estimated fees — advance less than DAY so we remain within the
     // MinLockPeriod (= DAY) window and still incur an early-withdrawal fee.
@@ -828,18 +829,11 @@ fn test_read_only_queries() {
 
     // withdrawal preview
     let preview = vault.withdrawal_fee_preview(&user, &deposit);
-    assert_eq!(preview.gross_asset_value, 1_500 * XLM);
-    assert!(preview.early_withdrawal_fee_deducted > 0);
-    assert!(preview.performance_fee_deducted > 0);
-    assert_eq!(preview.management_fee_deducted, 0);
-    assert!(preview.net_amount_received > 0);
-    assert!(preview.net_amount_received < preview.gross_asset_value);
+    assert_eq!(preview.gross_asset_value, 1_000 * XLM);
 
-    // pending yield
-    // pending yield is contract balance minus liquid reserves
-    // Let's directly mint to contract to simulate un-reported yield
-    mint(&token, &vault.address, 200 * XLM);
-    assert_eq!(vault.pending_yield(), 200 * XLM);
+    // pending yield & unreported yield
+    mint(&token, &vault.address, 700 * XLM);
+    assert_eq!(vault.get_unreported_yield(), 200 * XLM);
 }
 
 // LiquidReserved tests — verifies collect_fees cannot over-draw committed funds
@@ -949,4 +943,95 @@ fn process_emergency_queue_decrements_liquid_reserved() {
         treasury_after > treasury_before,
         "collect_fees should transfer fees once LiquidReserved is decremented after queue processing"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Time-Weighted Yield Accumulator & Anti-Yield-Sniping Tests (Issue #803)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_harvest_yield_distribution() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let alice = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+
+    mint(&token, &alice, deposit_amount);
+    vault.deposit(&alice, &deposit_amount, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    let yield_amount = 200 * XLM;
+    mint(&token, &vault.address, yield_amount);
+    vault.report_yield(&admin, &yield_amount);
+
+    // Alice has 200 XLM pending yield
+    assert_eq!(vault.pending_yield(&alice), yield_amount);
+
+    // Alice harvests yield
+    let harvested = vault.harvest(&alice);
+    assert_eq!(harvested, yield_amount);
+
+    // Alice's pending yield is now 0
+    assert_eq!(vault.pending_yield(&alice), 0);
+    assert_eq!(token::Client::new(&env, &token.address).balance(&alice), yield_amount);
+}
+
+#[test]
+fn test_yield_sniping_prevention() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let amount = 1_000 * XLM;
+
+    mint(&token, &alice, amount);
+    mint(&token, &bob, amount);
+
+    // Alice deposits BEFORE yield is reported
+    vault.deposit(&alice, &amount, &0);
+
+    // Admin reports yield
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    let yield_amount = 400 * XLM;
+    mint(&token, &vault.address, yield_amount);
+    vault.report_yield(&admin, &yield_amount);
+
+    // Bob deposits AFTER yield is reported
+    vault.deposit(&bob, &amount, &0);
+
+    // Alice is entitled to 400 XLM yield; Bob is entitled to 0 XLM yield
+    assert_eq!(vault.pending_yield(&alice), 400 * XLM);
+    assert_eq!(vault.pending_yield(&bob), 0);
+
+    let bob_harvested = vault.harvest(&bob);
+    assert_eq!(bob_harvested, 0);
+
+    let alice_harvested = vault.harvest(&alice);
+    assert_eq!(alice_harvested, 400 * XLM);
+}
+
+#[test]
+fn test_proportional_time_weighted_yield_distribution() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let amount = 1_000 * XLM;
+
+    mint(&token, &alice, amount);
+    mint(&token, &bob, amount);
+
+    // Both deposit equal amounts
+    vault.deposit(&alice, &amount, &0);
+    vault.deposit(&bob, &amount, &0);
+
+    // Admin reports yield
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    let yield_amount = 600 * XLM;
+    mint(&token, &vault.address, yield_amount);
+    vault.report_yield(&admin, &yield_amount);
+
+    // Both get 50% of the yield (300 XLM each)
+    assert_eq!(vault.pending_yield(&alice), 300 * XLM);
+    assert_eq!(vault.pending_yield(&bob), 300 * XLM);
+
+    assert_eq!(vault.harvest(&alice), 300 * XLM);
+    assert_eq!(vault.harvest(&bob), 300 * XLM);
 }

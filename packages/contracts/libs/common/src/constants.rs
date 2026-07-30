@@ -8,3 +8,6 @@ pub const MAX_PERFORMANCE_FEE_BPS: u32 = 5000;
 pub const MAX_EARLY_WITHDRAWAL_FEE_BPS: u32 = 500;
 pub const MAX_EMERGENCY_FEE_BPS: u32 = 500;
 pub const MIN_DEPOSIT_AMOUNT: i128 = 10_000_000; // 1 unit in 7 decimals
+
+pub const SCALE: i128 = 1_000_000_000_000_000_000; // 1e18 fixed-point scale
+pub const MAX_TOTAL_SHARES: i128 = 1_000_000_000_000_000_000_000; // 1e21 max shares cap

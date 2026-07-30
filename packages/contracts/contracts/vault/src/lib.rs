@@ -11,7 +11,11 @@ mod vault_token {
 }
 use vault_token::Client as VaultTokenContractClient;
 
+pub mod accrual;
+
 use nester_access_control::{AccessControl, Role};
+use nester_common::constants::{MAX_TOTAL_SHARES, SCALE};
+use nester_common::events::{YieldHarvestedEventData, YieldIndexUpdatedEventData};
 use nester_common::{emit_event, ContractError};
 
 const VAULT: Symbol = symbol_short!("VAULT");
@@ -242,7 +246,7 @@ fn vault_token_client(env: &Env) -> VaultTokenContractClient<'_> {
     VaultTokenContractClient::new(env, &vault_token)
 }
 
-fn get_shares(env: &Env, user: &Address) -> i128 {
+fn get_shares_internal(env: &Env, user: &Address) -> i128 {
     vault_token_client(env).balance(user)
 }
 
@@ -524,6 +528,8 @@ impl VaultContract {
             .instance()
             .set(&DataKey::LastFeeAccrual, &env.ledger().timestamp());
 
+        accrual::set_yield_index(&env, SCALE);
+
         let fee_config = FeeConfig {
             performance_fee_bps: 1000,    // 10%
             management_fee_bps: 50,       // 0.5%
@@ -747,13 +753,51 @@ impl VaultContract {
     pub fn report_yield(env: Env, caller: Address, amount: i128) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Manager);
+        if amount <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
+        let total_shares = vault_token_client(&env).total_supply();
+        if total_shares <= 0 {
+            // Option A: Reject report_yield when total_shares == 0
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
+        let old_index = accrual::get_yield_index(&env);
+        let new_index = accrual::accumulate_yield(&env, amount, total_shares)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+
+        let current_reserves = get_vault_liquid_reserves(&env);
+        let new_reserves = current_reserves
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_vault_liquid_reserves(&env, new_reserves);
 
         let total_assets = get_total_assets(&env);
         let new_total = total_assets
             .checked_add(amount)
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
         set_total_assets(&env, new_total);
-        sync_vault_token_total_assets(&env);
+
+        emit_event(
+            &env,
+            VAULT,
+            symbol_short!("Y_UPD"),
+            caller,
+            YieldIndexUpdatedEventData {
+                old_index,
+                new_index,
+                yield_amount: amount,
+                total_shares,
+            },
+        );
+    }
+
+    /// Explicit sync entrypoint to synchronize a user's yield accumulator checkpoint.
+    pub fn sync_user(env: Env, user: Address) {
+        require_initialized(&env);
+        let shares = get_shares_internal(&env, &user);
+        accrual::sync_user(&env, &user, shares).unwrap_or_else(|e| panic_with_error!(&env, e));
     }
 
     /// Read-only check: does the live allocation drift exceed the strategy's
@@ -971,21 +1015,38 @@ impl VaultContract {
         user.require_auth();
         accrue_management_fee(&env);
 
+        let current_shares = get_shares_internal(&env, &user);
+        accrual::sync_user(&env, &user, current_shares)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+
+        let current_total_shares = vault_token_client(&env).total_supply();
+        let shares_to_mint = vault_token_client(&env).shares_for_deposit(&amount);
+        if current_total_shares
+            .checked_add(shares_to_mint)
+            .unwrap_or(i128::MAX)
+            > MAX_TOTAL_SHARES
+        {
+            panic_with_error!(&env, ContractError::ExceedsLimit);
+        }
+
+        if shares_to_mint < min_shares_out {
+            panic_with_error!(&env, ContractError::SlippageExceeded);
+        }
+
         let token_address = self::VaultContract::get_token(env.clone());
         let contract_address = env.current_contract_address();
 
         token::Client::new(&env, &token_address).transfer(&user, &contract_address, &amount);
 
         let total_assets = get_total_assets(&env);
-        // Mint deposit shares against gross assets (pre-fee) so new depositors
-        // do not pay for uncollected accrued fees.
         vault_token_client(&env).set_total_assets(&total_assets);
-        let shares_to_mint = vault_token_client(&env).shares_for_deposit(&amount);
-        if shares_to_mint < min_shares_out {
-            panic_with_error!(&env, ContractError::SlippageExceeded);
-        }
         let _ = vault_token_client(&env).mint_for_deposit(&user, &amount);
-        let new_user_shares = get_shares(&env, &user);
+        let new_user_shares = get_shares_internal(&env, &user);
+
+        // Synchronize user index to global index for newly minted shares
+        let current_yield_index = accrual::get_yield_index(&env);
+        accrual::set_user_index(&env, &user, current_yield_index);
+
         let new_total_assets = total_assets
             .checked_add(amount)
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
@@ -1090,10 +1151,13 @@ impl VaultContract {
         user.require_auth();
         accrue_management_fee(&env);
 
-        let current_shares = get_shares(&env, &user);
+        let current_shares = get_shares_internal(&env, &user);
         if shares > current_shares {
             panic_with_error!(&env, ContractError::InsufficientBalance);
         }
+
+        accrual::sync_user(&env, &user, current_shares)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
 
         let total_assets = get_total_assets(&env);
         let accrued_fees = get_accrued_fees(&env);
@@ -1228,6 +1292,10 @@ impl VaultContract {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
 
+        let shares = get_shares_internal(&env, &user);
+        accrual::sync_user(&env, &user, shares)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+
         let fee_bps: u32 = env
             .storage()
             .instance()
@@ -1238,7 +1306,6 @@ impl VaultContract {
 
         let liquid_reserves = get_vault_liquid_reserves(&env);
 
-        let shares = get_shares(&env, &user);
         let total_assets = get_total_assets(&env);
         let burned_assets = if shares > 0 {
             vault_token_client(&env).burn_for_withdrawal(&user, &shares)
@@ -1312,13 +1379,59 @@ impl VaultContract {
         }
     }
 
+    /// Harvest accrued yield for a user.
+    pub fn harvest(env: Env, user: Address) -> i128 {
+        require_initialized(&env);
+        require_active(&env);
+        user.require_auth();
+
+        accrue_management_fee(&env);
+        let shares = get_shares_internal(&env, &user);
+        accrual::sync_user(&env, &user, shares).unwrap_or_else(|e| panic_with_error!(&env, e));
+
+        let payout = accrual::get_user_accrued(&env, &user);
+        if payout > 0 {
+            accrual::set_user_accrued(&env, &user, 0);
+
+            let token_address = self::VaultContract::get_token(env.clone());
+            token::Client::new(&env, &token_address).transfer(
+                &env.current_contract_address(),
+                &user,
+                &payout,
+            );
+
+            let current_reserves = get_vault_liquid_reserves(&env);
+            set_vault_liquid_reserves(&env, current_reserves.saturating_sub(payout));
+
+            let total_assets = get_total_assets(&env);
+            set_total_assets(&env, total_assets.saturating_sub(payout));
+
+            emit_event(
+                &env,
+                VAULT,
+                symbol_short!("HARVEST"),
+                user.clone(),
+                YieldHarvestedEventData {
+                    user: user.clone(),
+                    amount: payout,
+                },
+            );
+        }
+
+        payout
+    }
+
+    pub fn harvest_vault(env: Env, user: Address) -> i128 {
+        VaultContract::harvest(env, user)
+    }
+
     // -----------------------------------------------------------------------
     // View functions
     // -----------------------------------------------------------------------
 
     pub fn get_balance(env: Env, user: Address) -> i128 {
         require_initialized(&env);
-        let shares = get_shares(&env, &user);
+        let shares = get_shares_internal(&env, &user);
         if shares <= 0 {
             return 0;
         }
@@ -1343,7 +1456,7 @@ impl VaultContract {
 
     pub fn get_shares(env: Env, user: Address) -> i128 {
         require_initialized(&env);
-        get_shares(&env, &user)
+        get_shares_internal(&env, &user)
     }
 
     pub fn get_total_deposits(env: Env) -> i128 {
@@ -1392,12 +1505,18 @@ impl VaultContract {
         fees
     }
 
-    pub fn pending_yield(env: Env) -> i128 {
+    pub fn pending_yield(env: Env, user: Address) -> i128 {
+        require_initialized(&env);
+        let shares = get_shares_internal(&env, &user);
+        accrual::pending_yield(&env, &user, shares).unwrap_or(0)
+    }
+
+    pub fn get_unreported_yield(env: Env) -> i128 {
         require_initialized(&env);
         let token_address = self::VaultContract::get_token(env.clone());
         let contract_balance = token::Client::new(&env, &token_address).balance(&env.current_contract_address());
         let liquid_reserves = get_vault_liquid_reserves(&env);
-        
+
         if contract_balance > liquid_reserves {
             contract_balance - liquid_reserves
         } else {
@@ -1407,7 +1526,7 @@ impl VaultContract {
 
     pub fn withdrawal_fee_preview(env: Env, user: Address, shares: i128) -> WithdrawalFeePreview {
         require_initialized(&env);
-        let current_shares = get_shares(&env, &user);
+        let current_shares = get_shares_internal(&env, &user);
         let mut preview = WithdrawalFeePreview {
             gross_asset_value: 0,
             management_fee_deducted: 0,
