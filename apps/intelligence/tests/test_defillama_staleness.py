@@ -7,8 +7,10 @@ instead of an empty list — so an AI response that references yield data
 degrades to slightly-stale numbers instead of having none at all.
 """
 
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 from app.services.defillama import DeFiLlamaClient, _mem_cache
@@ -56,20 +58,20 @@ def _make_mock_response(status: int, json_data: object) -> MagicMock:
     return mock_resp
 
 
-def _make_session(mock_resp: MagicMock) -> MagicMock:
+def _make_session(mock_resp: MagicMock) -> aiohttp.ClientSession:
     session = AsyncMock()
     session.get = MagicMock(return_value=mock_resp)
-    session.__aenter__ = AsyncMock(return_value=session)
-    session.__aexit__ = AsyncMock(return_value=False)
-    return session
+    session.aenter = AsyncMock(return_value=session)
+    session.aexit = AsyncMock(return_value=False)
+    return cast(aiohttp.ClientSession, session)
 
 
-def _make_failing_session(exc: Exception) -> MagicMock:
+def _make_failing_session(exc: Exception) -> aiohttp.ClientSession:
     session = AsyncMock()
     session.get = MagicMock(side_effect=exc)
-    session.__aenter__ = AsyncMock(return_value=session)
-    session.__aexit__ = AsyncMock(return_value=False)
-    return session
+    session.aenter = AsyncMock(return_value=session)
+    session.aexit = AsyncMock(return_value=False)
+    return cast(aiohttp.ClientSession, session)
 
 
 async def _prime_cache_and_expire_short_ttl(client: DeFiLlamaClient) -> None:
@@ -105,7 +107,10 @@ async def test_outage_after_ttl_expiry_serves_stale_data_on_non_200(client):
 async def test_outage_after_ttl_expiry_serves_stale_data_on_exception(client):
     await _prime_cache_and_expire_short_ttl(client)
 
-    with patch("aiohttp.ClientSession", return_value=_make_failing_session(Exception("network down"))):
+    with patch(
+        "aiohttp.ClientSession",
+        return_value=_make_failing_session(Exception("network down")),
+    ):
         result = await client.get_yield_pools(chain="Stellar")
 
     assert result, "expected stale fallback data, got empty list"
