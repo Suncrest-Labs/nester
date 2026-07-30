@@ -134,7 +134,7 @@ export function Navbar() {
                                     >
                                         <button
                                             onClick={() => setShowMenu(!showMenu)}
-                                            className="flex items-center gap-2 rounded-full border border-border bg-white px-4 py-2 transition-all hover:border-black/20 hover:shadow-sm"
+                                            className="flex items-center gap-2 rounded-full border border-border bg-white dark:bg-[#100F0F] px-4 py-2 transition-all hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm"
                                         >
                                             <div className="h-2 w-2 rounded-full bg-emerald-500" />
                                             <span className="text-sm font-medium text-foreground font-mono">
@@ -155,7 +155,7 @@ export function Navbar() {
                                                     animate={{ opacity: 1, y: 0, scale: 1 }}
                                                     exit={{ opacity: 0, y: 8, scale: 0.96 }}
                                                     transition={{ duration: 0.15 }}
-                                                    className="absolute right-0 top-full mt-2 w-64 rounded-2xl border border-border bg-white p-2 shadow-xl shadow-black/8"
+                                                    className="absolute right-0 top-full mt-2 w-64 rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-2 shadow-xl shadow-black/8"
                                                 >
                                                     <div className="px-3 py-2 mb-1">
                                                         <p className="text-xs text-muted-foreground mb-1">Connected Wallet</p>
@@ -193,7 +193,7 @@ export function Navbar() {
                                     {/* Mobile hamburger */}
                                     <button
                                         onClick={() => setMobileOpen(!mobileOpen)}
-                                        className="md:hidden flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-white text-foreground/70 transition-colors hover:text-foreground"
+                                        className="md:hidden flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-white dark:bg-[#100F0F] text-foreground/70 transition-colors hover:text-foreground"
                                         aria-label="Toggle menu"
                                     >
                                         {mobileOpen ? <X className="h-4.5 w-4.5" /> : <Menu className="h-4.5 w-4.5" />}
@@ -201,7 +201,7 @@ export function Navbar() {
                                 </>
                             ) : (
                                 <Link href="/">
-                                    <div className="p-0.5 rounded-full border border-black/15">
+                                    <div className="p-0.5 rounded-full border border-black/15 dark:border-white/15">
                                         <button className="rounded-full bg-brand-dark hover:bg-brand-dark/90 px-5 py-2 text-sm font-medium text-white transition-all">
                                             Connect Wallet
                                         </button>
@@ -233,19 +233,19 @@ export function Navbar() {
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -12 }}
                             transition={{ duration: 0.2, ease: "easeOut" }}
-                            className="fixed left-4 right-4 top-26 z-50 md:hidden rounded-2xl border border-border bg-white shadow-2xl shadow-black/10 overflow-hidden"
+                            className="fixed left-4 right-4 top-26 z-50 md:hidden rounded-2xl border border-border bg-white dark:bg-[#100F0F] shadow-2xl shadow-black/10 overflow-hidden"
                         >
                             {/* Address */}
                             <div className="px-5 py-4 border-b border-border">
-                                <p className="text-[10px] uppercase tracking-widest text-black/40 mb-1">Wallet</p>
+                                <p className="text-[10px] uppercase tracking-widest text-black/40 dark:text-white/40 mb-1">Wallet</p>
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                         <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                                        <span className="font-mono text-sm text-black/70">
+                                        <span className="font-mono text-sm text-black/70 dark:text-white/70">
                                             {address ? truncateAddress(address, 8) : ""}
                                         </span>
                                     </div>
-                                    <button onClick={copyAddress} className="text-black/30 hover:text-black/60 transition-colors">
+                                    <button onClick={copyAddress} className="text-black/30 dark:text-white/30 hover:text-black/60 dark:hover:text-white/60 transition-colors">
                                         {copied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
                                     </button>
                                 </div>
@@ -260,8 +260,8 @@ export function Navbar() {
                                         className={cn(
                                             "flex items-center justify-between rounded-xl px-4 py-3 text-sm font-medium transition-colors",
                                             pathname === item.href
-                                                ? "bg-black text-white"
-                                                : "text-black/60 hover:bg-black/5 hover:text-black"
+                                                ? "bg-black dark:bg-blue-600 text-white"
+                                                : "text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5 hover:text-black dark:hover:text-white"
                                         )}
                                     >
                                         {item.label}

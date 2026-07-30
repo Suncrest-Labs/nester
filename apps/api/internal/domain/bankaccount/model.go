@@ -83,11 +83,13 @@ type UpdateInput struct {
 	BankName     *string
 }
 
-// Repository persists encrypted bank accounts.
+// Repository persists encrypted bank accounts. The encrypted account number is
+// stored alongside the key version that sealed it so keys can be rotated
+// without rewriting historical rows.
 type Repository interface {
-	Create(ctx context.Context, account BankAccount, encryptedNumber []byte, fingerprint string) (BankAccount, error)
+	Create(ctx context.Context, account BankAccount, encryptedNumber []byte, fingerprint, keyVersion string) (BankAccount, error)
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]BankAccount, error)
-	GetByID(ctx context.Context, id uuid.UUID) (BankAccount, []byte, error)
+	GetByID(ctx context.Context, id uuid.UUID) (account BankAccount, encryptedNumber []byte, keyVersion string, err error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ClearDefaultForCurrency(ctx context.Context, userID uuid.UUID, currency string) error
 	SetDefault(ctx context.Context, id uuid.UUID, userID uuid.UUID) error

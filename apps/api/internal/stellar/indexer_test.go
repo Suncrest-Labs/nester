@@ -77,7 +77,6 @@ func TestExtractEventAmount_JSONNumber(t *testing.T) {
 	assert.True(t, amount.Equal(decimal.RequireFromString("123456789012345678901234567890")))
 }
 
-
 func TestExtractEventAmount_LargeAmountPrecision(t *testing.T) {
 	// 1e18 stroops is far above float64's exact-integer limit (2^53 ~ 9.007e15).
 	const bigStroops = "1000000000000000000"
@@ -108,4 +107,110 @@ func TestExtractEventAmount_LargeAmountPrecision(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, "1500", got.String())
 	})
+}
+
+func TestApplyIndexedEvent_EmergencyRequested_UpsertsQueueEntry(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	event := indexedEvent{
+		ID:         "evt-emrg-reqd",
+		ContractID: "CVAULT1",
+		EventType:  "emrg_reqd",
+		Ledger:     10,
+		Data: map[string]any{
+			"user":             "GUSER1",
+			"seq":              json.Number("3"),
+			"shares_requested": json.Number("10000000"),
+		},
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO processed_events").
+		WithArgs(event.ID, event.Ledger).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO emergency_withdrawal_queue").
+		WithArgs("CVAULT1", "GUSER1", "3", "10000000").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	processed, err := applyIndexedEvent(context.Background(), db, event)
+	assert.NoError(t, err)
+	assert.True(t, processed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestApplyIndexedEvent_PenaltyCharged_PersistsReason(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	event := indexedEvent{
+		ID:         "evt-pnlty-chg",
+		ContractID: "CVAULT1",
+		EventType:  "pnlty_chg",
+		Ledger:     11,
+		Data: map[string]any{
+			"user":          "GUSER2",
+			"amount":        json.Number("500000"),
+			"shares_burned": json.Number("10000000"),
+			"reason":        []any{"EmergencyExit"},
+		},
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO processed_events").
+		WithArgs(event.ID, event.Ledger).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO penalty_events").
+		WithArgs("CVAULT1", "GUSER2", "500000", "10000000", "emergency_exit").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	processed, err := applyIndexedEvent(context.Background(), db, event)
+	assert.NoError(t, err)
+	assert.True(t, processed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestApplyIndexedEvent_RebalanceLegExecuted_Persists(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	event := indexedEvent{
+		ID:         "evt-rebal-leg",
+		ContractID: "CVAULT1",
+		EventType:  "rebal_leg",
+		Ledger:     12,
+		Data: map[string]any{
+			"source_id":  "aave",
+			"delta":      json.Number("-4000000"),
+			"amount_out": json.Number("4000000"),
+			"min_out":    json.Number("3900000"),
+		},
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO processed_events").
+		WithArgs(event.ID, event.Ledger).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO vault_rebalance_legs").
+		WithArgs("CVAULT1", "aave", "-4000000", "4000000", "3900000").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	processed, err := applyIndexedEvent(context.Background(), db, event)
+	assert.NoError(t, err)
+	assert.True(t, processed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExtractEventEnumVariant_HandlesMapShape(t *testing.T) {
+	variant, ok := extractEventEnumVariant(indexedEvent{
+		Data: map[string]any{"reason": map[string]any{"LockBreak": nil}},
+	}, "reason")
+	assert.True(t, ok)
+	assert.Equal(t, "LockBreak", variant)
 }

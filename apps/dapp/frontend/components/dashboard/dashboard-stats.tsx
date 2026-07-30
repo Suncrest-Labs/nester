@@ -58,7 +58,7 @@ export function DashboardStats({ stats, loading }: DashboardStatsProps) {
                         duration: 0.5,
                         delay: 0.1 + i * 0.08,
                     }}
-                    className="group rounded-2xl border border-border bg-white p-5 transition-all hover:border-black/15 hover:shadow-sm"
+                    className="group rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-5 transition-all hover:border-black/15 dark:hover:border-white/15 hover:shadow-sm"
                 >
                     {loading ? (
                         <div className="animate-pulse">

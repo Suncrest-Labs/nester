@@ -107,7 +107,7 @@ export function RebalanceSuggestionCard({ vaultId, vaultName }: Props) {
 
       {modalOpen && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 px-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#100F0F] p-6 shadow-xl">
             <h3 className="font-heading text-xl font-light">Confirm rebalance</h3>
             <p className="mt-2 text-sm text-muted-foreground">{vaultName}</p>
             <div className="mt-4 grid grid-cols-2 gap-4 text-sm">

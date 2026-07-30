@@ -1,5 +1,5 @@
-ALTER TABLE vault_transactions ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
-ALTER TABLE vault_transactions ADD COLUMN IF NOT EXISTS shares_minted_or_burned NUMERIC(28, 8);
-ALTER TABLE vault_transactions ADD COLUMN IF NOT EXISTS share_price_at_time NUMERIC(28, 8);
-ALTER TABLE vault_transactions ADD COLUMN IF NOT EXISTS fee_charged NUMERIC(28, 8);
-ALTER TABLE vault_transactions RENAME COLUMN tx_hash TO transaction_hash;
+-- No-op. This migration was a byte-for-byte duplicate of 033_update_vault_transactions
+-- (a campaign PR copied it as a template). 033 already adds the columns and renames
+-- tx_hash -> transaction_hash; re-running the rename here fails because tx_hash no
+-- longer exists. Neutralized to keep the version sequence intact. See AUDIT_REPORT.md.
+SELECT 1;

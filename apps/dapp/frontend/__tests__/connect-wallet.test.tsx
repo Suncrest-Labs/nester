@@ -61,6 +61,7 @@ describe("ConnectWallet", () => {
       walletsLoaded: true,
       isConnected: true,
       address: "GABC1234567890",
+      user: { address: "GABC1234567890" },
       selectedWalletId: "freighter",
     } as ReturnType<typeof useWallet>);
 

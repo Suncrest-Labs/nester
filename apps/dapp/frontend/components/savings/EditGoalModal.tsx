@@ -91,20 +91,20 @@ export function EditGoalModal({ goal, onClose }: EditGoalModalProps) {
         aria-hidden="true"
       />
       <div
-        className="fixed inset-x-4 top-16 z-50 mx-auto max-w-lg rounded-3xl bg-white p-8 shadow-2xl
+        className="fixed inset-x-4 top-16 z-50 mx-auto max-w-lg rounded-3xl bg-white dark:bg-[#100F0F] p-8 shadow-2xl
                    sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2"
         role="dialog"
         aria-modal="true"
         aria-labelledby="edit-goal-title"
       >
         <div className="mb-6 flex items-center justify-between">
-          <h2 id="edit-goal-title" className="text-lg font-semibold text-black">
+          <h2 id="edit-goal-title" className="text-lg font-semibold text-black dark:text-white">
             Edit Savings Goal
           </h2>
           <button
             onClick={onClose}
             aria-label="Close"
-            className="flex h-8 w-8 items-center justify-center rounded-xl border border-black/10 text-black/40 hover:text-black transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-xl border border-black/10 dark:border-white/10 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors"
           >
             <X className="h-4 w-4" />
           </button>
@@ -112,7 +112,7 @@ export function EditGoalModal({ goal, onClose }: EditGoalModalProps) {
 
         <form onSubmit={handleSubmit} noValidate className="space-y-5">
           <div>
-            <label htmlFor="edit-goal-description" className="mb-1.5 block text-xs font-medium text-black/60">
+            <label htmlFor="edit-goal-description" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
               Description
             </label>
             <input
@@ -122,13 +122,13 @@ export function EditGoalModal({ goal, onClose }: EditGoalModalProps) {
               onChange={(e) => setDescription(e.target.value)}
               placeholder="e.g. Emergency fund, Holiday trip…"
               maxLength={200}
-              className="h-11 w-full rounded-xl border border-black/10 bg-black/[0.02] px-4 text-sm text-black outline-none transition-colors focus:border-black/25"
+              className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label htmlFor="edit-goal-amount" className="mb-1.5 block text-xs font-medium text-black/60">
+              <label htmlFor="edit-goal-amount" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
                 Target amount
               </label>
               <input
@@ -139,15 +139,15 @@ export function EditGoalModal({ goal, onClose }: EditGoalModalProps) {
                 value={targetAmount}
                 onChange={(e) => setTargetAmount(e.target.value)}
                 placeholder="0.00"
-                className="h-11 w-full rounded-xl border border-black/10 bg-black/[0.02] px-4 font-mono text-sm text-black outline-none transition-colors focus:border-black/25
+                className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 font-mono text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25
                            [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-black/60">Currency</label>
+              <label className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">Currency</label>
               <div
-                className="flex h-11 rounded-xl border border-black/10 bg-black/[0.02] p-1"
+                className="flex h-11 rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-1"
                 role="group"
                 aria-label="Select currency"
               >
@@ -158,8 +158,8 @@ export function EditGoalModal({ goal, onClose }: EditGoalModalProps) {
                     onClick={() => setCurrency(c)}
                     className={`flex-1 rounded-lg text-xs font-semibold transition-colors ${
                       currency === c
-                        ? "bg-black text-white"
-                        : "text-black/60 hover:text-black"
+                        ? "bg-black dark:bg-blue-600 text-white"
+                        : "text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white"
                     }`}
                     aria-pressed={currency === c}
                   >
@@ -171,7 +171,7 @@ export function EditGoalModal({ goal, onClose }: EditGoalModalProps) {
           </div>
 
           <div>
-            <label htmlFor="edit-goal-deadline" className="mb-1.5 block text-xs font-medium text-black/60">
+            <label htmlFor="edit-goal-deadline" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
               Target deadline
             </label>
             <input
@@ -180,19 +180,19 @@ export function EditGoalModal({ goal, onClose }: EditGoalModalProps) {
               value={deadline}
               min={minDate}
               onChange={(e) => setDeadline(e.target.value)}
-              className="h-11 w-full rounded-xl border border-black/10 bg-black/[0.02] px-4 text-sm text-black outline-none transition-colors focus:border-black/25"
+              className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
             />
           </div>
 
           <div>
-            <label htmlFor="edit-goal-category" className="mb-1.5 block text-xs font-medium text-black/60">
+            <label htmlFor="edit-goal-category" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
               Category
             </label>
             <select
               id="edit-goal-category"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="h-11 w-full rounded-xl border border-black/10 bg-black/[0.02] px-4 text-sm text-black outline-none transition-colors focus:border-black/25"
+              className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
             >
               <option value="other">Other</option>
               <option value="emergency_fund">Emergency Fund</option>
@@ -215,14 +215,14 @@ export function EditGoalModal({ goal, onClose }: EditGoalModalProps) {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 rounded-xl border border-black/10 py-3 text-xs font-semibold text-black/60 hover:bg-black/5 transition-colors"
+              className="flex-1 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-semibold text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={submitting}
-              className="flex-1 rounded-xl bg-black py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
+              className="flex-1 rounded-xl bg-black dark:bg-blue-600 py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
             >
               {submitting ? "Saving…" : "Save Changes"}
             </button>

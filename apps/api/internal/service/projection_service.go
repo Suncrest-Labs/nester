@@ -13,14 +13,25 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/performance"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/projection"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsschedule"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
-// ProjectionService handles compound interest projections
+// ProjectionService handles compound interest projections, including the
+// Monte Carlo savings forecast added for issue #843 (see
+// projection_simulation.go). savingsGoalRepo/savingsScheduleRepo are only
+// used by the Monte Carlo path (to resolve a goal's target/deadline and a
+// user's real contribution cadence); the deterministic methods below don't
+// touch them.
 type ProjectionService struct {
 	calculator      projection.Calculator
 	vaultRepo       vault.Repository
 	performanceRepo performance.SnapshotRepository
+
+	savingsGoalRepo     savingsgoal.Repository
+	savingsScheduleRepo savingsschedule.Repository
+	simCache            *simulationCache
 }
 
 // NewProjectionService creates a new projection service
@@ -28,11 +39,16 @@ func NewProjectionService(
 	calculator projection.Calculator,
 	vaultRepo vault.Repository,
 	performanceRepo performance.SnapshotRepository,
+	savingsGoalRepo savingsgoal.Repository,
+	savingsScheduleRepo savingsschedule.Repository,
 ) *ProjectionService {
 	return &ProjectionService{
-		calculator:      calculator,
-		vaultRepo:       vaultRepo,
-		performanceRepo: performanceRepo,
+		calculator:          calculator,
+		vaultRepo:           vaultRepo,
+		performanceRepo:     performanceRepo,
+		savingsGoalRepo:     savingsGoalRepo,
+		savingsScheduleRepo: savingsScheduleRepo,
+		simCache:            newSimulationCache(SimulationCacheTTL),
 	}
 }
 

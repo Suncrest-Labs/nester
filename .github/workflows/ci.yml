@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["*"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Detect which areas of the monorepo changed so downstream jobs can skip
   # work they don't need to run. Each filter is an OR of globs; if ANY match,
@@ -19,7 +23,6 @@ jobs:
       intelligence: ${{ steps.filter.outputs.intelligence }}
       dapp: ${{ steps.filter.outputs.dapp }}
       api: ${{ steps.filter.outputs.api }}
-      internal: ${{ steps.filter.outputs.internal }}
       contracts: ${{ steps.filter.outputs.contracts }}
       shared: ${{ steps.filter.outputs.shared }}
     steps:
@@ -48,10 +51,6 @@ jobs:
               - 'apps/dapp/**'
             api:
               - 'apps/api/**'
-            internal:
-              - 'internal/**'
-              - 'go.mod'
-              - 'go.sum'
             contracts:
               - 'packages/contracts/**'
               - 'scripts/contract-audit.sh'
@@ -117,31 +116,31 @@ jobs:
     needs: changes
     if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/dapp/frontend
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Lint (security rules)
-        run: npm run lint
+        run: pnpm --filter @nester/dapp run lint
         continue-on-error: true
 
       - name: Build
-        run: npm run build
+        run: pnpm --filter @nester/dapp run build
 
       - name: Test
-        run: npm run test:coverage
+        run: pnpm --filter @nester/dapp run test:coverage
 
       - name: Audit JS dependencies (dapp)
-        run: npm audit --audit-level=moderate
+        run: pnpm audit --audit-level=moderate
         continue-on-error: true
 
   security:
@@ -176,7 +175,7 @@ jobs:
         continue-on-error: true
 
       - uses: actions/setup-go@v5
-        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.internal == 'true' || needs.changes.outputs.shared == 'true'
+        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
         with:
           go-version-file: apps/api/go.mod
           cache: true
@@ -220,19 +219,22 @@ jobs:
         working-directory: apps/api
         continue-on-error: true
 
+      - uses: pnpm/action-setup@v4
+        if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+
       - uses: actions/setup-node@v4
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
         with:
           node-version: 22
+          cache: pnpm
 
       - name: Install dapp dependencies for audit
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
-        run: npm install
-        working-directory: apps/dapp/frontend
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Audit JavaScript dependencies
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
-        run: npm audit --audit-level=high
+        run: pnpm audit --audit-level=high
         working-directory: apps/dapp/frontend
         continue-on-error: true
 
@@ -303,6 +305,12 @@ jobs:
     env:
       DATABASE_URL: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
       REDIS_URL: redis://localhost:6379
+      # Redis-backed tests (internal/cache, internal/notifications,
+      # internal/ws) skip via t.Skip when this is unset, following the
+      # convention in internal/middleware/ratelimit_backend_test.go. REDIS_URL
+      # above is what the app itself reads; without this, every such test
+      # silently skips in CI even though the redis service below is running.
+      REDIS_ADDR: localhost:6379
     steps:
       - uses: actions/checkout@v4
 
@@ -339,46 +347,6 @@ jobs:
         run: go test -race -timeout 120s -count=1 -run Integration ./...
         continue-on-error: true
 
-
-  internal-stellar:
-    name: Internal (Go)
-    needs: changes
-    if: needs.changes.outputs.internal == 'true' || needs.changes.outputs.shared == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check for Go module
-        id: check
-        run: |
-          if [ -f "go.mod" ] && [ -d "internal" ]; then
-            echo "has_module=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_module=false" >> $GITHUB_OUTPUT
-          fi
-
-      - uses: actions/setup-go@v5
-        if: steps.check.outputs.has_module == 'true'
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Run tests
-        if: steps.check.outputs.has_module == 'true'
-        run: go test -v -race ./internal/...
-
-      - name: Check formatting
-        if: steps.check.outputs.has_module == 'true'
-        run: |
-          if [ "$(gofmt -s -l ./internal | wc -l)" -gt 0 ]; then
-            echo "Code formatting issues found"
-            gofmt -s -d ./internal
-            exit 1
-          fi
-
-      - name: Run vet
-        if: steps.check.outputs.has_module == 'true'
-        run: go vet ./internal/...
 
   contracts:
     name: Contracts (Rust)

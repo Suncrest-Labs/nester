@@ -19,3 +19,7 @@ pub fn role_key(_account: &Symbol, _role: &Symbol) -> Symbol {
 pub fn initialized_key() -> Symbol {
     symbol_short!("init")
 }
+
+pub fn reentrancy_lock_key() -> Symbol {
+    symbol_short!("RE_LOCK")
+}

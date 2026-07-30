@@ -432,6 +432,34 @@ func (s *VaultService) UpdateVault(ctx context.Context, input UpdateVaultInput) 
 	return s.repository.GetVault(ctx, input.VaultID)
 }
 
+// UpdateHarvestFrequency sets how often the harvest engine considers this
+// vault for a harvest ("daily" or "weekly"), letting owners trade off
+// harvest latency against cumulative gas spend on a per-vault basis (#940).
+func (s *VaultService) UpdateHarvestFrequency(ctx context.Context, vaultID uuid.UUID, userID uuid.UUID, frequency string) (vault.Vault, error) {
+	if vaultID == uuid.Nil {
+		return vault.Vault{}, vault.ErrInvalidVault
+	}
+
+	parsed, err := vault.ParseHarvestFrequency(frequency)
+	if err != nil {
+		return vault.Vault{}, err
+	}
+
+	existing, err := s.repository.GetVault(ctx, vaultID)
+	if err != nil {
+		return vault.Vault{}, err
+	}
+	if existing.UserID != userID {
+		return vault.Vault{}, vault.ErrVaultForbidden
+	}
+
+	if err := s.repository.UpdateHarvestFrequency(ctx, vaultID, parsed); err != nil {
+		return vault.Vault{}, err
+	}
+
+	return s.repository.GetVault(ctx, vaultID)
+}
+
 // CloseVault transitions a vault to the closed status. Unless Force is set, it
 // rejects vaults that still hold a balance.
 func (s *VaultService) CloseVault(ctx context.Context, input CloseVaultInput) (vault.Vault, error) {

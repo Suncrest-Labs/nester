@@ -22,7 +22,7 @@ function QuickPrompts({ onSelect }: { onSelect: (p: string) => void }) {
           key={p}
           type="button"
           onClick={() => onSelect(p)}
-          className="rounded-full border border-black/10 bg-black/5 px-2.5 py-1 text-[10px] font-semibold text-black/70 transition-all hover:border-black/20 hover:bg-black/10 hover:text-black focus-visible:ring-2 focus-visible:ring-black"
+          className="rounded-full border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 px-2.5 py-1 text-[10px] font-semibold text-black/70 dark:text-white/70 transition-all hover:border-black/20 dark:hover:border-white/20 hover:bg-black/10 dark:hover:bg-white/10 hover:text-black dark:hover:text-white focus-visible:ring-2 focus-visible:ring-black"
         >
           {p}
         </button>
@@ -34,13 +34,13 @@ function QuickPrompts({ onSelect }: { onSelect: (p: string) => void }) {
 function TypingDots() {
   return (
     <div className="flex items-center justify-start" aria-label="Prometheus is typing">
-      <div className="mr-2 mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black/5">
-        <Sparkles className="h-2.5 w-2.5 text-black/50" aria-hidden="true" />
+      <div className="mr-2 mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black/5 dark:bg-white/5">
+        <Sparkles className="h-2.5 w-2.5 text-black/50 dark:text-white/50" aria-hidden="true" />
       </div>
-      <div className="flex items-center gap-1 rounded-2xl border border-black/10 bg-white px-3 py-2.5">
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/40 [animation-delay:0ms]" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/40 [animation-delay:150ms]" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/40 [animation-delay:300ms]" />
+      <div className="flex items-center gap-1 rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] px-3 py-2.5">
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/40 dark:bg-white/40 [animation-delay:0ms]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/40 dark:bg-white/40 [animation-delay:150ms]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/40 dark:bg-white/40 [animation-delay:300ms]" />
       </div>
     </div>
   )
@@ -55,21 +55,21 @@ function renderBold(text: string): React.ReactNode[] {
   )
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, onConfirm }: { message: ChatMessage; onConfirm?: (id: string, approved: boolean) => void }) {
   const isUser = message.role === 'user'
   const paragraphs = message.content.split('\n').filter((p) => p.trim() !== '')
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       {!isUser && (
-        <div className="mr-2 mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black/5">
-          <Sparkles className="h-2.5 w-2.5 text-black/50" aria-hidden="true" />
+        <div className="mr-2 mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black/5 dark:bg-white/5">
+          <Sparkles className="h-2.5 w-2.5 text-black/50 dark:text-white/50" aria-hidden="true" />
         </div>
       )}
       <div
         className={`max-w-[85%] rounded-2xl px-3 py-2 text-[11px] leading-relaxed font-medium ${
           isUser
-            ? 'bg-black text-white'
-            : 'border border-black/10 bg-white text-black'
+            ? 'bg-black dark:bg-blue-600 text-white'
+            : 'border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] text-black dark:text-white'
         }`}
       >
         {paragraphs.map((p, i) => (
@@ -77,6 +77,31 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             {renderBold(p)}
           </p>
         ))}
+        {message.proposal && (
+          <div className="mt-3 rounded-xl border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 p-3">
+            <p className="mb-3 font-semibold">{message.proposal.text}</p>
+            {message.proposal.status === 'pending' ? (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onConfirm?.(message.proposal!.id, true)}
+                  className="flex-1 rounded-lg bg-black dark:bg-white px-3 py-1.5 text-center font-semibold text-white dark:text-black transition-opacity hover:opacity-90 active:scale-95"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => onConfirm?.(message.proposal!.id, false)}
+                  className="flex-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] px-3 py-1.5 text-center font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5 active:scale-95"
+                >
+                  Decline
+                </button>
+              </div>
+            ) : (
+              <p className="text-center font-semibold opacity-70">
+                {message.proposal.status === 'executed' ? 'Executed' : 'Declined'}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -141,6 +166,37 @@ export function PrometheusChatbot() {
 
   if (!isConnected || !address) return null
 
+  const handleConfirm = async (proposalId: string, approved: boolean) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.proposal?.id === proposalId
+          ? { ...m, proposal: { ...m.proposal, status: approved ? 'executed' : 'declined' } }
+          : m
+      )
+    )
+    
+    // Set streaming to true to show typing indicator while confirming
+    setStreaming(true)
+    setMessages((prev) => [...prev, { role: 'assistant', content: '' }])
+
+    try {
+      const res = await intelligence.confirmToolAction(proposalId, approved)
+      setMessages((prev) => {
+        const updated = [...prev]
+        updated[updated.length - 1] = { role: 'assistant', content: res.assistant_message }
+        return updated
+      })
+    } catch (err: any) {
+      setMessages((prev) => {
+        const updated = [...prev]
+        updated[updated.length - 1] = { role: 'assistant', content: `Error: ${err.message}` }
+        return updated
+      })
+    } finally {
+      setStreaming(false)
+    }
+  }
+
   const sendMessage = (text: string) => {
     const trimmed = text.trim()
     if (!trimmed || streaming) return
@@ -152,6 +208,23 @@ export function PrometheusChatbot() {
 
     const source = intelligence.sendMessage(address, trimmed)
     eventSourceRef.current = source
+
+    source.addEventListener('pending_confirmation', (e: any) => {
+      source.close()
+      setStreaming(false)
+      const data = JSON.parse(e.data)
+      setMessages((prev) => {
+        const updated = [...prev]
+        const last = updated[updated.length - 1]
+        if (last?.role === 'assistant') {
+          updated[updated.length - 1] = {
+            ...last,
+            proposal: { id: data.proposal_id, text: data.text, status: 'pending' },
+          }
+        }
+        return updated
+      })
+    })
 
     source.onmessage = (e: MessageEvent) => {
       if (e.data === '[DONE]') {
@@ -197,26 +270,26 @@ export function PrometheusChatbot() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.95 }}
             transition={{ duration: 0.2 }}
-            className="flex w-85 flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl shadow-black/10"
+            className="flex w-85 flex-col overflow-hidden rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] shadow-2xl shadow-black/10"
             role="dialog"
             aria-labelledby="chat-header"
             aria-modal="true"
           >
             {/* Header */}
-            <div className="flex items-center gap-2 border-b border-black/10 bg-white px-4 py-3">
-              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-black/5">
-                <Sparkles className="h-3 w-3 text-black/50" aria-hidden="true" />
+            <div className="flex items-center gap-2 border-b border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] px-4 py-3">
+              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-black/5 dark:bg-white/5">
+                <Sparkles className="h-3 w-3 text-black/50 dark:text-white/50" aria-hidden="true" />
               </div>
               <div className="flex-1">
-                <p id="chat-header" className="text-xs font-semibold text-black">
+                <p id="chat-header" className="text-xs font-semibold text-black dark:text-white">
                   <span className="font-display italic">Prometheus</span> AI
                 </p>
-                <p className="text-[10px] text-black/50 font-medium">DeFi Advisory</p>
+                <p className="text-[10px] text-black/50 dark:text-white/50 font-medium">DeFi Advisory</p>
               </div>
               <button
                 onClick={() => setOpen(false)}
                 aria-label="Close chat"
-                className="flex h-6 w-6 items-center justify-center rounded-full text-black/40 transition-colors hover:bg-black/5 hover:text-black focus-visible:ring-2 focus-visible:ring-black"
+                className="flex h-6 w-6 items-center justify-center rounded-full text-black/40 dark:text-white/40 transition-colors hover:bg-black/5 dark:hover:bg-white/5 hover:text-black dark:hover:text-white focus-visible:ring-2 focus-visible:ring-black"
               >
                 <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
@@ -229,7 +302,7 @@ export function PrometheusChatbot() {
                 aria-live="polite"
             >
               {messages.length === 0 ? (
-                <p className="text-center text-[11px] text-black/50 font-medium">
+                <p className="text-center text-[11px] text-black/50 dark:text-white/50 font-medium">
                   Ask me anything about your portfolio or DeFi markets.
                 </p>
               ) : (
@@ -239,7 +312,7 @@ export function PrometheusChatbot() {
                   return isLastAndEmpty ? (
                     <TypingDots key={i} />
                   ) : (
-                    <MessageBubble key={i} message={msg} />
+                    <MessageBubble key={i} message={msg} onConfirm={handleConfirm} />
                   )
                 })
               )}
@@ -248,13 +321,13 @@ export function PrometheusChatbot() {
 
             {/* Quick prompts */}
             {messages.length === 0 && (
-              <div className="border-t border-black/10 px-4 py-3">
+              <div className="border-t border-black/10 dark:border-white/10 px-4 py-3">
                 <QuickPrompts onSelect={sendMessage} />
               </div>
             )}
 
             {/* Input */}
-            <div className="flex items-center gap-2 border-t border-black/10 px-3 py-2.5">
+            <div className="flex items-center gap-2 border-t border-black/10 dark:border-white/10 px-3 py-2.5">
               <input
                 ref={inputRef}
                 type="text"
@@ -264,14 +337,14 @@ export function PrometheusChatbot() {
                 placeholder="Ask Prometheus…"
                 disabled={streaming}
                 aria-label="Message Prometheus"
-                className="flex-1 bg-transparent text-xs text-black font-medium placeholder:text-black/40 outline-none disabled:opacity-50"
+                className="flex-1 bg-transparent text-xs text-black dark:text-white font-medium placeholder:text-black/40 dark:placeholder:text-white/40 outline-none disabled:opacity-50"
               />
               <button
                 type="button"
                 onClick={() => sendMessage(input)}
                 disabled={!input.trim() || streaming}
                 aria-label="Send message"
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-black text-white transition-opacity disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-black"
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-black dark:bg-blue-600 text-white transition-opacity disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-black"
               >
                 <Send className="h-3 w-3" aria-hidden="true" />
               </button>
@@ -284,7 +357,7 @@ export function PrometheusChatbot() {
       <button
         id="chat-toggle"
         onClick={() => setOpen((v) => !v)}
-        className="flex h-13 w-13 items-center justify-center rounded-full bg-black text-white shadow-xl shadow-black/20 transition-transform hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2"
+        className="flex h-13 w-13 items-center justify-center rounded-full bg-black dark:bg-blue-600 text-white shadow-xl shadow-black/20 transition-transform hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2"
         aria-label="Toggle Prometheus AI chat"
         aria-expanded={open}
         aria-controls="chat-panel"

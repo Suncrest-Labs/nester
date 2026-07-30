@@ -8,6 +8,9 @@ import TransactionTable from "@/components/history/TransactionTable";
 import { exportCsv } from "@/lib/export/csv";
 import { exportPdf } from "@/lib/export/pdf";
 import { useWallet } from "@/components/wallet-provider";
+import { useAuth } from "@/components/auth-provider";
+import { useVaults } from "@/hooks/useVaults";
+import { getStoredToken } from "@/lib/api/client";
 import { AppShell } from "@/components/app-shell";
 import { motion } from "framer-motion";
 
@@ -30,7 +33,14 @@ interface Transaction {
 
 export default function HistoryPage() {
   const { isConnected, user } = useWallet();
+  const { userId } = useAuth();
+  const { vaults } = useVaults(userId ?? undefined);
   const router = useRouter();
+
+  const vaultOptions = useMemo(
+    () => vaults.map((v) => ({ id: v.id, name: `${v.currency} Vault` })),
+    [vaults]
+  );
 
   useEffect(() => {
     if (!isConnected) router.push("/");
@@ -59,6 +69,7 @@ export default function HistoryPage() {
     if (filters.toDate) params.append("to", filters.toDate);
     if (filters.vaultId) params.append("vault", filters.vaultId);
     if (filters.status && filters.status !== "All") params.append("status", filters.status);
+    if (filters.searchTerm) params.append("q", filters.searchTerm);
     if (cursor) params.append("cursor", cursor);
     params.append("limit", "25");
     return params.toString();
@@ -70,7 +81,9 @@ export default function HistoryPage() {
       setError(null);
       try {
         const query = buildQuery();
-        const res = await fetch(`/api/v1/activity?${query}`);
+        const res = await fetch(`/api/v1/activity?${query}`, {
+          headers: { Authorization: `Bearer ${getStoredToken()}` },
+        });
         if (!res.ok) throw new Error(`Error ${res.status}`);
         const json: ActivityResponse = await res.json();
         setTransactions(json.data);
@@ -142,32 +155,32 @@ export default function HistoryPage() {
         transition={{ duration: 0.3 }}
         className="my-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"
       >
-        <div className="text-[28px] font-semibold text-black">Transaction History</div>
+        <div className="text-[28px] font-semibold text-black dark:text-white">Transaction History</div>
       </motion.div>
 
       {/* Yield Summary */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3 mb-6">
-        <div className="rounded-xl border p-4 bg-white">
+        <div className="rounded-xl border p-4 bg-white dark:bg-[#100F0F]">
           <p className="text-sm text-gray-500">Total Deposited</p>
-          <p className="mt-1 text-lg font-medium text-black">
+          <p className="mt-1 text-lg font-medium text-black dark:text-white">
             {summary.totalDeposited.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
         </div>
-        <div className="rounded-xl border p-4 bg-white">
+        <div className="rounded-xl border p-4 bg-white dark:bg-[#100F0F]">
           <p className="text-sm text-gray-500">Total Withdrawn</p>
-          <p className="mt-1 text-lg font-medium text-black">
+          <p className="mt-1 text-lg font-medium text-black dark:text-white">
             {summary.totalWithdrawn.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
         </div>
-        <div className="rounded-xl border p-4 bg-white">
+        <div className="rounded-xl border p-4 bg-white dark:bg-[#100F0F]">
           <p className="text-sm text-gray-500">Total Yield Earned</p>
-          <p className="mt-1 text-lg font-medium text-black">
+          <p className="mt-1 text-lg font-medium text-black dark:text-white">
             {summary.totalYield.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
         </div>
       </div>
 
-      <FilterBar vaultOptions={[]} onChange={setFilters} />
+      <FilterBar vaultOptions={vaultOptions} onChange={setFilters} />
 
       <TransactionTable
         transactions={filteredTransactions}
@@ -184,7 +197,7 @@ export default function HistoryPage() {
           disabled={!prevCursor}
           className={cn(
             "rounded-md px-4 py-2 border",
-            prevCursor ? "bg-white hover:bg-gray-100" : "bg-gray-100 text-gray-400 cursor-not-allowed"
+            prevCursor ? "bg-white dark:bg-[#100F0F] hover:bg-gray-100" : "bg-gray-100 text-gray-400 cursor-not-allowed"
           )}
         >
           Previous
@@ -194,7 +207,7 @@ export default function HistoryPage() {
           disabled={!nextCursor}
           className={cn(
             "rounded-md px-4 py-2 border",
-            nextCursor ? "bg-white hover:bg-gray-100" : "bg-gray-100 text-gray-400 cursor-not-allowed"
+            nextCursor ? "bg-white dark:bg-[#100F0F] hover:bg-gray-100" : "bg-gray-100 text-gray-400 cursor-not-allowed"
           )}
         >
           Next

@@ -1,11 +1,22 @@
 #![cfg(test)]
 
+// Privileged-entrypoint authorization matrix
+//
+// | Entrypoint | Authorized | Unauthorized role | Missing signature | Revoked role |
+// | --- | --- | --- | --- | --- |
+// | initialize | test_initialize | N/A | test_initialize_requires_admin_authorization | N/A (one-time bootstrap) |
+// | receive_fees | test_receive_fees_accepts_registered_vault | N/A | test_receive_fees_rejects_missing_vault_auth | N/A (fixed vault address) |
+// | set_recipients | test_set_recipients_happy_path | test_set_recipients_requires_admin | test_set_recipients_requires_caller_auth | test_revoked_admin_cannot_set_recipients |
+// | distribute | test_distribute_three_recipients; test_operator_can_distribute | test_distribute_requires_admin_or_operator | test_distribute_requires_caller_auth | test_revoked_operator_cannot_distribute; test_revoked_admin_cannot_distribute |
+// | withdraw | test_existing_withdraw_still_works | test_withdraw_requires_admin | test_withdraw_requires_caller_auth | test_revoked_admin_cannot_withdraw |
+//
+// Role-negative tests deliberately keep authentication mocked and pass valid
+// business inputs, so removing the role check makes them fail. The separate
+// no-auth tests use an account that does hold the required role and clear all
+// mocked authorizations, so removing only `require_auth` also makes them fail.
+
 use super::*;
-use soroban_sdk::{
-    symbol_short,
-    testutils::Address as _,
-    Address, Env,
-};
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
 
 // ---------------------------------------------------------------------------
 // Minimal mock vault — just needs to be a registered contract so its address
@@ -46,6 +57,7 @@ fn setup() -> (
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &contract_id);
     client.initialize(&admin, &vault);
+    client.register_callee(&admin, &token);
 
     // Grant operator role to the operator address.
     // AccessControl::grant_role is called via the admin through whatever
@@ -93,14 +105,47 @@ fn vault_receive(env: &Env, vault: &Address, client: &TreasuryContractClient, am
 }
 
 /// Mint tokens directly into the treasury contract.
-fn fund_treasury(
-    env: &Env,
-    token_address: &Address,
-    treasury_address: &Address,
-    amount: i128,
-) {
+fn fund_treasury(env: &Env, token_address: &Address, treasury_address: &Address, amount: i128) {
     let sac = soroban_sdk::token::StellarAssetClient::new(env, token_address);
     sac.mint(treasury_address, &amount);
+}
+
+/// Grant a role in the treasury's AccessControl storage for test setup.
+fn grant_test_role(
+    env: &Env,
+    treasury: &Address,
+    grantor: &Address,
+    grantee: &Address,
+    role: Role,
+) {
+    env.as_contract(treasury, || {
+        AccessControl::grant_role(env, grantor, grantee, role);
+    });
+}
+
+/// Revoke a role in the treasury's AccessControl storage for test setup.
+fn revoke_test_role(
+    env: &Env,
+    treasury: &Address,
+    revoker: &Address,
+    target: &Address,
+    role: Role,
+) {
+    env.as_contract(treasury, || {
+        AccessControl::revoke_role(env, revoker, target, role);
+    });
+}
+
+/// Build a valid one-recipient configuration for authorization tests.
+fn one_recipient(env: &Env, recipient: &Address) -> Vec<FeeRecipient> {
+    let mut recipients = Vec::new(env);
+    recipients.push_back(FeeRecipient {
+        address: recipient.clone(),
+        share_bps: BPS_TOTAL,
+        label: symbol_short!("solo"),
+        total_received: 0,
+    });
+    recipients
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +161,25 @@ fn test_initialize() {
     assert_eq!(client.get_available_fees(), 0);
     assert!(client.get_recipients().is_empty());
     assert!(client.get_distribution_history().is_empty());
+}
+
+#[test]
+fn test_initialize_requires_admin_authorization() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let vault = env.register_contract(None, MockVault);
+    let contract_id = env.register_contract(None, TreasuryContract);
+    let client = TreasuryContractClient::new(&env, &contract_id);
+
+    // The address passed as the initial admin must actually authorize the
+    // bootstrap. With no mocked auth, removing `admin.require_auth()` would
+    // make this invocation succeed and this assertion fail.
+    env.mock_auths(&[]);
+    let result = client.try_initialize(&admin, &vault);
+    assert!(
+        result.is_err(),
+        "unsigned admin must not initialize treasury"
+    );
 }
 
 #[test]
@@ -137,6 +201,29 @@ fn test_receive_fees_accumulates() {
     vault_receive(&env, &vault, &client, 500);
     assert_eq!(client.get_total_received(), 1_500);
     assert_eq!(client.get_available_fees(), 1_500);
+}
+
+#[test]
+fn test_receive_fees_accepts_registered_vault() {
+    let (env, _admin, _op, vault, _token, client) = setup();
+
+    // Disable blanket auth: the nested invocation from the registered vault
+    // contract itself is what satisfies `vault.require_auth()`.
+    env.mock_auths(&[]);
+    vault_receive(&env, &vault, &client, 750);
+
+    assert_eq!(client.get_total_received(), 750);
+}
+
+#[test]
+fn test_receive_fees_rejects_missing_vault_auth() {
+    let (env, _admin, _op, _vault, _token, client) = setup();
+
+    env.mock_auths(&[]);
+    let result = client.try_receive_fees(&750);
+
+    assert!(result.is_err(), "only the registered vault may report fees");
+    assert_eq!(client.get_total_received(), 0);
 }
 
 #[test]
@@ -507,6 +594,172 @@ fn test_distribute_requires_admin_or_operator() {
 
     // Stranger has no role — must panic.
     client.distribute(&stranger, &token);
+}
+
+#[test]
+fn test_set_recipients_requires_caller_auth() {
+    let (env, admin, _op, _vault, _token, client) = setup();
+    let recipient = Address::generate(&env);
+    let recipients = one_recipient(&env, &recipient);
+
+    // `admin` holds the correct role; only its signature is absent.
+    env.mock_auths(&[]);
+    let result = client.try_set_recipients(&admin, &recipients);
+
+    assert!(
+        result.is_err(),
+        "admin role must not substitute for authorization"
+    );
+    assert!(client.get_recipients().is_empty());
+}
+
+#[test]
+fn test_revoked_admin_cannot_set_recipients() {
+    let (env, admin, _op, _vault, _token, client) = setup();
+    let delegated_admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let recipients = one_recipient(&env, &recipient);
+
+    grant_test_role(&env, &client.address, &admin, &delegated_admin, Role::Admin);
+    client.set_recipients(&delegated_admin, &recipients);
+
+    revoke_test_role(&env, &client.address, &admin, &delegated_admin, Role::Admin);
+    let result = client.try_set_recipients(&delegated_admin, &recipients);
+
+    assert!(result.is_err(), "revoked admin must not update recipients");
+}
+
+#[test]
+fn test_operator_can_distribute() {
+    let (env, admin, operator, vault, token, client) = setup();
+    let recipient = Address::generate(&env);
+    let recipients = one_recipient(&env, &recipient);
+    client.set_recipients(&admin, &recipients);
+    grant_test_role(&env, &client.address, &admin, &operator, Role::Operator);
+    vault_receive(&env, &vault, &client, 1_000);
+    fund_treasury(&env, &token, &client.address, 1_000);
+
+    client.distribute(&operator, &token);
+
+    let token_client = soroban_sdk::token::TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&recipient), 1_000);
+    assert_eq!(client.get_total_distributed(), 1_000);
+}
+
+#[test]
+fn test_distribute_requires_caller_auth() {
+    let (env, admin, _op, vault, token, client) = setup();
+    let recipient = Address::generate(&env);
+    let recipients = one_recipient(&env, &recipient);
+    client.set_recipients(&admin, &recipients);
+    vault_receive(&env, &vault, &client, 1_000);
+    fund_treasury(&env, &token, &client.address, 1_000);
+
+    // All role and business preconditions are valid; only the signature is
+    // missing, isolating `caller.require_auth()` from the role check.
+    env.mock_auths(&[]);
+    let result = client.try_distribute(&admin, &token);
+
+    assert!(result.is_err(), "admin must authorize distribution");
+    assert_eq!(client.get_total_distributed(), 0);
+}
+
+#[test]
+fn test_revoked_operator_cannot_distribute() {
+    let (env, admin, operator, vault, token, client) = setup();
+    let recipient = Address::generate(&env);
+    let recipients = one_recipient(&env, &recipient);
+    client.set_recipients(&admin, &recipients);
+    grant_test_role(&env, &client.address, &admin, &operator, Role::Operator);
+
+    vault_receive(&env, &vault, &client, 1_000);
+    fund_treasury(&env, &token, &client.address, 1_000);
+    client.distribute(&operator, &token);
+
+    revoke_test_role(&env, &client.address, &admin, &operator, Role::Operator);
+    vault_receive(&env, &vault, &client, 500);
+    fund_treasury(&env, &token, &client.address, 500);
+    let result = client.try_distribute(&operator, &token);
+
+    assert!(result.is_err(), "revoked operator must not distribute");
+    assert_eq!(client.get_total_distributed(), 1_000);
+    assert_eq!(client.get_available_fees(), 500);
+}
+
+#[test]
+fn test_revoked_admin_cannot_distribute() {
+    let (env, admin, _op, vault, token, client) = setup();
+    let delegated_admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let recipients = one_recipient(&env, &recipient);
+    client.set_recipients(&admin, &recipients);
+    grant_test_role(&env, &client.address, &admin, &delegated_admin, Role::Admin);
+
+    vault_receive(&env, &vault, &client, 1_000);
+    fund_treasury(&env, &token, &client.address, 1_000);
+    client.distribute(&delegated_admin, &token);
+
+    revoke_test_role(&env, &client.address, &admin, &delegated_admin, Role::Admin);
+    vault_receive(&env, &vault, &client, 500);
+    fund_treasury(&env, &token, &client.address, 500);
+    let result = client.try_distribute(&delegated_admin, &token);
+
+    assert!(result.is_err(), "revoked admin must not distribute");
+    assert_eq!(client.get_total_distributed(), 1_000);
+}
+
+#[test]
+fn test_withdraw_requires_admin() {
+    let (env, _admin, _op, _vault, token, client) = setup();
+    let outsider = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    fund_treasury(&env, &token, &client.address, 1_000);
+
+    // Auth is mocked for the outsider, and all transfer inputs are valid. The
+    // Admin role check must be the reason this call fails.
+    let result = client.try_withdraw(&outsider, &recipient, &token, &500);
+
+    assert!(
+        result.is_err(),
+        "non-admin must not withdraw treasury funds"
+    );
+    let token_client = soroban_sdk::token::TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&recipient), 0);
+}
+
+#[test]
+fn test_withdraw_requires_caller_auth() {
+    let (env, admin, _op, _vault, token, client) = setup();
+    let recipient = Address::generate(&env);
+    fund_treasury(&env, &token, &client.address, 1_000);
+
+    env.mock_auths(&[]);
+    let result = client.try_withdraw(&admin, &recipient, &token, &500);
+
+    assert!(result.is_err(), "admin must authorize treasury withdrawal");
+    let token_client = soroban_sdk::token::TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&recipient), 0);
+}
+
+#[test]
+fn test_revoked_admin_cannot_withdraw() {
+    let (env, admin, _op, _vault, token, client) = setup();
+    let delegated_admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    grant_test_role(&env, &client.address, &admin, &delegated_admin, Role::Admin);
+    fund_treasury(&env, &token, &client.address, 1_000);
+
+    client.withdraw(&delegated_admin, &recipient, &token, &250);
+    revoke_test_role(&env, &client.address, &admin, &delegated_admin, Role::Admin);
+    let result = client.try_withdraw(&delegated_admin, &recipient, &token, &250);
+
+    assert!(
+        result.is_err(),
+        "revoked admin must not withdraw treasury funds"
+    );
+    let token_client = soroban_sdk::token::TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&recipient), 250);
+    assert_eq!(token_client.balance(&client.address), 750);
 }
 
 // ---------------------------------------------------------------------------

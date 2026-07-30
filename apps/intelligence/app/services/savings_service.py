@@ -9,6 +9,7 @@ from app.models.savings import (
 )
 from app.services.claude import build_system_prompt
 from app.services.claude import client as anthropic_client
+from app.services.finance_math import required_monthly_deposit as _required_monthly_deposit
 from app.services.i18n import format_amount, format_percentage, resolve_language
 from app.services.vault_context import VaultContextFetcher
 
@@ -66,10 +67,7 @@ class SavingsService:
         n = request.time_horizon_months
         fv = request.goal_usdc
 
-        if r > 0:
-            required_deposit = fv * (r / ((1 + r) ** n - 1))
-        else:
-            required_deposit = fv / n
+        required_deposit = _required_monthly_deposit(fv, r, n)
 
         achievable = required_deposit <= request.max_monthly_contribution_usdc
 

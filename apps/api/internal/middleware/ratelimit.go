@@ -4,9 +4,29 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
+
+// trustedProxyCount is the number of trusted reverse proxies / load balancers in
+// front of the API. It defaults to 0 (trust none: rate limits key off the direct
+// connection address) and is set once at startup via ConfigureClientIP. When
+// greater than 0, clientIP derives the originating client address from the
+// X-Forwarded-For chain, counting hops from the right so spoofed left-most
+// entries cannot forge a client IP past the trusted-proxy boundary.
+var trustedProxyCount int
+
+// ConfigureClientIP sets how many trusted proxies sit in front of the API for
+// the purpose of client-IP extraction in rate limiting. It must be called once
+// during startup, before the server begins serving. A negative count is treated
+// as 0. See trustedProxyCount.
+func ConfigureClientIP(count int) {
+	if count < 0 {
+		count = 0
+	}
+	trustedProxyCount = count
+}
 
 // bucket is a token-bucket entry for a single rate-limit key.
 type bucket struct {
@@ -65,17 +85,54 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 	return false, wait
 }
 
+// clientIP returns the address used to key rate limits for r.
+//
+// With no trusted proxies configured (the default), it is the direct connection
+// address from r.RemoteAddr (port stripped). When trustedProxyCount > 0, the API
+// is assumed to sit behind that many trusted proxies, and the originating client
+// address is taken from the X-Forwarded-For chain: the direct peer is appended as
+// the right-most hop and the entry trustedProxyCount positions further left is
+// returned. Counting from the right means a client cannot spoof its way past the
+// trusted-proxy boundary by injecting extra left-most X-Forwarded-For entries.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if trustedProxyCount <= 0 {
+		return host
+	}
+
+	// chain is client...proxies (left to right), with the direct peer last.
+	chain := make([]string, 0, trustedProxyCount+1)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		for _, p := range strings.Split(xff, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				chain = append(chain, p)
+			}
+		}
+	}
+	chain = append(chain, host)
+
+	idx := max(len(chain)-1-trustedProxyCount, 0)
+	return chain[idx]
+}
+
+// writeRateLimited writes the shared 429 response: a Retry-After header (in
+// whole seconds, minimum 1) and the API's standard JSON error envelope.
+func writeRateLimited(w http.ResponseWriter, wait time.Duration, message string) {
+	retryAfter := max(int(wait.Seconds()), 1)
+	w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusTooManyRequests)
+	fmt.Fprintf(w, `{"success":false,"error":{"code":"RATE_LIMITED","message":%q}}`, message)
+}
+
 // IPRateLimiter returns middleware that enforces a per-remote-IP rate limit of
 // limit requests per window.
 func IPRateLimiter(limit int, window time.Duration) func(http.Handler) http.Handler {
 	l := newLimiter(limit, window)
-	return rateLimitMiddleware(l, func(r *http.Request) string {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			return r.RemoteAddr
-		}
-		return ip
-	})
+	return rateLimitMiddleware(l, clientIP)
 }
 
 // WalletRateLimiter returns middleware that enforces a per-wallet rate limit.
@@ -105,21 +162,9 @@ func WriteMethodRateLimiter(limit int, window time.Duration) func(http.Handler) 
 				return
 			}
 
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				ip = r.RemoteAddr
-			}
-
-			allowed, wait := l.allow(ip)
+			allowed, wait := l.allow(clientIP(r))
 			if !allowed {
-				retryAfter := int(wait.Seconds())
-				if retryAfter < 1 {
-					retryAfter = 1
-				}
-				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusTooManyRequests)
-				fmt.Fprintf(w, `{"success":false,"error":{"code":"RATE_LIMITED","message":"write rate limit exceeded"}}`)
+				writeRateLimited(w, wait, "write rate limit exceeded")
 				return
 			}
 
@@ -139,14 +184,7 @@ func rateLimitMiddleware(l *limiter, keyFn func(*http.Request) string) func(http
 
 			allowed, wait := l.allow(key)
 			if !allowed {
-				retryAfter := int(wait.Seconds())
-				if retryAfter < 1 {
-					retryAfter = 1
-				}
-				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusTooManyRequests)
-				fmt.Fprintf(w, `{"success":false,"error":{"code":"RATE_LIMITED","message":"rate limit exceeded"}}`)
+				writeRateLimited(w, wait, "rate limit exceeded")
 				return
 			}
 

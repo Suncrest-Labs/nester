@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, TrendingDown, TrendingUp, Minus } from 'lucide-react'
-import { intelligence, type MarketSentiment } from '@/lib/api/intelligence'
+import { intelligence, type MarketSentiment, type MarketSentimentPoint } from '@/lib/api/intelligence'
 
 /** Refresh the sentiment widget every 5 minutes. */
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000
@@ -47,6 +47,8 @@ export function MarketSentimentWidget() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [spinning, setSpinning] = useState(false)
+  const [historyRange, setHistoryRange] = useState<7 | 30>(7)
+  const [historyPoints, setHistoryPoints] = useState<MarketSentimentPoint[]>([])
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetch = async (manual = false) => {
@@ -63,6 +65,15 @@ export function MarketSentimentWidget() {
     }
   }
 
+  const fetchHistory = async (range: 7 | 30) => {
+    try {
+      const { points } = await intelligence.getMarketSentimentHistory(range)
+      setHistoryPoints(points)
+    } catch {
+      setHistoryPoints([])
+    }
+  }
+
   useEffect(() => {
     fetch()
     intervalRef.current = setInterval(() => fetch(), REFRESH_INTERVAL_MS)
@@ -71,11 +82,15 @@ export function MarketSentimentWidget() {
     }
   }, [])
 
+  useEffect(() => {
+    fetchHistory(historyRange)
+  }, [historyRange])
+
   if (loading) return <MarketSentimentSkeleton />
 
   if (error || !data) {
     return (
-      <div className="rounded-2xl border border-border bg-white p-4">
+      <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium text-foreground/60">Market Sentiment</p>
           <button
@@ -98,7 +113,7 @@ export function MarketSentimentWidget() {
   const confidencePct = Math.round(data.confidence * 100)
 
   return (
-    <div className="rounded-2xl border border-border bg-white p-4 transition-all hover:border-black/15 hover:shadow-sm">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 transition-all hover:border-black/15 dark:hover:border-white/15 hover:shadow-sm">
       {/* Header */}
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -130,8 +145,42 @@ export function MarketSentimentWidget() {
         </span>
       </div>
 
+      {/* Historical trend */}
+      <SentimentSparkline
+        points={historyPoints}
+        range={historyRange}
+        onRangeChange={setHistoryRange}
+      />
+
       {/* Summary */}
       <p className="text-xs leading-relaxed text-muted-foreground">{data.summary}</p>
+
+      {data.contexts && data.contexts.length > 0 && (
+        <div className="mt-3 space-y-2 border-t border-border pt-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Sourced market context · informational only
+          </p>
+          {data.contexts.map((context) => (
+            <div key={`${context.source_url}-${context.observed_at}`} className="text-xs">
+              <p className="text-foreground/80">
+                <span className="font-medium">{context.protocol}:</span> {context.summary}
+              </p>
+              <a
+                href={context.source_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="mt-0.5 inline-block text-[10px] text-muted-foreground underline"
+              >
+                Source: {context.publisher} · {Math.round(context.confidence * 100)}% confidence
+              </a>
+            </div>
+          ))}
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            {data.disclaimer ??
+              'Low-trust context, not financial advice. It cannot trigger fund movements.'}
+          </p>
+        </div>
+      )}
 
       {/* Timestamp */}
       <p className="mt-2 text-[10px] text-muted-foreground/50">
@@ -141,11 +190,95 @@ export function MarketSentimentWidget() {
   )
 }
 
+// ── Sparkline ─────────────────────────────────────────────────────────────────
+
+const SPARKLINE_SIGNAL_COLOR: Record<MarketSentimentPoint['signal'], string> = {
+  bull: '#10b981', // emerald-500, matches SIGNAL_CONFIG.bull.dot
+  bear: '#ef4444', // red-500, matches SIGNAL_CONFIG.bear.dot
+  neutral: '#fbbf24', // amber-400, matches SIGNAL_CONFIG.neutral.dot
+}
+
+const SPARKLINE_WIDTH = 100
+const SPARKLINE_HEIGHT = 24
+const SPARKLINE_PADDING_Y = 3
+
+interface SentimentSparklineProps {
+  points: MarketSentimentPoint[]
+  range: 7 | 30
+  onRangeChange: (range: 7 | 30) => void
+}
+
+/**
+ * SentimentSparkline
+ *
+ * A small confidence-over-time trend line (7 or 30 day) so users see how
+ * sentiment has been moving, not just the current point-in-time read.
+ * Line color follows the most recent point's signal.
+ */
+function SentimentSparkline({ points, range, onRangeChange }: SentimentSparklineProps) {
+  const hasEnoughData = points.length >= 2
+
+  const path = hasEnoughData
+    ? (() => {
+        const xs = points.map((_, i) => (i / (points.length - 1)) * SPARKLINE_WIDTH)
+        const usableHeight = SPARKLINE_HEIGHT - SPARKLINE_PADDING_Y * 2
+        const ys = points.map(
+          (p) => SPARKLINE_HEIGHT - SPARKLINE_PADDING_Y - p.confidence * usableHeight
+        )
+        return xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${ys[i].toFixed(2)}`).join(' ')
+      })()
+    : ''
+
+  const lineColor = hasEnoughData
+    ? SPARKLINE_SIGNAL_COLOR[points[points.length - 1].signal]
+    : SPARKLINE_SIGNAL_COLOR.neutral
+
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <div className="h-6 flex-1">
+        {hasEnoughData ? (
+          <svg
+            viewBox={`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`}
+            preserveAspectRatio="none"
+            className="h-6 w-full"
+            role="img"
+            aria-label={`Sentiment confidence trend over the last ${range} days`}
+          >
+            <path d={path} fill="none" stroke={lineColor} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          </svg>
+        ) : (
+          <p className="text-[10px] leading-6 text-muted-foreground/60">
+            Not enough history yet to chart a trend
+          </p>
+        )}
+      </div>
+      <div className="flex gap-0.5" role="tablist" aria-label="Sentiment trend period">
+        {([7, 30] as const).map((r) => (
+          <button
+            key={r}
+            type="button"
+            role="tab"
+            aria-selected={range === r}
+            onClick={() => onRangeChange(r)}
+            className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+              range === r
+                ? 'bg-secondary text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {r}d
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
 export function MarketSentimentSkeleton() {
   return (
-    <div className="rounded-2xl border border-border bg-white p-4 animate-pulse">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 animate-pulse">
       <div className="mb-3 flex items-center gap-2">
         <div className="h-2 w-2 rounded-full bg-secondary" />
         <div className="h-3 w-28 rounded bg-secondary" />

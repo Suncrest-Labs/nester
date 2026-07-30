@@ -75,7 +75,7 @@ export default function VaultComparison({ vaults }: VaultComparisonProps) {
         </thead>
         <tbody className="divide-y divide-gray-200">
           {sortedVaults.map((vault) => (
-            <tr key={vault.id} className="bg-white hover:bg-gray-50">
+            <tr key={vault.id} className="bg-white dark:bg-[#100F0F] hover:bg-gray-50">
               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                 {vault.name}
               </td>

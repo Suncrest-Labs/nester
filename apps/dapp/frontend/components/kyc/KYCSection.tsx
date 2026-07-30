@@ -104,19 +104,19 @@ function StepIndicator({ current, steps }: { current: Step; steps: { id: Step; l
                             className={cn(
                                 "flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium transition-colors",
                                 done
-                                    ? "bg-black text-white"
+                                    ? "bg-black dark:bg-blue-600 text-white"
                                     : active
-                                        ? "bg-black text-white"
-                                        : "bg-black/8 text-black/35"
+                                        ? "bg-black dark:bg-blue-600 text-white"
+                                        : "bg-black/8 dark:bg-white/8 text-black/35 dark:text-white/35"
                             )}
                         >
                             {done ? <CheckCircle2 className="h-4 w-4" /> : i + 1}
                         </div>
-                        <span className={cn("text-xs hidden sm:block", active ? "text-black" : "text-black/40")}>
+                        <span className={cn("text-xs hidden sm:block", active ? "text-black dark:text-white" : "text-black/40 dark:text-white/40")}>
                             {step.label}
                         </span>
                         {i < steps.length - 1 && (
-                            <ChevronRight className="h-3.5 w-3.5 text-black/20 ml-1" />
+                            <ChevronRight className="h-3.5 w-3.5 text-black/20 dark:text-white/20 ml-1" />
                         )}
                     </div>
                 );
@@ -146,16 +146,16 @@ function FileUpload({
 
     return (
         <div>
-            <label className="mb-1.5 block text-xs text-black/45">
+            <label className="mb-1.5 block text-xs text-black/45 dark:text-white/45">
                 {label} {required && <span className="text-red-500">*</span>}
             </label>
             <label
                 className={cn(
                     "flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-6 cursor-pointer transition-colors",
                     dragOver
-                        ? "border-black/30 bg-black/4"
-                        : "border-black/12 hover:border-black/22 hover:bg-black/2",
-                    value && "border-black/25 bg-black/3"
+                        ? "border-black/30 dark:border-white/30 bg-black/4 dark:bg-white/4"
+                        : "border-black/12 dark:border-white/12 hover:border-black/22 dark:hover:border-white/22 hover:bg-black/2 dark:hover:bg-white/2",
+                    value && "border-black/25 dark:border-white/25 bg-black/3 dark:bg-white/3"
                 )}
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
@@ -168,16 +168,16 @@ function FileUpload({
                 <input type="file" accept="image/*,.pdf" className="sr-only" onChange={handleChange} />
                 {value ? (
                     <>
-                        <CheckCircle2 className="h-5 w-5 text-black/40" />
-                        <span className="text-xs text-black/50 text-center px-3">{value.name}</span>
+                        <CheckCircle2 className="h-5 w-5 text-black/40 dark:text-white/40" />
+                        <span className="text-xs text-black/50 dark:text-white/50 text-center px-3">{value.name}</span>
                     </>
                 ) : (
                     <>
-                        <Upload className="h-5 w-5 text-black/25" />
-                        <span className="text-xs text-black/40 text-center px-3">
+                        <Upload className="h-5 w-5 text-black/25 dark:text-white/25" />
+                        <span className="text-xs text-black/40 dark:text-white/40 text-center px-3">
                             Click to upload or drag &amp; drop
                         </span>
-                        {hint && <span className="text-[10px] text-black/30">{hint}</span>}
+                        {hint && <span className="text-[10px] text-black/30 dark:text-white/30">{hint}</span>}
                     </>
                 )}
             </label>
@@ -261,7 +261,7 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                         className="space-y-4"
                     >
                         <div>
-                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45">
+                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45 dark:text-white/45">
                                 <User className="h-3.5 w-3.5" /> Full Name *
                             </label>
                             <input
@@ -270,15 +270,15 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                                 onChange={(e) => update("full_name")(e.target.value)}
                                 placeholder="As it appears on your ID"
                                 className={cn(
-                                    "h-11 w-full rounded-xl border bg-black/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white",
-                                    errors.full_name ? "border-red-400 focus:border-red-400" : "border-black/10 focus:border-black/25"
+                                    "h-11 w-full rounded-xl border bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white dark:focus:bg-[#100F0F]",
+                                    errors.full_name ? "border-red-400 focus:border-red-400" : "border-black/10 dark:border-white/10 focus:border-black/25 dark:focus:border-white/25"
                                 )}
                             />
                             {errors.full_name && <p className="mt-1 text-[11px] text-red-500">{errors.full_name}</p>}
                         </div>
 
                         <div>
-                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45">
+                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45 dark:text-white/45">
                                 <Calendar className="h-3.5 w-3.5" /> Date of Birth *
                             </label>
                             <input
@@ -286,24 +286,24 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                                 value={data.date_of_birth}
                                 onChange={(e) => update("date_of_birth")(e.target.value)}
                                 className={cn(
-                                    "h-11 w-full rounded-xl border bg-black/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white",
-                                    errors.date_of_birth ? "border-red-400" : "border-black/10 focus:border-black/25"
+                                    "h-11 w-full rounded-xl border bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white dark:focus:bg-[#100F0F]",
+                                    errors.date_of_birth ? "border-red-400" : "border-black/10 dark:border-white/10 focus:border-black/25 dark:focus:border-white/25"
                                 )}
                             />
                             {errors.date_of_birth && <p className="mt-1 text-[11px] text-red-500">{errors.date_of_birth}</p>}
                         </div>
 
                         <div>
-                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45">
+                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45 dark:text-white/45">
                                 <Globe className="h-3.5 w-3.5" /> Country *
                             </label>
                             <select
                                 value={data.country}
                                 onChange={(e) => update("country")(e.target.value)}
                                 className={cn(
-                                    "h-11 w-full rounded-xl border bg-black/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white appearance-none",
-                                    errors.country ? "border-red-400" : "border-black/10 focus:border-black/25",
-                                    !data.country && "text-black/35"
+                                    "h-11 w-full rounded-xl border bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white dark:focus:bg-[#100F0F] appearance-none",
+                                    errors.country ? "border-red-400" : "border-black/10 dark:border-white/10 focus:border-black/25 dark:focus:border-white/25",
+                                    !data.country && "text-black/35 dark:text-white/35"
                                 )}
                             >
                                 <option value="">Select your country</option>
@@ -323,16 +323,16 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                         className="space-y-4"
                     >
                         <div>
-                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45">
+                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45 dark:text-white/45">
                                 <FileText className="h-3.5 w-3.5" /> ID Type *
                             </label>
                             <select
                                 value={data.id_type}
                                 onChange={(e) => update("id_type")(e.target.value)}
                                 className={cn(
-                                    "h-11 w-full rounded-xl border bg-black/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white appearance-none",
-                                    errors.id_type ? "border-red-400" : "border-black/10 focus:border-black/25",
-                                    !data.id_type && "text-black/35"
+                                    "h-11 w-full rounded-xl border bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white dark:focus:bg-[#100F0F] appearance-none",
+                                    errors.id_type ? "border-red-400" : "border-black/10 dark:border-white/10 focus:border-black/25 dark:focus:border-white/25",
+                                    !data.id_type && "text-black/35 dark:text-white/35"
                                 )}
                             >
                                 <option value="">Select ID type</option>
@@ -342,7 +342,7 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                         </div>
 
                         <div>
-                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45">
+                            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-black/45 dark:text-white/45">
                                 <CreditCard className="h-3.5 w-3.5" /> ID Number *
                             </label>
                             <input
@@ -351,8 +351,8 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                                 onChange={(e) => update("id_number")(e.target.value)}
                                 placeholder="Enter your ID number"
                                 className={cn(
-                                    "h-11 w-full rounded-xl border bg-black/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white",
-                                    errors.id_number ? "border-red-400" : "border-black/10 focus:border-black/25"
+                                    "h-11 w-full rounded-xl border bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm outline-none transition-colors focus:bg-white dark:focus:bg-[#100F0F]",
+                                    errors.id_number ? "border-red-400" : "border-black/10 dark:border-white/10 focus:border-black/25 dark:focus:border-white/25"
                                 )}
                             />
                             {errors.id_number && <p className="mt-1 text-[11px] text-red-500">{errors.id_number}</p>}
@@ -384,7 +384,7 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                         exit={{ opacity: 0, x: -16 }}
                         className="space-y-3"
                     >
-                        <div className="rounded-2xl border border-black/8 bg-black/[0.015] p-5 space-y-3">
+                        <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-black/[0.015] dark:bg-white/[0.015] p-5 space-y-3">
                             {[
                                 { label: "Full Name", value: data.full_name },
                                 { label: "Date of Birth", value: data.date_of_birth },
@@ -395,12 +395,12 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                                 { label: "Back Document", value: data.id_back?.name ?? "Not provided" },
                             ].map(({ label, value }) => (
                                 <div key={label} className="flex justify-between gap-4 text-sm">
-                                    <span className="text-black/40 shrink-0">{label}</span>
-                                    <span className="text-black text-right truncate">{value}</span>
+                                    <span className="text-black/40 dark:text-white/40 shrink-0">{label}</span>
+                                    <span className="text-black dark:text-white text-right truncate">{value}</span>
                                 </div>
                             ))}
                         </div>
-                        <p className="text-xs text-black/40 leading-relaxed">
+                        <p className="text-xs text-black/40 dark:text-white/40 leading-relaxed">
                             By submitting, you confirm that all details are accurate. Your documents
                             will be stored securely and reviewed within 1-3 business days.
                         </p>
@@ -413,7 +413,7 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                     <button
                         onClick={handleBack}
                         disabled={isSubmitting}
-                        className="flex-1 rounded-xl border border-black/12 py-3 text-sm text-black/60 hover:text-black transition-colors disabled:opacity-35"
+                        className="flex-1 rounded-xl border border-black/12 dark:border-white/12 py-3 text-sm text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white transition-colors disabled:opacity-35"
                     >
                         Back
                     </button>
@@ -421,7 +421,7 @@ export function KYCForm({ onSubmit, isSubmitting }: KYCFormProps) {
                 <button
                     onClick={step === "confirm" ? handleSubmit : handleNext}
                     disabled={isSubmitting}
-                    className="flex-1 rounded-xl bg-black py-3 text-sm text-white transition-opacity hover:opacity-75 disabled:opacity-35"
+                    className="flex-1 rounded-xl bg-black dark:bg-blue-600 py-3 text-sm text-white transition-opacity hover:opacity-75 disabled:opacity-35"
                 >
                     {isSubmitting ? "Submitting…" : step === "confirm" ? "Submit for Review" : "Continue"}
                 </button>
@@ -461,8 +461,8 @@ export function KYCSection({
             {/* Status banner */}
             <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div>
-                    <p className="text-sm text-black">Identity Verification (KYC)</p>
-                    <p className="text-xs text-black/40 mt-0.5">
+                    <p className="text-sm text-black dark:text-white">Identity Verification (KYC)</p>
+                    <p className="text-xs text-black/40 dark:text-white/40 mt-0.5">
                         Required to access fiat offramp and withdrawals
                     </p>
                 </div>
@@ -514,7 +514,7 @@ export function KYCSection({
                     {!showForm && (
                         <button
                             onClick={() => setShowForm(true)}
-                            className="w-full rounded-xl border border-black/10 py-2.5 text-sm text-black/60 hover:text-black hover:border-black/20 transition-colors"
+                            className="w-full rounded-xl border border-black/10 dark:border-white/10 py-2.5 text-sm text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white hover:border-black/20 dark:hover:border-white/20 transition-colors"
                         >
                             Resubmit Verification
                         </button>
@@ -525,7 +525,7 @@ export function KYCSection({
             {status === "unverified" && !showForm && (
                 <button
                     onClick={() => setShowForm(true)}
-                    className="w-full rounded-xl bg-black py-3 text-sm text-white transition-opacity hover:opacity-75"
+                    className="w-full rounded-xl bg-black dark:bg-blue-600 py-3 text-sm text-white transition-opacity hover:opacity-75"
                 >
                     Start Verification
                 </button>
@@ -540,7 +540,7 @@ export function KYCSection({
                         exit={{ opacity: 0, height: 0 }}
                         className="overflow-hidden"
                     >
-                        <div className="pt-2 border-t border-black/6">
+                        <div className="pt-2 border-t border-black/6 dark:border-white/6">
                             <KYCForm onSubmit={handleSubmit} isSubmitting={isSubmitting} />
                         </div>
                     </motion.div>

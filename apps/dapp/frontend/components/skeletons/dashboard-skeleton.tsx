@@ -15,7 +15,7 @@ export function DashboardSkeleton() {
       </div>
 
       {/* Balance + Chart card */}
-      <div className="rounded-2xl border border-black/[0.06] bg-white overflow-hidden">
+      <div className="rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] overflow-hidden">
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-0">
           {/* Left side - balance */}
           <div className="p-8 lg:p-10 flex flex-col justify-between">
@@ -37,7 +37,7 @@ export function DashboardSkeleton() {
           </div>
 
           {/* Right side - chart */}
-          <div className="border-t lg:border-t-0 lg:border-l border-black/[0.06] p-8 lg:p-10 flex flex-col">
+          <div className="border-t lg:border-t-0 lg:border-l border-black/[0.06] dark:border-white/[0.06] p-8 lg:p-10 flex flex-col">
             <div className="flex gap-1 mb-6 justify-end">
               {Array.from({ length: 6 }).map((_, i) => (
                 <SkeletonLine key={i} width="2rem" height="1.5rem" />
@@ -79,7 +79,7 @@ export function DashboardSkeleton() {
         <SkeletonLine width="120px" height="1rem" className="mb-6" />
         <div className="space-y-2">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="flex items-center justify-between p-4 rounded-xl bg-black/[0.015]">
+            <div key={i} className="flex items-center justify-between p-4 rounded-xl bg-black/[0.015] dark:bg-white/[0.015]">
               <div className="flex items-center gap-3">
                 <Skeleton className="h-8 w-8 rounded-lg" />
                 <div className="space-y-2">
@@ -173,7 +173,7 @@ export function HistorySkeleton() {
           <div key={i} className="relative">
             {/* Timeline line */}
             {i !== 7 && (
-              <div className="absolute left-6 top-12 bottom-0 w-px bg-black/[0.06]" />
+              <div className="absolute left-6 top-12 bottom-0 w-px bg-black/[0.06] dark:bg-white/[0.06]" />
             )}
             
             <div className="flex gap-4">
@@ -181,7 +181,7 @@ export function HistorySkeleton() {
                 <Skeleton className="h-12 w-12 rounded-full" />
               </div>
               
-              <div className="flex-1 rounded-xl border border-black/[0.06] bg-white p-6">
+              <div className="flex-1 rounded-xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] p-6">
                 <div className="flex items-start justify-between mb-4">
                   <div className="space-y-2">
                     <SkeletonLine width="150px" height="1rem" />
@@ -263,7 +263,7 @@ export function SettingsSkeleton() {
             
             <div className="space-y-4">
               {Array.from({ length: 3 }).map((_, itemIndex) => (
-                <div key={itemIndex} className="flex items-center justify-between py-3 border-b border-black/[0.04] last:border-0">
+                <div key={itemIndex} className="flex items-center justify-between py-3 border-b border-black/[0.04] dark:border-white/[0.04] last:border-0">
                   <div className="space-y-1">
                     <SkeletonLine width="120px" height="0.875rem" />
                     <SkeletonLine width="200px" height="0.75rem" />

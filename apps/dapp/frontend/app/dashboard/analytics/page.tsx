@@ -60,7 +60,7 @@ export default function AnalyticsPage() {
         from.setDate(from.getDate() - parseInt(timeRange));
         const to = new Date();
         const response = await fetch(
-          `/api/v1/users/${address}/analytics?from=${from.toISOString().split('T')[0]}&to=${to.toISOString().split('T')[0]}`
+          `/api/v1/analytics/users/${address}?from=${from.toISOString().split('T')[0]}&to=${to.toISOString().split('T')[0]}`
         );
         if (!response.ok) throw new Error("Failed to fetch analytics");
         const data = await response.json();

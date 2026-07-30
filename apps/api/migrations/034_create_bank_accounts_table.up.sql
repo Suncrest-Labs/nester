@@ -11,9 +11,14 @@ CREATE TABLE bank_accounts (
     country                    TEXT NOT NULL,
     is_default                 BOOLEAN NOT NULL DEFAULT false,
     verified_at                TIMESTAMPTZ,
-    created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, account_number_fingerprint, COALESCE(bank_code, ''))
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Uniqueness across (user, account fingerprint, bank), treating a missing bank_code
+-- as ''. Postgres does not allow an expression in a table UNIQUE constraint, so this
+-- is an expression unique index.
+CREATE UNIQUE INDEX idx_bank_accounts_user_fingerprint_bank
+    ON bank_accounts (user_id, account_number_fingerprint, COALESCE(bank_code, ''));
 
 CREATE UNIQUE INDEX idx_bank_accounts_one_default_per_currency
     ON bank_accounts (user_id, currency)

@@ -263,6 +263,10 @@ func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 		"027_user_profile_fields.up.sql",
 		"033_update_vault_transactions.up.sql",
 		"023_vault_transactions_hash_unique.up.sql",
+		"036_allow_harvest_transaction_type.up.sql",
+		"042_create_yield_harvests.up.sql",
+		"074_add_vault_name_description_search.up.sql",
+		"075_add_vault_transactions_memo_search.up.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)
@@ -278,7 +282,7 @@ func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 func resetIntegrationTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	if _, err := db.Exec(`TRUNCATE TABLE settlements, allocations, vaults, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE settlements, allocations, vault_transactions, yield_harvests, vaults, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE failed: %v", err)
 	}
 }

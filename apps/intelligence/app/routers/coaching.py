@@ -1,5 +1,6 @@
 """Savings coaching endpoint — deposit schedule and progress assessment."""
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -23,5 +24,6 @@ async def coaching(
     claims: dict[str, Any] = Depends(verify_jwt),  # noqa: ARG001
 ) -> CoachingResponse:
     """Return a Prometheus-generated deposit schedule and progress assessment."""
-    result: CoachingResponse = await generate_coaching(body)
+    request_id: str = getattr(request.state, "request_id", "") or str(uuid.uuid4())
+    result: CoachingResponse = await generate_coaching(body, request_id=request_id)
     return result

@@ -282,6 +282,35 @@ impl Timelock {
         );
     }
 
+    /// Cancel a pending operation using Upgrader role (for upgrade operations).
+    pub fn cancel_upgrade_op(env: &Env, caller: &Address, op_id: u64) {
+        caller.require_auth();
+        AccessControl::require_role(env, caller, Role::Upgrader);
+
+        let mut op = get_operation(env, op_id);
+
+        if op.status != TimelockStatus::Pending {
+            panic_with_error!(env, ContractError::TimelockAlreadyExecuted);
+        }
+
+        op.status = TimelockStatus::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Operation(op_id), &op);
+
+        emit_event(
+            env,
+            TIMELOCK,
+            OP_CANCELLED,
+            caller.clone(),
+            CancelEventData {
+                op_type: op.op_type,
+                cancelled_by: caller.clone(),
+            },
+        );
+    }
+
+
     /// Return all pending operations.
     pub fn get_pending(env: &Env) -> Vec<TimelockOperation> {
         let ids: Vec<u64> = env
@@ -327,7 +356,7 @@ impl Timelock {
     /// # Panics
     /// * [`ContractError::TimelockInvalidDelay`] — new_delay outside allowed bounds.
     pub fn propose_set_delay(env: &Env, caller: &Address, new_delay: u64) -> u64 {
-        if new_delay < MIN_DELAY || new_delay > MAX_DELAY {
+        if !(MIN_DELAY..=MAX_DELAY).contains(&new_delay) {
             panic_with_error!(env, ContractError::TimelockInvalidDelay);
         }
 
@@ -341,7 +370,7 @@ impl Timelock {
     /// returns the payload for a `SET_DLY` operation.
     pub fn apply_delay(env: &Env, payload: &Bytes) {
         let new_delay = decode_u64(payload);
-        if new_delay < MIN_DELAY || new_delay > MAX_DELAY {
+        if !(MIN_DELAY..=MAX_DELAY).contains(&new_delay) {
             panic_with_error!(env, ContractError::TimelockInvalidDelay);
         }
         env.storage().instance().set(&DataKey::Delay, &new_delay);

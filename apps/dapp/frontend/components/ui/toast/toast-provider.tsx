@@ -213,7 +213,7 @@ function ToastItem({
       exit={{ opacity: 0, y: -20, scale: 0.95 }}
       transition={{ duration: 0.2 }}
       className={cn(
-        "relative rounded-xl border bg-white shadow-lg pointer-events-auto p-4",
+        "relative rounded-xl border bg-white dark:bg-[#100F0F] shadow-lg pointer-events-auto p-4",
         getBorderColor()
       )}
     >
@@ -224,27 +224,27 @@ function ToastItem({
         
         <div className="flex-1 min-w-0">
           {toast.title && (
-            <h4 className="text-sm font-medium text-black mb-1">
+            <h4 className="text-sm font-medium text-black dark:text-white mb-1">
               {toast.title}
             </h4>
           )}
-          <p className="text-sm text-black/80">
+          <p className="text-sm text-black/80 dark:text-white/80">
             {toast.message}
           </p>
-          
+
           {toast.action && (
             <button
               onClick={toast.action.onClick}
-              className="mt-2 text-xs font-medium text-black/60 hover:text-black underline"
+              className="mt-2 text-xs font-medium text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white underline"
             >
               {toast.action.label}
             </button>
           )}
         </div>
-        
+
         <button
           onClick={onRemove}
-          className="flex-shrink-0 p-1 rounded-md text-black/40 hover:text-black/60 hover:bg-black/[0.04] transition-colors"
+          className="flex-shrink-0 p-1 rounded-md text-black/40 dark:text-white/40 hover:text-black/60 dark:hover:text-white/60 hover:bg-black/[0.04] dark:hover:bg-white/[0.04] transition-colors"
           aria-label="Dismiss"
         >
           <X className="h-4 w-4" />

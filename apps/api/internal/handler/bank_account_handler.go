@@ -22,10 +22,12 @@ func NewBankAccountHandler(svc *service.BankAccountService) *BankAccountHandler 
 }
 
 func (h *BankAccountHandler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/users/{id}/bank-accounts", h.listAccounts)
-	mux.HandleFunc("POST /api/v1/users/{id}/bank-accounts", h.addAccount)
-	mux.HandleFunc("PATCH /api/v1/users/{id}/bank-accounts/{acctId}", h.patchAccount)
-	mux.HandleFunc("DELETE /api/v1/users/{id}/bank-accounts/{acctId}", h.deleteAccount)
+	// Registered under /bank-accounts to avoid ServeMux conflicts with literal
+	// /api/v1/users/... routes (wallet, kyc, savings-goals).
+	mux.HandleFunc("GET /api/v1/bank-accounts/users/{id}", h.listAccounts)
+	mux.HandleFunc("POST /api/v1/bank-accounts/users/{id}", h.addAccount)
+	mux.HandleFunc("PATCH /api/v1/bank-accounts/users/{id}/{acctId}", h.patchAccount)
+	mux.HandleFunc("DELETE /api/v1/bank-accounts/users/{id}/{acctId}", h.deleteAccount)
 }
 
 type addBankAccountRequest struct {

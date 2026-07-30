@@ -12,6 +12,50 @@ use soroban_sdk::{
 };
 use yield_registry::{YieldRegistryContract, YieldRegistryContractClient};
 
+// Authorization test matrix (U = unauthorized/unsigned, A = authorized,
+// R = role revoked before a subsequent call):
+//
+// initialize / initialize_with_vault_type
+//   U: initialize_requires_admin_signature;
+//      initialize_with_vault_type_requires_signature
+//   A: strategy_initialization_sets_vault_type_and_default_tables
+//   R: N/A (one-shot bootstrap)
+// update_strategy_params
+//   U: non_admin_update_attempts_are_rejected;
+//      privileged_strategy_calls_require_signatures
+//   A: admin_can_update_strategy_parameters
+//   R: revoked_admin_cannot_use_admin_operations
+// set_weights
+//   U: unauthorized_caller_cannot_update_weights;
+//      privileged_strategy_calls_require_signatures
+//   A: set_weights_and_calculate_allocation; operator_can_update_weights
+//   R: revoked_operator_cannot_set_weights
+// compute_allocation
+//   U/A/R: compute_allocation_role_lifecycle
+//   unsigned: privileged_strategy_calls_require_signatures
+// set_allocations
+//   U: test_set_allocations_unauthorized_is_rejected;
+//      set_allocations_role_lifecycle; privileged_strategy_calls_require_signatures
+//   A/R: set_allocations_role_lifecycle
+// grant_role
+//   U: operator_cannot_grant_roles; privileged_access_control_calls_require_signatures
+//   A: operator_can_update_weights
+//   R: revoked_admin_cannot_use_admin_operations
+// revoke_role
+//   U: operator_cannot_revoke_roles; privileged_access_control_calls_require_signatures
+//   A: revoked_operator_cannot_set_weights
+//   R: revoked_admin_cannot_use_admin_operations
+// transfer_admin
+//   U: operator_cannot_transfer_admin; privileged_access_control_calls_require_signatures
+//   A/R: two_step_admin_transfer_moves_privileges
+// accept_admin
+//   U: wrong_address_cannot_accept_admin; privileged_access_control_calls_require_signatures
+//   A: two_step_admin_transfer_moves_privileges             R: N/A (address-bound)
+//
+// Negative role tests intentionally pass values that satisfy every subsequent
+// business-rule validation. Removing an authorization check must therefore turn
+// the protected call into a success and make its test fail.
+
 fn reg(
     registry: &YieldRegistryContractClient,
     env: &Env,
@@ -66,6 +110,42 @@ fn weight_sum(weights: &soroban_sdk::Vec<AllocationWeight>) -> u32 {
     sum
 }
 
+fn valid_balanced_weights(env: &Env) -> soroban_sdk::Vec<AllocationWeight> {
+    vec![
+        env,
+        AllocationWeight {
+            source_id: symbol_short!("aave"),
+            weight_bps: 4_000,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("blend"),
+            weight_bps: 3_500,
+        },
+        AllocationWeight {
+            source_id: symbol_short!("comp"),
+            weight_bps: 2_500,
+        },
+    ]
+}
+
+fn valid_apys(env: &Env) -> soroban_sdk::Vec<SourceApy> {
+    vec![
+        env,
+        SourceApy {
+            source_id: symbol_short!("aave"),
+            apy_bps: 300,
+        },
+        SourceApy {
+            source_id: symbol_short!("blend"),
+            apy_bps: 300,
+        },
+        SourceApy {
+            source_id: symbol_short!("comp"),
+            apy_bps: 400,
+        },
+    ]
+}
+
 #[test]
 fn strategy_initialization_sets_vault_type_and_default_tables() {
     for (vault_type, aave, blend, comp) in [
@@ -104,6 +184,40 @@ fn strategy_reinitialization_is_rejected() {
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     client.initialize_with_vault_type(&admin, &registry_id, &VaultType::Balanced);
     client.initialize_with_vault_type(&admin, &registry_id, &VaultType::Growth);
+}
+
+#[test]
+fn initialize_requires_admin_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    YieldRegistryContractClient::new(&env, &registry_id).initialize(&admin);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    env.mock_auths(&[]);
+
+    assert!(client.try_initialize(&admin, &registry_id).is_err());
+}
+
+#[test]
+fn initialize_with_vault_type_requires_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry_id = env.register_contract(None, YieldRegistryContract);
+    YieldRegistryContractClient::new(&env, &registry_id).initialize(&admin);
+    let strategy_id = env.register_contract(None, AllocationStrategyContract);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+
+    env.mock_auths(&[]);
+
+    assert!(client
+        .try_initialize_with_vault_type(&admin, &registry_id, &VaultType::Balanced)
+        .is_err());
 }
 
 #[test]
@@ -237,25 +351,16 @@ fn sends_remainder_to_highest_weight() {
 }
 
 #[test]
-fn only_admin_can_update_weights() {
+fn unauthorized_caller_cannot_update_weights() {
     let (env, _admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     let outsider = Address::generate(&env);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.set_weights(
-            &outsider,
-            &vec![
-                &env,
-                AllocationWeight {
-                    source_id: symbol_short!("aave"),
-                    weight_bps: 10_000,
-                },
-            ],
-        );
-    }));
-
-    assert!(result.is_err());
+    // These weights satisfy sum, source-status, and min/max validation. If the
+    // role check is removed, this call succeeds and the test fails.
+    assert!(client
+        .try_set_weights(&outsider, &valid_balanced_weights(&env))
+        .is_err());
 }
 
 #[test]
@@ -282,31 +387,53 @@ fn operator_can_update_weights() {
 }
 
 #[test]
-#[should_panic]
 fn operator_cannot_grant_roles() {
     let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     let operator = Address::generate(&env);
     let outsider = Address::generate(&env);
     client.grant_role(&admin, &operator, &Role::Operator);
-    let _ = env;
 
-    client.grant_role(&operator, &outsider, &Role::Operator);
+    assert!(env.as_contract(&strategy_id, || {
+        nester_access_control::AccessControl::has_role(&env, &operator, Role::Operator)
+    }));
+    assert!(!env.as_contract(&strategy_id, || {
+        nester_access_control::AccessControl::has_role(&env, &operator, Role::Admin)
+    }));
+    assert_eq!(
+        client.try_grant_role(&operator, &outsider, &Role::Operator),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::Unauthorized as u32,
+        ))),
+    );
 }
 
 #[test]
-#[should_panic]
 fn operator_cannot_revoke_roles() {
     let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     let operator = Address::generate(&env);
+    let target = Address::generate(&env);
     client.grant_role(&admin, &operator, &Role::Operator);
+    client.grant_role(&admin, &target, &Role::Operator);
+    assert!(env.as_contract(&strategy_id, || {
+        nester_access_control::AccessControl::has_role(&env, &target, Role::Operator)
+    }));
 
-    client.revoke_role(&operator, &admin, &Role::Admin);
+    // Revoke a non-Admin role so last-admin protection cannot mask a missing
+    // authorization check.
+    assert_eq!(
+        client.try_revoke_role(&operator, &target, &Role::Operator),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::Unauthorized as u32,
+        ))),
+    );
+    assert!(env.as_contract(&strategy_id, || {
+        nester_access_control::AccessControl::has_role(&env, &target, Role::Operator)
+    }));
 }
 
 #[test]
-#[should_panic]
 fn operator_cannot_transfer_admin() {
     let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
@@ -314,8 +441,154 @@ fn operator_cannot_transfer_admin() {
     let outsider = Address::generate(&env);
     client.grant_role(&admin, &operator, &Role::Operator);
 
-    let _ = env;
-    client.transfer_admin(&operator, &outsider);
+    assert!(env.as_contract(&strategy_id, || {
+        nester_access_control::AccessControl::has_role(&env, &operator, Role::Operator)
+    }));
+    assert!(!env.as_contract(&strategy_id, || {
+        nester_access_control::AccessControl::has_role(&env, &operator, Role::Admin)
+    }));
+    assert_eq!(
+        client.try_transfer_admin(&operator, &outsider),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::Unauthorized as u32,
+        ))),
+    );
+}
+
+#[test]
+fn revoked_operator_cannot_set_weights() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    let operator = Address::generate(&env);
+    let weights = valid_balanced_weights(&env);
+
+    client.grant_role(&admin, &operator, &Role::Operator);
+    client.set_weights(&operator, &weights);
+    client.revoke_role(&admin, &operator, &Role::Operator);
+
+    assert!(client.try_set_weights(&operator, &weights).is_err());
+}
+
+#[test]
+fn compute_allocation_role_lifecycle() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    let operator = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let apys = valid_apys(&env);
+
+    assert!(client.try_compute_allocation(&outsider, &apys).is_err());
+
+    client.grant_role(&admin, &operator, &Role::Operator);
+    let weights = client.compute_allocation(&operator, &apys);
+    assert_eq!(weight_sum(&weights), 10_000);
+
+    client.revoke_role(&admin, &operator, &Role::Operator);
+    assert!(client.try_compute_allocation(&operator, &apys).is_err());
+}
+
+#[test]
+fn revoked_admin_cannot_use_admin_operations() {
+    let (env, initial_admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    let remaining_admin = Address::generate(&env);
+    let operator = Address::generate(&env);
+
+    client.grant_role(&initial_admin, &remaining_admin, &Role::Admin);
+    client.grant_role(&initial_admin, &operator, &Role::Operator);
+    client.revoke_role(&remaining_admin, &initial_admin, &Role::Admin);
+
+    assert!(client
+        .try_update_strategy_params(&initial_admin, &500, &6_500, &500)
+        .is_err());
+    assert!(client
+        .try_grant_role(&initial_admin, &Address::generate(&env), &Role::Operator,)
+        .is_err());
+    assert!(client
+        .try_revoke_role(&initial_admin, &operator, &Role::Operator)
+        .is_err());
+    assert!(client
+        .try_transfer_admin(&initial_admin, &Address::generate(&env))
+        .is_err());
+}
+
+#[test]
+fn two_step_admin_transfer_moves_privileges() {
+    let (env, initial_admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    let new_admin = Address::generate(&env);
+    let operator = Address::generate(&env);
+
+    client.transfer_admin(&initial_admin, &new_admin);
+    client.accept_admin(&new_admin);
+
+    client.update_strategy_params(&new_admin, &500, &6_500, &500);
+    client.grant_role(&new_admin, &operator, &Role::Operator);
+    assert!(client
+        .try_update_strategy_params(&initial_admin, &500, &6_500, &500)
+        .is_err());
+    assert!(client
+        .try_grant_role(&initial_admin, &Address::generate(&env), &Role::Operator,)
+        .is_err());
+}
+
+#[test]
+fn wrong_address_cannot_accept_admin() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    let proposed_admin = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    client.transfer_admin(&admin, &proposed_admin);
+
+    assert!(client.try_accept_admin(&outsider).is_err());
+
+    // The failed attempt must leave the original proposal usable.
+    client.accept_admin(&proposed_admin);
+    client.update_strategy_params(&proposed_admin, &500, &6_500, &500);
+}
+
+#[test]
+fn privileged_strategy_calls_require_signatures() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    let operator = Address::generate(&env);
+    let weights = valid_balanced_weights(&env);
+    let apys = valid_apys(&env);
+    client.grant_role(&admin, &operator, &Role::Operator);
+
+    env.mock_auths(&[]);
+
+    assert!(client
+        .try_update_strategy_params(&admin, &500, &6_500, &500)
+        .is_err());
+    assert!(client.try_set_weights(&admin, &weights).is_err());
+    assert!(client.try_compute_allocation(&admin, &apys).is_err());
+    assert!(client
+        .try_set_allocations(&operator, &1_000_i128, &apys)
+        .is_err());
+}
+
+#[test]
+fn privileged_access_control_calls_require_signatures() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    let operator = Address::generate(&env);
+    let proposed_admin = Address::generate(&env);
+    client.grant_role(&admin, &operator, &Role::Operator);
+    client.transfer_admin(&admin, &proposed_admin);
+
+    env.mock_auths(&[]);
+
+    assert!(client
+        .try_grant_role(&admin, &Address::generate(&env), &Role::Operator)
+        .is_err());
+    assert!(client
+        .try_revoke_role(&admin, &operator, &Role::Operator)
+        .is_err());
+    assert!(client
+        .try_transfer_admin(&admin, &Address::generate(&env))
+        .is_err());
+    assert!(client.try_accept_admin(&proposed_admin).is_err());
 }
 
 #[test]
@@ -634,12 +907,20 @@ fn admin_can_update_strategy_parameters() {
 }
 
 #[test]
-#[should_panic]
 fn non_admin_update_attempts_are_rejected() {
     let (env, _, _, strategy_id) = setup_with_type(VaultType::Balanced);
     let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     let outsider = Address::generate(&env);
-    client.update_strategy_params(&outsider, &125, &4_500, &500);
+
+    assert!(!env.as_contract(&strategy_id, || {
+        nester_access_control::AccessControl::has_role(&env, &outsider, Role::Admin)
+    }));
+    assert_eq!(
+        client.try_update_strategy_params(&outsider, &125, &4_500, &500),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::Unauthorized as u32,
+        ))),
+    );
 }
 
 #[test]
@@ -898,27 +1179,45 @@ fn allocation_weights_always_sum_to_ten_thousand_bps() {
     }
 }
 
+#[test]
+fn set_allocations_role_lifecycle() {
+    let (env, admin, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
+    let operator = Address::generate(&env);
+    let apys = valid_apys(&env);
+
+    // Admin is intentionally not an implicit Operator for this entrypoint.
+    assert!(client
+        .try_set_allocations(&admin, &1_000_i128, &apys)
+        .is_err());
+
+    client.grant_role(&admin, &operator, &Role::Operator);
+    client.set_allocations(&operator, &1_000_i128, &apys);
+    let allocated = client.get_source_allocation(&symbol_short!("aave"))
+        + client.get_source_allocation(&symbol_short!("blend"))
+        + client.get_source_allocation(&symbol_short!("comp"));
+    assert_eq!(allocated, 1_000);
+
+    client.revoke_role(&admin, &operator, &Role::Operator);
+    assert!(client
+        .try_set_allocations(&operator, &1_000_i128, &apys)
+        .is_err());
+}
+
 // AllocationStrategy.set_allocations requires operator role — unauthorized callers are rejected.
 #[test]
-#[should_panic]
 fn test_set_allocations_unauthorized_is_rejected() {
-    let env = Env::default();
-    env.mock_all_auths_allowing_non_root_auth();
-
-    let registry_id = env.register_contract(None, YieldRegistryContract);
-    let registry = YieldRegistryContractClient::new(&env, &registry_id);
-    let admin = Address::generate(&env);
-    registry.initialize(&admin);
-
-    let contract_id = env.register_contract(None, AllocationStrategyContract);
-    let client = AllocationStrategyContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &registry_id);
-
+    let (env, _, _, strategy_id) = setup_with_type(VaultType::Balanced);
+    let client = AllocationStrategyContractClient::new(&env, &strategy_id);
     let attacker = Address::generate(&env);
-    let apys = soroban_sdk::Vec::new(&env);
+    let apys = valid_apys(&env);
 
-    // attacker is not an operator — should panic
-    client.set_allocations(&attacker, &1000_i128, &apys);
+    assert!(!env.as_contract(&strategy_id, || {
+        nester_access_control::AccessControl::has_role(&env, &attacker, Role::Operator)
+    }));
+    assert!(client
+        .try_set_allocations(&attacker, &1_000_i128, &apys)
+        .is_err());
 }
 
 #[test]

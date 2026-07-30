@@ -62,9 +62,9 @@ const TransactionTable: React.FC<Props> = ({ transactions, loading, error, onExp
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-black/10 bg-white">
+    <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F]">
       <table className="w-full text-left">
-        <thead className="border-b border-black/10 bg-gray-50 text-xs text-gray-600">
+        <thead className="border-b border-black/10 dark:border-white/10 bg-gray-50 text-xs text-gray-600">
           <tr>
             <th className="px-4 py-2">Date</th>
             <th className="px-4 py-2">Type</th>
@@ -76,7 +76,7 @@ const TransactionTable: React.FC<Props> = ({ transactions, loading, error, onExp
         </thead>
         <tbody>
           {transactions.map((tx) => (
-            <tr key={tx.id} className="border-b border-black/5 last:border-0 hover:bg-black/5">
+            <tr key={tx.id} className="border-b border-black/5 dark:border-white/5 last:border-0 hover:bg-black/5 dark:hover:bg-white/5">
               <td className="px-4 py-2 text-sm text-gray-700">{new Date(tx.timestamp).toLocaleString()}</td>
               <td className="px-4 py-2 text-sm text-gray-700">{tx.type}</td>
               <td className="px-4 py-2 text-sm text-gray-700">{tx.vaultName}</td>

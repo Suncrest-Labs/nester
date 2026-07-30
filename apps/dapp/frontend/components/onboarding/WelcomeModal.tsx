@@ -21,7 +21,7 @@ export function WelcomeModal() {
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.95 }}
                         transition={{ duration: 0.3 }}
-                        className="relative w-full max-w-md overflow-hidden rounded-3xl border border-border bg-white shadow-2xl shadow-black/5"
+                        className="relative w-full max-w-md overflow-hidden rounded-3xl border border-border bg-white dark:bg-[#100F0F] shadow-2xl shadow-black/5"
                     >
                         <div className="p-8 text-center">
                             <h2 className="mb-2 font-heading text-2xl font-light tracking-tight text-foreground sm:text-3xl">
@@ -64,7 +64,7 @@ export function WelcomeModal() {
                                 <div className="flex items-center justify-between gap-3">
                                     <button
                                         onClick={() => window.open("https://nester.com", "_blank")}
-                                        className="flex-1 rounded-xl border border-border bg-white px-4 py-3.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+                                        className="flex-1 rounded-xl border border-border bg-white dark:bg-[#100F0F] px-4 py-3.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
                                     >
                                         Learn More
                                     </button>

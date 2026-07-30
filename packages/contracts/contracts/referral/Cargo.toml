@@ -1,0 +1,19 @@
+[package]
+name = "referral-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "referral_contract"
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+nester-common = { path = "../../libs/common" }
+nester-access-control = { path = "../access_control" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+nester-test-utils = { path = "../../libs/test_utils" }

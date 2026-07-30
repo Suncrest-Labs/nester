@@ -35,6 +35,7 @@ describe("AuthProvider", () => {
     const { useWallet } = await import("@/components/wallet-provider");
     vi.mocked(useWallet).mockReturnValue({
       address: null,
+      user: null,
       connect: vi.fn(),
       disconnect: vi.fn(),
       isConnecting: false,

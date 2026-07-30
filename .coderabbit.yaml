@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit AI review configuration for Suncrest-Labs/nester.
+# Automated reviews run on every pull request that targets `dev` (and `main`).
+language: "en-US"
+early_access: false
+tone_instructions: "Be concise and technical. Prioritise correctness, security, and data-integrity issues over style nits. Reference exact file paths and line numbers."
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  auto_title_placeholder: "@coderabbitai title"
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  sequence_diagrams: true
+  assess_linked_issues: true
+  related_issues: true
+  suggested_labels: true
+  suggested_reviewers: true
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - "dev"
+      - "main"
+
+  # Skip generated / vendored / binary noise so reviews focus on real source.
+  path_filters:
+    - "!**/pnpm-lock.yaml"
+    - "!**/go.sum"
+    - "!**/Cargo.lock"
+    - "!**/*.wasm"
+    - "!**/node_modules/**"
+    - "!**/.next/**"
+    - "!**/dist/**"
+    - "!**/target/**"
+    - "!**/*.snap"
+    - "!**/*.min.js"
+
+  path_instructions:
+    - path: "apps/api/**"
+      instructions: >-
+        Go backend (Chi router, pgx/v5, Redis). Flag SQL built via string
+        concatenation, missing ownership/authorization checks on handlers,
+        user-controlled IDs pulled from request bodies instead of the JWT
+        context, unhandled errors, goroutines without context cancellation,
+        and money/amount math that uses float instead of integer or
+        shopspring/decimal. Require table-driven tests for new service logic.
+    - path: "packages/contracts/**"
+      instructions: >-
+        Soroban / Rust smart contracts. Flag unchecked arithmetic on i128
+        balances, missing access-control (require_auth / role checks) on
+        admin functions, panics on attacker-reachable paths, and any change
+        to share-price or fee math without a corresponding regression test.
+    - path: "apps/dapp/frontend/**"
+      instructions: >-
+        Next.js 16 / React 19 DApp. Flag unhandled promise rejections,
+        missing loading/error states on data-fetching components, direct use
+        of secrets in client code, and accessibility regressions. Require
+        tests for new hooks and wallet-signing flows.
+    - path: "apps/intelligence/**"
+      instructions: >-
+        Python FastAPI + Anthropic Claude service. Flag missing JWT
+        validation on new endpoints, unbounded prompt/token usage, prompt
+        strings assembled from unsanitised user input, and hardcoded model
+        IDs that bypass the pinned config value.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Flag workflows that run untrusted PR code with write permissions or
+        secrets, unpinned third-party actions, and any weakening of the
+        existing security scanners (CodeQL, Semgrep, gosec, bandit, gitleaks).
+
+  tools:
+    github-checks:
+      enabled: true
+    gitleaks:
+      enabled: true
+    ruff:
+      enabled: true
+    golangci-lint:
+      enabled: true
+    eslint:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  learnings:
+    scope: "auto"
+  issues:
+    scope: "auto"

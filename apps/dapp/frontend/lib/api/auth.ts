@@ -1,8 +1,9 @@
 import { config } from "@/lib/config";
+import { getAccessToken } from "@/lib/auth/token-store";
 
+/** @deprecated import getAccessToken from "@/lib/auth/token-store" instead. */
 export function getStoredToken(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem("nester_token") ?? "";
+  return getAccessToken();
 }
 
 /** JWT `sub` claim — the authenticated user UUID. */

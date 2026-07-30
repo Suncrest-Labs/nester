@@ -31,6 +31,10 @@ func buildUserVaultWhere(userID uuid.UUID, filter vault.UserListFilter) (string,
 		args = append(args, filter.CreatedAfter.UTC())
 		clauses = append(clauses, fmt.Sprintf("created_at >= $%d", len(args)))
 	}
+	if filter.Search != "" {
+		args = append(args, filter.Search)
+		clauses = append(clauses, fmt.Sprintf("search_vector @@ plainto_tsquery('english', $%d)", len(args)))
+	}
 
 	return strings.Join(clauses, " AND "), args
 }
@@ -75,6 +79,10 @@ func buildUserSettlementWhere(userID uuid.UUID, filter offramp.UserListFilter) (
 	if filter.FiatCurrency != "" {
 		args = append(args, strings.ToUpper(strings.TrimSpace(filter.FiatCurrency)))
 		clauses = append(clauses, fmt.Sprintf("fiat_currency = $%d", len(args)))
+	}
+	if filter.Search != "" {
+		args = append(args, filter.Search)
+		clauses = append(clauses, fmt.Sprintf("search_vector @@ plainto_tsquery('english', $%d)", len(args)))
 	}
 
 	return strings.Join(clauses, " AND "), args

@@ -1,12 +1,20 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 )
+
+// RevocationChecker answers whether a session (identified by the JWT's sid
+// claim) has been revoked. Backed by Redis in production; consulted on
+// every request that carries a session ID.
+type RevocationChecker interface {
+	IsRevoked(ctx context.Context, sessionID string) (bool, error)
+}
 
 // RouteRule describes the authentication policy for a URL prefix + method pair.
 type RouteRule struct {
@@ -28,7 +36,7 @@ type RouteRule struct {
 // secret.  rules are evaluated in order; the first matching rule determines
 // access policy.  If no rule matches, the request is treated as protected
 // (auth required, no specific scope).
-func Authenticate(secret, serviceAPIKey string, rules []RouteRule) func(http.Handler) http.Handler {
+func Authenticate(secret, serviceAPIKey string, rules []RouteRule, revocation RevocationChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rule := matchRule(rules, r)
@@ -52,7 +60,7 @@ func Authenticate(secret, serviceAPIKey string, rules []RouteRule) func(http.Han
 					writeMiddlewareError(w, http.StatusUnauthorized, "X-User-Id header required for service auth")
 					return
 				}
-				user := auth.User{ID: userID, WalletAddress: "", Scopes: nil, Roles: nil}
+				user := auth.User{ID: userID, WalletAddress: "", Scopes: nil, Roles: []string{"service"}}
 				next.ServeHTTP(w, r.WithContext(auth.NewContext(r.Context(), user)))
 				return
 			}
@@ -63,11 +71,28 @@ func Authenticate(secret, serviceAPIKey string, rules []RouteRule) func(http.Han
 				return
 			}
 
+			// Fail-closed: a session-bearing token whose revocation status
+			// can't be determined is rejected rather than let through, since
+			// serving a possibly-revoked session is the worse failure mode
+			// for a savings platform.
+			if claims.SessionID != "" {
+				revoked, err := revocation.IsRevoked(r.Context(), claims.SessionID)
+				if err != nil {
+					writeMiddlewareError(w, http.StatusServiceUnavailable, "session verification unavailable")
+					return
+				}
+				if revoked {
+					writeMiddlewareError(w, http.StatusUnauthorized, "session has been revoked, please sign in again")
+					return
+				}
+			}
+
 			user := auth.User{
 				ID:            claims.Subject,
 				WalletAddress: claims.WalletAddress,
 				Scopes:        claims.Scopes,
 				Roles:         claims.Roles,
+				SessionID:     claims.SessionID,
 			}
 
 			// Scope check for routes that require a specific permission.

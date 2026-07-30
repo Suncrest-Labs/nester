@@ -52,7 +52,7 @@ export default function NotificationsPage() {
                     </div>
                     <button
                         onClick={markAllAsRead}
-                        className="inline-flex items-center gap-2 rounded-full border border-border bg-white px-4 py-2 text-sm font-medium text-foreground/75 transition-colors hover:bg-secondary hover:text-foreground"
+                        className="inline-flex items-center gap-2 rounded-full border border-border bg-white dark:bg-[#100F0F] px-4 py-2 text-sm font-medium text-foreground/75 transition-colors hover:bg-secondary hover:text-foreground"
                     >
                         <CheckCheck className="h-4 w-4" />
                         Mark all as read
@@ -63,7 +63,7 @@ export default function NotificationsPage() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.45, delay: 0.1 }}
-                    className="overflow-hidden rounded-3xl border border-border bg-white"
+                    className="overflow-hidden rounded-3xl border border-border bg-white dark:bg-[#100F0F]"
                 >
                     {notifications.length === 0 ? (
                         <div className="flex flex-col items-center justify-center px-6 py-20 text-center">

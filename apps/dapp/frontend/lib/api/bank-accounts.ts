@@ -37,7 +37,7 @@ function requireUserId(): string {
 
 export async function listBankAccounts(): Promise<SavedBankAccount[]> {
   const userId = requireUserId();
-  const res = await fetch(`${API_V1}/users/${userId}/bank-accounts`, {
+  const res = await fetch(`${API_V1}/bank-accounts/users/${userId}`, {
     headers: apiAuthHeaders(),
     cache: "no-store",
   });
@@ -54,7 +54,7 @@ export async function addBankAccount(body: {
   is_default?: boolean;
 }): Promise<SavedBankAccount> {
   const userId = requireUserId();
-  const res = await fetch(`${API_V1}/users/${userId}/bank-accounts`, {
+  const res = await fetch(`${API_V1}/bank-accounts/users/${userId}`, {
     method: "POST",
     headers: apiAuthHeaders(),
     body: JSON.stringify(body),
@@ -64,7 +64,7 @@ export async function addBankAccount(body: {
 
 export async function setDefaultBankAccount(acctId: string): Promise<SavedBankAccount> {
   const userId = requireUserId();
-  const res = await fetch(`${API_V1}/users/${userId}/bank-accounts/${acctId}`, {
+  const res = await fetch(`${API_V1}/bank-accounts/users/${userId}/${acctId}`, {
     method: "PATCH",
     headers: apiAuthHeaders(),
     body: JSON.stringify({ is_default: true }),
@@ -74,7 +74,7 @@ export async function setDefaultBankAccount(acctId: string): Promise<SavedBankAc
 
 export async function removeBankAccount(acctId: string): Promise<void> {
   const userId = requireUserId();
-  const res = await fetch(`${API_V1}/users/${userId}/bank-accounts/${acctId}`, {
+  const res = await fetch(`${API_V1}/bank-accounts/users/${userId}/${acctId}`, {
     method: "DELETE",
     headers: apiAuthHeaders(),
   });

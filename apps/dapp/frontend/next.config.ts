@@ -9,7 +9,9 @@ if (!process.env.NEXT_PUBLIC_STELLAR_NETWORK && process.env.NODE_ENV !== "develo
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   turbopack: {
-    root: path.resolve(__dirname, "../../"),
+    // Monorepo root (where pnpm-lock.yaml lives) so Turbopack resolves the
+    // workspace correctly under pnpm's hoisted node_modules.
+    root: path.resolve(__dirname, "../../../"),
   },
   async rewrites() {
     const intelligenceUrl =

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,12 +25,18 @@ type VaultReader interface {
 	GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error)
 }
 
+type OutcomeRecorder interface {
+	RecordGoalCompletion(ctx context.Context, userID uuid.UUID, ts time.Time) error
+}
+
 type SavingsGoalService struct {
 	repo           savingsgoal.Repository
+	templateRepo   savingsgoal.TemplateRepository
 	vaultRepo      VaultReader
 	notifier       GoalMilestoneNotifier
 	streakRepo     savingsstreak.Repository
 	streakNotifier StreakMilestoneNotifier
+	outcomeRec     OutcomeRecorder
 }
 
 func NewSavingsGoalService(repo savingsgoal.Repository, vaultRepo VaultReader, notifier GoalMilestoneNotifier) *SavingsGoalService {
@@ -38,10 +45,21 @@ func NewSavingsGoalService(repo savingsgoal.Repository, vaultRepo VaultReader, n
 	}
 	return &SavingsGoalService{
 		repo:           repo,
+		templateRepo:   nil,
 		vaultRepo:      vaultRepo,
 		notifier:       notifier,
 		streakNotifier: noopStreakMilestoneNotifier{},
 	}
+}
+
+// SetOutcomeRecorder attaches an outcome recorder for nudge effectiveness tracking.
+func (s *SavingsGoalService) SetOutcomeRecorder(rec OutcomeRecorder) {
+	s.outcomeRec = rec
+}
+
+// SetTemplateRepository attaches the template repository.
+func (s *SavingsGoalService) SetTemplateRepository(repo savingsgoal.TemplateRepository) {
+	s.templateRepo = repo
 }
 
 // SetStreakRepository attaches the streak persistence layer.
@@ -67,6 +85,10 @@ type CreateSavingsGoalInput struct {
 	Name         string          `json:"name"`
 	Emoji        string          `json:"emoji"`
 	VaultID      *uuid.UUID      `json:"vault_id,omitempty"`
+	// MinContribution/MaxContribution are optional per-contribution limits
+	// (#922) enforced at deposit time.
+	MinContribution *decimal.Decimal `json:"min_contribution,omitempty"`
+	MaxContribution *decimal.Decimal `json:"max_contribution,omitempty"`
 }
 
 type UpdateSavingsGoalInput struct {
@@ -80,6 +102,13 @@ type UpdateSavingsGoalInput struct {
 	// AutoCompound toggles whether harvested yield is reinvested into the
 	// goal's vault position or credited to yield_balance instead.
 	AutoCompound *bool `json:"auto_compound"`
+	// MinContribution/MaxContribution update a goal's per-contribution
+	// limits (#922) when non-nil. Setting either to a zero decimal (rather
+	// than leaving it nil) clears that limit.
+	MinContribution      *decimal.Decimal `json:"min_contribution,omitempty"`
+	MaxContribution      *decimal.Decimal `json:"max_contribution,omitempty"`
+	ClearMinContribution bool             `json:"-"`
+	ClearMaxContribution bool             `json:"-"`
 }
 
 func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
@@ -99,6 +128,9 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 	}
 	desc := strings.TrimSpace(in.Description)
 	name := strings.TrimSpace(in.Name)
+	if err := validateGoalName(name); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
 	if name == "" && desc != "" {
 		runes := []rune(desc)
 		if len(runes) > 50 {
@@ -107,16 +139,21 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 			name = desc
 		}
 	}
+	if err := savingsgoal.ValidateContributionLimits(in.MinContribution, in.MaxContribution); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
 	goal := &savingsgoal.SavingsGoal{
-		ID:           uuid.New(),
-		UserID:       userID,
-		TargetAmount: in.TargetAmount,
-		Currency:     savingsgoal.NormalizeCurrency(in.Currency),
-		Deadline:     in.Deadline.UTC(),
-		Description:  desc,
-		Name:         name,
-		Emoji:        emoji,
-		Category:     category,
+		ID:              uuid.New(),
+		UserID:          userID,
+		TargetAmount:    in.TargetAmount,
+		Currency:        savingsgoal.NormalizeCurrency(in.Currency),
+		Deadline:        in.Deadline.UTC(),
+		Description:     desc,
+		Name:            name,
+		Emoji:           emoji,
+		Category:        category,
+		MinContribution: in.MinContribution,
+		MaxContribution: in.MaxContribution,
 	}
 	if in.VaultID != nil {
 		if err := s.validateGoalVault(ctx, userID, *in.VaultID, goal.Currency); err != nil {
@@ -127,7 +164,52 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 	if err := s.repo.Create(ctx, goal); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
+}
+
+type CreateFromTemplateInput struct {
+	TemplateID     uuid.UUID
+	OverrideAmount *decimal.Decimal
+	OverrideMonths *int
+	VaultID        *uuid.UUID
+}
+
+func (s *SavingsGoalService) ListTemplates(ctx context.Context) ([]savingsgoal.GoalTemplate, error) {
+	if s.templateRepo == nil {
+		return nil, fmt.Errorf("goal templates not configured")
+	}
+	return s.templateRepo.List(ctx)
+}
+
+func (s *SavingsGoalService) CreateFromTemplate(ctx context.Context, userID uuid.UUID, in CreateFromTemplateInput) (savingsgoal.SavingsGoal, error) {
+	if s.templateRepo == nil {
+		return savingsgoal.SavingsGoal{}, fmt.Errorf("goal templates not configured")
+	}
+	template, err := s.templateRepo.GetByID(ctx, in.TemplateID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	amount := template.SuggestedAmount
+	if in.OverrideAmount != nil {
+		amount = *in.OverrideAmount
+	}
+	months := template.SuggestedMonths
+	if in.OverrideMonths != nil {
+		months = *in.OverrideMonths
+	}
+	deadline := time.Now().UTC().AddDate(0, months, 0)
+
+	createIn := CreateSavingsGoalInput{
+		TargetAmount: amount,
+		Currency:     template.Currency,
+		Deadline:     deadline,
+		Description:  template.Description,
+		Category:     string(template.Category),
+		Name:         template.Name,
+		Emoji:        "", // Optional: could map template.Icon to emoji if needed
+		VaultID:      in.VaultID,
+	}
+	return s.Create(ctx, userID, createIn)
 }
 
 func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
@@ -138,7 +220,7 @@ func (s *SavingsGoalService) Get(ctx context.Context, userID, goalID uuid.UUID) 
 	if goal.UserID != userID {
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
@@ -151,21 +233,18 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		filterCategory = string(parsed)
 	}
 
-	// Status is filtered after enrichment so the dynamic auto-complete (#716) is
-	// reflected: a stored-active goal that has reached its target reads as
-	// "completed" here, matching ?status=completed and excluded by ?status=active.
 	filterStatus, err := savingsgoal.ParseStatusFilter(status)
 	if err != nil {
 		return nil, err
 	}
 
-	goals, err := s.repo.ListByUser(ctx, userID, filterCategory)
+	goals, err := s.repo.ListByUser(ctx, userID, filterCategory, "")
 	if err != nil {
 		return nil, err
 	}
 	out := make([]savingsgoal.SavingsGoal, 0, len(goals))
 	for _, g := range goals {
-		enriched, err := s.enrichProgress(ctx, g)
+		enriched, err := s.EnrichProgress(ctx, g)
 		if err != nil {
 			return nil, err
 		}
@@ -179,6 +258,117 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		out = append(out, enriched)
 	}
 	return out, nil
+}
+
+// SavingsGoalListFilter drives ListPaginated: pagination, sort, and search on
+// top of the same category/status/archived semantics as List.
+type SavingsGoalListFilter struct {
+	Page            int
+	PerPage         int
+	SortField       string
+	SortOrder       string
+	Category        string
+	Status          string
+	IncludeArchived bool
+	Search          string
+}
+
+// ListPaginated is List with pagination, sort, and full-text search applied.
+// Status/archived filtering depends on each goal's enriched status, which is
+// only known after EnrichProgress runs — so, unlike vault/settlement
+// listing, pagination here is applied in Go after enrichment and filtering,
+// not pushed down as SQL LIMIT/OFFSET. Goals-per-user is low-cardinality, so
+// this is not a performance concern.
+func (s *SavingsGoalService) ListPaginated(ctx context.Context, userID uuid.UUID, filter SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error) {
+	filterCategory := ""
+	if strings.TrimSpace(filter.Category) != "" {
+		parsed, err := savingsgoal.ParseCategory(filter.Category)
+		if err != nil {
+			return nil, 0, err
+		}
+		filterCategory = string(parsed)
+	}
+
+	filterStatus, err := savingsgoal.ParseStatusFilter(filter.Status)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	goals, err := s.repo.ListByUser(ctx, userID, filterCategory, filter.Search)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	out := make([]savingsgoal.SavingsGoal, 0, len(goals))
+	for _, g := range goals {
+		enriched, err := s.EnrichProgress(ctx, g)
+		if err != nil {
+			return nil, 0, err
+		}
+		if filterStatus != "" {
+			if enriched.Status != filterStatus {
+				continue
+			}
+		} else if !filter.IncludeArchived && enriched.Status == savingsgoal.GoalStatusArchived {
+			continue
+		}
+		out = append(out, enriched)
+	}
+
+	sortSavingsGoals(out, filter.SortField, filter.SortOrder)
+
+	total := len(out)
+	page, perPage := filter.Page, filter.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = listquery.DefaultPerPage
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return out[start:end], total, nil
+}
+
+func sortSavingsGoals(goals []savingsgoal.SavingsGoal, field, order string) {
+	desc := order != "asc"
+	compare := func(i, j int) int {
+		switch field {
+		case "target_amount":
+			return goals[i].TargetAmount.Cmp(goals[j].TargetAmount)
+		case "deadline":
+			switch {
+			case goals[i].Deadline.Before(goals[j].Deadline):
+				return -1
+			case goals[i].Deadline.After(goals[j].Deadline):
+				return 1
+			default:
+				return 0
+			}
+		default:
+			switch {
+			case goals[i].CreatedAt.Before(goals[j].CreatedAt):
+				return -1
+			case goals[i].CreatedAt.After(goals[j].CreatedAt):
+				return 1
+			default:
+				return 0
+			}
+		}
+	}
+	sort.SliceStable(goals, func(i, j int) bool {
+		c := compare(i, j)
+		if desc {
+			return c > 0
+		}
+		return c < 0
+	})
 }
 
 func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUID, in UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
@@ -224,7 +414,11 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 		goal.Category = category
 	}
 	if in.Name != nil {
-		goal.Name = strings.TrimSpace(*in.Name)
+		name := strings.TrimSpace(*in.Name)
+		if err := validateGoalName(name); err != nil {
+			return savingsgoal.SavingsGoal{}, err
+		}
+		goal.Name = name
 	}
 	if in.Emoji != nil {
 		e := strings.TrimSpace(*in.Emoji)
@@ -236,6 +430,19 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	if in.AutoCompound != nil {
 		goal.AutoCompound = *in.AutoCompound
 	}
+	if in.ClearMinContribution {
+		goal.MinContribution = nil
+	} else if in.MinContribution != nil {
+		goal.MinContribution = in.MinContribution
+	}
+	if in.ClearMaxContribution {
+		goal.MaxContribution = nil
+	} else if in.MaxContribution != nil {
+		goal.MaxContribution = in.MaxContribution
+	}
+	if err := savingsgoal.ValidateContributionLimits(goal.MinContribution, goal.MaxContribution); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
 	// Deadline is validated above (when changed); only amount/currency here, so
 	// other fields of an overdue goal can still be updated.
 	if err := validateSavingsGoalInput(goal.TargetAmount, goal.Currency); err != nil {
@@ -244,11 +451,40 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	if err := s.repo.Update(ctx, goal); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
+// Delete soft-deletes the goal (#924): it stamps deleted_at rather than
+// destroying the row, leaving a SavingsGoalRecoveryWindow-long window during
+// which Restore can undo it before the scheduled purge job hard-deletes it.
 func (s *SavingsGoalService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
 	return s.repo.Delete(ctx, goalID, userID)
+}
+
+// Restore undoes a soft delete (#924), provided the goal was deleted less
+// than SavingsGoalRecoveryWindow ago. Returns ErrGoalNotFound if the goal
+// doesn't exist or isn't owned by userID, ErrGoalNotDeleted if it was never
+// deleted, and ErrRecoveryWindowExpired once the window has elapsed (the
+// goal may already be gone, or about to be purged).
+func (s *SavingsGoalService) Restore(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByIDIncludingDeleted(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.DeletedAt == nil {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotDeleted
+	}
+	if time.Since(*goal.DeletedAt) > savingsgoal.SavingsGoalRecoveryWindow {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrRecoveryWindowExpired
+	}
+	if err := s.repo.Restore(ctx, goalID, userID); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.DeletedAt = nil
+	return s.EnrichProgress(ctx, *goal)
 }
 
 func (s *SavingsGoalService) ListContributions(ctx context.Context, userID, goalID uuid.UUID, params listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error) {
@@ -263,7 +499,7 @@ func (s *SavingsGoalService) ListContributions(ctx context.Context, userID, goal
 }
 
 func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {
-	goals, err := s.repo.ListByUser(ctx, userID, "")
+	goals, err := s.repo.ListByUser(ctx, userID, "", "")
 	if err != nil {
 		return savingsgoal.SavingsGoalsSummary{}, err
 	}
@@ -272,7 +508,7 @@ func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (sav
 
 	now := time.Now().UTC()
 	for _, goal := range goals {
-		enriched, err := s.enrichProgress(ctx, goal)
+		enriched, err := s.EnrichProgress(ctx, goal)
 		if err != nil {
 			return savingsgoal.SavingsGoalsSummary{}, err
 		}
@@ -352,7 +588,7 @@ func (s *SavingsGoalService) validateGoalVault(ctx context.Context, userID, vaul
 	return nil
 }
 
-func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoal.SavingsGoal) (savingsgoal.SavingsGoal, error) {
+func (s *SavingsGoalService) EnrichProgress(ctx context.Context, goal savingsgoal.SavingsGoal) (savingsgoal.SavingsGoal, error) {
 	balance, err := s.currentAmount(ctx, goal)
 	if err != nil {
 		return savingsgoal.SavingsGoal{}, err
@@ -379,6 +615,9 @@ func (s *SavingsGoalService) enrichProgress(ctx context.Context, goal savingsgoa
 		now := time.Now().UTC()
 		goal.CompletedAt = &now
 		goal.Status = savingsgoal.GoalStatusCompleted
+		if s.outcomeRec != nil {
+			_ = s.outcomeRec.RecordGoalCompletion(ctx, goal.UserID, now)
+		}
 	}
 
 	newMilestones := savingsgoal.DetectNewMilestones(goal.ProgressPct, goal.NotifiedMilestones)
@@ -451,7 +690,7 @@ func (s *SavingsGoalService) Pause(ctx context.Context, userID, goalID uuid.UUID
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusPaused
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Resume reactivates a paused goal (#718).
@@ -470,7 +709,7 @@ func (s *SavingsGoalService) Resume(ctx context.Context, userID, goalID uuid.UUI
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusActive
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Complete explicitly marks a goal as completed with a disposition action (#716).
@@ -502,7 +741,10 @@ func (s *SavingsGoalService) Complete(ctx context.Context, userID, goalID uuid.U
 	goal.CompletionAction = action
 	now := time.Now().UTC()
 	goal.CompletedAt = &now
-	return s.enrichProgress(ctx, *goal)
+	if s.outcomeRec != nil {
+		_ = s.outcomeRec.RecordGoalCompletion(ctx, goal.UserID, now)
+	}
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Share generates a unique share token for the goal, enabling read-only public access.
@@ -523,7 +765,7 @@ func (s *SavingsGoalService) Share(ctx context.Context, userID, goalID uuid.UUID
 		goal.ShareToken = &token
 		goal.IsShared = true
 	}
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // Unshare revokes the share token, making the goal private again.
@@ -545,7 +787,7 @@ func (s *SavingsGoalService) GetShared(ctx context.Context, token uuid.UUID) (sa
 	if err != nil {
 		return savingsgoal.SharedGoalView{}, err
 	}
-	enriched, err := s.enrichProgress(ctx, *goal)
+	enriched, err := s.EnrichProgress(ctx, *goal)
 	if err != nil {
 		return savingsgoal.SharedGoalView{}, err
 	}
@@ -575,13 +817,13 @@ func (s *SavingsGoalService) Archive(ctx context.Context, userID, goalID uuid.UU
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
 	if goal.Status == savingsgoal.GoalStatusArchived {
-		return s.enrichProgress(ctx, *goal)
+		return s.EnrichProgress(ctx, *goal)
 	}
 	if err := s.repo.UpdateStatus(ctx, goalID, userID, savingsgoal.GoalStatusArchived); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusArchived
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // GetAutoCompoundForVault looks up the goal linked to vaultID and reports its
@@ -616,13 +858,13 @@ func (s *SavingsGoalService) Unarchive(ctx context.Context, userID, goalID uuid.
 		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 	}
 	if goal.Status != savingsgoal.GoalStatusArchived {
-		return s.enrichProgress(ctx, *goal)
+		return s.EnrichProgress(ctx, *goal)
 	}
 	if err := s.repo.UpdateStatus(ctx, goalID, userID, savingsgoal.GoalStatusActive); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
 	goal.Status = savingsgoal.GoalStatusActive
-	return s.enrichProgress(ctx, *goal)
+	return s.EnrichProgress(ctx, *goal)
 }
 
 // isoWeekKey returns an "YYYY-Www" string uniquely identifying the ISO calendar week of t.
@@ -846,6 +1088,14 @@ func (s *SavingsGoalService) DepositSplit(ctx context.Context, userID uuid.UUID,
 		goals[i] = g
 	}
 
+	// Enforce each goal's optional per-contribution limits (#922) against the
+	// amount it is about to receive.
+	for i, g := range goals {
+		if err := savingsgoal.ValidateContributionAmount(amounts[i], g.MinContribution, g.MaxContribution); err != nil {
+			return SplitDepositResult{}, fmt.Errorf("goal %s: %w", g.ID, err)
+		}
+	}
+
 	// Build deposit records and persist atomically.
 	deposits := make([]savingsgoal.GoalDeposit, len(in.Allocations))
 	for i, a := range in.Allocations {
@@ -896,9 +1146,23 @@ func (s *SavingsGoalService) DepositSplit(ctx context.Context, userID uuid.UUID,
 // meaningless for a savings goal, so creation requires at least 24h (#686).
 const MinDeadlineLeadTime = 24 * time.Hour
 
+// MaxGoalNameLength caps the goal name to the savings_goals.name column width
+// (VARCHAR(100)); validating here returns a 400 instead of a DB error (#681).
+const MaxGoalNameLength = 100
+
+func validateGoalName(name string) error {
+	if len([]rune(name)) > MaxGoalNameLength {
+		return fmt.Errorf("%w: name must be at most %d characters", savingsgoal.ErrInvalidGoal, MaxGoalNameLength)
+	}
+	return nil
+}
+
 func validateSavingsGoalInput(target decimal.Decimal, currency string) error {
 	if !target.IsPositive() {
-		return fmt.Errorf("%w: target_amount must be positive", savingsgoal.ErrInvalidGoal)
+		return fmt.Errorf("%w: target_amount must be greater than zero", savingsgoal.ErrInvalidAmount)
+	}
+	if target.LessThan(savingsgoal.MinTargetAmount) {
+		return fmt.Errorf("%w: target_amount must be at least %s", savingsgoal.ErrInvalidAmount, savingsgoal.MinTargetAmount)
 	}
 	currency = strings.TrimSpace(currency)
 	if currency == "" {

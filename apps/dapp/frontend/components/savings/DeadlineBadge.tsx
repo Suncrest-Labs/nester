@@ -62,7 +62,7 @@ export function DeadlineBadge({ deadline, status, className }: DeadlineBadgeProp
         <div
           id={tooltipId}
           role="tooltip"
-          className="absolute bottom-full left-1/2 z-20 mb-2 w-max max-w-[220px] -translate-x-1/2 rounded-lg border border-black/8 bg-white px-3 py-2 text-xs font-medium text-black/70 shadow-lg shadow-black/10"
+          className="absolute bottom-full left-1/2 z-20 mb-2 w-max max-w-[220px] -translate-x-1/2 rounded-lg border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-black/70 dark:text-white/70 shadow-lg shadow-black/10"
         >
           Goal deadline: {fullDate}
           <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black/8" />

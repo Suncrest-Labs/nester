@@ -156,16 +156,16 @@ function DefaultErrorFallback({ error, resetError, level = "page" }: ErrorFallba
 
   if (isWidget) {
     return (
-      <div className="flex flex-col items-center justify-center p-6 text-center rounded-2xl border border-black/[0.06] bg-white min-h-[12rem]">
+      <div className="flex flex-col items-center justify-center p-6 text-center rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] min-h-[12rem]">
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-50 mb-4">
           <Icon className="h-6 w-6 text-red-600" />
         </div>
-        
-        <h3 className="text-sm font-medium text-black mb-2">
+
+        <h3 className="text-sm font-medium text-black dark:text-white mb-2">
           {errorContent.title}
         </h3>
-        
-        <p className="text-xs text-black/60 mb-4 max-w-xs">
+
+        <p className="text-xs text-black/60 dark:text-white/60 mb-4 max-w-xs">
           {errorContent.description}
         </p>
         
@@ -186,11 +186,11 @@ function DefaultErrorFallback({ error, resetError, level = "page" }: ErrorFallba
         <Icon className="h-8 w-8 text-red-600" />
       </div>
       
-      <h2 className="text-xl font-semibold text-black mb-3">
+      <h2 className="text-xl font-semibold text-black dark:text-white mb-3">
         {errorContent.title}
       </h2>
-      
-      <p className="text-sm text-black/60 mb-6 max-w-md">
+
+      <p className="text-sm text-black/60 dark:text-white/60 mb-6 max-w-md">
         {errorContent.description}
       </p>
       
@@ -205,7 +205,7 @@ function DefaultErrorFallback({ error, resetError, level = "page" }: ErrorFallba
         {!is401Error && !is404Error && (
           <button
             onClick={() => window.location.href = "/dashboard"}
-            className="px-4 py-2 text-sm text-black/60 hover:text-black transition-colors"
+            className="px-4 py-2 text-sm text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white transition-colors"
           >
             Go Home
           </button>
@@ -214,7 +214,7 @@ function DefaultErrorFallback({ error, resetError, level = "page" }: ErrorFallba
 
       {process.env.NODE_ENV === "development" && error && (
         <details className="mt-8 w-full max-w-2xl">
-          <summary className="cursor-pointer text-xs text-black/40 hover:text-black/60">
+          <summary className="cursor-pointer text-xs text-black/40 dark:text-white/40 hover:text-black/60 dark:hover:text-white/60">
             Error Details (Development)
           </summary>
           <pre className="mt-2 text-xs text-left bg-gray-50 p-4 rounded overflow-auto">
@@ -263,7 +263,7 @@ function RetryButton({
     <button
       onClick={handleClick}
       disabled={countdown > 0}
-      className={`${baseClass} rounded-lg border border-black/[0.08] bg-white font-medium transition-colors hover:border-black/20 hover:bg-black/[0.02] disabled:opacity-50 disabled:cursor-not-allowed`}
+      className={`${baseClass} rounded-lg border border-black/[0.08] dark:border-white/[0.08] bg-white dark:bg-[#100F0F] font-medium transition-colors hover:border-black/20 dark:hover:border-white/20 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] disabled:opacity-50 disabled:cursor-not-allowed`}
     >
       {countdown > 0 ? `Retry in ${countdown}s` : children}
     </button>

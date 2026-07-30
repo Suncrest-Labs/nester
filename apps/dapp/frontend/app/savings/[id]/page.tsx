@@ -32,9 +32,50 @@ import { useSavingsGoal, useSavingsGoalContributions } from "@/hooks/useSavingsG
 import { DeadlineBadge } from "@/components/savings/DeadlineBadge";
 import { EditGoalModal } from "@/components/savings/EditGoalModal";
 import { formatFullDeadline } from "@/lib/savings/deadline";
+import { ProgressVisualization } from "@/components/savings/ProgressVisualization";
+import type { GoalProgressData } from "@/lib/types/progress";
 
 function toNumber(value: string | number): number {
   return typeof value === "number" ? value : parseFloat(value) || 0;
+}
+
+function buildProgressData(goal: SavingsGoal): GoalProgressData {
+  const current = toNumber(goal.current_amount);
+  const target = toNumber(goal.target_amount);
+  const principal = goal.principal_amount != null ? toNumber(goal.principal_amount) : current;
+  const yieldAmt = goal.yield_amount != null ? toNumber(goal.yield_amount) : 0;
+  const locked = goal.locked_positions?.map((p) => ({
+    id: p.id,
+    amount: toNumber(p.amount),
+    currency: goal.currency,
+    locked_at: p.locked_at,
+    matures_at: p.matures_at,
+    boost_percent: p.boost_percent,
+    yield_earned: toNumber(p.yield_earned),
+  })) ?? [];
+  const flexible = goal.flexible_amount != null ? toNumber(goal.flexible_amount) : Math.max(0, current - locked.reduce((s, p) => s + p.amount, 0));
+
+  return {
+    current_amount: current,
+    target_amount: target,
+    currency: goal.currency,
+    principal_amount: principal,
+    yield_amount: yieldAmt,
+    locked_positions: locked,
+    flexible_amount: flexible,
+    projection: goal.projection ? {
+      vault_id: goal.vault_id,
+      currency: goal.currency,
+      current_apy: 0,
+      timeline: goal.projection.timeline,
+      success_probability: goal.projection.success_probability,
+      on_track: goal.projection.on_track,
+      monthly_gap: goal.projection.monthly_gap,
+    } : undefined,
+    asset_composition: goal.asset_composition,
+    deadline: goal.deadline,
+    status: goal.status,
+  };
 }
 
 function goalDisplayName(goal: SavingsGoal): string {
@@ -79,12 +120,12 @@ function AutoCompoundToggle({
       onClick={() => onToggle(!enabled)}
       className={cn(
         "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-black disabled:opacity-50",
-        enabled ? "bg-black" : "bg-black/15"
+        enabled ? "bg-black dark:bg-white" : "bg-black/15 dark:bg-white/15"
       )}
     >
       <span
         className={cn(
-          "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform",
+          "inline-block h-5 w-5 transform rounded-full bg-white dark:bg-[#100F0F] shadow transition-transform",
           enabled ? "translate-x-5" : "translate-x-0.5"
         )}
       />
@@ -107,10 +148,10 @@ function ContributionRow({ contribution }: { contribution: SavingsGoalContributi
           <ArrowDownLeft className="h-4 w-4 text-emerald-600" aria-hidden="true" />
         </div>
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-black capitalize">
+          <p className="truncate text-sm font-medium text-black dark:text-white capitalize">
             {contribution.source?.replace(/_/g, " ") || "Contribution"}
           </p>
-          <p className="text-[11px] text-black/50 font-medium">{dateLabel}</p>
+          <p className="text-[11px] text-black/50 dark:text-white/50 font-medium">{dateLabel}</p>
         </div>
       </div>
       <span className="shrink-0 font-mono text-sm font-medium text-emerald-600">
@@ -124,10 +165,10 @@ function ContributionHistory({ goalId }: { goalId: string }) {
   const { data, isLoading, isError, refetch, isFetching } = useSavingsGoalContributions(goalId);
 
   return (
-    <div className="rounded-2xl border border-black/8 bg-white">
-      <div className="border-b border-black/8 px-5 py-4">
-        <h2 className="text-sm font-semibold text-black">Contribution History</h2>
-        <p className="mt-0.5 text-xs text-black/60 font-medium">
+    <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]">
+      <div className="border-b border-black/8 dark:border-white/8 px-5 py-4">
+        <h2 className="text-sm font-semibold text-black dark:text-white">Contribution History</h2>
+        <p className="mt-0.5 text-xs text-black/60 dark:text-white/60 font-medium">
           Deposits and yield applied toward this goal
         </p>
       </div>
@@ -137,35 +178,35 @@ function ContributionHistory({ goalId }: { goalId: string }) {
           {[0, 1, 2].map((i) => (
             <div key={i} className="flex items-center justify-between px-5 py-3.5">
               <div className="flex items-center gap-3">
-                <div className="h-8 w-8 animate-pulse rounded-lg bg-black/10" />
+                <div className="h-8 w-8 animate-pulse rounded-lg bg-black/10 dark:bg-white/10" />
                 <div className="space-y-1.5">
-                  <div className="h-3 w-28 animate-pulse rounded bg-black/10" />
-                  <div className="h-2.5 w-20 animate-pulse rounded bg-black/10" />
+                  <div className="h-3 w-28 animate-pulse rounded bg-black/10 dark:bg-white/10" />
+                  <div className="h-2.5 w-20 animate-pulse rounded bg-black/10 dark:bg-white/10" />
                 </div>
               </div>
-              <div className="h-3 w-16 animate-pulse rounded bg-black/10" />
+              <div className="h-3 w-16 animate-pulse rounded bg-black/10 dark:bg-white/10" />
             </div>
           ))}
         </div>
       ) : isError ? (
         <div className="px-5 py-8 text-center" data-testid="contributions-error">
-          <p className="text-sm font-medium text-black/70">Couldn&apos;t load contributions</p>
+          <p className="text-sm font-medium text-black/70 dark:text-white/70">Couldn&apos;t load contributions</p>
           <button
             type="button"
             onClick={() => refetch()}
             disabled={isFetching}
-            className="mt-3 rounded-lg bg-black px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+            className="mt-3 rounded-lg bg-black dark:bg-blue-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
           >
             {isFetching ? "Retrying…" : "Retry"}
           </button>
         </div>
       ) : !data?.length ? (
         <div className="px-5 py-10 text-center" data-testid="contributions-empty">
-          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-black/5">
-            <Wallet className="h-5 w-5 text-black/40" aria-hidden="true" />
+          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-black/5 dark:bg-white/5">
+            <Wallet className="h-5 w-5 text-black/40 dark:text-white/40" aria-hidden="true" />
           </div>
-          <p className="text-sm font-semibold text-black">No contributions yet</p>
-          <p className="mx-auto mt-1 max-w-xs text-xs text-black/60 font-medium">
+          <p className="text-sm font-semibold text-black dark:text-white">No contributions yet</p>
+          <p className="mx-auto mt-1 max-w-xs text-xs text-black/60 dark:text-white/60 font-medium">
             Make your first deposit to start building toward this goal.
           </p>
         </div>
@@ -246,36 +287,36 @@ export default function SavingsGoalDetailPage() {
         initial={{ opacity: 0, x: -8 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.3 }}
-        className="mb-7 flex items-center gap-1.5 text-xs text-black/50 font-medium"
+        className="mb-7 flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50 font-medium"
         aria-label="Breadcrumb"
       >
         <Link
           href="/savings"
-          className="inline-flex items-center gap-1.5 hover:text-black transition-colors focus-visible:ring-2 focus-visible:ring-black"
+          className="inline-flex items-center gap-1.5 hover:text-black dark:hover:text-white transition-colors focus-visible:ring-2 focus-visible:ring-black"
         >
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
           Savings
         </Link>
-        <ChevronRight className="h-3.5 w-3.5 text-black/30" aria-hidden="true" />
-        <span className="text-black/70 truncate max-w-[200px]">
+        <ChevronRight className="h-3.5 w-3.5 text-black/30 dark:text-white/30" aria-hidden="true" />
+        <span className="text-black/70 dark:text-white/70 truncate max-w-[200px]">
           {goal ? goalDisplayName(goal) : "Goal"}
         </span>
       </motion.nav>
 
       {isLoading ? (
-        <div className="p-12 text-center text-sm text-black/50">Loading goal…</div>
+        <div className="p-12 text-center text-sm text-black/50 dark:text-white/50">Loading goal…</div>
       ) : isError || !goal ? (
-        <div className="rounded-3xl border border-black/8 bg-white p-12 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-black/5">
-            <Target className="h-6 w-6 text-black/40" aria-hidden="true" />
+        <div className="rounded-3xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-12 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5">
+            <Target className="h-6 w-6 text-black/40 dark:text-white/40" aria-hidden="true" />
           </div>
-          <p className="text-sm font-semibold text-black">Goal not found</p>
-          <p className="mx-auto mt-1 max-w-xs text-xs text-black/60 font-medium">
+          <p className="text-sm font-semibold text-black dark:text-white">Goal not found</p>
+          <p className="mx-auto mt-1 max-w-xs text-xs text-black/60 dark:text-white/60 font-medium">
             This savings goal may have been removed or is unavailable.
           </p>
           <Link
             href="/savings"
-            className="mt-5 inline-block rounded-xl bg-black px-6 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-75"
+            className="mt-5 inline-block rounded-xl bg-black dark:bg-blue-600 px-6 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-75"
           >
             Back to Savings
           </Link>
@@ -284,10 +325,8 @@ export default function SavingsGoalDetailPage() {
         (() => {
           const current = toNumber(goal.current_amount);
           const target = toNumber(goal.target_amount);
-          const progress = Math.min(100, Math.max(0, goal.progress_pct ?? 0));
           const isPaused = goal.status === "paused";
           const isCompleted = goal.status === "completed";
-          const remaining = Math.max(0, target - current);
 
           return (
             <>
@@ -301,7 +340,7 @@ export default function SavingsGoalDetailPage() {
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                   <div className="min-w-0">
                     <div className="mb-2 flex items-center gap-2 flex-wrap">
-                      <span className="rounded-full bg-black/5 px-2.5 py-0.5 text-[11px] font-medium text-black/60">
+                      <span className="rounded-full bg-black/5 dark:bg-white/5 px-2.5 py-0.5 text-[11px] font-medium text-black/60 dark:text-white/60">
                         {categoryLabel(goal.category)}
                       </span>
                       {isPaused && (
@@ -316,10 +355,10 @@ export default function SavingsGoalDetailPage() {
                       )}
                       <DeadlineBadge deadline={goal.deadline} status={goal.status} />
                     </div>
-                    <h1 className="text-2xl text-black sm:text-3xl font-semibold truncate">
+                    <h1 className="text-2xl text-black dark:text-white sm:text-3xl font-semibold truncate">
                       {goalDisplayName(goal)}
                     </h1>
-                    <p className="mt-2 text-sm text-black/60 font-medium">
+                    <p className="mt-2 text-sm text-black/60 dark:text-white/60 font-medium">
                       Target {formatAmount(goal.target_amount, goal.currency)} by{" "}
                       {formatFullDeadline(goal.deadline)}
                     </p>
@@ -329,7 +368,7 @@ export default function SavingsGoalDetailPage() {
                   <div className="flex items-center gap-2 flex-wrap shrink-0">
                     <Link
                       href="/savings#vault-grid"
-                      className="flex items-center gap-1.5 rounded-xl bg-black px-4 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
+                      className="flex items-center gap-1.5 rounded-xl bg-black dark:bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
                     >
                       <Plus className="h-3.5 w-3.5" aria-hidden="true" />
                       Deposit
@@ -343,7 +382,7 @@ export default function SavingsGoalDetailPage() {
                             ? runAction("resumed", () => savingsGoals.resume(id))
                             : runAction("paused", () => savingsGoals.pause(id))
                         }
-                        className="flex items-center gap-1.5 rounded-xl border border-black/10 px-4 py-2.5 text-xs font-semibold text-black/70 transition-colors hover:border-black/20 hover:text-black disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
+                        className="flex items-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 px-4 py-2.5 text-xs font-semibold text-black/70 dark:text-white/70 transition-colors hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
                       >
                         {isPaused ? (
                           <Play className="h-3.5 w-3.5" aria-hidden="true" />
@@ -357,7 +396,7 @@ export default function SavingsGoalDetailPage() {
                       type="button"
                       disabled={busy}
                       onClick={() => setEditOpen(true)}
-                      className="flex items-center gap-1.5 rounded-xl border border-black/10 px-4 py-2.5 text-xs font-semibold text-black/70 transition-colors hover:border-black/20 hover:text-black disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
+                      className="flex items-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 px-4 py-2.5 text-xs font-semibold text-black/70 dark:text-white/70 transition-colors hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
                     >
                       <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                       Edit
@@ -366,7 +405,7 @@ export default function SavingsGoalDetailPage() {
                       type="button"
                       disabled={busy}
                       onClick={handleArchive}
-                      className="flex items-center gap-1.5 rounded-xl border border-black/10 px-4 py-2.5 text-xs font-semibold text-black/70 transition-colors hover:border-red-200 hover:text-red-600 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
+                      className="flex items-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 px-4 py-2.5 text-xs font-semibold text-black/70 dark:text-white/70 transition-colors hover:border-red-200 hover:text-red-600 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
                     >
                       <Archive className="h-3.5 w-3.5" aria-hidden="true" />
                       Archive
@@ -385,42 +424,23 @@ export default function SavingsGoalDetailPage() {
                 {/* Left: progress + contributions */}
                 <div className="space-y-5 lg:col-span-3">
                   {/* Progress card */}
-                  <div className="rounded-2xl border border-black/8 bg-white p-6">
+                  <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-6">
                     <div className="mb-4 flex items-end justify-between gap-4">
                       <div>
-                        <p className="text-xs text-black/60 font-medium">Current balance</p>
-                        <p className="mt-1 font-mono text-3xl text-black">
+                        <p className="text-xs text-black/60 dark:text-white/60 font-medium">Current balance</p>
+                        <p className="mt-1 font-mono text-3xl text-black dark:text-white">
                           {formatAmount(goal.current_amount, goal.currency)}
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-xs text-black/60 font-medium">Target</p>
-                        <p className="mt-1 font-mono text-lg text-black/70">
+                        <p className="text-xs text-black/60 dark:text-white/60 font-medium">Target</p>
+                        <p className="mt-1 font-mono text-lg text-black/70 dark:text-white/70">
                           {formatAmount(goal.target_amount, goal.currency)}
                         </p>
                       </div>
                     </div>
 
-                    <div
-                      className="h-3 overflow-hidden rounded-full bg-black/8"
-                      role="progressbar"
-                      aria-valuenow={Math.round(progress)}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-label="Goal progress"
-                    >
-                      <div
-                        className={cn(
-                          "h-full rounded-full transition-all",
-                          isCompleted ? "bg-emerald-500" : "bg-black"
-                        )}
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-xs font-medium text-black/60">
-                      <span>{progress.toFixed(0)}% complete</span>
-                      <span>{formatAmount(remaining, goal.currency)} to go</span>
-                    </div>
+                    <ProgressVisualization progress={buildProgressData(goal)} />
                   </div>
 
                   {/* Contributions */}
@@ -429,55 +449,55 @@ export default function SavingsGoalDetailPage() {
 
                 {/* Right: details */}
                 <div className="space-y-5 lg:col-span-2">
-                  <div className="rounded-2xl border border-black/8 bg-white p-5">
-                    <p className="mb-4 text-xs text-black/60 font-semibold uppercase tracking-widest">
+                  <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5">
+                    <p className="mb-4 text-xs text-black/60 dark:text-white/60 font-semibold uppercase tracking-widest">
                       Goal Details
                     </p>
                     <dl className="space-y-3.5">
                       <div className="flex items-start justify-between gap-3">
-                        <dt className="flex items-center gap-2 text-xs text-black/60">
-                          <Target className="h-3.5 w-3.5 text-black/40" aria-hidden="true" />
+                        <dt className="flex items-center gap-2 text-xs text-black/60 dark:text-white/60">
+                          <Target className="h-3.5 w-3.5 text-black/40 dark:text-white/40" aria-hidden="true" />
                           Target
                         </dt>
-                        <dd className="text-right font-mono text-xs text-black font-medium">
+                        <dd className="text-right font-mono text-xs text-black dark:text-white font-medium">
                           {formatAmount(goal.target_amount, goal.currency)}
                         </dd>
                       </div>
                       <div className="flex items-start justify-between gap-3">
-                        <dt className="flex items-center gap-2 text-xs text-black/60">
-                          <Wallet className="h-3.5 w-3.5 text-black/40" aria-hidden="true" />
+                        <dt className="flex items-center gap-2 text-xs text-black/60 dark:text-white/60">
+                          <Wallet className="h-3.5 w-3.5 text-black/40 dark:text-white/40" aria-hidden="true" />
                           Currency
                         </dt>
-                        <dd className="text-right text-xs text-black font-medium">{goal.currency}</dd>
+                        <dd className="text-right text-xs text-black dark:text-white font-medium">{goal.currency}</dd>
                       </div>
                       <div className="flex items-start justify-between gap-3">
-                        <dt className="flex items-center gap-2 text-xs text-black/60">
-                          <Calendar className="h-3.5 w-3.5 text-black/40" aria-hidden="true" />
+                        <dt className="flex items-center gap-2 text-xs text-black/60 dark:text-white/60">
+                          <Calendar className="h-3.5 w-3.5 text-black/40 dark:text-white/40" aria-hidden="true" />
                           Deadline
                         </dt>
-                        <dd className="text-right text-xs text-black font-medium">
+                        <dd className="text-right text-xs text-black dark:text-white font-medium">
                           {formatFullDeadline(goal.deadline)}
                         </dd>
                       </div>
                       {goal.description && (
-                        <div className="border-t border-black/6 pt-3.5">
-                          <dt className="mb-1 text-xs text-black/60">Description</dt>
-                          <dd className="text-xs text-black/80 leading-relaxed">{goal.description}</dd>
+                        <div className="border-t border-black/6 dark:border-white/6 pt-3.5">
+                          <dt className="mb-1 text-xs text-black/60 dark:text-white/60">Description</dt>
+                          <dd className="text-xs text-black/80 dark:text-white/80 leading-relaxed">{goal.description}</dd>
                         </div>
                       )}
                     </dl>
                   </div>
 
                   {/* Auto-compound */}
-                  <div className="rounded-2xl border border-black/8 bg-white p-5">
+                  <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/5">
-                          <RefreshCcw className="h-4 w-4 text-black/50" aria-hidden="true" />
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/5 dark:bg-white/5">
+                          <RefreshCcw className="h-4 w-4 text-black/50 dark:text-white/50" aria-hidden="true" />
                         </div>
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold text-black">Auto-compound</p>
-                          <p className="text-[11px] text-black/60 font-medium">
+                          <p className="text-sm font-semibold text-black dark:text-white">Auto-compound</p>
+                          <p className="text-[11px] text-black/60 dark:text-white/60 font-medium">
                             Reinvest yield toward this goal
                           </p>
                         </div>

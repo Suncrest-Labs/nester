@@ -31,7 +31,7 @@ function WalletGridCard({
         <button
             onClick={() => onSelect(wallet.id)}
             disabled={isConnecting}
-            className="group flex h-[84px] w-full flex-col items-center justify-center gap-2 rounded-xl border border-border bg-white transition-all hover:-translate-y-[2px] hover:border-black/20 hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.97]"
+            className="group flex h-[84px] w-full flex-col items-center justify-center gap-2 rounded-xl border border-border bg-white dark:bg-[#100F0F] transition-all hover:-translate-y-[2px] hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.97]"
         >
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary/60 overflow-hidden">
                 {isThisConnecting ? (
@@ -70,7 +70,7 @@ function WalletListItem({
         <button
             onClick={() => onSelect(wallet.id)}
             disabled={isConnecting}
-            className="group flex w-full items-center gap-3 rounded-xl border border-border bg-white p-3 transition-all hover:border-black/20 hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed min-h-[52px] active:scale-[0.98]"
+            className="group flex w-full items-center gap-3 rounded-xl border border-border bg-white dark:bg-[#100F0F] p-3 transition-all hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed min-h-[52px] active:scale-[0.98]"
         >
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-secondary overflow-hidden">
                 {wallet.icon ? (
@@ -237,7 +237,7 @@ export function ConnectWallet() {
                     transition={{ duration: 0.6, delay: 0.4 }}
                     className="w-full"
                 >
-                    <div className="rounded-2xl sm:rounded-3xl border border-border bg-white px-4 sm:px-6 py-5 shadow-xl shadow-black/[0.03]">
+                    <div className="rounded-2xl sm:rounded-3xl border border-border bg-white dark:bg-[#100F0F] px-4 sm:px-6 py-5 shadow-xl shadow-black/[0.03]">
                         {isConnected ? (
                             <div className="flex flex-col items-center">
                                 <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-500">
@@ -280,7 +280,7 @@ export function ConnectWallet() {
                                 <div className="flex w-full gap-3">
                                     <button
                                         onClick={disconnect}
-                                        className="flex-1 rounded-xl border border-border bg-white px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+                                        className="flex-1 rounded-xl border border-border bg-white dark:bg-[#100F0F] px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
                                     >
                                         Disconnect
                                     </button>
@@ -332,7 +332,7 @@ export function ConnectWallet() {
                                         animate={{ opacity: 1 }}
                                         transition={{ delay: 0.7 }}
                                         onClick={() => setShowAll(!showAll)}
-                                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-3 text-xs font-medium text-muted-foreground transition-all hover:border-black/20 hover:text-foreground min-h-[44px]"
+                                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-3 text-xs font-medium text-muted-foreground transition-all hover:border-black/20 dark:hover:border-white/20 hover:text-foreground min-h-[44px]"
                                     >
                                         {showAll
                                             ? "Show less"

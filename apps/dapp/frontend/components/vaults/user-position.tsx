@@ -8,7 +8,7 @@ const POSITION_ROWS = [
 
 export function UserPosition() {
   return (
-    <div className="rounded-2xl border border-border bg-white p-5">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-5">
       <div className="flex items-center justify-between mb-3">
         <p className="font-heading text-sm font-medium text-foreground">
           Your Position

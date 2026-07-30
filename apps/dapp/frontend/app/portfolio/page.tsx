@@ -234,13 +234,13 @@ export default function PortfolioPage() {
                 className="mb-8 flex items-center justify-between gap-4"
             >
                 <div>
-                    <h1 className="text-2xl text-black sm:text-3xl font-semibold">Portfolio</h1>
+                    <h1 className="text-2xl text-black dark:text-white sm:text-3xl font-semibold">Portfolio</h1>
                     <div className="mt-1.5 flex items-center gap-2">
-                        <span className="text-sm text-black/60 font-medium">{address ? truncAddr(address) : ""}</span>
+                        <span className="text-sm text-black/60 dark:text-white/60 font-medium">{address ? truncAddr(address) : ""}</span>
                         {address && (
                             <button
                                 onClick={copyAddress}
-                                className="text-black/40 hover:text-black/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
+                                className="text-black/40 dark:text-white/40 hover:text-black/70 dark:hover:text-white/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
                                 aria-label="Copy wallet address"
                             >
                                 {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
@@ -251,7 +251,7 @@ export default function PortfolioPage() {
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setHideBalances(!hideBalances)}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 text-black/40 hover:text-black/70 transition-all focus-visible:ring-2 focus-visible:ring-black"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 dark:border-white/10 text-black/40 dark:text-white/40 hover:text-black/70 dark:hover:text-white/70 transition-all focus-visible:ring-2 focus-visible:ring-black"
                         aria-label={hideBalances ? "Show balances" : "Hide balances"}
                         aria-pressed={hideBalances}
                     >
@@ -260,7 +260,7 @@ export default function PortfolioPage() {
                     <button
                         onClick={loadAssets}
                         disabled={loading}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 text-black/40 hover:text-black/70 transition-all disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-black"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 dark:border-white/10 text-black/40 dark:text-white/40 hover:text-black/70 dark:hover:text-white/70 transition-all disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-black"
                         aria-label="Refresh balances"
                     >
                         <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} aria-hidden="true" />
@@ -273,15 +273,15 @@ export default function PortfolioPage() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.05 }}
-                className="mb-6 rounded-2xl border border-black/[0.06] bg-white overflow-hidden"
+                className="mb-6 rounded-2xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] overflow-hidden"
             >
                 <div className="p-8">
-                    <p className="text-[12px] text-black/60 font-semibold tracking-wide mb-2 uppercase">Net Worth</p>
-                    <p className="text-[42px] font-extralight leading-none text-black tracking-[-0.02em]" aria-live="polite">
+                    <p className="text-[12px] text-black/60 dark:text-white/60 font-semibold tracking-wide mb-2 uppercase">Net Worth</p>
+                    <p className="text-[42px] font-extralight leading-none text-black dark:text-white tracking-[-0.02em]" aria-live="polite">
                         {hide(fmtUsd(totalUsd))}
                     </p>
                 </div>
-                <div className="border-t border-black/[0.06] grid grid-cols-2 sm:grid-cols-4 divide-x divide-black/[0.06]">
+                <div className="border-t border-black/[0.06] dark:border-white/[0.06] grid grid-cols-2 sm:grid-cols-4 divide-x divide-black/[0.06] dark:divide-white/[0.06]">
                     {[
                         { label: "Wallet", value: fmtUsd(walletUsd), icon: WalletIcon },
                         { label: "In Markets", value: fmtUsd(vaultUsd), icon: TrendingUp },
@@ -290,10 +290,10 @@ export default function PortfolioPage() {
                     ].map((item) => (
                         <div key={item.label} className="px-5 py-4">
                             <div className="flex items-center gap-1.5 mb-1.5">
-                                <item.icon className="h-3 w-3 text-black/40" aria-hidden="true" />
-                                <span className="text-[11px] text-black/60 font-medium">{item.label}</span>
+                                <item.icon className="h-3 w-3 text-black/40 dark:text-white/40" aria-hidden="true" />
+                                <span className="text-[11px] text-black/60 dark:text-white/60 font-medium">{item.label}</span>
                             </div>
-                            <p className="text-sm text-black font-semibold">{hide(item.value)}</p>
+                            <p className="text-sm text-black dark:text-white font-semibold">{hide(item.value)}</p>
                         </div>
                     ))}
                 </div>
@@ -311,13 +311,13 @@ export default function PortfolioPage() {
                     {walletAssets.filter(a => a.balance > 0).map((asset) => (
                         <div
                             key={asset.code}
-                            className="flex items-center gap-2 rounded-xl border border-black/8 bg-white px-4 py-2.5 shrink-0"
+                            className="flex items-center gap-2 rounded-xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-4 py-2.5 shrink-0"
                         >
-                            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-black/[0.04] text-[10px] text-black/60 font-bold" aria-hidden="true">
+                            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-black/[0.04] dark:bg-white/[0.04] text-[10px] text-black/60 dark:text-white/60 font-bold" aria-hidden="true">
                                 {asset.code.slice(0, 2)}
                             </div>
-                            <span className="text-xs text-black/70 font-semibold">{asset.code}</span>
-                            <span className="text-sm text-black font-medium">
+                            <span className="text-xs text-black/70 dark:text-white/70 font-semibold">{asset.code}</span>
+                            <span className="text-sm text-black dark:text-white font-medium">
                                 {hide(asset.balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 }))}
                             </span>
                         </div>
@@ -330,7 +330,7 @@ export default function PortfolioPage() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.15 }}
-                className="mb-5 flex items-center gap-1 border-b border-black/8"
+                className="mb-5 flex items-center gap-1 border-b border-black/8 dark:border-white/8"
                 role="tablist"
                 aria-label="Portfolio sections"
             >
@@ -343,12 +343,12 @@ export default function PortfolioPage() {
                         onClick={() => setActiveTab(tab)}
                         className={cn(
                             "relative pb-3 px-1 mr-4 text-sm capitalize transition-colors focus-visible:ring-2 focus-visible:ring-black",
-                            activeTab === tab ? "text-black font-semibold" : "text-black/60 hover:text-black/80 font-medium"
+                            activeTab === tab ? "text-black dark:text-white font-semibold" : "text-black/60 dark:text-white/60 hover:text-black/80 dark:hover:text-white/80 font-medium"
                         )}
                     >
                         {tab}
                         {activeTab === tab && (
-                            <motion.div layoutId="tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-black rounded-full" aria-hidden="true" />
+                            <motion.div layoutId="tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-black dark:bg-white rounded-full" aria-hidden="true" />
                         )}
                     </button>
                 ))}
@@ -367,9 +367,9 @@ export default function PortfolioPage() {
                         exit={{ opacity: 0, y: -8 }}
                     >
                         {positions.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-black/8 bg-white">
-                                <p className="text-sm text-black/60 font-medium">No positions yet</p>
-                                <p className="mt-1 text-xs text-black/50">
+                            <div className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]">
+                                <p className="text-sm text-black/60 dark:text-white/60 font-medium">No positions yet</p>
+                                <p className="mt-1 text-xs text-black/50 dark:text-white/50">
                                     Supply assets to a market to see your positions here.
                                 </p>
                             </div>
@@ -381,43 +381,43 @@ export default function PortfolioPage() {
                                         initial={{ opacity: 0, y: 6 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         transition={{ delay: i * 0.04 }}
-                                        className="flex items-center justify-between gap-4 rounded-2xl border border-black/8 bg-white px-5 py-4"
+                                        className="flex items-center justify-between gap-4 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-5 py-4"
                                     >
                                         <div className="min-w-0">
                                             <div className="flex items-center gap-2">
-                                                <p className="text-sm text-black font-semibold truncate">{pos.vaultName}</p>
-                                                <span className="text-[11px] text-black/60 font-medium">{pos.asset}</span>
+                                                <p className="text-sm text-black dark:text-white font-semibold truncate">{pos.vaultName}</p>
+                                                <span className="text-[11px] text-black/60 dark:text-white/60 font-medium">{pos.asset}</span>
                                                 {pos.isMatured ? (
-                                                    <span className="text-[10px] bg-black text-white rounded-full px-2 py-0.5 font-bold">Matured</span>
+                                                    <span className="text-[10px] bg-black dark:bg-blue-600 text-white rounded-full px-2 py-0.5 font-bold">Matured</span>
                                                 ) : (
-                                                    <span className="text-[10px] bg-black/[0.04] text-black/70 rounded-full px-2 py-0.5 font-semibold">{pos.daysRemaining}d left</span>
+                                                    <span className="text-[10px] bg-black/[0.04] dark:bg-white/[0.04] text-black/70 dark:text-white/70 rounded-full px-2 py-0.5 font-semibold">{pos.daysRemaining}d left</span>
                                                 )}
                                             </div>
-                                            <div className="mt-1 flex items-center gap-3 text-xs text-black/60 font-medium">
+                                            <div className="mt-1 flex items-center gap-3 text-xs text-black/60 dark:text-white/60 font-medium">
                                                 <span>APY {(pos.apy * 100).toFixed(1)}%</span>
                                                 <span className="text-emerald-700">Yield +{pos.yieldEarned.toFixed(4)}</span>
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-3 shrink-0">
                                             <div className="text-right">
-                                                <p className="text-base text-black font-bold">
+                                                <p className="text-base text-black dark:text-white font-bold">
                                                     {hide(pos.currentValue.toFixed(2))}
                                                 </p>
-                                                <p className="text-[11px] text-black/60 mt-0.5 font-medium">
+                                                <p className="text-[11px] text-black/60 dark:text-white/60 mt-0.5 font-medium">
                                                     Principal: {pos.principal.toFixed(2)}
                                                 </p>
                                             </div>
                                             <div className="flex gap-1.5">
                                                 <button
                                                     onClick={() => setTransferPos(pos)}
-                                                    className="rounded-lg border border-black/10 px-3 py-1.5 text-[11px] text-black/60 font-semibold hover:border-black/20 hover:text-black transition-colors focus-visible:ring-2 focus-visible:ring-black"
+                                                    className="rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-[11px] text-black/60 dark:text-white/60 font-semibold hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white transition-colors focus-visible:ring-2 focus-visible:ring-black"
                                                     aria-label={`Transfer ${pos.vaultName} position`}
                                                 >
                                                     Transfer
                                                 </button>
                                                 <button
                                                     onClick={() => setWithdrawPos(pos)}
-                                                    className="rounded-lg bg-black px-3 py-1.5 text-[11px] text-white font-semibold transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
+                                                    className="rounded-lg bg-black dark:bg-blue-600 px-3 py-1.5 text-[11px] text-white font-semibold transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
                                                     aria-label={`Withdraw from ${pos.vaultName}`}
                                                 >
                                                     Withdraw
@@ -442,9 +442,9 @@ export default function PortfolioPage() {
                         exit={{ opacity: 0, y: -8 }}
                     >
                         {recentTx.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-black/8 bg-white">
-                                <p className="text-sm text-black/60 font-medium">No activity yet</p>
-                                <p className="mt-1 text-xs text-black/50">
+                            <div className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]">
+                                <p className="text-sm text-black/60 dark:text-white/60 font-medium">No activity yet</p>
+                                <p className="mt-1 text-xs text-black/50 dark:text-white/50">
                                     Deposits, withdrawals, and yield events will appear here.
                                 </p>
                             </div>
@@ -458,25 +458,25 @@ export default function PortfolioPage() {
                                             initial={{ opacity: 0, y: 4 }}
                                             animate={{ opacity: 1, y: 0 }}
                                             transition={{ delay: i * 0.03 }}
-                                            className="flex items-center justify-between gap-4 rounded-xl border border-black/8 bg-white px-5 py-3.5"
+                                            className="flex items-center justify-between gap-4 rounded-xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-5 py-3.5"
                                         >
                                             <div className="flex items-center gap-3">
-                                                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-black/60">
+                                                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] dark:bg-white/[0.04] text-black/60 dark:text-white/60">
                                                     <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                                                 </div>
                                                 <div>
-                                                    <p className="text-sm text-black font-semibold">{tx.type}</p>
-                                                    <p className="text-[11px] text-black/60 mt-0.5 font-medium">
+                                                    <p className="text-sm text-black dark:text-white font-semibold">{tx.type}</p>
+                                                    <p className="text-[11px] text-black/60 dark:text-white/60 mt-0.5 font-medium">
                                                         {tx.vaultName} · {new Date(tx.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                                                     </p>
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-3">
                                                 <div className="text-right">
-                                                    <p className="text-sm text-black font-bold">{tx.amount} {tx.asset}</p>
+                                                    <p className="text-sm text-black dark:text-white font-bold">{tx.amount} {tx.asset}</p>
                                                     <span className={cn(
                                                         "text-[11px] font-semibold",
-                                                        tx.status === "Confirmed" ? "text-black/60" :
+                                                        tx.status === "Confirmed" ? "text-black/60 dark:text-white/60" :
                                                         tx.status === "Pending" ? "text-amber-700" : "text-red-700"
                                                     )}>{tx.status}</span>
                                                 </div>
@@ -485,7 +485,7 @@ export default function PortfolioPage() {
                                                         href={`${currentNetwork.explorerUrl}/transactions/${tx.txHash}`}
                                                         target="_blank"
                                                         rel="noreferrer"
-                                                        className="flex h-6 w-6 items-center justify-center rounded-md text-black/40 hover:bg-black/[0.04] hover:text-black/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
+                                                        className="flex h-6 w-6 items-center justify-center rounded-md text-black/40 dark:text-white/40 hover:bg-black/[0.04] dark:hover:bg-white/[0.04] hover:text-black/70 dark:hover:text-white/70 transition-colors focus-visible:ring-2 focus-visible:ring-black"
                                                         aria-label={`View transaction ${tx.txHash?.slice(0, 8)} on explorer`}
                                                     >
                                                         <ExternalLink className="h-3 w-3" aria-hidden="true" />

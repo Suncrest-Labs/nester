@@ -181,6 +181,41 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 		if err != nil {
 			return false, err
 		}
+
+	// Fair-ordering emergency withdrawal queue (issue #814).
+	case "emrg_reqd":
+		if err := applyEmergencyQueueRequested(ctx, tx, event); err != nil {
+			return false, err
+		}
+	case "emrg_fill":
+		if err := applyEmergencyQueueFilled(ctx, tx, event); err != nil {
+			return false, err
+		}
+	case "emrg_canc":
+		if err := applyEmergencyQueueCancelled(ctx, tx, event); err != nil {
+			return false, err
+		}
+
+	// Early-exit penalty escrow (issue #805).
+	case "pnlty_chg":
+		if err := applyPenaltyCharged(ctx, tx, event); err != nil {
+			return false, err
+		}
+	case "pnlty_dst":
+		if err := applyPenaltyDistributed(ctx, tx, event); err != nil {
+			return false, err
+		}
+
+	// Slippage-safe multi-hop rebalance (issue #810).
+	case "rebal_leg":
+		if err := applyRebalanceLegExecuted(ctx, tx, event); err != nil {
+			return false, err
+		}
+	case "rebal_cmp":
+		if err := applyRebalanceCompleted(ctx, tx, event); err != nil {
+			return false, err
+		}
+
 	default:
 		// Keep cursor continuity even for unsupported events.
 	}
@@ -232,6 +267,268 @@ func extractEventAmount(event indexedEvent) (decimal.Decimal, bool) {
 	}
 
 	return decimal.Zero, false
+}
+
+// extractEventField reads an arbitrary numeric field (not just "amount"/
+// "value") from an event's data map, using the same tolerant type handling
+// as extractEventAmount.
+func extractEventField(event indexedEvent, key string) (decimal.Decimal, bool) {
+	if event.Data == nil {
+		return decimal.Zero, false
+	}
+	raw, ok := event.Data[key]
+	if !ok {
+		return decimal.Zero, false
+	}
+	switch v := raw.(type) {
+	case string:
+		value, err := decimal.NewFromString(strings.TrimSpace(v))
+		if err != nil {
+			return decimal.Zero, false
+		}
+		return value, true
+	case json.Number:
+		value, err := decimal.NewFromString(v.String())
+		if err != nil {
+			return decimal.Zero, false
+		}
+		return value, true
+	case int:
+		return decimal.NewFromInt(int64(v)), true
+	case int64:
+		return decimal.NewFromInt(v), true
+	case float64:
+		if v != math.Trunc(v) || math.Abs(v) > float64(1<<53) {
+			return decimal.Zero, false
+		}
+		return decimal.NewFromInt(int64(v)), true
+	}
+	return decimal.Zero, false
+}
+
+// extractEventStringField reads a string-valued field (e.g. a Stellar
+// address or a symbol) from an event's data map.
+func extractEventStringField(event indexedEvent, key string) (string, bool) {
+	if event.Data == nil {
+		return "", false
+	}
+	raw, ok := event.Data[key]
+	if !ok {
+		return "", false
+	}
+	s, ok := raw.(string)
+	if !ok || strings.TrimSpace(s) == "" {
+		return "", false
+	}
+	return s, true
+}
+
+// extractEventBoolField reads a boolean field, tolerating the RPC's actual
+// JSON encoding of a Soroban bool.
+func extractEventBoolField(event indexedEvent, key string) (bool, bool) {
+	if event.Data == nil {
+		return false, false
+	}
+	raw, ok := event.Data[key]
+	if !ok {
+		return false, false
+	}
+	b, ok := raw.(bool)
+	return b, ok
+}
+
+// extractEventEnumVariant reads a unit-variant Soroban enum (e.g.
+// PenaltyReason), tolerating the couple of shapes an RPC/XDR-to-JSON
+// encoder might reasonably use for it: a bare string, a single-element
+// array, or a single-key object.
+func extractEventEnumVariant(event indexedEvent, key string) (string, bool) {
+	if event.Data == nil {
+		return "", false
+	}
+	raw, ok := event.Data[key]
+	if !ok {
+		return "", false
+	}
+	switch v := raw.(type) {
+	case string:
+		return v, true
+	case []any:
+		if len(v) == 0 {
+			return "", false
+		}
+		s, ok := v[0].(string)
+		return s, ok
+	case map[string]any:
+		for k := range v {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+func penaltyReasonToDB(variant string) string {
+	switch strings.ToLower(strings.TrimSpace(variant)) {
+	case "earlywithdrawal":
+		return "early_withdrawal"
+	case "lockbreak":
+		return "lock_break"
+	case "emergencyexit":
+		return "emergency_exit"
+	case "weightdeviation":
+		return "weight_deviation"
+	default:
+		return "early_withdrawal"
+	}
+}
+
+// applyEmergencyQueueRequested persists a new (or extended) fair-queue
+// position from an `emergency_requested` event (issue #814).
+func applyEmergencyQueueRequested(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
+	user, ok := extractEventStringField(event, "user")
+	if !ok {
+		return fmt.Errorf("emrg_reqd event missing user")
+	}
+	seq, ok := extractEventField(event, "seq")
+	if !ok {
+		return fmt.Errorf("emrg_reqd event missing seq")
+	}
+	sharesRequested, ok := extractEventField(event, "shares_requested")
+	if !ok {
+		return fmt.Errorf("emrg_reqd event missing shares_requested")
+	}
+
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO emergency_withdrawal_queue (vault_contract_address, user_address, seq, shares_requested, shares_filled, status)
+VALUES ($1, $2, $3, $4, 0, 'open')
+ON CONFLICT (vault_contract_address, seq) DO UPDATE
+SET shares_requested = EXCLUDED.shares_requested,
+    updated_at = NOW()`,
+		event.ContractID, user, seq.String(), sharesRequested.String(),
+	)
+	return err
+}
+
+// applyEmergencyQueueFilled updates an entry's filled amount from an
+// `emergency_filled` event.
+func applyEmergencyQueueFilled(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
+	seq, ok := extractEventField(event, "seq")
+	if !ok {
+		return fmt.Errorf("emrg_fill event missing seq")
+	}
+	fillShares, ok := extractEventField(event, "fill_shares")
+	if !ok {
+		return fmt.Errorf("emrg_fill event missing fill_shares")
+	}
+	fullyFilled, _ := extractEventBoolField(event, "fully_filled")
+
+	status := "open"
+	if fullyFilled {
+		status = "filled"
+	}
+
+	_, err := tx.ExecContext(ctx, `
+UPDATE emergency_withdrawal_queue
+SET shares_filled = shares_filled + $1::numeric,
+    status = $2,
+    updated_at = NOW()
+WHERE vault_contract_address = $3 AND seq = $4`,
+		fillShares.String(), status, event.ContractID, seq.String(),
+	)
+	return err
+}
+
+// applyEmergencyQueueCancelled marks an entry cancelled from an
+// `emergency_cancelled` event.
+func applyEmergencyQueueCancelled(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
+	seq, ok := extractEventField(event, "seq")
+	if !ok {
+		return fmt.Errorf("emrg_canc event missing seq")
+	}
+	_, err := tx.ExecContext(ctx, `
+UPDATE emergency_withdrawal_queue
+SET status = 'cancelled', updated_at = NOW()
+WHERE vault_contract_address = $1 AND seq = $2`,
+		event.ContractID, seq.String(),
+	)
+	return err
+}
+
+// applyPenaltyCharged persists a `penalty_charged` event (issue #805).
+func applyPenaltyCharged(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
+	user, ok := extractEventStringField(event, "user")
+	if !ok {
+		return fmt.Errorf("pnlty_chg event missing user")
+	}
+	amount, ok := extractEventField(event, "amount")
+	if !ok {
+		return fmt.Errorf("pnlty_chg event missing amount")
+	}
+	sharesBurned, _ := extractEventField(event, "shares_burned")
+	reasonVariant, _ := extractEventEnumVariant(event, "reason")
+
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO penalty_events (vault_contract_address, user_address, amount, shares_burned, reason)
+VALUES ($1, $2, $3, $4, $5)`,
+		event.ContractID, user, amount.String(), sharesBurned.String(), penaltyReasonToDB(reasonVariant),
+	)
+	return err
+}
+
+// applyPenaltyDistributed persists a `penalty_distributed` event.
+func applyPenaltyDistributed(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
+	depositorAmount, _ := extractEventField(event, "depositor_amount")
+	treasuryAmount, _ := extractEventField(event, "treasury_amount")
+	retainedDust, _ := extractEventField(event, "retained_dust")
+
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO penalty_distributions (vault_contract_address, depositor_amount, treasury_amount, retained_dust)
+VALUES ($1, $2, $3, $4)`,
+		event.ContractID, depositorAmount.String(), treasuryAmount.String(), retainedDust.String(),
+	)
+	return err
+}
+
+// applyRebalanceLegExecuted persists a `rebalance_leg_executed` event
+// (issue #810) so realised slippage can be analysed off-chain.
+func applyRebalanceLegExecuted(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
+	sourceID, ok := extractEventStringField(event, "source_id")
+	if !ok {
+		return fmt.Errorf("rebal_leg event missing source_id")
+	}
+	delta, ok := extractEventField(event, "delta")
+	if !ok {
+		return fmt.Errorf("rebal_leg event missing delta")
+	}
+	amountOut, _ := extractEventField(event, "amount_out")
+	minOut, _ := extractEventField(event, "min_out")
+
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO vault_rebalance_legs (vault_contract_address, source_id, delta, amount_out, min_out)
+VALUES ($1, $2, $3, $4, $5)`,
+		event.ContractID, sourceID, delta.String(), amountOut.String(), minOut.String(),
+	)
+	return err
+}
+
+// applyRebalanceCompleted persists the once-per-call summary emitted by
+// `execute_rebalance` (issue #810). Kept in its own table rather than joined
+// onto `vault_rebalance_legs` because the event carries no shared key back
+// to individual legs — same reasoning as `penalty_distributions` living
+// apart from `penalty_events`.
+func applyRebalanceCompleted(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
+	planHash, ok := extractEventField(event, "plan_hash")
+	if !ok {
+		return fmt.Errorf("rebal_cmp event missing plan_hash")
+	}
+	totalValueMoved, _ := extractEventField(event, "total_value_moved")
+	realizedSlippageBps, _ := extractEventField(event, "realized_slippage_bps")
+
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO vault_rebalance_completions (vault_contract_address, plan_hash, total_value_moved, realized_slippage_bps)
+VALUES ($1, $2, $3, $4)`,
+		event.ContractID, planHash.String(), totalValueMoved.String(), realizedSlippageBps.IntPart(),
+	)
+	return err
 }
 
 func fetchSorobanEvents(

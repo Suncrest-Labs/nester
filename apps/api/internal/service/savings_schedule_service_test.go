@@ -101,7 +101,7 @@ type memoryGoalRepo struct {
 }
 
 func (m *memoryGoalRepo) Create(context.Context, *savingsgoal.SavingsGoal) error { return nil }
-func (m *memoryGoalRepo) ListByUser(context.Context, uuid.UUID, string) ([]savingsgoal.SavingsGoal, error) {
+func (m *memoryGoalRepo) ListByUser(context.Context, uuid.UUID, string, string) ([]savingsgoal.SavingsGoal, error) {
 	return nil, nil
 }
 func (m *memoryGoalRepo) GetByID(_ context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
@@ -113,6 +113,14 @@ func (m *memoryGoalRepo) GetByID(_ context.Context, id uuid.UUID) (*savingsgoal.
 }
 func (m *memoryGoalRepo) Update(context.Context, *savingsgoal.SavingsGoal) error { return nil }
 func (m *memoryGoalRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error     { return nil }
+func (m *memoryGoalRepo) Restore(context.Context, uuid.UUID, uuid.UUID) error    { return nil }
+func (m *memoryGoalRepo) GetByIDIncludingDeleted(_ context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	return m.GetByID(context.Background(), id)
+}
+func (m *memoryGoalRepo) ListDeletedOlderThan(context.Context, time.Time) ([]savingsgoal.SavingsGoal, error) {
+	return nil, nil
+}
+func (m *memoryGoalRepo) HardDelete(context.Context, uuid.UUID) error { return nil }
 func (m *memoryGoalRepo) SumVaultBalance(context.Context, uuid.UUID, string) (decimal.Decimal, error) {
 	return decimal.Zero, nil
 }
@@ -143,6 +151,18 @@ func (m *memoryGoalRepo) UpdateMilestones(_ context.Context, goalID uuid.UUID, m
 	m.goals[goalID] = g
 	return nil
 }
+func (m *memoryGoalRepo) UpdateDeadlineReminders(_ context.Context, goalID uuid.UUID, reminders []int) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.DeadlineRemindersSent = append([]int(nil), reminders...)
+	m.goals[goalID] = g
+	return nil
+}
+func (m *memoryGoalRepo) ListActiveApproachingDeadline(context.Context, int) ([]savingsgoal.SavingsGoal, error) {
+	return nil, nil
+}
 func (m *memoryGoalRepo) SetShareToken(_ context.Context, goalID, userID uuid.UUID, token uuid.UUID) error {
 	g, ok := m.goals[goalID]
 	if !ok || g.UserID != userID {
@@ -171,6 +191,18 @@ func (m *memoryGoalRepo) GetByShareToken(_ context.Context, token uuid.UUID) (*s
 	}
 	return nil, savingsgoal.ErrGoalNotFound
 }
+
+func (m *memoryGoalRepo) UpdateOnchainLink(_ context.Context, goalID uuid.UUID, onchainGoalID, onchainStatus string) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.OnchainGoalID = &onchainGoalID
+	g.OnchainStatus = &onchainStatus
+	m.goals[goalID] = g
+	return nil
+}
+
 type memoryVaultRepo struct {
 	vaults map[uuid.UUID]vault.Vault
 }
@@ -215,6 +247,15 @@ func (m *memoryVaultRepo) UpdateVault(_ context.Context, id uuid.UUID, addr stri
 	}
 	v.ContractAddress = addr
 	v.Status = status
+	m.vaults[id] = v
+	return nil
+}
+func (m *memoryVaultRepo) UpdateHarvestFrequency(_ context.Context, id uuid.UUID, frequency string) error {
+	v, ok := m.vaults[id]
+	if !ok {
+		return vault.ErrVaultNotFound
+	}
+	v.HarvestFrequency = frequency
 	m.vaults[id] = v
 	return nil
 }

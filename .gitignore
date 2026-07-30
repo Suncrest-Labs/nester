@@ -44,9 +44,6 @@ pnpm-debug.log*
 *.exe
 bin/
 apps/api/tmp/
-services/api/bin/
-services/api/server
-services/api/server.exe
 
 # Vercel
 .vercel
@@ -74,9 +71,3 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
-ISSUE_CONTEXT_156.md
-.solve-issues-state.json
-.issue-worktrees/
-ISSUE_CONTEXT_236.md
-ISSUE_CONTEXT_248.md
-ISSUE_CONTEXT_264.md

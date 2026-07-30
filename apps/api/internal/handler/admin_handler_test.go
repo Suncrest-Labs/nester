@@ -16,12 +16,17 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
+
+type noopRevocationChecker struct{}
+
+func (noopRevocationChecker) IsRevoked(context.Context, string) (bool, error) { return false, nil }
 
 type adminHandlerStubService struct {
 	dashboard   admindomain.VaultHealthDashboard
@@ -229,6 +234,22 @@ func (s *adminHandlerStubService) GetDetailedHealth(context.Context) (admindomai
 	return s.health, nil
 }
 
+func (s *adminHandlerStubService) ListGoalTemplates(context.Context) ([]savingsgoal.GoalTemplate, error) {
+	return nil, nil
+}
+
+func (s *adminHandlerStubService) CreateGoalTemplate(context.Context, service.CreateGoalTemplateInput) (savingsgoal.GoalTemplate, error) {
+	return savingsgoal.GoalTemplate{}, nil
+}
+
+func (s *adminHandlerStubService) UpdateGoalTemplate(context.Context, service.UpdateGoalTemplateInput) (savingsgoal.GoalTemplate, error) {
+	return savingsgoal.GoalTemplate{}, nil
+}
+
+func (s *adminHandlerStubService) DeleteGoalTemplate(context.Context, uuid.UUID) error {
+	return nil
+}
+
 func (s *adminHandlerStubService) TriggerRebalance(_ context.Context, id uuid.UUID, req admindomain.RebalanceRequest) (admindomain.RebalanceResponse, error) {
 	if _, ok := s.vaults[id]; !ok {
 		return admindomain.RebalanceResponse{}, vault.ErrVaultNotFound
@@ -292,7 +313,7 @@ func TestAdminHandlerAuthDashboardRequiresAdmin(t *testing.T) {
 	rules := []middleware.RouteRule{
 		{PathPrefix: "/api/v1/admin/", Role: "admin"},
 	}
-	protected := middleware.Authenticate("admin-test-secret", "", rules)(mux)
+	protected := middleware.Authenticate("admin-test-secret", "", rules, noopRevocationChecker{})(mux)
 	server := httptest.NewServer(protected)
 	defer server.Close()
 
@@ -411,7 +432,7 @@ func TestAdminHandlerAuthListPauseVerify(t *testing.T) {
 	rules := []middleware.RouteRule{
 		{PathPrefix: "/api/v1/admin/", Role: "admin"},
 	}
-	protected := middleware.Authenticate("admin-test-secret", "", rules)(mux)
+	protected := middleware.Authenticate("admin-test-secret", "", rules, noopRevocationChecker{})(mux)
 	server := httptest.NewServer(protected)
 	defer server.Close()
 
@@ -473,7 +494,7 @@ func TestAdminHandlerRebalanceAuth(t *testing.T) {
 	rules := []middleware.RouteRule{
 		{PathPrefix: "/api/v1/admin/", Role: "admin"},
 	}
-	protected := middleware.Authenticate("admin-test-secret", "", rules)(mux)
+	protected := middleware.Authenticate("admin-test-secret", "", rules, noopRevocationChecker{})(mux)
 	server := httptest.NewServer(protected)
 	defer server.Close()
 
@@ -512,7 +533,7 @@ func TestAdminHandlerAllocationEndpointsRequireAdmin(t *testing.T) {
 	mux := http.NewServeMux()
 	h.Register(mux)
 	rules := []middleware.RouteRule{{PathPrefix: "/api/v1/admin/", Role: "admin"}}
-	protected := middleware.Authenticate("admin-test-secret", "", rules)(mux)
+	protected := middleware.Authenticate("admin-test-secret", "", rules, noopRevocationChecker{})(mux)
 	server := httptest.NewServer(protected)
 	defer server.Close()
 

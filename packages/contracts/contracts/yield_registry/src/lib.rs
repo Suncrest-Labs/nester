@@ -5,8 +5,10 @@
 //! allocation logic.
 //!
 //! # Roles
+//!
 //! * Admin: register/update/remove sources, risk + limit updates.
 //! * Operator: day-to-day performance refreshes (APY/TVL) and migration ops.
+//!
 //! Role management is delegated to [`nester_access_control`].
 //!
 //! # Status transitions
@@ -24,7 +26,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env, Symbol, Vec,
 };
 
 use nester_access_control::{AccessControl, Role};
@@ -176,6 +178,7 @@ impl YieldRegistryContract {
     /// Initialise the registry, granting `admin` the Admin role.
     pub fn initialize(env: Env, admin: Address) {
         AccessControl::initialize(&env, &admin);
+        nester_common::Upgrade::init_schema_version(&env, 1);
         env.storage()
             .instance()
             .set(&DataKey::SourceList, &Vec::<Symbol>::new(&env));
@@ -256,7 +259,9 @@ impl YieldRegistryContract {
         let mut source = get_source_or_panic(&env, &id);
 
         // Deprecated and Exploit are terminal states.
-        if matches!(source.status, SourceStatus::Deprecated) || matches!(source.status, SourceStatus::Exploit) {
+        if matches!(source.status, SourceStatus::Deprecated)
+            || matches!(source.status, SourceStatus::Exploit)
+        {
             panic_with_error!(&env, ContractError::InvalidOperation);
         }
 
@@ -264,7 +269,9 @@ impl YieldRegistryContract {
         source.status = new_status.clone();
 
         // Deprecation or Exploit implies migration is required.
-        if matches!(new_status, SourceStatus::Deprecated) || matches!(new_status, SourceStatus::Exploit) {
+        if matches!(new_status, SourceStatus::Deprecated)
+            || matches!(new_status, SourceStatus::Exploit)
+        {
             source.migration_required = true;
             source.migration_completed = false;
             source.migration_completed_at = 0;
@@ -671,7 +678,63 @@ impl YieldRegistryContract {
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
     }
+
+    // -----------------------------------------------------------------------
+    // Upgradeability & Schema Migration
+    // -----------------------------------------------------------------------
+
+    /// Proposes a new WASM upgrade for the yield registry.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_YIELD_REGISTRY (48 hours).
+    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &admin,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_YIELD_REGISTRY,
+            eta,
+        );
+    }
+
+    /// Cancels a pending WASM upgrade for the yield registry.
+    ///
+    /// Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, admin: Address) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &admin);
+    }
+
+    /// Executes a matured WASM upgrade for the yield registry.
+    ///
+    /// Execution is permissionless after maturity.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
+
+    /// Retrieves pending upgrade details if present.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
+    }
+
+    /// Returns current contract schema version.
+    pub fn get_schema_version(env: Env) -> u32 {
+        nester_common::Upgrade::get_schema_version(&env)
+    }
+
+    /// Bumps schema version if needed (idempotent).
+    pub fn migrate(env: Env) -> u32 {
+        let current = nester_common::Upgrade::get_schema_version(&env);
+        let target = 1u32;
+        if current < target {
+            nester_common::Upgrade::set_schema_version(&env, target);
+            target
+        } else {
+            current
+        }
+    }
 }
+
 
 // ---------------------------------------------------------------------------
 // Private helpers
@@ -759,9 +822,13 @@ fn performance_event_data(source: &YieldSource) -> SourcePerformanceUpdatedEvent
     }
 }
 
+/// APY/TVL reporting (issue #820): Admin, Operator, or the narrower
+/// [`Role::Attester`] — a distinct key dedicated to signing yield reports,
+/// separate from any fund-moving role.
 fn require_admin_or_operator(env: &Env, caller: &Address) {
     if !AccessControl::has_role(env, caller, Role::Admin)
         && !AccessControl::has_role(env, caller, Role::Operator)
+        && !AccessControl::has_role(env, caller, Role::Attester)
     {
         panic_with_error!(env, ContractError::Unauthorized);
     }
