@@ -24,7 +24,32 @@ const (
 	ReasonNoYield Reason = "no_yield"
 	// ReasonBelowThreshold: yield is positive but does not cover gas + margin.
 	ReasonBelowThreshold Reason = "below_threshold"
+	// ReasonNotDue: the vault's configured harvest frequency has not elapsed
+	// since its last harvest (#940).
+	ReasonNotDue Reason = "not_due"
 )
+
+// FrequencyDuration maps a per-vault harvest frequency (#940) to the minimum
+// interval that must elapse between harvests. Unrecognized values fall back
+// to the daily cadence.
+func FrequencyDuration(frequency string) time.Duration {
+	switch frequency {
+	case "weekly":
+		return 7 * 24 * time.Hour
+	default:
+		return 24 * time.Hour
+	}
+}
+
+// DueForHarvest reports whether enough time has elapsed since lastHarvestedAt
+// for frequency to permit another harvest. A nil lastHarvestedAt (never
+// harvested) is always due.
+func DueForHarvest(now time.Time, frequency string, lastHarvestedAt *time.Time) bool {
+	if lastHarvestedAt == nil {
+		return true
+	}
+	return now.Sub(*lastHarvestedAt) >= FrequencyDuration(frequency)
+}
 
 // GatingInput carries the economics of a single harvest decision. All amounts
 // are in the vault's settlement currency (e.g. USDC), same scale as the ledger.

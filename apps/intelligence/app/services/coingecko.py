@@ -67,6 +67,22 @@ def _cache_get(key: str) -> Any | None:
     return None
 
 
+def _cache_get_stale(key: str) -> tuple[Any | None, bool]:
+    r = _get_redis()
+    if r is not None:
+        try:
+            raw = r.get(key)
+            if raw:
+                return json.loads(raw), False
+        except Exception as exc:
+            logger.warning("coingecko cache get stale: %s", exc)
+    entry = _mem_cache.get(key)
+    if entry:
+        is_stale = time.monotonic() >= entry[1]
+        return entry[0], is_stale
+    return None, False
+
+
 def _cache_set(key: str, value: Any, ttl: int) -> None:
     r = _get_redis()
     if r is not None:
@@ -83,7 +99,7 @@ class CoinGeckoClient:
         self.base_url = base_url.rstrip("/")
 
     async def get_prices(self, coin_ids: list[str]) -> dict[str, PriceData]:
-        """Fetch USD price, 24h change, and market cap. Returns last cached value on 429."""
+        """Fetch USD price, 24h change, and market cap. Falls back to stale cache on failure."""
         cache_key = f"coingecko:prices:{','.join(sorted(coin_ids))}"
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -103,13 +119,37 @@ class CoinGeckoClient:
                     timeout=aiohttp.ClientTimeout(total=8),
                 ) as resp:
                     if resp.status == 429:
-                        logger.warning("CoinGecko rate limited (429), returning empty prices")
+                        stale, is_stale = _cache_get_stale(cache_key)
+                        if stale is not None:
+                            log = "coingecko get_prices using stale data on rate-limit"
+                            if is_stale:
+                                logger.warning(log)
+                            else:
+                                logger.info(log)
+                            return {k: PriceData(**v) for k, v in stale.items()}
+                        logger.warning("CoinGecko rate limited (429), no cache available")
                         return {}
                     if resp.status != 200:
+                        stale, is_stale = _cache_get_stale(cache_key)
+                        if stale is not None:
+                            log = "coingecko get_prices using stale data after http %s"
+                            if is_stale:
+                                logger.warning(log, resp.status)
+                            else:
+                                logger.info(log, resp.status)
+                            return {k: PriceData(**v) for k, v in stale.items()}
                         logger.warning("CoinGecko /simple/price returned %s", resp.status)
                         return {}
                     data = await resp.json()
         except Exception as exc:
+            stale, is_stale = _cache_get_stale(cache_key)
+            if stale is not None:
+                log = "coingecko get_prices using stale data after failure: %s"
+                if is_stale:
+                    logger.warning(log, exc)
+                else:
+                    logger.info(log, exc)
+                return {k: PriceData(**v) for k, v in stale.items()}
             logger.warning("coingecko get_prices failed: %s", exc)
             return {}
 
@@ -126,7 +166,7 @@ class CoinGeckoClient:
         return {k: PriceData(**v) for k, v in result.items()}
 
     async def get_market_sentiment(self) -> MarketSentiment:
-        """Fetch DeFi global market cap and dominance. Returns neutral on 429."""
+        """Fetch DeFi global market cap and dominance. Falls back to stale cache on failure."""
         cache_key = "coingecko:defi_global"
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -145,13 +185,37 @@ class CoinGeckoClient:
                     timeout=aiohttp.ClientTimeout(total=8),
                 ) as resp:
                     if resp.status == 429:
-                        logger.warning("CoinGecko rate limited (429), returning neutral sentiment")
+                        stale, is_stale = _cache_get_stale(cache_key)
+                        if stale is not None:
+                            log = "coingecko get_market_sentiment using stale data on rate-limit"
+                            if is_stale:
+                                logger.warning(log)
+                            else:
+                                logger.info(log)
+                            return MarketSentiment(**stale)
+                        logger.warning("CoinGecko rate limited (429), no cache available")
                         return _neutral
                     if resp.status != 200:
+                        stale, is_stale = _cache_get_stale(cache_key)
+                        if stale is not None:
+                            log = "coingecko get_market_sentiment using stale data after http %s"
+                            if is_stale:
+                                logger.warning(log, resp.status)
+                            else:
+                                logger.info(log, resp.status)
+                            return MarketSentiment(**stale)
                         logger.warning("CoinGecko /global/defi returned %s", resp.status)
                         return _neutral
                     data = await resp.json()
         except Exception as exc:
+            stale, is_stale = _cache_get_stale(cache_key)
+            if stale is not None:
+                log = "coingecko get_market_sentiment using stale data after failure: %s"
+                if is_stale:
+                    logger.warning(log, exc)
+                else:
+                    logger.info(log, exc)
+                return MarketSentiment(**stale)
             logger.warning("coingecko get_market_sentiment failed: %s", exc)
             return _neutral
 

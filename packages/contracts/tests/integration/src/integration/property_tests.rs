@@ -37,7 +37,7 @@ fn amount_strategy() -> impl Strategy<Value = i128> {
         Just(100 * XLM),
         Just(1_000 * XLM),
         Just(10_000 * XLM),
-        1..=100_i128.map(|x| x * XLM),
+        (1..=100_i128).prop_map(|x| x * XLM),
     ]
 }
 

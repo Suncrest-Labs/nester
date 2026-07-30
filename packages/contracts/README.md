@@ -9,9 +9,12 @@ packages/contracts/
 ├── contracts/
 │   ├── vault/              # Core vault contract for asset storage
 │   ├── vault_token/        # Token contract for vault participation
+│   ├── vault_factory/      # Deterministic, registry-tracked vault deployment
 │   ├── yield_registry/     # Registry for yield strategies
 │   ├── allocation_strategy/ # Dynamic allocation logic
-│   └── access_control/     # Role-based access control
+│   ├── access_control/     # Granular role-based access control
+│   ├── referral/           # On-chain referral / deposit-incentive program
+│   └── timelock/           # Mandatory delay for sensitive admin operations
 ├── libs/
 │   ├── common/             # Shared error types, constants, storage patterns
 │   └── test_utils/         # Test environment setup and helpers
@@ -174,7 +177,7 @@ use nester_test_utils::{setup_test_env, assert_ok};
 ## Contract Descriptions
 
 ### Vault (`vault/`)
-Core contract managing asset deposits, withdrawals, and vault state. Interfaces with vault tokens and allocation strategies.
+Core contract managing asset deposits, withdrawals, and vault state. Interfaces with vault tokens and allocation strategies. Protects itself with an autonomous, staged circuit breaker (`breaker.rs`) — share-price-move, yield-sanity, withdrawal-velocity, and source-failure conditions escalate a graded severity (`Normal` → `Throttled` → `DepositsHalted` → `FullHalt`); the emergency withdrawal queue works at every severity level, and recovery is staged and cooled-down. See [`SECURITY.md`](../../SECURITY.md#circuit-breaker-issue-817).
 
 ### Vault Token (`vault_token/`)
 ERC-20-like token contract representing fractional ownership in the vault. Minted on deposits, burned on withdrawals.
@@ -186,7 +189,13 @@ Registry and metadata store for supported yield strategies. Tracks strategy para
 Dynamic allocation contract that determines how vault assets are distributed across registered yield strategies.
 
 ### Access Control (`access_control/`)
-Role-based access control system for managing permissions across all contracts (admin, manager, user roles).
+Granular role-based access control shared by every contract: `Admin`, `Operator`, `Manager`, `Guardian`, `Upgrader`, `Attester`, `FeeManager`, `RebalanceKeeper`, `Treasurer`, `VaultCreator`. Every role transfer is two-step (`transfer_role`/`accept_role`, cancellable) and roles can be time-bounded via `grant_role_until`. Full role model and the Guardian asymmetry guarantee — a Guardian can always make the protocol safer and never riskier — are documented in [`SECURITY.md`](../../SECURITY.md#on-chain-access-control-model-issue-820).
+
+### Vault Factory (`vault_factory/`)
+Deploys new vaults from a single governed WASM hash via the Soroban deployer, with deterministic, pre-computable addresses (`predict_vault_address`) and an on-chain registry (`is_nester_vault`, `get_vault`, `list_vaults`) so any integrator can distinguish a genuine Nester vault from a lookalike. Deployment and initialisation are atomic. Changing the WASM hash goes through the shared `timelock`.
+
+### Referral (`referral/`)
+Standalone on-chain referral program — deliberately kept out of the vault's hot path; the vault is the sole trusted caller of `accrue_reward`, mirroring the existing `treasury.receive_fees` trust pattern. Rewards accrue from the protocol's performance-fee slice on a referred user's yield — never from the user's own returns — and are bounded by minimum deposit/tenure gates, per-referrer caps, and a global program budget. See [`EVENTS.md`](EVENTS.md#referral-events-contract-symbol-referral--issue-818) for the full event surface.
 
 ## Architecture Principles
 
@@ -265,8 +274,69 @@ mod tests {
 4. Run full QA suite: `make fmt && make clippy && make test && make build`
 5. Deploy to testnet: `make deploy-testnet`
 
+## Contract Upgrade Runbook
+
+All upgradeable Nester contracts (`vault`, `yield_registry`, `allocation_strategy`, `treasury`) use a secure, timelock-governed upgrade mechanism.
+
+### 1. Reproducible Build Process
+Compile and optimize contract WASM binaries:
+```bash
+cargo build --release --target wasm32-unknown-unknown -p vault-contract
+stellar contract optimize \
+  --wasm ./target/wasm32-unknown-unknown/release/vault_contract.wasm \
+  --wasm-out ./target/wasm32-unknown-unknown/release/vault_contract_opt.wasm
+```
+
+### 2. WASM Hash Computation & Verification
+Compute the SHA-256 hash of the optimized WASM:
+```bash
+sha256sum ./target/wasm32-unknown-unknown/release/vault_contract_opt.wasm
+```
+Alternatively, install WASM to testnet to obtain the on-chain WASM hash:
+```bash
+stellar contract install --wasm ./target/wasm32-unknown-unknown/release/vault_contract_opt.wasm --source-account <ACCOUNT> --network testnet
+```
+
+### 3. Proposal Process
+An account holding the `Upgrader` role proposes the upgrade:
+- Minimum timelock delays:
+  - Vault: 48 hours (`172,800` seconds)
+  - Yield Registry: 48 hours (`172,800` seconds)
+  - Allocation Strategy: 48 hours (`172,800` seconds)
+  - Treasury: 7 days (`604_800` seconds)
+```bash
+stellar contract invoke --id <CONTRACT_ID> --source-account upgrader --network testnet -- propose_upgrade \
+  --admin <UPGRADER_ADDRESS> \
+  --new_wasm_hash <WASM_HASH> \
+  --eta <FUTURE_TIMESTAMP>
+```
+
+### 4. Multisig Signing & Cancellation
+If a proposal needs to be aborted before maturity, an `Upgrader` calls:
+```bash
+stellar contract invoke --id <CONTRACT_ID> --source-account upgrader --network testnet -- cancel_upgrade \
+  --admin <UPGRADER_ADDRESS>
+```
+
+### 5. Execution & Migration
+Once the ledger timestamp reaches `ETA`, execution is permissionless:
+```bash
+stellar contract invoke --id <CONTRACT_ID> --source-account any_relayer --network testnet -- execute_upgrade \
+  --caller <CALLER_ADDRESS> \
+  --wasm_hash <WASM_HASH>
+```
+Following upgrade execution, run explicit storage migration if schema changes occurred:
+```bash
+stellar contract invoke --id <CONTRACT_ID> --source-account admin --network testnet -- migrate
+```
+
+### 6. Storage Invariant & Rollback Considerations
+- **Storage Invariant**: Existing storage keys may never be reused with different data types. New schema modifications must allocate new keys.
+- **Rollbacks**: If an executed WASM contains a bug, a new upgrade proposal must be submitted with the previous known-good WASM hash and serve out the timelock delay. Emergency pause state remains available throughout to protect funds.
+
 ## References
 
 - [Soroban Documentation](https://soroban.stellar.org/)
 - [Soroban SDK Docs](https://docs.rs/soroban-sdk/)
 - [Rust Edition 2021](https://doc.rust-lang.org/edition-guide/rust-2021/index.html)
+

@@ -45,6 +45,8 @@ type Config struct {
 	recurringDeposit      RecurringDepositConfig
 	jobQueue              JobQueueConfig
 	harvest               HarvestConfig
+	rebalancer            RebalancerConfig
+	schedulerLeadership   SchedulerLeadershipConfig
 }
 
 // AccountCipherConfig holds the versioned key set used to encrypt sensitive
@@ -153,10 +155,12 @@ type IntelligenceConfig struct {
 }
 
 type AuthConfig struct {
-	secret          string
-	serviceAPIKey   string
-	tokenExpiry     time.Duration
-	challengeExpiry time.Duration
+	secret                  string
+	serviceAPIKey           string
+	accessTokenExpiry       time.Duration
+	refreshTokenExpiry      time.Duration
+	absoluteSessionLifetime time.Duration
+	challengeExpiry         time.Duration
 }
 
 type RateLimitConfig struct {
@@ -246,10 +250,12 @@ func Load() (*Config, error) {
 		},
 		settlementProviderURL: loader.stringDefault("SETTLEMENT_PROVIDER_URL", ""),
 		auth: AuthConfig{
-			secret:          loader.requiredString("AUTH_JWT_SECRET"),
-			serviceAPIKey:   loader.stringDefault("NESTER_SERVICE_API_KEY", ""),
-			tokenExpiry:     loader.durationDefault("AUTH_TOKEN_EXPIRY", 24*time.Hour),
-			challengeExpiry: loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
+			secret:                  loader.requiredString("AUTH_JWT_SECRET"),
+			serviceAPIKey:           loader.stringDefault("NESTER_SERVICE_API_KEY", ""),
+			accessTokenExpiry:       loader.durationDefault("AUTH_ACCESS_TOKEN_EXPIRY", 5*time.Minute),
+			refreshTokenExpiry:      loader.durationDefault("AUTH_REFRESH_TOKEN_EXPIRY", 7*24*time.Hour),
+			absoluteSessionLifetime: loader.durationDefault("AUTH_ABSOLUTE_SESSION_LIFETIME", 30*24*time.Hour),
+			challengeExpiry:         loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
 		},
 		rateLimit: RateLimitConfig{
 			globalLimit:       loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
@@ -319,6 +325,15 @@ func Load() (*Config, error) {
 			backoffMax:         loader.durationDefault("JOB_QUEUE_BACKOFF_MAX", 5*time.Minute),
 			statsInterval:      loader.durationDefault("JOB_QUEUE_STATS_INTERVAL", 30*time.Second),
 			drainTimeout:       loader.durationDefault("JOB_QUEUE_DRAIN_TIMEOUT", 25*time.Second),
+		},
+		rebalancer: RebalancerConfig{
+			enabled:       loader.boolDefault("REBALANCER_ENABLED", true),
+			interval:      time.Duration(loader.intDefault("REBALANCER_INTERVAL_MINUTES", 15)) * time.Minute,
+			minAPYGainBPS: int64(loader.intDefault("REBALANCER_MIN_APY_GAIN_BPS", 50)),
+		},
+		schedulerLeadership: SchedulerLeadershipConfig{
+			lockKey:           int64(loader.intDefault("SCHEDULER_LEADER_LOCK_KEY", 846000)),
+			heartbeatInterval: loader.durationDefault("SCHEDULER_LEADER_HEARTBEAT_INTERVAL", 3*time.Second),
 		},
 	}
 
@@ -539,6 +554,34 @@ func (h HarvestConfig) Window() time.Duration   { return h.window }
 func (h HarvestConfig) Margin() string          { return h.margin }
 func (h HarvestConfig) GasFee() string          { return h.gasFee }
 
+// RebalancerConfig governs the automated vault rebalance-decision loop
+// (nester#372; wired into main.go as part of #846). Money-moving: gated
+// behind scheduler leadership so only one instance evaluates and submits.
+type RebalancerConfig struct {
+	enabled       bool
+	interval      time.Duration
+	minAPYGainBPS int64
+}
+
+func (c Config) Rebalancer() RebalancerConfig      { return c.rebalancer }
+func (r RebalancerConfig) Enabled() bool           { return r.enabled }
+func (r RebalancerConfig) Interval() time.Duration { return r.interval }
+func (r RebalancerConfig) MinAPYGainBPS() int64    { return r.minAPYGainBPS }
+
+// SchedulerLeadershipConfig governs the Postgres-advisory-lock leader
+// election that gates all five scheduler background job loops (#846). See
+// internal/scheduler/leadership.go for the full design rationale.
+type SchedulerLeadershipConfig struct {
+	lockKey           int64
+	heartbeatInterval time.Duration
+}
+
+func (c Config) SchedulerLeadership() SchedulerLeadershipConfig { return c.schedulerLeadership }
+func (s SchedulerLeadershipConfig) LockKey() int64              { return s.lockKey }
+func (s SchedulerLeadershipConfig) HeartbeatInterval() time.Duration {
+	return s.heartbeatInterval
+}
+
 func (c Config) JobQueue() JobQueueConfig                 { return c.jobQueue }
 func (j JobQueueConfig) Enabled() bool                    { return j.enabled }
 func (j JobQueueConfig) PollInterval() time.Duration      { return j.pollInterval }
@@ -617,8 +660,20 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("AUTH_JWT_SECRET must not use the development default in production or staging")
 	}
 
-	if c.auth.tokenExpiry <= 0 {
-		loader.addError("AUTH_TOKEN_EXPIRY must be greater than 0")
+	if c.auth.accessTokenExpiry <= 0 {
+		loader.addError("AUTH_ACCESS_TOKEN_EXPIRY must be greater than 0")
+	}
+	if c.auth.refreshTokenExpiry <= 0 {
+		loader.addError("AUTH_REFRESH_TOKEN_EXPIRY must be greater than 0")
+	}
+	if c.auth.absoluteSessionLifetime <= 0 {
+		loader.addError("AUTH_ABSOLUTE_SESSION_LIFETIME must be greater than 0")
+	}
+	if c.auth.accessTokenExpiry >= c.auth.refreshTokenExpiry {
+		loader.addError("AUTH_ACCESS_TOKEN_EXPIRY must be less than AUTH_REFRESH_TOKEN_EXPIRY")
+	}
+	if c.auth.refreshTokenExpiry >= c.auth.absoluteSessionLifetime {
+		loader.addError("AUTH_REFRESH_TOKEN_EXPIRY must be less than AUTH_ABSOLUTE_SESSION_LIFETIME")
 	}
 
 	if c.auth.challengeExpiry <= 0 {
@@ -855,8 +910,16 @@ func (a AuthConfig) ServiceAPIKey() string {
 	return a.serviceAPIKey
 }
 
-func (a AuthConfig) TokenExpiry() time.Duration {
-	return a.tokenExpiry
+func (a AuthConfig) AccessTokenExpiry() time.Duration {
+	return a.accessTokenExpiry
+}
+
+func (a AuthConfig) RefreshTokenExpiry() time.Duration {
+	return a.refreshTokenExpiry
+}
+
+func (a AuthConfig) AbsoluteSessionLifetime() time.Duration {
+	return a.absoluteSessionLifetime
 }
 
 func (a AuthConfig) ChallengeExpiry() time.Duration {

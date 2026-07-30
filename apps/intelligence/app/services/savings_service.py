@@ -7,7 +7,10 @@ from app.models.savings import (
     SavingsPlanResponse,
     ScheduleEntry,
 )
+from app.services.claude import build_system_prompt
 from app.services.claude import client as anthropic_client
+from app.services.finance_math import required_monthly_deposit as _required_monthly_deposit
+from app.services.i18n import format_amount, format_percentage, resolve_language
 from app.services.vault_context import VaultContextFetcher
 
 logger = logging.getLogger(__name__)
@@ -64,10 +67,7 @@ class SavingsService:
         n = request.time_horizon_months
         fv = request.goal_usdc
 
-        if r > 0:
-            required_deposit = fv * (r / ((1 + r) ** n - 1))
-        else:
-            required_deposit = fv / n
+        required_deposit = _required_monthly_deposit(fv, r, n)
 
         achievable = required_deposit <= request.max_monthly_contribution_usdc
 
@@ -100,8 +100,9 @@ class SavingsService:
                 )
 
         # 4. Generate Narrative using Claude
+        language = resolve_language(request.language)
         narrative = await self._generate_narrative(
-            request, apy, required_deposit, achievable, total_yield
+            request, apy, required_deposit, achievable, total_yield, language
         )
 
         return SavingsPlanResponse(
@@ -120,28 +121,42 @@ class SavingsService:
         required_deposit: float,
         achievable: bool,
         total_yield: float,
+        language: str,
     ) -> str:
         status_text = "achievable" if achievable else "NOT achievable"
+        goal_str = format_amount(request.goal_usdc, "USDC", language)
+        max_contribution_str = format_amount(
+            request.max_monthly_contribution_usdc, "USDC", language
+        )
+        apy_str = format_percentage(apy * 100, language)
+        required_deposit_str = format_amount(required_deposit, "USDC", language)
+        total_yield_str = format_amount(total_yield, "USDC", language)
         prompt = (
             "You are Prometheus, a DeFi-savvy financial advisor.\n"
-            f"A user wants to save ${request.goal_usdc} in {request.time_horizon_months} months.\n"
-            f"Their maximum monthly contribution is ${request.max_monthly_contribution_usdc}.\n"
-            f"The current applicable APY is {apy*100:.2f}%.\n"
-            f"The calculated required monthly deposit is ${required_deposit:.2f}.\n"
+            f"A user wants to save {goal_str} in {request.time_horizon_months} months.\n"
+            f"Their maximum monthly contribution is {max_contribution_str}.\n"
+            f"The current applicable APY is {apy_str}.\n"
+            f"The calculated required monthly deposit is {required_deposit_str}.\n"
             f"The goal is {status_text} within their stated contribution limit.\n"
-            f"The total yield they will earn is ${total_yield:.2f}.\n\n"
+            f"The total yield they will earn is {total_yield_str}.\n\n"
             "Provide a concise, encouraging narrative (2-3 sentences) explaining the plan.\n"
             "If it's achievable, highlight the power of compound interest and the yield "
             "they'll earn.\n"
             "If it's NOT achievable, suggest adjusting the time horizon, increasing the monthly "
             "contribution, or seeking a higher yield vault (while mentioning risk).\n"
-            "Keep it professional yet conversational."
+            "Keep it professional yet conversational.\n"
+            "Reference the amounts and percentages above exactly as given rather than "
+            "reformatting them."
         )
 
         try:
             response = anthropic_client.messages.create(
                 model=settings.anthropic_model,
                 max_tokens=150,
+                system=build_system_prompt(
+                    "You are Prometheus, a DeFi-savvy financial advisor for Nester.",
+                    language,
+                ),
                 messages=[{"role": "user", "content": prompt}],
             )
             if response.content and hasattr(response.content[0], "text"):
@@ -151,13 +166,13 @@ class SavingsService:
             logger.error(f"Error generating narrative from Claude: {e}")
             if achievable:
                 return (
-                    f"At the current {apy*100:.1f}% APY, you need to deposit "
-                    f"${required_deposit:.2f}/month. You'll earn ${total_yield:.2f} "
+                    f"At the current {apy_str} APY, you need to deposit "
+                    f"{required_deposit_str}/month. You'll earn {total_yield_str} "
                     "in interest along the way!"
                 )
             return (
-                f"To reach your goal of ${request.goal_usdc}, you'd need to deposit "
-                f"${required_deposit:.2f}/month, which is above your limit. "
+                f"To reach your goal of {goal_str}, you'd need to deposit "
+                f"{required_deposit_str}/month, which is above your limit. "
                 "Consider extending your timeline."
             )
 

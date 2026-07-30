@@ -110,12 +110,12 @@ func (r *settlementStubUserRepo) GetRoles(_ context.Context, _ uuid.UUID) ([]str
 	return nil, nil
 }
 
-func (r *settlementStubUserRepo) SaveKYCDocument(_ context.Context, _ *user.KYCDocument) error {
+func (r *settlementStubUserRepo) SaveKYCDocument(_ context.Context, _ *user.KYCDocument, _ *user.EncryptedKYCDoc) error {
 	return nil
 }
 
-func (r *settlementStubUserRepo) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, error) {
-	return nil, user.ErrUserNotFound
+func (r *settlementStubUserRepo) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, *user.EncryptedKYCDoc, error) {
+	return nil, nil, user.ErrUserNotFound
 }
 
 func (r *settlementStubUserRepo) UpdateKYCStatus(_ context.Context, _ uuid.UUID, _ user.KYCStatus, _ *string, _ *time.Time) error {

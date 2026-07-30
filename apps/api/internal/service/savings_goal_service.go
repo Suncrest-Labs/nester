@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +25,10 @@ type VaultReader interface {
 	GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error)
 }
 
+type OutcomeRecorder interface {
+	RecordGoalCompletion(ctx context.Context, userID uuid.UUID, ts time.Time) error
+}
+
 type SavingsGoalService struct {
 	repo           savingsgoal.Repository
 	templateRepo   savingsgoal.TemplateRepository
@@ -31,6 +36,7 @@ type SavingsGoalService struct {
 	notifier       GoalMilestoneNotifier
 	streakRepo     savingsstreak.Repository
 	streakNotifier StreakMilestoneNotifier
+	outcomeRec     OutcomeRecorder
 }
 
 func NewSavingsGoalService(repo savingsgoal.Repository, vaultRepo VaultReader, notifier GoalMilestoneNotifier) *SavingsGoalService {
@@ -44,6 +50,11 @@ func NewSavingsGoalService(repo savingsgoal.Repository, vaultRepo VaultReader, n
 		notifier:       notifier,
 		streakNotifier: noopStreakMilestoneNotifier{},
 	}
+}
+
+// SetOutcomeRecorder attaches an outcome recorder for nudge effectiveness tracking.
+func (s *SavingsGoalService) SetOutcomeRecorder(rec OutcomeRecorder) {
+	s.outcomeRec = rec
 }
 
 // SetTemplateRepository attaches the template repository.
@@ -74,6 +85,10 @@ type CreateSavingsGoalInput struct {
 	Name         string          `json:"name"`
 	Emoji        string          `json:"emoji"`
 	VaultID      *uuid.UUID      `json:"vault_id,omitempty"`
+	// MinContribution/MaxContribution are optional per-contribution limits
+	// (#922) enforced at deposit time.
+	MinContribution *decimal.Decimal `json:"min_contribution,omitempty"`
+	MaxContribution *decimal.Decimal `json:"max_contribution,omitempty"`
 }
 
 type UpdateSavingsGoalInput struct {
@@ -84,6 +99,16 @@ type UpdateSavingsGoalInput struct {
 	Category     *string          `json:"category"`
 	Name         *string          `json:"name"`
 	Emoji        *string          `json:"emoji"`
+	// AutoCompound toggles whether harvested yield is reinvested into the
+	// goal's vault position or credited to yield_balance instead.
+	AutoCompound *bool `json:"auto_compound"`
+	// MinContribution/MaxContribution update a goal's per-contribution
+	// limits (#922) when non-nil. Setting either to a zero decimal (rather
+	// than leaving it nil) clears that limit.
+	MinContribution      *decimal.Decimal `json:"min_contribution,omitempty"`
+	MaxContribution      *decimal.Decimal `json:"max_contribution,omitempty"`
+	ClearMinContribution bool             `json:"-"`
+	ClearMaxContribution bool             `json:"-"`
 }
 
 func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
@@ -114,16 +139,21 @@ func (s *SavingsGoalService) Create(ctx context.Context, userID uuid.UUID, in Cr
 			name = desc
 		}
 	}
+	if err := savingsgoal.ValidateContributionLimits(in.MinContribution, in.MaxContribution); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
 	goal := &savingsgoal.SavingsGoal{
-		ID:           uuid.New(),
-		UserID:       userID,
-		TargetAmount: in.TargetAmount,
-		Currency:     savingsgoal.NormalizeCurrency(in.Currency),
-		Deadline:     in.Deadline.UTC(),
-		Description:  desc,
-		Name:         name,
-		Emoji:        emoji,
-		Category:     category,
+		ID:              uuid.New(),
+		UserID:          userID,
+		TargetAmount:    in.TargetAmount,
+		Currency:        savingsgoal.NormalizeCurrency(in.Currency),
+		Deadline:        in.Deadline.UTC(),
+		Description:     desc,
+		Name:            name,
+		Emoji:           emoji,
+		Category:        category,
+		MinContribution: in.MinContribution,
+		MaxContribution: in.MaxContribution,
 	}
 	if in.VaultID != nil {
 		if err := s.validateGoalVault(ctx, userID, *in.VaultID, goal.Currency); err != nil {
@@ -208,7 +238,7 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		return nil, err
 	}
 
-	goals, err := s.repo.ListByUser(ctx, userID, filterCategory)
+	goals, err := s.repo.ListByUser(ctx, userID, filterCategory, "")
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +258,117 @@ func (s *SavingsGoalService) List(ctx context.Context, userID uuid.UUID, categor
 		out = append(out, enriched)
 	}
 	return out, nil
+}
+
+// SavingsGoalListFilter drives ListPaginated: pagination, sort, and search on
+// top of the same category/status/archived semantics as List.
+type SavingsGoalListFilter struct {
+	Page            int
+	PerPage         int
+	SortField       string
+	SortOrder       string
+	Category        string
+	Status          string
+	IncludeArchived bool
+	Search          string
+}
+
+// ListPaginated is List with pagination, sort, and full-text search applied.
+// Status/archived filtering depends on each goal's enriched status, which is
+// only known after EnrichProgress runs — so, unlike vault/settlement
+// listing, pagination here is applied in Go after enrichment and filtering,
+// not pushed down as SQL LIMIT/OFFSET. Goals-per-user is low-cardinality, so
+// this is not a performance concern.
+func (s *SavingsGoalService) ListPaginated(ctx context.Context, userID uuid.UUID, filter SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error) {
+	filterCategory := ""
+	if strings.TrimSpace(filter.Category) != "" {
+		parsed, err := savingsgoal.ParseCategory(filter.Category)
+		if err != nil {
+			return nil, 0, err
+		}
+		filterCategory = string(parsed)
+	}
+
+	filterStatus, err := savingsgoal.ParseStatusFilter(filter.Status)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	goals, err := s.repo.ListByUser(ctx, userID, filterCategory, filter.Search)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	out := make([]savingsgoal.SavingsGoal, 0, len(goals))
+	for _, g := range goals {
+		enriched, err := s.EnrichProgress(ctx, g)
+		if err != nil {
+			return nil, 0, err
+		}
+		if filterStatus != "" {
+			if enriched.Status != filterStatus {
+				continue
+			}
+		} else if !filter.IncludeArchived && enriched.Status == savingsgoal.GoalStatusArchived {
+			continue
+		}
+		out = append(out, enriched)
+	}
+
+	sortSavingsGoals(out, filter.SortField, filter.SortOrder)
+
+	total := len(out)
+	page, perPage := filter.Page, filter.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = listquery.DefaultPerPage
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return out[start:end], total, nil
+}
+
+func sortSavingsGoals(goals []savingsgoal.SavingsGoal, field, order string) {
+	desc := order != "asc"
+	compare := func(i, j int) int {
+		switch field {
+		case "target_amount":
+			return goals[i].TargetAmount.Cmp(goals[j].TargetAmount)
+		case "deadline":
+			switch {
+			case goals[i].Deadline.Before(goals[j].Deadline):
+				return -1
+			case goals[i].Deadline.After(goals[j].Deadline):
+				return 1
+			default:
+				return 0
+			}
+		default:
+			switch {
+			case goals[i].CreatedAt.Before(goals[j].CreatedAt):
+				return -1
+			case goals[i].CreatedAt.After(goals[j].CreatedAt):
+				return 1
+			default:
+				return 0
+			}
+		}
+	}
+	sort.SliceStable(goals, func(i, j int) bool {
+		c := compare(i, j)
+		if desc {
+			return c > 0
+		}
+		return c < 0
+	})
 }
 
 func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUID, in UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
@@ -286,6 +427,22 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 		}
 		goal.Emoji = e
 	}
+	if in.AutoCompound != nil {
+		goal.AutoCompound = *in.AutoCompound
+	}
+	if in.ClearMinContribution {
+		goal.MinContribution = nil
+	} else if in.MinContribution != nil {
+		goal.MinContribution = in.MinContribution
+	}
+	if in.ClearMaxContribution {
+		goal.MaxContribution = nil
+	} else if in.MaxContribution != nil {
+		goal.MaxContribution = in.MaxContribution
+	}
+	if err := savingsgoal.ValidateContributionLimits(goal.MinContribution, goal.MaxContribution); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
 	// Deadline is validated above (when changed); only amount/currency here, so
 	// other fields of an overdue goal can still be updated.
 	if err := validateSavingsGoalInput(goal.TargetAmount, goal.Currency); err != nil {
@@ -297,8 +454,37 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	return s.EnrichProgress(ctx, *goal)
 }
 
+// Delete soft-deletes the goal (#924): it stamps deleted_at rather than
+// destroying the row, leaving a SavingsGoalRecoveryWindow-long window during
+// which Restore can undo it before the scheduled purge job hard-deletes it.
 func (s *SavingsGoalService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
 	return s.repo.Delete(ctx, goalID, userID)
+}
+
+// Restore undoes a soft delete (#924), provided the goal was deleted less
+// than SavingsGoalRecoveryWindow ago. Returns ErrGoalNotFound if the goal
+// doesn't exist or isn't owned by userID, ErrGoalNotDeleted if it was never
+// deleted, and ErrRecoveryWindowExpired once the window has elapsed (the
+// goal may already be gone, or about to be purged).
+func (s *SavingsGoalService) Restore(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByIDIncludingDeleted(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if goal.DeletedAt == nil {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotDeleted
+	}
+	if time.Since(*goal.DeletedAt) > savingsgoal.SavingsGoalRecoveryWindow {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrRecoveryWindowExpired
+	}
+	if err := s.repo.Restore(ctx, goalID, userID); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.DeletedAt = nil
+	return s.EnrichProgress(ctx, *goal)
 }
 
 func (s *SavingsGoalService) ListContributions(ctx context.Context, userID, goalID uuid.UUID, params listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error) {
@@ -313,7 +499,7 @@ func (s *SavingsGoalService) ListContributions(ctx context.Context, userID, goal
 }
 
 func (s *SavingsGoalService) Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {
-	goals, err := s.repo.ListByUser(ctx, userID, "")
+	goals, err := s.repo.ListByUser(ctx, userID, "", "")
 	if err != nil {
 		return savingsgoal.SavingsGoalsSummary{}, err
 	}
@@ -429,6 +615,9 @@ func (s *SavingsGoalService) EnrichProgress(ctx context.Context, goal savingsgoa
 		now := time.Now().UTC()
 		goal.CompletedAt = &now
 		goal.Status = savingsgoal.GoalStatusCompleted
+		if s.outcomeRec != nil {
+			_ = s.outcomeRec.RecordGoalCompletion(ctx, goal.UserID, now)
+		}
 	}
 
 	newMilestones := savingsgoal.DetectNewMilestones(goal.ProgressPct, goal.NotifiedMilestones)
@@ -552,6 +741,9 @@ func (s *SavingsGoalService) Complete(ctx context.Context, userID, goalID uuid.U
 	goal.CompletionAction = action
 	now := time.Now().UTC()
 	goal.CompletedAt = &now
+	if s.outcomeRec != nil {
+		_ = s.outcomeRec.RecordGoalCompletion(ctx, goal.UserID, now)
+	}
 	return s.EnrichProgress(ctx, *goal)
 }
 
@@ -632,6 +824,28 @@ func (s *SavingsGoalService) Archive(ctx context.Context, userID, goalID uuid.UU
 	}
 	goal.Status = savingsgoal.GoalStatusArchived
 	return s.EnrichProgress(ctx, *goal)
+}
+
+// GetAutoCompoundForVault looks up the goal linked to vaultID and reports its
+// auto_compound preference. found is false when no goal is linked to the
+// vault, in which case callers should fall back to their own default.
+// Implements the GoalYieldRouter seam VaultService uses at harvest time.
+func (s *SavingsGoalService) GetAutoCompoundForVault(ctx context.Context, vaultID uuid.UUID) (goalID uuid.UUID, autoCompound bool, found bool, err error) {
+	goal, err := s.repo.GetByVaultID(ctx, vaultID)
+	if err != nil {
+		if errors.Is(err, savingsgoal.ErrGoalNotFound) {
+			return uuid.Nil, false, false, nil
+		}
+		return uuid.Nil, false, false, err
+	}
+	return goal.ID, goal.AutoCompound, true, nil
+}
+
+// CreditGoalYieldBalance adds amount to the goal's yield_balance. Called by
+// VaultService when a linked goal's auto_compound is false, so harvested
+// yield is tracked on the goal instead of being reinvested into the vault.
+func (s *SavingsGoalService) CreditGoalYieldBalance(ctx context.Context, goalID uuid.UUID, amount decimal.Decimal) error {
+	return s.repo.CreditYieldBalance(ctx, goalID, amount)
 }
 
 // Unarchive restores an archived goal to active status (#721).
@@ -872,6 +1086,14 @@ func (s *SavingsGoalService) DepositSplit(ctx context.Context, userID uuid.UUID,
 			return SplitDepositResult{}, fmt.Errorf("%w: goal %s is archived", savingsgoal.ErrGoalArchived, a.GoalID)
 		}
 		goals[i] = g
+	}
+
+	// Enforce each goal's optional per-contribution limits (#922) against the
+	// amount it is about to receive.
+	for i, g := range goals {
+		if err := savingsgoal.ValidateContributionAmount(amounts[i], g.MinContribution, g.MaxContribution); err != nil {
+			return SplitDepositResult{}, fmt.Errorf("goal %s: %w", g.ID, err)
+		}
 	}
 
 	// Build deposit records and persist atomically.
