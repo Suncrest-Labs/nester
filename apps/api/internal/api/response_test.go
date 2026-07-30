@@ -139,6 +139,23 @@ func TestJSON_NonSerialisableDataReturnsInternalError(t *testing.T) {
 // Error — error envelope
 // ---------------------------------------------------------------------------
 
+func TestErrorWithRequestID_IncludesRequestIDInBodyAndHeader(t *testing.T) {
+	rec := httptest.NewRecorder()
+	api.ErrorWithRequestID(rec, http.StatusBadRequest, "invalid user_id", "req-42")
+
+	if rec.Header().Get("X-Request-ID") != "req-42" {
+		t.Fatalf("expected X-Request-ID header to be set, got %q", rec.Header().Get("X-Request-ID"))
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if string(raw["request_id"]) != `"req-42"` {
+		t.Fatalf("expected request_id in body, got %s", raw["request_id"])
+	}
+}
+
 func TestError_WritesBadRequestEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	api.Error(rec, http.StatusBadRequest, "invalid user_id")

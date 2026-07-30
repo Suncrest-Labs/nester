@@ -116,20 +116,56 @@ func (noopLeadershipStatus) InstanceID() string { return "" }
 func (noopLeadershipStatus) IsLeader() bool     { return false }
 func (noopLeadershipStatus) Since() time.Time   { return time.Time{} }
 
+// AuditChainVerifier exposes chain integrity verification for admin inspection.
+type AuditChainVerifier interface {
+	RunOnce(ctx context.Context) (ok bool, brokenSeq int64, err error)
+}
+
+type noopAuditChainVerifier struct{}
+
+func (noopAuditChainVerifier) RunOnce(_ context.Context) (bool, int64, error) {
+	return true, 0, nil
+}
+
 type AdminHandler struct {
-	service         adminService
-	userService     *service.UserService
-	eventSyncer     EventSyncer
-	leadership      LeadershipStatus
-	backfillTrigger BackfillTrigger
-	backfillRuns    BackfillRunLister
+	service            adminService
+	userService        *service.UserService
+	eventSyncer        EventSyncer
+	leadership         LeadershipStatus
+	backfillTrigger    BackfillTrigger
+	backfillRuns       BackfillRunLister
+	auditChainVerifier AuditChainVerifier
 }
 
 func NewAdminHandler(svc adminService, userSvc *service.UserService) *AdminHandler {
 	return &AdminHandler{
 		service: svc, userService: userSvc, eventSyncer: noopEventSyncer{}, leadership: noopLeadershipStatus{},
 		backfillTrigger: noopBackfillTrigger{}, backfillRuns: noopBackfillRunLister{},
+		auditChainVerifier: noopAuditChainVerifier{},
 	}
+}
+
+// SetAuditChainVerifier wires the audit chain verifier so operators can trigger
+// a one-shot integrity check via GET /api/v1/admin/audit/verify.
+func (h *AdminHandler) SetAuditChainVerifier(v AuditChainVerifier) {
+	h.auditChainVerifier = v
+}
+
+func (h *AdminHandler) verifyAuditChain(w http.ResponseWriter, r *http.Request) {
+	ok, brokenSeq, err := h.auditChainVerifier.RunOnce(r.Context())
+	if err != nil {
+		response.WriteJSON(w, http.StatusOK, response.OK(map[string]any{
+			"chain_ok":           false,
+			"broken_at_sequence": brokenSeq,
+			"error":              err.Error(),
+		}))
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(map[string]any{
+		"chain_ok":           ok,
+		"broken_at_sequence": brokenSeq,
+	}))
 }
 
 // SetEventSyncer wires a real EventSyncer.  Call this from main after the
@@ -181,6 +217,9 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/savings-goal-templates", h.createGoalTemplate)
 	mux.HandleFunc("PATCH /api/v1/admin/savings-goal-templates/{id}", h.updateGoalTemplate)
 	mux.HandleFunc("DELETE /api/v1/admin/savings-goal-templates/{id}", h.deleteGoalTemplate)
+
+	// Audit chain integrity (issue #834)
+	mux.HandleFunc("GET /api/v1/admin/audit/verify", h.verifyAuditChain)
 
 	mux.HandleFunc("POST /api/v1/admin/backfill", h.startBackfill)
 	mux.HandleFunc("POST /api/v1/admin/backfill/{id}/resume", h.resumeBackfill)

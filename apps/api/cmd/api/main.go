@@ -548,7 +548,7 @@ func run() error {
 	analyticsHandler.Register(mux)
 
 	// Risk service
-	riskService := services.NewRiskService(vaultRepository)
+	riskService := services.NewRiskService(vaultRepository, db)
 	riskHandler := handler.NewRiskHandler(riskService)
 	riskHandler.Register(mux)
 
@@ -745,11 +745,19 @@ func run() error {
 		service.DispatcherSuspensionNotifier{Dispatcher: notificationDispatcher2},
 		baseLogger.WithGroup("webhook-delivery"),
 	)
+
+	// Per-goal notification preferences (mute/digest frequency).
+	goalNotificationRepo := postgres.NewGoalNotificationRepository(db)
+	goalNotificationPrefSvc := service.NewGoalNotificationPreferenceService(goalNotificationRepo, savingsGoalRepo)
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
 		vaultRepository,
 		service.CompositeGoalMilestoneNotifier{
 			Notifiers: []service.GoalMilestoneNotifier{
+				service.DispatcherGoalMilestoneNotifier{
+					Dispatcher:  notificationDispatcher2,
+					Preferences: goalNotificationRepo,
+				},
 				service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
 				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
 			},
@@ -757,14 +765,27 @@ func run() error {
 	)
 	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
-	savingsGoalSvc.SetStreakNotifier(service.NudgeEngineStreakMilestoneNotifier{NudgeEngine: nudgeEngineSvc})
+	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
 	savingsGoalSvc.SetTemplateRepository(goalTemplateRepo)
+	// Honor each goal's auto_compound preference when its vault is harvested (#task1).
+	vaultService.SetGoalYieldRouter(savingsGoalSvc)
 
 	minDeposit, _ := decimal.NewFromString(cfg.RecurringDeposit().MinDepositAmount())
 	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)
 	savingsScheduleSvc := service.NewSavingsScheduleService(savingsScheduleRepo, savingsGoalRepo, vaultRepository, minDeposit)
 	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc, savingsScheduleSvc)
+	savingsGoalHandler.SetNotificationPreferenceManager(goalNotificationPrefSvc)
 	savingsGoalHandler.Register(mux)
+
+	goalNotificationDigestJob := scheduler.NewGoalNotificationDigestJob(
+		scheduler.GoalNotificationDigestConfig{Enabled: true, Interval: time.Hour},
+		goalNotificationRepo,
+		notificationDispatcher2,
+		baseLogger.WithGroup("goal-notification-digest"),
+	)
+	goalDigestCtx, cancelGoalDigest := context.WithCancel(context.Background())
+	defer cancelGoalDigest()
+	go goalNotificationDigestJob.Run(goalDigestCtx)
 
 	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
 	savingsScheduleHandler.Register(mux)

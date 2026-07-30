@@ -47,6 +47,7 @@ export interface CoachingResponse {
   deposit_schedule: CoachingDepositItem[]
   nudges: string[]
   confidence: string
+  session_summary?: string
 }
 
 export interface CoachingRequest {

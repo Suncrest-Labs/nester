@@ -25,6 +25,26 @@ class Settings(BaseSettings):
     nester_service_api_key: str = ""
     defillama_base_url: str = "https://api.llama.fi"
 
+    # Maximum token count for conversation history before automatic summarization
+    # is triggered. When the estimated token count of the active history exceeds
+    # this threshold, Prometheus generates a summary of the earlier turns and
+    # replaces them with "[Summary of previous conversation] <summary>" so the
+    # active context stays within this bound.
+    #
+    # The default of 80_000 corresponds to roughly 80% of the claude-sonnet-5
+    # context window (200k tokens). Adjust down to reduce per-request cost or
+    # up to allow more conversational depth before summarization.
+    #
+    # Set INTELLIGENCE_MAX_HISTORY_TOKENS=0 to disable summarization entirely
+    # (not recommended for production — long sessions will hit context limits).
+    max_history_tokens: int = 80_000
+
+    # Number of most-recent turns to ALWAYS retain verbatim in the active
+    # context after a summarization pass. Older turns are replaced by the
+    # summary. Must be ≥ 2 (one user + one assistant) so the conversation
+    # remains coherent.
+    history_recent_turns_kept: int = 6
+
     model_config = SettingsConfigDict(
         env_prefix="INTELLIGENCE_",
         env_file=".env",

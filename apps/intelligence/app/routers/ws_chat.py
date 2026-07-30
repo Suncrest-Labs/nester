@@ -88,8 +88,14 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 except Exception:
                     preferences = None
 
+            language: Optional[str] = data.get("language")
+
             async for chunk in stream_chat(
-                user_id, message, request_id=request_id, preferences=preferences
+                user_id,
+                message,
+                request_id=request_id,
+                preferences=preferences,
+                language=language,
             ):
                 # Strip SSE "data: " prefix — WS clients get raw text
                 if chunk.startswith("data: "):

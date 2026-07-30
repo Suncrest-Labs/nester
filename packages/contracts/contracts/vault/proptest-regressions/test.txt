@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9ef1d6d967290d9fd3f439243b6002b05c3b7883c1c6a5797947e9b79253ad2a # shrinks to initial_deposit = 643628233689, yield_pct = 27
+cc ae98f0e4f620b626ac5806f46b9e90bfa33da0a2f0f823e30f277382f1a1dff9 # shrinks to attacker_deposit = 10000000, direct_transfer = 10000000000, victim_deposit = 10000000
+cc bdb982acf5208483b12c2b704bb67ed64b46a5e50f0a1a0f502f954022a647db # shrinks to initial_assets = 3414244262662222, initial_shares = 914287118356464, deposit_amount = 120625155122
