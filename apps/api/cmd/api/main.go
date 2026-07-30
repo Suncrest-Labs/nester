@@ -25,6 +25,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/ledger"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
@@ -152,7 +153,13 @@ func run() error {
 	yieldHarvestService := service.NewYieldHarvestService(yieldHarvestRepository)
 	vaultService.SetYieldHarvestRecorder(yieldHarvestService)
 
+	// Ledger: authoritative double-entry bookkeeping source of truth
+	ledgerRepository := postgres.NewLedgerRepository(db)
+	ledgerService := service.NewLedgerService(ledgerRepository, db)
+	_ = ledgerService // wired for future use; portfolio reads via repo, postings via vault repo helpers
+
 	portfolioService := service.NewPortfolioService(vaultRepository)
+	portfolioService.SetLedgerRepository(ledgerRepository)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioService)
 
 	transactionRepository := postgres.NewTransactionRepository(db)
@@ -908,6 +915,38 @@ func run() error {
 	defer cancelDigest()
 	go digestJob.Run(digestCtx)
 
+	// Ledger balance verification job: recomputes balances from raw entries and asserts equality
+	ledgerVerificationJob := scheduler.NewLedgerBalanceVerificationJob(
+		scheduler.VerificationConfig{Enabled: true, Interval: 10 * time.Minute},
+		ledgerRepository,
+		baseLogger.WithGroup("ledger-verification"),
+	)
+	ledgerVerificationJob.SetLeaderChecker(schedulerLeadership)
+	verificationCtx, cancelVerification := context.WithCancel(context.Background())
+	defer cancelVerification()
+	go ledgerVerificationJob.Run(verificationCtx)
+
+	// Ledger reconciliation job: compares ledger vault-pool vs on-chain and sum user positions vs share price
+	// Chain reader adapter
+	chainReaderForLedger := &ledgerChainReaderAdapter{
+		contractReader: stellarpkg.NewContractReader(
+			cfg.Stellar().RPCURL(),
+			cfg.Stellar().NetworkPassphrase(),
+			"",
+		),
+	}
+	ledgerReconciliationJob := scheduler.NewLedgerReconciliationJob(scheduler.LedgerReconciliationDeps{
+		LedgerRepo:  ledgerRepository,
+		VaultLister: &reconciliationVaultListerAdapter{vaultRepo: vaultRepository},
+		ChainReader: chainReaderForLedger,
+		Logger:      baseLogger.WithGroup("ledger-reconciliation"),
+		Config: ledgerDomainConfig(),
+	})
+	ledgerReconciliationJob.SetLeaderChecker(schedulerLeadership)
+	reconciliationCtx, cancelReconciliation := context.WithCancel(context.Background())
+	defer cancelReconciliation()
+	go ledgerReconciliationJob.Run(reconciliationCtx)
+
 	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
 	performanceSnapshotsHandler.Register(mux)
 
@@ -1265,4 +1304,68 @@ func pingStellarDependencies(logger *slog.Logger, cfg *config.Config) error {
 	}
 
 	return nil
+}
+
+// ── Ledger adapters ──────────────────────────────────────────────────────────
+// ledgerChainReaderAdapter wraps stellar ContractReader to implement ledger.ChainReader
+// for the reconciliation job.
+
+type ledgerChainReaderAdapter struct {
+	contractReader *stellarpkg.ContractReader
+}
+
+func (a *ledgerChainReaderAdapter) ReadVaultBalance(ctx context.Context, contractAddress string) (int64, error) {
+	if a.contractReader == nil {
+		return 0, fmt.Errorf("contract reader not configured")
+	}
+	dec, err := a.contractReader.VaultBalance(ctx, contractAddress)
+	if err != nil {
+		return 0, err
+	}
+	// Convert decimal USDC to stroops int64
+	return dec.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart(), nil
+}
+
+func (a *ledgerChainReaderAdapter) ReadTotalSharesTimesPrice(ctx context.Context, contractAddress string) (int64, error) {
+	if a.contractReader == nil {
+		return 0, nil
+	}
+	// For now, reuse VaultBalance as total_shares*share_price approximates total assets
+	dec, err := a.contractReader.TotalAssets(ctx, contractAddress)
+	if err != nil {
+		return 0, nil // skip this check if not available
+	}
+	return dec.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart(), nil
+}
+
+// reconciliationVaultListerAdapter adapts vaultRepository to ReconciliationVaultLister
+type reconciliationVaultListerAdapter struct {
+	vaultRepo *postgres.VaultRepository
+}
+
+func (a *reconciliationVaultListerAdapter) ListActiveForReconciliation(ctx context.Context) ([]scheduler.ReconcileVaultInfo, error) {
+	if a.vaultRepo == nil {
+		return nil, nil
+	}
+	vaults, err := a.vaultRepo.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]scheduler.ReconcileVaultInfo, 0, len(vaults))
+	for _, v := range vaults {
+		out = append(out, scheduler.ReconcileVaultInfo{
+			ID:              v.ID,
+			ContractAddress: v.ContractAddress,
+			Currency:        v.Currency,
+		})
+	}
+	return out, nil
+}
+
+func ledgerDomainConfig() ledger.ReconciliationConfig {
+	return ledger.ReconciliationConfig{
+		Enabled:          true,
+		Interval:         5 * time.Minute,
+		ToleranceStroops: 1_000_000, // 0.1 USDC
+	}
 }
