@@ -24,10 +24,14 @@ func NewVaultRepository(db *sql.DB) *VaultRepository {
 }
 
 func (r *VaultRepository) CreateVault(ctx context.Context, model vault.Vault) (vault.Vault, error) {
+	if model.HarvestFrequency == "" {
+		model.HarvestFrequency = vault.DefaultHarvestFrequency
+	}
+
 	query := `
 		INSERT INTO vaults (
-			id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, harvest_frequency
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING created_at, updated_at
 	`
 
@@ -43,6 +47,7 @@ func (r *VaultRepository) CreateVault(ctx context.Context, model vault.Vault) (v
 		string(model.Status),
 		model.YieldEarned.String(),
 		model.FeesPaid.String(),
+		model.HarvestFrequency,
 	).Scan(&model.CreatedAt, &model.UpdatedAt); err != nil {
 		return vault.Vault{}, mapRepositoryError(err)
 	}
@@ -52,7 +57,7 @@ func (r *VaultRepository) CreateVault(ctx context.Context, model vault.Vault) (v
 
 func (r *VaultRepository) GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error) {
 	query := `
-		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, last_synced_at, deleted_at, created_at, updated_at
+		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, harvest_frequency, last_harvested_at, last_synced_at, deleted_at, created_at, updated_at
 		FROM vaults
 		WHERE id = $1 AND deleted_at IS NULL
 	`
@@ -71,17 +76,35 @@ func (r *VaultRepository) GetVault(ctx context.Context, id uuid.UUID) (vault.Vau
 	return model, nil
 }
 
-func (r *VaultRepository) GetUserVaults(ctx context.Context, userID uuid.UUID) ([]vault.Vault, error) {
-	query := `
-		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, last_synced_at, deleted_at, created_at, updated_at
-		FROM vaults
-		WHERE user_id = $1 AND deleted_at IS NULL
-		ORDER BY created_at DESC
-	`
+func (r *VaultRepository) ListUserVaults(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter vault.UserListFilter,
+) ([]vault.Vault, int, error) {
+	where, args := buildUserVaultWhere(userID, filter)
 
-	rows, err := r.db.QueryContext(ctx, query, userID.String())
+	countQuery := `SELECT COUNT(*) FROM vaults WHERE ` + where
+	var total int
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, mapRepositoryError(err)
+	}
+
+	sortColumn := sanitizeUserVaultSort(filter.SortField)
+	order := sanitizeOrder(filter.SortOrder)
+	offset := (filter.Page - 1) * filter.PerPage
+
+	listQuery := fmt.Sprintf(`
+		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, harvest_frequency, last_harvested_at, last_synced_at, deleted_at, created_at, updated_at
+		FROM vaults
+		WHERE %s
+		ORDER BY %s %s
+		LIMIT $%d OFFSET $%d
+	`, where, sortColumn, order, len(args)+1, len(args)+2) // #nosec G201 -- sort/order from whitelist
+
+	args = append(args, filter.PerPage, offset)
+	rows, err := r.db.QueryContext(ctx, listQuery, args...)
 	if err != nil {
-		return nil, mapRepositoryError(err)
+		return nil, 0, mapRepositoryError(err)
 	}
 	defer rows.Close()
 
@@ -89,12 +112,12 @@ func (r *VaultRepository) GetUserVaults(ctx context.Context, userID uuid.UUID) (
 	for rows.Next() {
 		model, err := scanVault(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		allocations, err := loadAllocations(ctx, r.db, model.ID)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		model.Allocations = allocations
@@ -102,17 +125,60 @@ func (r *VaultRepository) GetUserVaults(ctx context.Context, userID uuid.UUID) (
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return vaults, nil
+	return vaults, total, nil
+}
+
+// ListVaults returns a paginated slice of all non-deleted vaults.
+func (r *VaultRepository) ListVaults(ctx context.Context, filter vault.ListFilter) ([]vault.Vault, int, error) {
+	args := []any{}
+	where := "deleted_at IS NULL"
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		where += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+
+	var total int
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM vaults WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, 0, mapRepositoryError(err)
+	}
+
+	args = append(args, filter.Limit, filter.Offset)
+	listQuery := fmt.Sprintf(`
+		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, harvest_frequency, last_harvested_at, last_synced_at, deleted_at, created_at, updated_at
+		FROM vaults
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, where, len(args)-1, len(args)) // #nosec G201 -- where is built from whitelist only
+
+	rows, err := r.db.QueryContext(ctx, listQuery, args...)
+	if err != nil {
+		return nil, 0, mapRepositoryError(err)
+	}
+	defer rows.Close()
+
+	out := make([]vault.Vault, 0, filter.Limit)
+	for rows.Next() {
+		model, err := scanVault(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, model)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 // ListActive returns every non-deleted vault whose status is `active`. Used
 // by the performance tracker so it can iterate live vaults each tick.
 func (r *VaultRepository) ListActive(ctx context.Context) ([]vault.Vault, error) {
 	const query = `
-		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, created_at, updated_at
+		SELECT id, user_id, contract_address, total_deposited, current_balance, currency, status, yield_earned, fees_paid, harvest_frequency, last_harvested_at, last_synced_at, deleted_at, created_at, updated_at
 		FROM vaults
 		WHERE deleted_at IS NULL AND status = 'active'
 		ORDER BY created_at ASC
@@ -142,6 +208,62 @@ func (r *VaultRepository) ListActive(ctx context.Context) ([]vault.Vault, error)
 	return out, nil
 }
 
+// VaultAPYInfo is a lightweight projection used by the APY deviation scheduler.
+type VaultAPYInfo struct {
+	ID                 uuid.UUID
+	UserID             uuid.UUID
+	Currency           string
+	LastAPYAlertSentAt *time.Time
+}
+
+// ListActiveVaultsForAPYCheck returns id, user_id, currency, and last_apy_alert_sent_at
+// for all active, non-deleted vaults. Used by the APY deviation check job (#670).
+func (r *VaultRepository) ListActiveVaultsForAPYCheck(ctx context.Context) ([]VaultAPYInfo, error) {
+	const query = `
+		SELECT id, user_id, currency, last_apy_alert_sent_at
+		FROM vaults
+		WHERE deleted_at IS NULL AND status = 'active'
+		ORDER BY created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []VaultAPYInfo
+	for rows.Next() {
+		var (
+			id, userID, currency string
+			alertAt              sql.NullTime
+		)
+		if err := rows.Scan(&id, &userID, &currency, &alertAt); err != nil {
+			return nil, err
+		}
+		parsedID, _ := uuid.Parse(id)
+		parsedUserID, _ := uuid.Parse(userID)
+		var alertAtPtr *time.Time
+		if alertAt.Valid {
+			t := alertAt.Time
+			alertAtPtr = &t
+		}
+		out = append(out, VaultAPYInfo{
+			ID:                 parsedID,
+			UserID:             parsedUserID,
+			Currency:           currency,
+			LastAPYAlertSentAt: alertAtPtr,
+		})
+	}
+	return out, rows.Err()
+}
+
+// UpdateAPYAlertSentAt records the time an APY drop alert was sent for a vault (#670).
+func (r *VaultRepository) UpdateAPYAlertSentAt(ctx context.Context, vaultID uuid.UUID, sentAt time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE vaults SET last_apy_alert_sent_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
+		vaultID.String(), sentAt)
+	return err
+}
+
 func (r *VaultRepository) UpdateVaultBalances(ctx context.Context, id uuid.UUID, totalDeposited decimal.Decimal, currentBalance decimal.Decimal) error {
 	result, err := r.db.ExecContext(
 		ctx,
@@ -165,8 +287,8 @@ func (r *VaultRepository) UpdateVaultBalances(ctx context.Context, id uuid.UUID,
 	return nil
 }
 
-func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
-	if amount.Cmp(decimal.Zero) <= 0 {
+func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, record vault.TransactionRecord) error {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
 
@@ -184,7 +306,7 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, amoun
 		     updated_at = NOW()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id.String(),
-		amount.String(),
+		record.Amount.String(),
 	)
 	if err != nil {
 		return mapRepositoryError(err)
@@ -200,9 +322,17 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, amoun
 
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO vault_transactions (vault_id, type, amount) VALUES ($1, 'deposit', $2::numeric)`,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'deposit', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
 		id.String(),
-		amount.String(),
+		record.UserID.String(),
+		record.Amount.String(),
+		record.TransactionHash,
+		record.SharesMintedOrBurned.String(),
+		record.SharePriceAtTime.String(),
+		record.FeeCharged.String(),
 	); err != nil {
 		return mapRepositoryError(err)
 	}
@@ -281,10 +411,36 @@ func (r *VaultRepository) UpdateVault(ctx context.Context, id uuid.UUID, contrac
 	return nil
 }
 
+// UpdateHarvestFrequency sets the vault's harvest cadence, used by the harvest
+// engine to gate how often it considers this vault for a harvest (#940).
+func (r *VaultRepository) UpdateHarvestFrequency(ctx context.Context, id uuid.UUID, frequency string) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET harvest_frequency = $2, updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		id.String(),
+		frequency,
+	)
+	if err != nil {
+		return mapRepositoryError(err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return vault.ErrVaultNotFound
+	}
+
+	return nil
+}
+
 // RecordWithdrawal decrements current_balance atomically and writes a ledger
 // entry. It does NOT touch total_deposited (deposits are never reversed).
-func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
-	if amount.Cmp(decimal.Zero) <= 0 {
+func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, record vault.TransactionRecord) error {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
 
@@ -301,7 +457,7 @@ func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, am
 		     updated_at = NOW()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id.String(),
-		amount.String(),
+		record.Amount.String(),
 	)
 	if err != nil {
 		return mapRepositoryError(err)
@@ -317,11 +473,190 @@ func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, am
 
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO vault_transactions (vault_id, type, amount) VALUES ($1, 'withdrawal', $2::numeric)`,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'withdrawal', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
 		id.String(),
-		amount.String(),
+		record.UserID.String(),
+		record.Amount.String(),
+		record.TransactionHash,
+		record.SharesMintedOrBurned.String(),
+		record.SharePriceAtTime.String(),
+		record.FeeCharged.String(),
 	); err != nil {
 		return mapRepositoryError(err)
+	}
+
+	return tx.Commit()
+}
+
+// RecordHarvest applies post-harvest balance updates and writes a ledger entry.
+func (r *VaultRepository) RecordHarvest(ctx context.Context, input vault.HarvestRecordInput) error {
+	if input.NetYield.Cmp(decimal.Zero) < 0 || input.PerformanceFee.Cmp(decimal.Zero) < 0 {
+		return vault.ErrInvalidAmount
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if input.Compounded {
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE vaults
+			 SET total_deposited = total_deposited + $2::numeric,
+			     current_balance = current_balance + $2::numeric,
+			     yield_earned = GREATEST(yield_earned - ($2::numeric + $3::numeric), 0),
+			     fees_paid = fees_paid + $3::numeric,
+			     last_harvested_at = NOW(),
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`,
+			input.VaultID.String(),
+			input.NetYield.String(),
+			input.PerformanceFee.String(),
+		)
+		if err != nil {
+			return mapRepositoryError(err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			return vault.ErrVaultNotFound
+		}
+	} else {
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE vaults
+			 SET current_balance = current_balance - $2::numeric,
+			     yield_earned = GREATEST(yield_earned - ($2::numeric + $3::numeric), 0),
+			     fees_paid = fees_paid + $3::numeric,
+			     last_harvested_at = NOW(),
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`,
+			input.VaultID.String(),
+			input.NetYield.String(),
+			input.PerformanceFee.String(),
+		)
+		if err != nil {
+			return mapRepositoryError(err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			return vault.ErrVaultNotFound
+		}
+	}
+
+	var sharesArg any
+	if input.NewSharesMinted != nil {
+		sharesArg = input.NewSharesMinted.String()
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash, shares_minted_or_burned, fee_charged
+		) VALUES ($1, $2, 'harvest', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric)`,
+		input.VaultID.String(),
+		input.UserID.String(),
+		input.NetYield.String(),
+		input.TransactionHash,
+		sharesArg,
+		input.PerformanceFee.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	return tx.Commit()
+}
+
+// ApplyConfirmedDeposit credits a vault's balance for a deposit that has been
+// confirmed on-chain. It is keyed by the Stellar transaction hash and is
+// idempotent: a second call with the same hash is a no-op (no balance change,
+// no duplicate ledger row), so the auto-confirmation worker can safely retry.
+// This is the only path that credits balance from a confirmed deposit —
+// balance is never moved at submission time.
+func (r *VaultRepository) ApplyConfirmedDeposit(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txHash string) error {
+	return r.applyConfirmedBalanceChange(ctx, id, amount, txHash, "deposit")
+}
+
+// ApplyConfirmedWithdrawal debits a vault's balance for a withdrawal confirmed
+// on-chain. Idempotent on txHash, mirroring ApplyConfirmedDeposit.
+func (r *VaultRepository) ApplyConfirmedWithdrawal(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txHash string) error {
+	return r.applyConfirmedBalanceChange(ctx, id, amount, txHash, "withdrawal")
+}
+
+func (r *VaultRepository) applyConfirmedBalanceChange(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txHash, txType string) error {
+	if amount.Cmp(decimal.Zero) <= 0 {
+		return vault.ErrInvalidAmount
+	}
+	if strings.TrimSpace(txHash) == "" {
+		// Without a hash we cannot dedupe, and a confirmed on-chain change
+		// always has one. Refuse rather than risk a double credit.
+		return vault.ErrInvalidVault
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Claim the hash first. If another worker (or an earlier retry) already
+	// applied this transaction, the insert affects zero rows and we leave the
+	// balance untouched.
+	ledger, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (vault_id, type, amount, transaction_hash)
+		 VALUES ($1, $2, $3::numeric, $4)
+		 ON CONFLICT (transaction_hash) DO NOTHING`,
+		id.String(),
+		txType,
+		amount.String(),
+		txHash,
+	)
+	if err != nil {
+		return mapRepositoryError(err)
+	}
+	inserted, err := ledger.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
+		// Already applied for this hash — idempotent no-op.
+		return tx.Commit()
+	}
+
+	var balanceSQL string
+	if txType == "deposit" {
+		balanceSQL = `UPDATE vaults
+			 SET total_deposited = total_deposited + $2::numeric,
+			     current_balance = current_balance + $2::numeric,
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`
+	} else {
+		balanceSQL = `UPDATE vaults
+			 SET current_balance = current_balance - $2::numeric,
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`
+	}
+
+	result, err := tx.ExecContext(ctx, balanceSQL, id.String(), amount.String())
+	if err != nil {
+		return mapRepositoryError(err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return vault.ErrVaultNotFound
 	}
 
 	return tx.Commit()
@@ -381,6 +716,120 @@ func (r *VaultRepository) ListDeposits(ctx context.Context, vaultID uuid.UUID) (
 	return txns, nil
 }
 
+// ListUserVaultTransactions returns all deposit and withdrawal rows for a user in a vault.
+func (r *VaultRepository) RecordRebalance(ctx context.Context, input vault.RebalanceRecordInput, withdrawRecord, depositRecord vault.TransactionRecord) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET current_balance = current_balance - $2::numeric,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		input.VaultID.String(),
+		withdrawRecord.Amount.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'withdrawal', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
+		input.VaultID.String(),
+		withdrawRecord.UserID.String(),
+		withdrawRecord.Amount.String(),
+		withdrawRecord.TransactionHash,
+		withdrawRecord.SharesMintedOrBurned.String(),
+		withdrawRecord.SharePriceAtTime.String(),
+		withdrawRecord.FeeCharged.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET current_balance = current_balance + $2::numeric,
+		     total_deposited = total_deposited + $2::numeric,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		input.VaultID.String(),
+		depositRecord.Amount.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'deposit', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
+		input.VaultID.String(),
+		depositRecord.UserID.String(),
+		depositRecord.Amount.String(),
+		depositRecord.TransactionHash,
+		depositRecord.SharesMintedOrBurned.String(),
+		depositRecord.SharePriceAtTime.String(),
+		depositRecord.FeeCharged.String(),
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash
+		) VALUES ($1, $2, 'rebalance', $3::numeric, NULLIF($4, ''))`,
+		input.VaultID.String(),
+		input.UserID.String(),
+		input.Amount.String(),
+		input.TransactionHash,
+	); err != nil {
+		return mapRepositoryError(err)
+	}
+
+	return tx.Commit()
+}
+
+func (r *VaultRepository) ListUserVaultTransactions(ctx context.Context, userID uuid.UUID, vaultID uuid.UUID) ([]vault.VaultTransaction, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, vault_id, user_id, type, amount, COALESCE(transaction_hash, ''), shares_minted_or_burned, share_price_at_time, fee_charged, created_at
+		 FROM vault_transactions
+		 WHERE vault_id = $1 AND user_id = $2
+		 ORDER BY created_at ASC`,
+		vaultID.String(),
+		userID.String(),
+	)
+	if err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	defer rows.Close()
+
+	txns := make([]vault.VaultTransaction, 0)
+	for rows.Next() {
+		txn, err := scanVaultTransaction(rows)
+		if err != nil {
+			return nil, err
+		}
+		txns = append(txns, txn)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return txns, nil
+}
+
 // ── scanners ─────────────────────────────────────────────────────────────────
 
 type scanner interface {
@@ -393,19 +842,21 @@ type queryer interface {
 
 func scanVault(row scanner) (vault.Vault, error) {
 	var (
-		id              string
-		userID          string
-		totalDeposited  string
-		currentBalance  string
-		contractAddress string
-		currency        string
-		status          string
-		yieldEarned     string
-		feesPaid        string
-		lastSyncedAt    sql.NullTime
-		deletedAt       sql.NullTime
-		createdAt       time.Time
-		updatedAt       time.Time
+		id               string
+		userID           string
+		totalDeposited   string
+		currentBalance   string
+		contractAddress  string
+		currency         string
+		status           string
+		yieldEarned      string
+		feesPaid         string
+		harvestFrequency string
+		lastHarvestedAt  sql.NullTime
+		lastSyncedAt     sql.NullTime
+		deletedAt        sql.NullTime
+		createdAt        time.Time
+		updatedAt        time.Time
 	)
 
 	if err := row.Scan(
@@ -418,6 +869,8 @@ func scanVault(row scanner) (vault.Vault, error) {
 		&status,
 		&yieldEarned,
 		&feesPaid,
+		&harvestFrequency,
+		&lastHarvestedAt,
 		&lastSyncedAt,
 		&deletedAt,
 		&createdAt,
@@ -452,6 +905,12 @@ func scanVault(row scanner) (vault.Vault, error) {
 	parsedYield, _ := decimal.NewFromString(yieldEarned)
 	parsedFees, _ := decimal.NewFromString(feesPaid)
 
+	var lastHarvestedAtPtr *time.Time
+	if lastHarvestedAt.Valid {
+		t := lastHarvestedAt.Time
+		lastHarvestedAtPtr = &t
+	}
+
 	var lastSyncedAtPtr *time.Time
 	if lastSyncedAt.Valid {
 		t := lastSyncedAt.Time
@@ -465,19 +924,21 @@ func scanVault(row scanner) (vault.Vault, error) {
 	}
 
 	return vault.Vault{
-		ID:              parsedID,
-		UserID:          parsedUserID,
-		ContractAddress: contractAddress,
-		TotalDeposited:  parsedDeposited,
-		CurrentBalance:  parsedBalance,
-		Currency:        currency,
-		Status:          vault.VaultStatus(status),
-		YieldEarned:     parsedYield,
-		FeesPaid:        parsedFees,
-		LastSyncedAt:    lastSyncedAtPtr,
-		DeletedAt:       deletedAtPtr,
-		CreatedAt:       createdAt,
-		UpdatedAt:       updatedAt,
+		ID:               parsedID,
+		UserID:           parsedUserID,
+		ContractAddress:  contractAddress,
+		TotalDeposited:   parsedDeposited,
+		CurrentBalance:   parsedBalance,
+		Currency:         currency,
+		Status:           vault.VaultStatus(status),
+		YieldEarned:      parsedYield,
+		FeesPaid:         parsedFees,
+		HarvestFrequency: harvestFrequency,
+		LastHarvestedAt:  lastHarvestedAtPtr,
+		LastSyncedAt:     lastSyncedAtPtr,
+		DeletedAt:        deletedAtPtr,
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
 	}, nil
 }
 
@@ -648,6 +1109,9 @@ func mapRepositoryError(err error) error {
 		}
 		if pgErr.Code == "23503" && strings.Contains(pgErr.ConstraintName, "vault") {
 			return vault.ErrVaultNotFound
+		}
+		if pgErr.Code == "23505" && strings.Contains(pgErr.ConstraintName, "transaction_hash") {
+			return vault.ErrDuplicateTransaction
 		}
 	}
 

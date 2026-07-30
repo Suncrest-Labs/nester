@@ -19,6 +19,7 @@ import {
 } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
 import {
   executeVaultWithdraw,
   UserRejectedError,
@@ -27,7 +28,8 @@ import {
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
-import { VAULTS } from "@/lib/mock-vaults";
+import type { Vault as VaultDefinition } from "@/lib/types/vault";
+import { getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -97,7 +99,7 @@ function ModalShell({
                 </div>
                 <button
                   onClick={onClose}
-                  className="rounded-full border border-border bg-white p-2 text-muted-foreground transition-colors hover:text-foreground"
+                  className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -141,6 +143,7 @@ interface WithdrawModalProps {
 export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const { address } = useWallet();
   const { getWithdrawalQuote, recordWithdrawal, refreshBalances } = usePortfolio();
+  const { isOffline } = useOfflineStatus();
 
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
@@ -169,7 +172,8 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     amount > 0 &&
     !validationError &&
     !!quote &&
-    state === "input";
+    state === "input" &&
+    !isOffline;
 
   const reset = () => {
     setAmountInput("");
@@ -186,13 +190,14 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
 
     try {
       setState("building");
-      const vaultDef = VAULTS.find((v) => v.id === position.vaultId);
+      const vaultDef = getVaultById(position.vaultId);
       const txReceipt = await executeVaultWithdraw({
         walletAddress: address,
         vaultId: position.vaultId,
         contractId: vaultDef?.contractAddress || "",
         asset: position.asset?.toUpperCase() === "XLM" ? "XLM" : "USDC",
         shares: quote.sharesBurned,
+        minAssetsOut: quote.netAmount,
       });
 
       const result = recordWithdrawal({
@@ -228,7 +233,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
         <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
           {/* ── Left: position summary + amount ── */}
           <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
-            <div className="rounded-3xl border border-border bg-white p-5">
+            <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
               {/* Position stats */}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl border border-border bg-secondary/20 p-4">
@@ -300,7 +305,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                     <button
                       onClick={() => setAmountInput(position.currentValue.toFixed(2))}
                       disabled={state !== "input" && state !== "error"}
-                      className="rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 disabled:opacity-40"
+                      className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
                     >
                       Max
                     </button>
@@ -335,7 +340,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
 
           {/* ── Right: transaction flow + actions ── */}
           <div className="p-6">
-            <div className="rounded-3xl border border-border bg-white p-5">
+            <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
               <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
                 Transaction Flow
               </p>
@@ -411,7 +416,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                     <Link
                       href={receipt.explorerUrl}
                       target="_blank"
-                      className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:shadow"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:shadow"
                     >
                       View on Stellar Explorer
                       <ExternalLink className="h-3.5 w-3.5" />
@@ -430,12 +435,22 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                 </div>
               )}
 
+              {/* Offline guard */}
+              {isOffline && state === "input" && (
+                <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="flex items-start gap-2 text-sm text-amber-700">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>You need an internet connection to complete this transaction.</span>
+                  </div>
+                </div>
+              )}
+
               {/* Actions */}
               <div className="mt-5 flex gap-3">
                 <button
                   onClick={reset}
                   disabled={state === "signing" || state === "submitting"}
-                  className="flex-1 rounded-full border border-border bg-white px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 disabled:opacity-40"
+                  className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
                 >
                   {state === "success" ? "Close" : "Cancel"}
                 </button>

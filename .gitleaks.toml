@@ -12,9 +12,10 @@ paths = [
     '''\.env\..*''',
     '''apps/intelligence/\.env''',
 ]
-# Stellar testnet secret key used across internal/stellar test fixtures and
-# README examples. This is a known, intentionally-public test account — not
-# a credential that grants access to any production resource.
+# Stellar testnet secret key that appears in the (now-removed) internal/stellar test
+# fixtures. The files are deleted from the working tree, but the Secret Detection job
+# scans full git history (fetch-depth: 0), so this known, intentionally-public testnet
+# account must stay allowlisted to keep history scans green. Not a production credential.
 regexes = [
     '''SBVH6U5PEFXPXPJ4GPXVYACRF4NZQA5QBCZLLPQGHXWWK6NXPV6IYGG''',
 ]

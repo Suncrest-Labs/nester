@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Env, IntoVal, Symbol, Val};
+use soroban_sdk::{contracttype, Address, BytesN, Env, IntoVal, Symbol, Val};
 
 /// Helper to emit a standardized Nester event.
 ///
@@ -26,25 +26,24 @@ pub fn emit_event_with_sym(
 
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct YieldIndexUpdatedEventData {
-    pub old_index: i128,
-    pub new_index: i128,
-    pub yield_amount: i128,
-    pub total_shares: i128,
+pub struct UpgradeProposedEventData {
+    pub wasm_hash: BytesN<32>,
+    pub eta: u64,
+    pub proposer: Address,
 }
 
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct UserYieldAccruedEventData {
-    pub user: Address,
-    pub accrued_delta: i128,
-    pub total_accrued: i128,
-    pub user_index: i128,
+pub struct UpgradeCancelledEventData {
+    pub wasm_hash: BytesN<32>,
+    pub cancelled_by: Address,
 }
 
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct YieldHarvestedEventData {
-    pub user: Address,
-    pub amount: i128,
+pub struct UpgradeExecutedEventData {
+    pub wasm_hash: BytesN<32>,
+    pub executed_by: Address,
+    pub execution_timestamp: u64,
 }
+

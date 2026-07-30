@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
@@ -55,6 +56,44 @@ func (m *mockUserRepository) GetRoles(_ context.Context, _ uuid.UUID) ([]string,
 	return []string{}, nil
 }
 
+func (m *mockUserRepository) SaveKYCDocument(_ context.Context, _ *user.KYCDocument, _ *user.EncryptedKYCDoc) error {
+	return nil
+}
+
+func (m *mockUserRepository) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, *user.EncryptedKYCDoc, error) {
+	return nil, nil, user.ErrUserNotFound
+}
+
+func (m *mockUserRepository) UpdateKYCStatus(_ context.Context, userID uuid.UUID, status user.KYCStatus, reason *string, reviewedAt *time.Time) error {
+	u, err := m.GetByID(context.Background(), userID)
+	if err != nil {
+		return err
+	}
+	u.KYCStatus = status
+	u.KYCRejectionReason = reason
+	u.KYCReviewedAt = reviewedAt
+	m.users[userID] = u
+	return nil
+}
+
+func (m *mockUserRepository) UpdateProfile(_ context.Context, id uuid.UUID, patch user.ProfilePatch) (*user.User, error) {
+	u, err := m.GetByID(context.Background(), id)
+	if err != nil {
+		return nil, err
+	}
+	if patch.RiskProfile != nil {
+		u.RiskProfile = patch.RiskProfile
+	}
+	if patch.SavingsGoal != nil {
+		u.SavingsGoal = patch.SavingsGoal
+	}
+	if patch.OnboardingCompleted != nil {
+		u.OnboardingCompleted = *patch.OnboardingCompleted
+	}
+	m.users[id] = u
+	return u, nil
+}
+
 func TestUserHandler_Register(t *testing.T) {
 	repo := newMockUserRepository()
 	svc := service.NewUserService(repo)
@@ -79,7 +118,10 @@ func TestUserHandler_Register(t *testing.T) {
 
 	// Invalid format (missing display_name)
 	bodyInvalid := bytes.NewBufferString(`{"wallet_address":"G-WALLET-456"}`)
-	respInvalid, _ := http.Post(server.URL+"/api/v1/users", "application/json", bodyInvalid)
+	respInvalid, err := http.Post(server.URL+"/api/v1/users", "application/json", bodyInvalid)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
 	defer respInvalid.Body.Close()
 
 	if respInvalid.StatusCode != http.StatusBadRequest {
@@ -88,7 +130,10 @@ func TestUserHandler_Register(t *testing.T) {
 
 	// Duplicate wallet
 	bodyDuplicate := bytes.NewBufferString(`{"wallet_address":"G-WALLET-123","display_name":"Nakamoto"}`)
-	respDuplicate, _ := http.Post(server.URL+"/api/v1/users", "application/json", bodyDuplicate)
+	respDuplicate, err := http.Post(server.URL+"/api/v1/users", "application/json", bodyDuplicate)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
 	defer respDuplicate.Body.Close()
 
 	if respDuplicate.StatusCode != http.StatusConflict {
@@ -109,21 +154,30 @@ func TestUserHandler_GetEndpoints(t *testing.T) {
 	u, _ := svc.RegisterUser(context.Background(), "G-FETCH-ME", "Alice")
 
 	// Get by ID
-	resp1, _ := http.Get(server.URL + "/api/v1/users/" + u.ID.String())
+	resp1, err := http.Get(server.URL + "/api/v1/users/" + u.ID.String())
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
 	defer resp1.Body.Close()
 	if resp1.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 OK, got %d", resp1.StatusCode)
 	}
 
 	// Get by unknown ID
-	resp2, _ := http.Get(server.URL + "/api/v1/users/" + uuid.New().String())
+	resp2, err := http.Get(server.URL + "/api/v1/users/" + uuid.New().String())
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404 Not Found, got %d", resp2.StatusCode)
 	}
 
 	// Get by wallet
-	resp3, _ := http.Get(server.URL + "/api/v1/users/wallet/G-FETCH-ME")
+	resp3, err := http.Get(server.URL + "/api/v1/users/wallet/G-FETCH-ME")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
 	defer resp3.Body.Close()
 	if resp3.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 OK, got %d", resp3.StatusCode)

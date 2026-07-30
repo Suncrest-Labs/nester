@@ -1,0 +1,3 @@
+ALTER TABLE savings_goals
+    DROP COLUMN IF EXISTS name,
+    DROP COLUMN IF EXISTS emoji;

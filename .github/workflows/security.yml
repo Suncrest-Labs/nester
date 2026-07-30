@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: "0 6 * * 1"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   security-events: write
@@ -66,8 +70,6 @@ jobs:
       matrix:
         module:
           - apps/api
-          - services/api
-          - .
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -85,7 +87,33 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        run: govulncheck ./... || true
+        run: |
+          set +e
+          OUTPUT=$(govulncheck ./... 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+          
+          # Exit code 0 = no vulnerabilities
+          # Exit code 1 = error running govulncheck
+          # Exit code 3 = vulnerabilities found
+          
+          if [ $EXIT_CODE -eq 0 ]; then
+            exit 0
+          elif [ $EXIT_CODE -eq 3 ]; then
+            # Allow if every reported vuln ID is in the accepted list
+            ACCEPTED="GO-2026-4316 GO-2026-5004 GO-2026-5037 GO-2026-5039"
+            UNKNOWN=$(echo "$OUTPUT" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u | while read id; do
+              echo "$ACCEPTED" | grep -qw "$id" || echo "$id"
+            done)
+            if [ -z "$UNKNOWN" ]; then
+              echo "⚠️  Only known/accepted vulnerabilities found"
+              exit 0
+            fi
+            echo "Unknown vulnerabilities: $UNKNOWN"
+            exit 3
+          else
+            exit $EXIT_CODE
+          fi
 
   audit-rust:
     name: Dependency Audit (Rust)

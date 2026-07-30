@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme inline {
     --color-background: hsl(var(--background));
     --color-foreground: hsl(var(--foreground));
@@ -20,7 +22,7 @@
     --color-ring: hsl(var(--ring));
     --color-brand-purple: #B6509E;
     --color-brand-cyan: #2EBAC6;
-    --color-brand-dark: #0D0E1C;
+    --color-brand-dark: #100F0F;
     --font-sans: var(--font-inter), system-ui, sans-serif;
     --font-heading: var(--font-inter), system-ui, sans-serif;
     --font-display: var(--font-inter), system-ui, sans-serif;
@@ -29,25 +31,44 @@
 }
 
 :root {
+    --font-inter: Inter, ui-sans-serif, system-ui, sans-serif;
     --background: 0 0% 100%;
-    --foreground: 240 10% 10%;
+    --foreground: 240 10% 8%;
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 10%;
-    --primary: 255 60% 60%;
+    --card-foreground: 240 10% 8%;
+    --primary: 255 60% 50%;
     --primary-foreground: 0 0% 100%;
     --secondary: 240 4.8% 95.9%;
     --secondary-foreground: 240 5.9% 10%;
     --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
+    --muted-foreground: 240 5% 35%;
     --accent: 240 4.8% 95.9%;
     --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
+    --destructive: 0 72% 45%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 255 60% 60%;
+    --border: 240 5.9% 85%;
+    --input: 240 5.9% 85%;
+    --ring: 255 60% 50%;
     --gradient-brand: linear-gradient(135deg, #B6509E 0%, #2EBAC6 100%);
     --touch-target: 44px;
+}
+
+.dark {
+    --background: 0 0% 4%;
+    --foreground: 0 0% 100%;
+    --card: 0 3% 6%;
+    --card-foreground: 0 0% 100%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 70%;
+    --accent: 0 0% 14%;
+    --accent-foreground: 0 0% 100%;
+    --border: 0 0% 100% / 0.1;
+    --input: 0 0% 100% / 0.1;
+    --ring: 217 91% 60%;
 }
 
 * {
@@ -60,6 +81,12 @@ body {
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle grain texture on dark-mode background */
+.dark body {
+    background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='120'%20height='120'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='2'%20stitchTiles='stitch'/%3E%3C/filter%3E%3Crect%20width='100%25'%20height='100%25'%20filter='url(%23n)'%20opacity='0.035'/%3E%3C/svg%3E");
+    background-repeat: repeat;
 }
 
 /* Brand gradient text */
@@ -194,4 +221,12 @@ html.menu-open {
     background-size: 1.5px 100%, 100% 1.5px, 1.5px 100%, 100% 1.5px;
     background-position: 0 0, 0 0, 100% 0, 0 100%;
     background-repeat: no-repeat;
+}
+
+.dark .dash-border {
+    background-image:
+        repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(255,255,255,0.08) 3px, rgba(255,255,255,0.08) 7px),
+        repeating-linear-gradient(90deg, transparent, transparent 3px, rgba(255,255,255,0.08) 3px, rgba(255,255,255,0.08) 7px),
+        repeating-linear-gradient(180deg, transparent, transparent 3px, rgba(255,255,255,0.08) 3px, rgba(255,255,255,0.08) 7px),
+        repeating-linear-gradient(270deg, transparent, transparent 3px, rgba(255,255,255,0.08) 3px, rgba(255,255,255,0.08) 7px);
 }

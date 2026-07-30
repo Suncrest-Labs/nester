@@ -18,6 +18,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         return {
             title: "Documentation",
             description: "Technical documentation for the Nester protocol.",
+            alternates: {
+                canonical: "/docs",
+            },
         };
     }
 

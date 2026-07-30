@@ -14,6 +14,12 @@
 
 #![cfg(test)]
 
+pub mod adversarial_tests;
+pub mod circuit_breaker_tests;
+pub mod fee_tests;
+pub mod lifecycle_tests;
+pub mod share_price_tests;
+
 extern crate std;
 
 use soroban_sdk::{symbol_short, vec, Vec};
@@ -106,9 +112,13 @@ fn strategy_set_weights_validates_sources_via_registry() {
 /// Weights that reference an unknown source must be rejected by the strategy
 /// (the cross-contract validation fails).
 #[test]
-#[should_panic]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn strategy_rejects_weights_for_unregistered_source() {
     let h = NesterHarness::setup();
+    // Widen weight bounds so validation reaches the source-registration check;
+    // the Balanced default caps max at 6500 and would reject 10_000 first.
+    h.strategy()
+        .update_strategy_params(&h.admin, &500u32, &10_000u32, &100u32);
 
     let ghost = symbol_short!("ghost");
     let weights: Vec<AllocationWeight> = vec![
@@ -123,10 +133,14 @@ fn strategy_rejects_weights_for_unregistered_source() {
 
 /// Weights that reference a paused (inactive) source must be rejected.
 #[test]
-#[should_panic]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn strategy_rejects_weights_for_paused_source() {
     let h = NesterHarness::setup();
     use nester_common::SourceStatus;
+    // Widen weight bounds so validation reaches the source-status check;
+    // the Balanced default caps max at 6500 and would reject 10_000 first.
+    h.strategy()
+        .update_strategy_params(&h.admin, &500u32, &10_000u32, &100u32);
 
     let aave = symbol_short!("aave");
     h.registry()
@@ -154,6 +168,9 @@ fn strategy_rejects_weights_for_paused_source() {
 #[test]
 fn calculate_allocation_distributes_total_proportionally() {
     let h = NesterHarness::setup();
+    // Balanced default caps max_weight_bps at 6500; widen so the 70/30 split is valid.
+    h.strategy()
+        .update_strategy_params(&h.admin, &500u32, &10_000u32, &100u32);
 
     let aave = symbol_short!("aave");
     let blend = symbol_short!("blend");
@@ -240,6 +257,9 @@ fn calculate_allocation_assigns_remainder_to_highest_weight_source() {
 #[test]
 fn admin_can_grant_operator_who_can_set_weights() {
     let h = NesterHarness::setup();
+    // Balanced default caps max_weight_bps at 6500; widen so a single 100% weight is valid.
+    h.strategy()
+        .update_strategy_params(&h.admin, &500u32, &10_000u32, &100u32);
 
     let operator = h.create_user();
     let aave = symbol_short!("aave");

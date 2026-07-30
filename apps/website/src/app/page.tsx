@@ -1,3 +1,4 @@
+import { Metadata } from "next";
 import { Navbar } from "@/components/navbar";
 import { Hero } from "@/components/hero";
 import { ImageCarousel } from "@/components/image-carousel";
@@ -9,6 +10,12 @@ import { Faq } from "@/components/faq";
 import { Footer } from "@/components/footer";
 // import { FeaturesFloat } from "@/components/features-float";
 // import { Architecture } from "@/components/architecture";
+
+export const metadata: Metadata = {
+  alternates: {
+    canonical: "/",
+  },
+};
 
 const jsonLd = {
   "@context": "https://schema.org",

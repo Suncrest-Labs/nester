@@ -12,6 +12,8 @@ import { z } from "zod/v4";
 import { validateAmount, validateBankAccount } from "@/lib/validation";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { KYCStatusBadge, type KYCStatus } from "@/components/kyc/KYCSection";
+import Link from "next/link";
 import {
     ChevronDown,
     ArrowDownUp,
@@ -32,7 +34,15 @@ import { getExplorerTxUrl } from "@/utils/explorer";
 import { BankCombobox } from "@/components/offramp/BankCombobox";
 import { AccountNameField } from "@/components/offramp/AccountNameField";
 import { SuggestedBankChips } from "@/components/offramp/SuggestedBankChips";
+import {
+    SavedBankAccountPicker,
+    type PayoutMode,
+} from "@/components/offramp/SavedBankAccountPicker";
+import { SaveAccountPrompt } from "@/components/offramp/SaveAccountPrompt";
 import { useBankResolver } from "@/hooks/useBankResolver";
+import { fetchBankList } from "@/lib/api/bank";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { useTranslations } from "@/context/locale-context";
 
 const SEND_ASSETS = [
     { symbol: "USDC", name: "USD Coin", image: "/usdc.png" },
@@ -116,6 +126,11 @@ export default function OfframpPage() {
     const { isConnected } = useWallet();
     const { addNotification } = useNotifications();
     const router = useRouter();
+    const { isOffline } = useOfflineStatus();
+    const t = useTranslations();
+
+    // In a real app, this would come from the user's KYC state loaded via API
+    const [kycStatus] = useState<KYCStatus>("unverified");
 
     const {
         handleSubmit,
@@ -125,7 +140,7 @@ export default function OfframpPage() {
         formState: { errors, isValid, isDirty },
         trigger,
     } = useForm<FormValues>({
-        resolver: zodResolver(formSchema as any),
+        resolver: zodResolver(formSchema),
         mode: "onBlur",
         defaultValues: {
             amount: "",
@@ -141,6 +156,14 @@ export default function OfframpPage() {
     const [sendAsset, setSendAsset] = useState(SEND_ASSETS[0]);
     const [receiveCurrency, setReceiveCurrency] = useState(RECEIVE_CURRENCIES[0]);
     const [manualName, setManualName] = useState("");
+    const [payoutMode, setPayoutMode] = useState<PayoutMode>({ type: "manual" });
+    const [savePromptOpen, setSavePromptOpen] = useState(false);
+    const [lastManualPayout, setLastManualPayout] = useState<{
+        bankName: string;
+        bankCode: string;
+        accountNumber: string;
+        accountName: string;
+    } | null>(null);
 
     const { resolveState, accountInfo } = useBankResolver(accountNumber, selectedBankCode);
     const resolvedName = resolveState === "success" ? (accountInfo?.account_name ?? null) : null;
@@ -162,7 +185,14 @@ export default function OfframpPage() {
     }, [isConnected, router]);
 
     const numericAmount = parseFloat(sendAmount) || 0;
-    const allFieldsFilled = isValid;
+    const effectiveBankCode =
+        payoutMode.type === "saved"
+            ? payoutMode.account.bank_code ?? ""
+            : selectedBankCode;
+    const allFieldsFilled =
+        payoutMode.type === "saved"
+            ? numericAmount > 0 && Boolean(effectiveBankCode)
+            : isValid;
 
     const runQuoteScan = useCallback(
         (amount: number, bankCode: string, currency: typeof RECEIVE_CURRENCIES[0]) => {
@@ -221,10 +251,10 @@ export default function OfframpPage() {
 
         if (debounceRef.current) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
-            runQuoteScan(numericAmount, selectedBankCode, receiveCurrency);
+            runQuoteScan(numericAmount, effectiveBankCode, receiveCurrency);
 
             refreshRef.current = setInterval(() => {
-                silentRefresh(numericAmount, selectedBankCode, receiveCurrency);
+                silentRefresh(numericAmount, effectiveBankCode, receiveCurrency);
             }, 8000);
         }, 500);
 
@@ -232,7 +262,7 @@ export default function OfframpPage() {
             if (debounceRef.current) clearTimeout(debounceRef.current);
             if (refreshRef.current) clearInterval(refreshRef.current);
         };
-    }, [allFieldsFilled, numericAmount, selectedBankCode, receiveCurrency, runQuoteScan, silentRefresh]);
+    }, [allFieldsFilled, numericAmount, effectiveBankCode, receiveCurrency, runQuoteScan, silentRefresh]);
 
     if (!isConnected) return null;
 
@@ -243,7 +273,15 @@ export default function OfframpPage() {
             : 0;
 
     const handleWithdraw = handleSubmit((data) => {
-        if (!isValid || quotePhase !== "done" || !selectedQuote) {
+        if (isOffline) {
+            return;
+        }
+        const quote = selectedQuote;
+        const canSubmit =
+            payoutMode.type === "saved"
+                ? numericAmount > 0 && quotePhase === "done" && quote
+                : isValid && quotePhase === "done" && quote;
+        if (!canSubmit || !quote) {
             return;
         }
 
@@ -253,6 +291,20 @@ export default function OfframpPage() {
         }
 
         setShowLargeWarning(false);
+
+        if (payoutMode.type === "manual" && resolvedName) {
+            void fetchBankList("NG").then((banks) => {
+                const bank = banks.find((b) => b.code === data.bankCode);
+                setLastManualPayout({
+                    bankName: bank?.name ?? data.bankCode,
+                    bankCode: data.bankCode,
+                    accountNumber: data.accountNumber,
+                    accountName: resolvedName,
+                });
+                setSavePromptOpen(true);
+            });
+        }
+
         addNotification(
             {
                 type: "withdrawal_processed",
@@ -260,7 +312,7 @@ export default function OfframpPage() {
                 message: `Withdrew ${numericAmount.toLocaleString("en-US", {
                     maximumFractionDigits: 2,
                 })} ${sendAsset.symbol} to ${accountInfo?.bank_name ?? selectedBankCode} ending in ${data.accountNumber.slice(-4)}.`,
-                actionUrl: getExplorerTxUrl(`mock-settlement-${selectedQuote.node.id}`),
+                actionUrl: getExplorerTxUrl(`mock-settlement-${quote.node.id}`),
                 actionLabel: "View Transaction",
             },
             { showToast: true }
@@ -270,6 +322,34 @@ export default function OfframpPage() {
     return (
         <AppShell>
             <div className="mx-auto max-w-xl">
+                {/* KYC Banner for unverified users */}
+                {kycStatus === "unverified" && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3"
+                    >
+                        <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm text-amber-800">
+                                Identity verification required for offramp
+                            </p>
+                            <p className="text-xs text-amber-600/80 mt-0.5">
+                                Complete KYC to unlock fiat withdrawals.
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                            <KYCStatusBadge status={kycStatus} />
+                            <Link
+                                href="/settings?tab=verification"
+                                className="text-xs font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900"
+                            >
+                                Verify now
+                            </Link>
+                        </div>
+                    </motion.div>
+                )}
+
                 {/* Header */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -278,10 +358,10 @@ export default function OfframpPage() {
                     className="text-center mb-6 sm:mb-8"
                 >
                     <h1 className="font-heading text-xl sm:text-2xl font-semibold text-foreground">
-                        Cash Out
+                        {t("offramp.title")}
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Convert crypto to fiat, directly to your bank account
+                        {t("offramp.subtitle")}
                     </p>
                 </motion.div>
 
@@ -290,7 +370,7 @@ export default function OfframpPage() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.4, delay: 0.1 }}
-                    className="rounded-2xl border border-border bg-white shadow-sm overflow-hidden"
+                    className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] shadow-sm overflow-hidden"
                 >
                     <div className="p-4 sm:p-5">
                         <label className="text-xs text-muted-foreground font-medium mb-2 block">
@@ -346,7 +426,7 @@ export default function OfframpPage() {
                                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                                 </button>
                                 {showSendDropdown && (
-                                    <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-border bg-white shadow-lg py-1 z-10">
+                                    <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-border bg-white dark:bg-[#100F0F] shadow-lg py-1 z-10">
                                         {SEND_ASSETS.map((asset) => (
                                             <button
                                                 key={asset.symbol}
@@ -390,7 +470,7 @@ export default function OfframpPage() {
                     <div className="relative px-4 sm:px-5">
                         <div className="border-t border-border" />
                         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                            <div className="h-9 w-9 rounded-full border border-border bg-white flex items-center justify-center shadow-sm">
+                            <div className="h-9 w-9 rounded-full border border-border bg-white dark:bg-[#100F0F] flex items-center justify-center shadow-sm">
                                 <ArrowDownUp className="h-4 w-4 text-muted-foreground" />
                             </div>
                         </div>
@@ -437,7 +517,7 @@ export default function OfframpPage() {
                                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                                 </button>
                                 {showReceiveDropdown && (
-                                    <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-border bg-white shadow-lg py-1 z-10">
+                                    <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-border bg-white dark:bg-[#100F0F] shadow-lg py-1 z-10">
                                         {RECEIVE_CURRENCIES.map((currency) => (
                                             <button
                                                 key={currency.symbol}
@@ -468,6 +548,34 @@ export default function OfframpPage() {
 
                     {/* Bank Details Section */}
                     <div className="border-t border-border p-4 sm:p-5 space-y-4">
+                        <SavedBankAccountPicker
+                            currency={receiveCurrency.symbol}
+                            value={payoutMode}
+                            onChange={setPayoutMode}
+                        />
+
+                        {savePromptOpen && lastManualPayout && (
+                            <SaveAccountPrompt
+                                {...lastManualPayout}
+                                currency={receiveCurrency.symbol}
+                                country="NG"
+                                onDismiss={() => setSavePromptOpen(false)}
+                                onSaved={() => setSavePromptOpen(false)}
+                            />
+                        )}
+
+                        {payoutMode.type === "saved" ? (
+                            <div className="rounded-xl border border-border bg-secondary/20 px-4 py-3 text-sm">
+                                <p className="font-medium text-foreground">
+                                    {payoutMode.account.bank_name}
+                                </p>
+                                <p className="text-muted-foreground text-xs mt-1">
+                                    {payoutMode.account.account_name} · ••••
+                                    {payoutMode.account.account_last4}
+                                </p>
+                            </div>
+                        ) : (
+                        <>
                         {/* Step 1 — Account number */}
                         <div>
                             <label className="text-xs text-muted-foreground font-medium mb-2 block">
@@ -498,7 +606,7 @@ export default function OfframpPage() {
                                                 setTimeout(() => { trigger("accountNumber"); }, 0);
                                             }}
                                             className={cn(
-                                                "w-full px-4 py-3 rounded-xl border border-border bg-white text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-foreground/20 transition-colors min-h-[52px]",
+                                                "w-full px-4 py-3 rounded-xl border border-border bg-white dark:bg-[#100F0F] text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-foreground/20 transition-colors min-h-[52px]",
                                                 errors.accountNumber && "border-red-500 focus:border-red-500"
                                             )}
                                         />
@@ -569,6 +677,8 @@ export default function OfframpPage() {
                             onManualName={setManualName}
                             manualName={manualName}
                         />
+                        </>
+                        )}
                     </div>
 
                     {/* Rate info */}
@@ -626,25 +736,37 @@ export default function OfframpPage() {
                     {/* CTA Button */}
                     <div className="p-4 sm:p-5 pt-0">
                         <button
-                            disabled={!isValid || quotePhase !== "done" || resolveState === "loading" || resolveState === "not_found"}
+                            disabled={
+                                isOffline ||
+                                !isValid ||
+                                quotePhase !== "done" ||
+                                resolveState === "loading" ||
+                                resolveState === "not_found" ||
+                                resolveState === "idle" ||
+                                (resolveState === "provider_error" && !manualName.trim())
+                            }
                             onClick={handleWithdraw}
                             className="w-full rounded-xl bg-foreground text-background py-4 text-sm font-medium transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                            {!numericAmount
-                                ? "Enter an amount"
+                            {isOffline
+                                ? t("offramp.offlineMessage")
+                                : !numericAmount
+                                ? t("offramp.enterAmount")
                                 : !selectedBankCode
-                                    ? "Select a bank"
+                                    ? t("offramp.selectBank")
                                     : (accountNumber?.length || 0) !== 10
                                         ? "Enter account number"
                                         : resolveState === "loading"
                                             ? "Verifying account..."
                                             : resolveState === "not_found"
                                                 ? "Account not found"
-                                                : quotePhase !== "done"
-                                                    ? "Finding best rate..."
-                                                    : showLargeWarning
-                                                        ? "Yes, confirm withdrawal"
-                                                : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
+                                                : resolveState === "idle"
+                                                    ? "Waiting for account verification..."
+                                                    : quotePhase !== "done"
+                                                        ? "Finding best rate..."
+                                                        : showLargeWarning
+                                                            ? "Yes, confirm withdrawal"
+                                                            : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
                         </button>
                     </div>
                 </motion.div>
@@ -657,7 +779,7 @@ export default function OfframpPage() {
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: 8 }}
                             transition={{ duration: 0.35, delay: 0.05 }}
-                            className="mt-4 rounded-2xl border border-border bg-white shadow-sm overflow-hidden"
+                            className="mt-4 rounded-2xl border border-border bg-white dark:bg-[#100F0F] shadow-sm overflow-hidden"
                         >
                             {/* Quotes Header */}
                             <div className="px-4 sm:px-5 py-3.5 flex items-center justify-between border-b border-border gap-2">
@@ -845,7 +967,7 @@ export default function OfframpPage() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.4, delay: 0.4 }}
-                    className="mt-8 rounded-2xl border border-border bg-white p-5"
+                    className="mt-8 rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-5"
                 >
                     <h3 className="font-heading text-sm font-medium text-foreground mb-3">
                         Recent Offramps

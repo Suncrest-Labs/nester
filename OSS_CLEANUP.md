@@ -58,13 +58,12 @@
 
 ### 🟠 Fix Soon After Merge
 
-- [ ] **Verify `turbo.json` has no remaining `dapp/backend` pipeline entries.**
-  The issue called this out. The PR description doesn't confirm it was checked.
-  Run: `grep -r "dapp/backend" turbo.json`
+- [x] **Verify `turbo.json` has no remaining `dapp/backend` pipeline entries.**
+  Confirmed clean — no `dapp/backend` references found in `turbo.json`.
 
-- [ ] **Verify root `README.md` has no remaining references to the old Express service.**
-  The PR updated `apps/website/src/app/docs/content.ts` but the root README was not shown in the diff.
-  Run: `grep -r "dapp/backend" README.md`
+- [x] **Verify root `README.md` has no remaining references to the old Express service.**
+  Confirmed clean — no Express or `dapp/backend` references in root `README.md`.
+  Also patched `services/api/README.md` to remove stale "transitioning from Node.js/Express" language.
 
 ---
 
@@ -72,16 +71,10 @@
 
 ### 🟠 Fix Soon After Merge
 
-- [ ] **`GetRoles` passes `id.String()` instead of the raw `uuid.UUID` to pgx.**
+ - [x] **`GetRoles` passes `id.String()` instead of the raw `uuid.UUID` to pgx.** (resolved in commit `e8072f4`)
   File: `apps/api/internal/repository/postgres/user_repository.go`
-  pgx v5 handles `uuid.UUID` natively. Passing `.String()` forces string serialisation and an
-  implicit server-side cast. The rest of the repo passes UUID values directly. Change to:
-  ```go
-  rows, err := r.db.QueryContext(ctx,
-      `SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role`,
-      id,   // not id.String()
-  )
-  ```
+  pgx v5 handles `uuid.UUID` natively. Passing `.String()` forced string serialisation and an
+  implicit server-side cast. This PR now passes `uuid.UUID` values directly.
 
 - [ ] **`bootstrap-admin` does not call `db.Ping()` after `sql.Open()`.**
   File: `apps/api/cmd/bootstrap-admin/main.go`
@@ -140,11 +133,12 @@
 
 ### 🟠 Fix Soon After Merge
 
-- [ ] **Add impairment regression test to vault contract.**
+- [x] **Add impairment regression test to vault contract.**
   File: `packages/contracts/contracts/vault/src/test.rs`
   The issue explicitly required: "User deposits at rate 1.0, rate halves (impairment) → zero performance fee."
   The code handles it correctly (`yield_part < 0` → fee skipped) but the test proving it is missing.
-  Add a test that simulates a loss scenario and asserts no performance fee is charged.
+  Added `impairment_charges_zero_performance_fee`: deposits at rate 1.0, halves the share price via a
+  negative `report_yield`, and asserts both the preview and the actual withdrawal charge no performance fee.
 
 ---
 
@@ -164,9 +158,11 @@
 
 ### 🟡 Polish
 
-- [ ] **Verify `cargo test -p vault-contract` passes in CI with vault_token.wasm artifact.**
+- [x] **Verify `cargo test -p vault-contract` passes in CI with vault_token.wasm artifact.**
   The contributor left this box unchecked in the PR test plan. Confirm integration tests
   are not silently passing vacuously due to missing WASM artifact.
+  CI now builds `vault_token.wasm`, asserts the artifact exists, runs the tests explicitly,
+  and fails the job if zero vault-contract tests execute (see `.github/workflows/ci.yml`).
 
 ---
 
@@ -221,12 +217,10 @@
   This will confuse any migration runner that applies files in lexicographic order. Rename one of
   them and renumber consistently. Needs care — check if the runner is order-sensitive before touching.
 
-- [ ] **No migration runner is wired into the Go API startup.**
-  `scripts/seed.sql` is used as a workaround (it runs via Docker's `initdb`). This means:
-  - New migrations added after the initial seed are NOT applied automatically in the dev environment.
-  - Developers must run `make dev-reset` (wipes data) to pick up new schema changes.
-  Long-term: wire `golang-migrate` or equivalent into the API startup behind a flag
-  (`RUN_MIGRATIONS=true`) so `make dev` applies incremental migrations without data loss.
+- [x] **No migration runner is wired into the Go API startup.**
+  Resolved: `golang-migrate` runs on API startup when `RUN_MIGRATIONS=true` (set in
+  `docker-compose.yml` for local dev). Pending migrations apply incrementally on `make dev`
+  without requiring `make dev-reset`. See `apps/api/migrations/README.md`.
 
 ---
 

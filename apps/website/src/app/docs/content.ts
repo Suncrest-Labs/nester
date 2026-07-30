@@ -227,7 +227,7 @@ User clicks "Withdraw ₦500,000 to GTBank"
 ┌──────────────┐    ┌────────────────┐    ┌─────────────┐
 │ Frontend     │───▶│ Go Backend     │───▶│ LP Matcher   │
 │ POST         │    │ Validate KYC   │    │ Find best    │
-│ /offramp/req │    │ Lock escrow    │    │ GTBank node  │
+│ /settlements │    │ Lock escrow    │    │ GTBank node  │
 └──────────────┘    └───────┬────────┘    └──────┬──────┘
                             │                     │
                             ▼                     ▼
@@ -254,8 +254,8 @@ nester/
 │   ├── website/              # Marketing site (Next.js + pnpm)
 │   ├── dapp/
 │   │   ├── frontend/         # DApp (Next.js 16 + npm)
-│   │   ├── backend/          # API (Go + Chi — migrating from Node.js)
 │   │   └── contracts/        # Soroban smart contracts (Rust)
+│   ├── api/                  # API Gateway (Go + Chi + PostgreSQL)
 │   └── intelligence/         # Prometheus AI (Python + FastAPI)
 ├── packages/
 │   └── contracts/            # Shared contract types/ABIs
@@ -329,10 +329,10 @@ Get the Nester monorepo running locally in under 5 minutes.
 
 - **Node.js** ≥ 20 (22 for dapp frontend)
 - **pnpm** ≥ 8 (for website)
-- **npm** ≥ 9 (for dapp frontend/backend)
+- **npm** ≥ 9 (for dapp frontend)
 - **Rust** + \`soroban-cli\` (for smart contracts)
-- **Go** ≥ 1.22 (for backend, once migrated)
-- **Python** ≥ 3.11 (for intelligence service, once migrated)
+- **Go** ≥ 1.22 (for API backend)
+- **Python** ≥ 3.11 (for intelligence service)
 
 ## Clone & Install
 
@@ -343,11 +343,19 @@ cd nester
 # Website (pnpm)
 pnpm install
 
+# Go API Backend (Go)
+cd apps/api && go mod download && cd ../..
+
 # DApp frontend (npm)
 cd apps/dapp/frontend && npm install && cd ../../..
 
-# Intelligence (npm — temporary until Python migration)
-cd apps/intelligence && npm install && cd ../..
+# Intelligence (Python)
+cd apps/intelligence
+python -m venv venv
+# On macOS/Linux: source venv/bin/activate
+# On Windows: venv\\Scripts\\activate
+pip install -r requirements.txt
+cd ../..
 \`\`\`
 
 ## Run Development Servers
@@ -356,11 +364,14 @@ cd apps/intelligence && npm install && cd ../..
 # Website — runs on localhost:3000
 pnpm --filter @nester/website dev
 
+# Go API Backend — runs on localhost:8080
+cd apps/api && go run cmd/api/main.go
+
 # DApp frontend — runs on localhost:3001
 cd apps/dapp/frontend && npm run dev
 
-# Intelligence — runs on localhost:8081
-cd apps/intelligence && npm run dev
+# Intelligence — runs on localhost:8081 (with venv active)
+cd apps/intelligence && python -m uvicorn app.main:app --port 8081 --reload
 \`\`\`
 
 ## Build & Verify
@@ -368,8 +379,9 @@ cd apps/intelligence && npm run dev
 \`\`\`bash
 # Must pass before pushing — CI runs these exact commands
 pnpm --filter @nester/website build && pnpm --filter @nester/website lint
-cd apps/dapp/frontend && npm run build && cd ../../..
-cd apps/intelligence && npm run build && npm run lint && cd ../..
+cd apps/dapp/frontend && npm run build && npm run lint && cd ../../..
+cd apps/api && go test ./... && cd ../..
+cd apps/intelligence && pytest && ruff check . && mypy app tests && cd ../..
 \`\`\`
 
 ## Smart Contracts (Soroban)
@@ -1329,17 +1341,16 @@ curl https://api.nester.finance/api/v1/vaults
 
 Get detailed allocation breakdown for a specific vault.
 
-## POST /api/v1/deposit
+## POST /api/v1/vaults/{id}/deposit
 
-Prepare a deposit transaction for wallet signing.
+Prepare and record a deposit to a vault.
 
 \`\`\`bash
-curl -X POST https://api.nester.finance/api/v1/deposit \\
+curl -X POST https://api.nester.finance/api/v1/vaults/vault_balanced_01/deposit \\
   -H "Content-Type: application/json" \\
   -d '{
-    "vault_id": "vault_balanced_01",
-    "amount": 1000,
-    "wallet_address": "GBXYZ..."
+    "amount": "1000.00",
+    "asset": "USDC"
   }'
 \`\`\`
 
@@ -1347,25 +1358,42 @@ curl -X POST https://api.nester.finance/api/v1/deposit \\
 {
     "success": true,
     "data": {
-        "transaction_xdr": "AAAA...",
-        "estimated_shares": 1000,
-        "estimated_apy": 9.5,
-        "network": "testnet"
+        "id": "vault_balanced_01",
+        "user_id": "8c7d86f0-0b73-45cd-95f3-c5b9bf10e4a7",
+        "contract_address": "CB...",
+        "total_deposited": "6000.000000",
+        "current_balance": "6250.500000",
+        "currency": "USDC",
+        "status": "active",
+        "yield_earned": "250.500000",
+        "fees_paid": "0.000000",
+        "allocations": [
+            {
+                "id": "alloc_01_uuid",
+                "vault_id": "vault_balanced_01",
+                "protocol": "Blend",
+                "amount": "2400.00",
+                "apy": "8.5",
+                "status": "active",
+                "allocated_at": "2026-01-15T10:30:00Z"
+            }
+        ],
+        "created_at": "2026-01-15T10:30:00Z",
+        "updated_at": "2026-06-02T12:00:00Z"
     }
 }
 \`\`\`
 
-## POST /api/v1/withdraw
+## POST /api/v1/vaults/{id}/withdraw
 
-Initiate a withdrawal from a vault.
+Prepare and record a withdrawal from a vault.
 
 \`\`\`bash
-curl -X POST https://api.nester.finance/api/v1/withdraw \\
+curl -X POST https://api.nester.finance/api/v1/vaults/vault_balanced_01/withdraw \\
   -H "Content-Type: application/json" \\
   -d '{
-    "vault_id": "vault_balanced_01",
-    "shares": 500,
-    "wallet_address": "GBXYZ..."
+    "amount": "500.00",
+    "asset": "USDC"
   }'
 \`\`\`
 
@@ -1373,11 +1401,17 @@ curl -X POST https://api.nester.finance/api/v1/withdraw \\
 {
     "success": true,
     "data": {
-        "transaction_xdr": "AAAA...",
-        "amount": 525.50,
-        "penalty": 0,
-        "net_amount": 525.50,
-        "maturity_status": "matured"
+        "id": "vault_balanced_01",
+        "user_id": "8c7d86f0-0b73-45cd-95f3-c5b9bf10e4a7",
+        "contract_address": "CB...",
+        "total_deposited": "5500.000000",
+        "current_balance": "5750.500000",
+        "currency": "USDC",
+        "status": "active",
+        "yield_earned": "250.500000",
+        "fees_paid": "0.000000",
+        "created_at": "2026-01-15T10:30:00Z",
+        "updated_at": "2026-06-02T12:00:00Z"
     }
 }
 \`\`\`
@@ -1386,62 +1420,63 @@ curl -X POST https://api.nester.finance/api/v1/withdraw \\
 
     "position-api": {
         title: "Position Endpoints",
-        content: `# Position API Endpoints
+        content: `# Position & Portfolio API Endpoints
 
-## GET /api/v1/positions/:wallet
+## GET /api/v1/portfolio/summary
 
-Get all positions for a wallet address.
+Get aggregated portfolio summary and positions for the authenticated user.
 
 \`\`\`bash
-curl https://api.nester.finance/api/v1/positions/GBXYZ...
+curl https://api.nester.finance/api/v1/portfolio/summary \\
+  -H "Authorization: Bearer <token>"
 \`\`\`
 
 \`\`\`json
 {
     "success": true,
     "data": {
-        "wallet": "GBXYZ...",
-        "total_value_usd": 5250.50,
-        "total_yield_earned": 250.50,
+        "total_deposited_usdc": "5000.000000",
+        "total_current_value_usdc": "5250.500000",
+        "total_yield_earned_usdc": "250.500000",
         "positions": [
             {
                 "vault_id": "vault_balanced_01",
                 "vault_name": "Balanced",
-                "shares": 5000,
-                "value_usd": 5250.50,
-                "deposited_usd": 5000,
-                "yield_earned": 250.50,
-                "apy": 9.5,
-                "deposited_at": "2026-01-15T10:30:00Z",
-                "maturity_at": "2026-04-15T10:30:00Z",
-                "maturity_status": "locked",
-                "days_remaining": 24
+                "deposited": "5000.000000",
+                "current_value": "5250.500000",
+                "shares": "0.000000",
+                "apy_7d": "9.500000"
             }
         ]
     }
 }
 \`\`\`
 
-## GET /api/v1/yields
+## GET /api/v1/vaults/{id}/my-position
 
-Historical yield data for charting.
+Get authenticated user's position in a specific vault.
 
 \`\`\`bash
-curl https://api.nester.finance/api/v1/yields?vault_id=vault_balanced_01&period=30d
+curl https://api.nester.finance/api/v1/vaults/vault_balanced_01/my-position \\
+  -H "Authorization: Bearer <token>"
+\`\`\`
+
+## GET /api/v1/vaults/{id}/performance/history
+
+Get historical performance and yield data for charting.
+
+\`\`\`bash
+curl "https://api.nester.finance/api/v1/vaults/vault_balanced_01/performance/history?period=30d"
 \`\`\`
 
 \`\`\`json
 {
     "success": true,
-    "data": {
-        "vault_id": "vault_balanced_01",
-        "period": "30d",
-        "snapshots": [
-            { "date": "2026-02-20", "apy": 9.2, "tvl": 520000 },
-            { "date": "2026-02-21", "apy": 9.5, "tvl": 535000 },
-            { "date": "2026-02-22", "apy": 9.3, "tvl": 548000 }
-        ]
-    }
+    "data": [
+        { "recorded_at": "2026-02-20T12:00:00Z", "apy": 9.2, "tvl": 520000 },
+        { "recorded_at": "2026-02-21T12:00:00Z", "apy": 9.5, "tvl": 535000 },
+        { "recorded_at": "2026-02-22T12:00:00Z", "apy": 9.3, "tvl": 548000 }
+    ]
 }
 \`\`\`
 `,
@@ -1451,19 +1486,28 @@ curl https://api.nester.finance/api/v1/yields?vault_id=vault_balanced_01&period=
         title: "Off-Ramp Endpoints",
         content: `# Off-Ramp API Endpoints
 
-## POST /api/v1/offramp/request
+## POST /api/v1/settlements
 
-Initiate a fiat withdrawal.
+Initiate a fiat withdrawal (off-ramp).
 
 \`\`\`bash
-curl -X POST https://api.nester.finance/api/v1/offramp/request \\
+curl -X POST https://api.nester.finance/api/v1/settlements \\
   -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer <token>" \\
   -d '{
-    "wallet_address": "GBXYZ...",
-    "amount_usd": 1000,
-    "currency": "NGN",
-    "bank_code": "058",
-    "account_number": "0123456789"
+    "vault_id": "vault_balanced_01",
+    "amount": "1000.00",
+    "currency": "USDC",
+    "fiat_currency": "NGN",
+    "fiat_amount": "1565000.00",
+    "exchange_rate": "1565.00",
+    "destination": {
+      "type": "bank_transfer",
+      "provider": "bank",
+      "account_number": "0123456789",
+      "account_name": "John Doe",
+      "bank_code": "058"
+    }
   }'
 \`\`\`
 
@@ -1471,62 +1515,80 @@ curl -X POST https://api.nester.finance/api/v1/offramp/request \\
 {
     "success": true,
     "data": {
-        "request_id": "offramp_abc123",
-        "amount_usd": 1000,
-        "amount_fiat": 1565000,
-        "currency": "NGN",
-        "exchange_rate": 1565.0,
-        "fee_usd": 5.0,
-        "fee_pct": 0.5,
-        "estimated_time": "3 seconds",
-        "status": "escrowed",
-        "escrow_tx_hash": "abc123..."
+        "id": "settlement_abc123_uuid",
+        "user_id": "user_id_uuid",
+        "vault_id": "vault_balanced_01",
+        "amount": "1000.000000",
+        "currency": "USDC",
+        "fiat_currency": "NGN",
+        "fiat_amount": "1565000.000000",
+        "exchange_rate": "1565.000000",
+        "destination": {
+            "type": "bank_transfer",
+            "provider": "bank",
+            "account_number": "0123456789",
+            "account_name": "John Doe",
+            "bank_code": "058"
+        },
+        "status": "initiated",
+        "created_at": "2026-06-02T12:00:00Z"
     }
 }
 \`\`\`
 
-## GET /api/v1/offramp/status/:id
+## GET /api/v1/settlements/{id}
 
 Track settlement progress.
 
+\`\`\`bash
+curl https://api.nester.finance/api/v1/settlements/settlement_abc123_uuid \\
+  -H "Authorization: Bearer <token>"
+\`\`\`
+
 \`\`\`json
 {
     "success": true,
     "data": {
-        "request_id": "offramp_abc123",
-        "status": "settled",
-        "steps": [
-            { "step": "escrowed", "completed_at": "2026-03-22T14:00:01Z" },
-            { "step": "lp_matched", "completed_at": "2026-03-22T14:00:01Z" },
-            { "step": "fiat_initiated", "completed_at": "2026-03-22T14:00:02Z" },
-            { "step": "fiat_confirmed", "completed_at": "2026-03-22T14:00:04Z" },
-            { "step": "settled", "completed_at": "2026-03-22T14:00:04Z" }
-        ],
-        "settlement_time_ms": 3200
+        "id": "settlement_abc123_uuid",
+        "user_id": "user_id_uuid",
+        "vault_id": "vault_balanced_01",
+        "amount": "1000.000000",
+        "currency": "USDC",
+        "fiat_currency": "NGN",
+        "fiat_amount": "1565000.000000",
+        "exchange_rate": "1565.000000",
+        "destination": {
+            "type": "bank_transfer",
+            "provider": "bank",
+            "account_number": "0123456789",
+            "account_name": "John Doe",
+            "bank_code": "058"
+        },
+        "status": "confirmed",
+        "created_at": "2026-06-02T12:00:00Z",
+        "completed_at": "2026-06-02T12:00:04Z"
     }
 }
 \`\`\`
 
-## GET /api/v1/offramp/quote
+## GET /api/v1/rates
 
-Get a conversion quote before initiating off-ramp.
+Get a conversion exchange rate before initiating off-ramp.
 
 \`\`\`bash
-curl "https://api.nester.finance/api/v1/offramp/quote?amount=1000&currency=NGN"
+curl "https://api.nester.finance/api/v1/rates?base=USDC&quote=NGN"
 \`\`\`
 
 \`\`\`json
 {
     "success": true,
     "data": {
-        "amount_usd": 1000,
-        "amount_fiat": 1565000,
-        "currency": "NGN",
-        "exchange_rate": 1565.0,
-        "fee_usd": 5.0,
-        "fee_pct": 0.5,
-        "net_fiat": 1557175,
-        "valid_for_seconds": 30
+        "base": "USDC",
+        "quote": "NGN",
+        "rate": 1565.0,
+        "source": "paystack",
+        "fetched_at": "2026-06-02T12:00:00Z",
+        "expires_at": "2026-06-02T12:05:00Z"
     }
 }
 \`\`\`

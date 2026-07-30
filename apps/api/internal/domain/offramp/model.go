@@ -102,6 +102,6 @@ func ParseStatus(raw string) (SettlementStatus, error) {
 type Repository interface {
 	Create(ctx context.Context, model Settlement) (Settlement, error)
 	GetByID(ctx context.Context, id uuid.UUID) (Settlement, error)
-	GetByUserID(ctx context.Context, userID uuid.UUID, statusFilter SettlementStatus) ([]Settlement, error)
+	ListByUserID(ctx context.Context, userID uuid.UUID, filter UserListFilter) ([]Settlement, int, string, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status SettlementStatus, completedAt *time.Time) error
 }

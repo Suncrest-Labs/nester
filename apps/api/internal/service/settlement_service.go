@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/bankaccount"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
 )
 
@@ -17,24 +20,59 @@ var (
 	rebankCode = regexp.MustCompile(`^\d{3,9}$`)
 )
 
-type SettlementService struct {
-	repository offramp.Repository
+// SavedBankAccountResolver loads decrypted bank details for settlement.
+type SavedBankAccountResolver interface {
+	ResolveForSettlement(ctx context.Context, userID, accountID uuid.UUID) (bankaccount.BankAccount, error)
 }
 
-func NewSettlementService(repository offramp.Repository) *SettlementService {
-	return &SettlementService{repository: repository}
+type SettlementService struct {
+	repository   offramp.Repository
+	bankAccounts SavedBankAccountResolver
+	sep24        *Sep24Resolver // POC: SEP-24 integration
+}
+
+func NewSettlementService(repository offramp.Repository, bankAccounts SavedBankAccountResolver) *SettlementService {
+	return &SettlementService{repository: repository, bankAccounts: bankAccounts}
+}
+
+// SetSep24Resolver injects the SEP-24 resolver for POC testing.
+func (s *SettlementService) SetSep24Resolver(resolver *Sep24Resolver) {
+	s.sep24 = resolver
+}
+
+// InitiateSEP24Withdrawal is a POC method to start the offramp flow via the anchor.
+func (s *SettlementService) InitiateSEP24Withdrawal(ctx context.Context, id uuid.UUID) (string, string, error) {
+	if s.sep24 == nil {
+		return "", "", fmt.Errorf("SEP-24 resolver not configured")
+	}
+
+	settlement, err := s.GetSettlement(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+
+	return s.sep24.InitiateInteractiveWithdrawal(ctx, settlement.FiatCurrency, settlement.FiatAmount)
+}
+
+// CheckSEP24Status is a POC method to poll the anchor for transaction status.
+func (s *SettlementService) CheckSEP24Status(ctx context.Context, txID string) (string, error) {
+	if s.sep24 == nil {
+		return "", fmt.Errorf("SEP-24 resolver not configured")
+	}
+	return s.sep24.PollTransactionStatus(ctx, txID)
 }
 
 // InitiateSettlementInput carries caller-supplied data for a new settlement.
 type InitiateSettlementInput struct {
-	UserID       uuid.UUID
-	VaultID      uuid.UUID
-	Amount       decimal.Decimal
-	Currency     string
-	FiatCurrency string
-	FiatAmount   decimal.Decimal
-	ExchangeRate decimal.Decimal
-	Destination  offramp.Destination
+	UserID        uuid.UUID
+	VaultID       uuid.UUID
+	Amount        decimal.Decimal
+	Currency      string
+	FiatCurrency  string
+	FiatAmount    decimal.Decimal
+	ExchangeRate  decimal.Decimal
+	BankAccountID *uuid.UUID
+	Destination   offramp.Destination
 }
 
 // UpdateStatusInput carries the target state for a status transition.
@@ -73,6 +111,26 @@ func (s *SettlementService) InitiateSettlement(ctx context.Context, input Initia
 		return offramp.Settlement{}, offramp.ErrInvalidSettlement
 	}
 
+	if input.BankAccountID != nil {
+		if s.bankAccounts == nil {
+			return offramp.Settlement{}, offramp.ErrInvalidSettlement
+		}
+		saved, err := s.bankAccounts.ResolveForSettlement(ctx, input.UserID, *input.BankAccountID)
+		if err != nil {
+			return offramp.Settlement{}, mapBankAccountSettlementError(err)
+		}
+		input.Destination = offramp.Destination{
+			Type:          "bank_transfer",
+			Provider:      "bank",
+			AccountNumber: saved.AccountNumber,
+			AccountName:   saved.AccountName,
+			BankCode:      saved.BankCode,
+		}
+		if strings.TrimSpace(input.FiatCurrency) == "" {
+			input.FiatCurrency = saved.Currency
+		}
+	}
+
 	if err := validateDestination(input.Destination); err != nil {
 		return offramp.Settlement{}, err
 	}
@@ -101,27 +159,38 @@ func (s *SettlementService) GetSettlement(ctx context.Context, id uuid.UUID) (of
 	return s.repository.GetByID(ctx, id)
 }
 
-// GetUserSettlements returns all settlements for a user. If statusFilter is
-// non-empty it is validated and passed to the repository as a WHERE clause.
-func (s *SettlementService) GetUserSettlements(
+// ListUserSettlements returns a paginated, filterable list of settlements for a user.
+func (s *SettlementService) ListUserSettlements(
 	ctx context.Context,
 	userID uuid.UUID,
-	statusFilter string,
-) ([]offramp.Settlement, error) {
+	filter offramp.UserListFilter,
+) ([]offramp.Settlement, int, string, error) {
 	if userID == uuid.Nil {
-		return nil, offramp.ErrInvalidSettlement
+		return nil, 0, "", offramp.ErrInvalidSettlement
 	}
-
-	var parsedFilter offramp.SettlementStatus
-	if statusFilter != "" {
-		parsed, err := offramp.ParseStatus(statusFilter)
-		if err != nil {
-			return nil, err
+	if filter.Status != "" {
+		if _, err := offramp.ParseStatus(filter.Status); err != nil {
+			return nil, 0, "", err
 		}
-		parsedFilter = parsed
 	}
-
-	return s.repository.GetByUserID(ctx, userID, parsedFilter)
+	sortField := filter.SortField
+	if sortField == "" {
+		sortField = "created_at"
+	}
+	sortOrder := filter.SortOrder
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+	if filter.Cursor != "" && (sortField != "created_at" || sortOrder == "asc") {
+		return nil, 0, "", offramp.ErrInvalidSettlement
+	}
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PerPage < 1 {
+		filter.PerPage = 20
+	}
+	return s.repository.ListByUserID(ctx, userID, filter)
 }
 
 // UpdateStatus validates the state transition and persists the new status.
@@ -137,7 +206,7 @@ func (s *SettlementService) UpdateStatus(ctx context.Context, input UpdateStatus
 	}
 
 	if current.UserID != input.CallerID {
-		return offramp.Settlement{}, offramp.ErrForbidden
+		return offramp.Settlement{}, offramp.ErrSettlementNotFound
 	}
 
 	if !current.CanTransitionTo(input.NewStatus) {
@@ -176,4 +245,15 @@ func validateDestination(d offramp.Destination) error {
 		}
 	}
 	return nil
+}
+
+func mapBankAccountSettlementError(err error) error {
+	switch {
+	case errors.Is(err, bankaccount.ErrNotFound):
+		return offramp.ErrInvalidSettlement
+	case errors.Is(err, bankaccount.ErrForbidden):
+		return offramp.ErrForbidden
+	default:
+		return err
+	}
 }

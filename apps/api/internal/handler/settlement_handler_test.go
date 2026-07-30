@@ -15,6 +15,7 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 )
@@ -50,18 +51,18 @@ func (r *settlementStubRepo) GetByID(_ context.Context, id uuid.UUID) (offramp.S
 	return *s, nil
 }
 
-func (r *settlementStubRepo) GetByUserID(_ context.Context, userID uuid.UUID, filter offramp.SettlementStatus) ([]offramp.Settlement, error) {
+func (r *settlementStubRepo) ListByUserID(_ context.Context, userID uuid.UUID, filter offramp.UserListFilter) ([]offramp.Settlement, int, string, error) {
 	var out []offramp.Settlement
 	for _, s := range r.data {
 		if s.UserID != userID {
 			continue
 		}
-		if filter != "" && s.Status != filter {
+		if filter.Status != "" && string(s.Status) != filter.Status {
 			continue
 		}
 		out = append(out, *s)
 	}
-	return out, nil
+	return out, len(out), "", nil
 }
 
 func (r *settlementStubRepo) UpdateStatus(_ context.Context, id uuid.UUID, status offramp.SettlementStatus, completedAt *time.Time) error {
@@ -72,6 +73,62 @@ func (r *settlementStubRepo) UpdateStatus(_ context.Context, id uuid.UUID, statu
 	s.Status = status
 	s.CompletedAt = completedAt
 	return nil
+}
+
+type settlementStubUserRepo struct {
+	users map[uuid.UUID]*user.User
+}
+
+func newSettlementStubUserRepo(userID uuid.UUID) *settlementStubUserRepo {
+	return &settlementStubUserRepo{
+		users: map[uuid.UUID]*user.User{
+			userID: {
+				ID:        userID,
+				KYCStatus: user.KYCStatusVerified,
+			},
+		},
+	}
+}
+
+func (r *settlementStubUserRepo) Create(_ context.Context, u *user.User) error {
+	r.users[u.ID] = u
+	return nil
+}
+
+func (r *settlementStubUserRepo) GetByID(_ context.Context, id uuid.UUID) (*user.User, error) {
+	if u, ok := r.users[id]; ok {
+		return u, nil
+	}
+	return nil, user.ErrUserNotFound
+}
+
+func (r *settlementStubUserRepo) GetByWalletAddress(_ context.Context, _ string) (*user.User, error) {
+	return nil, user.ErrUserNotFound
+}
+
+func (r *settlementStubUserRepo) GetRoles(_ context.Context, _ uuid.UUID) ([]string, error) {
+	return nil, nil
+}
+
+func (r *settlementStubUserRepo) SaveKYCDocument(_ context.Context, _ *user.KYCDocument, _ *user.EncryptedKYCDoc) error {
+	return nil
+}
+
+func (r *settlementStubUserRepo) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, *user.EncryptedKYCDoc, error) {
+	return nil, nil, user.ErrUserNotFound
+}
+
+func (r *settlementStubUserRepo) UpdateKYCStatus(_ context.Context, _ uuid.UUID, _ user.KYCStatus, _ *string, _ *time.Time) error {
+	return nil
+}
+
+func (r *settlementStubUserRepo) UpdateProfile(_ context.Context, id uuid.UUID, _ user.ProfilePatch) (*user.User, error) {
+	return r.GetByID(context.Background(), id)
+}
+
+func newSettlementHandler(svc *service.SettlementService, userID uuid.UUID) *SettlementHandler {
+	userSvc := service.NewUserService(newSettlementStubUserRepo(userID))
+	return NewSettlementHandler(svc, userSvc)
 }
 
 func validSettlementJSONBody(userID, vaultID uuid.UUID) string {
@@ -96,11 +153,13 @@ func validSettlementJSONBody(userID, vaultID uuid.UUID) string {
 func TestSettlementHandler_PostCreates201(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
-	h := NewSettlementHandler(svc)
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
+	h := newSettlementHandler(svc, userID)
 	mux := http.NewServeMux()
 	h.Register(mux)
-	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	// Inject auth user middleware
+	handler := injectAuthUser(auth.User{ID: userID.String()}, mux)
+	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(handler))
 	defer server.Close()
 
 	resp, err := http.Post(
@@ -122,8 +181,8 @@ func TestSettlementHandler_PostCreates201(t *testing.T) {
 }
 
 func TestSettlementHandler_PostInvalidBody400(t *testing.T) {
-	svc := service.NewSettlementService(newSettlementStubRepo())
-	h := NewSettlementHandler(svc)
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
+	h := NewSettlementHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	server := httptest.NewServer(mux)
@@ -142,11 +201,11 @@ func TestSettlementHandler_PostInvalidBody400(t *testing.T) {
 func TestSettlementHandler_PostDomainValidation400(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
-	h := NewSettlementHandler(svc)
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
+	h := newSettlementHandler(svc, userID)
 	mux := http.NewServeMux()
 	h.Register(mux)
-	server := httptest.NewServer(mux)
+	server := httptest.NewServer(injectAuthUser(auth.User{ID: userID.String()}, mux))
 	defer server.Close()
 
 	// bank_transfer without bank_code
@@ -174,7 +233,7 @@ func TestSettlementHandler_Get200And404(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
 	repo := newSettlementStubRepo()
-	svc := service.NewSettlementService(repo)
+	svc := service.NewSettlementService(repo, nil)
 	created, err := svc.InitiateSettlement(context.Background(), service.InitiateSettlementInput{
 		UserID:       userID,
 		VaultID:      vaultID,
@@ -194,10 +253,10 @@ func TestSettlementHandler_Get200And404(t *testing.T) {
 		t.Fatalf("InitiateSettlement: %v", err)
 	}
 
-	h := NewSettlementHandler(svc)
+	h := NewSettlementHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
-	server := httptest.NewServer(mux)
+	server := httptest.NewServer(injectAuthUser(auth.User{ID: userID.String()}, mux))
 	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/api/v1/settlements/" + created.ID.String())
@@ -217,12 +276,38 @@ func TestSettlementHandler_Get200And404(t *testing.T) {
 	if resp404.StatusCode != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", resp404.StatusCode)
 	}
+
+	attacker := uuid.New()
+	created2, _ := svc.InitiateSettlement(context.Background(), service.InitiateSettlementInput{
+		UserID:       attacker,
+		VaultID:      vaultID,
+		Amount:       decimal.RequireFromString("10"),
+		Currency:     "USDC",
+		FiatCurrency: "NGN",
+		FiatAmount:   decimal.RequireFromString("100"),
+		ExchangeRate: decimal.RequireFromString("10"),
+		Destination: offramp.Destination{
+			Type:          "mobile_money",
+			Provider:      "mpesa",
+			AccountNumber: "0712345678",
+			AccountName:   "Jane",
+		},
+	})
+	
+	respNonOwner, err := http.Get(server.URL + "/api/v1/settlements/" + created2.ID.String())
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer respNonOwner.Body.Close()
+	if respNonOwner.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404 for non-owner, got %d", respNonOwner.StatusCode)
+	}
 }
 
 func TestSettlementHandler_PatchStatus200(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	created, err := svc.InitiateSettlement(context.Background(), service.InitiateSettlementInput{
 		UserID:       userID,
 		VaultID:      vaultID,
@@ -242,7 +327,7 @@ func TestSettlementHandler_PatchStatus200(t *testing.T) {
 		t.Fatalf("InitiateSettlement: %v", err)
 	}
 
-	h := NewSettlementHandler(svc)
+	h := NewSettlementHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	// Inject the settlement owner as the authenticated caller.
@@ -270,10 +355,10 @@ func TestSettlementHandler_PatchStatus200(t *testing.T) {
 	}
 }
 
-func TestSettlementHandler_PatchStatus403NonOwner(t *testing.T) {
+func TestSettlementHandler_PatchStatus404NonOwner(t *testing.T) {
 	ownerID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
 	created, err := svc.InitiateSettlement(context.Background(), service.InitiateSettlementInput{
 		UserID:       ownerID,
 		VaultID:      vaultID,
@@ -293,7 +378,7 @@ func TestSettlementHandler_PatchStatus403NonOwner(t *testing.T) {
 		t.Fatalf("InitiateSettlement: %v", err)
 	}
 
-	h := NewSettlementHandler(svc)
+	h := NewSettlementHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	// Inject a different user — not the settlement owner.
@@ -313,14 +398,14 @@ func TestSettlementHandler_PatchStatus403NonOwner(t *testing.T) {
 		t.Fatalf("PATCH: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("want 403 for non-owner, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404 for non-owner, got %d", resp.StatusCode)
 	}
 }
 
 func TestSettlementHandler_PatchStatus401NoAuth(t *testing.T) {
-	svc := service.NewSettlementService(newSettlementStubRepo())
-	h := NewSettlementHandler(svc)
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
+	h := NewSettlementHandler(svc, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	// No auth injection — handler must return 401.
@@ -347,11 +432,11 @@ func TestSettlementHandler_PatchStatus401NoAuth(t *testing.T) {
 func TestSettlementHandler_ListUserSettlementsWithStatus(t *testing.T) {
 	userID := uuid.New()
 	vaultID := uuid.New()
-	svc := service.NewSettlementService(newSettlementStubRepo())
-	h := NewSettlementHandler(svc)
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
+	h := newSettlementHandler(svc, userID)
 	mux := http.NewServeMux()
 	h.Register(mux)
-	server := httptest.NewServer(mux)
+	server := httptest.NewServer(injectAuthUser(auth.User{ID: userID.String()}, mux))
 	defer server.Close()
 
 	_, err := http.Post(server.URL+"/api/v1/settlements", "application/json", bytes.NewBufferString(validSettlementJSONBody(userID, vaultID)))

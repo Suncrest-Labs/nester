@@ -6,7 +6,11 @@
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:a11y": "playwright test tests/accessibility.spec.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@blend-capital/blend-sdk": "^3.2.2",
@@ -20,6 +24,7 @@
     "framer-motion": "^12.0.0",
     "lucide-react": "^0.474.0",
     "next": "16.1.7",
+    "next-auth": "^4.24.7",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-hook-form": "^7.72.0",
@@ -27,19 +32,33 @@
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^2.6.0",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "jspdf": "^2.5.1",
+    "jspdf-autotable": "^3.5.28"
   },
   "overrides": {
     "defu": ">=6.1.5"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.1",
+    "@axe-core/react": "^4.10.1",
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "axe-core": "^4.10.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^3.0.5",
     "eslint": "^9",
     "eslint-config-next": "16.1.7",
+    "eslint-plugin-security": "^3.0.0",
+    "jsdom": "^26.0.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.0.5"
   }
 }

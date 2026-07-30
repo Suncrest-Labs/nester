@@ -153,10 +153,43 @@ func openHandlerIntegrationDB(t *testing.T) *sql.DB {
 func applyHandlerIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 
+	// Wipe every table in the public schema before applying. The docker
+	// volume persists across container restarts, so tables created in prior
+	// runs must be dropped to avoid non-idempotent CREATE TABLE statements
+	// (e.g. 006_create_settlements_table) failing on the second run. CASCADE
+	// pulls in dependent objects; schema_migrations and any tables outside
+	// the public schema are untouched.
+	if _, err := db.Exec(`
+		DO $$
+		DECLARE r record;
+		BEGIN
+			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+			END LOOP;
+		END$$;
+	`); err != nil {
+		t.Fatalf("drop tables: %v", err)
+	}
+
+	// 033 must run BEFORE 023: 033 renames vault_transactions.tx_hash →
+	// transaction_hash, and 023 creates the UNIQUE INDEX on that column. 035
+	// is a byte-identical duplicate of 033 whose non-idempotent RENAME COLUMN
+	// would fail on re-runs, so it is intentionally skipped.
+	// 010 and 020 are deliberately omitted: they DROP users.email and RENAME
+	// users.name → display_name, which would break the seed helpers that
+	// INSERT into users (id, email, name). Apply either via a separate,
+	// opt-in helper if user-profile tests are extended.
 	for _, name := range []string{
 		"001_create_users_table.up.sql",
-		"004_create_vaults_table.up.sql",
+		"002_create_vaults_table.up.sql",
 		"005_create_allocations_table.up.sql",
+		"006_create_settlements_table.up.sql",
+		"007_add_vault_deleted_at.up.sql",
+		"008_add_vault_transactions.up.sql",
+		"014_add_missing_columns.up.sql",
+		"027_user_profile_fields.up.sql",
+		"033_update_vault_transactions.up.sql",
+		"023_vault_transactions_hash_unique.up.sql",
 	} {
 		path := filepath.Join("..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)
@@ -190,4 +223,156 @@ func seedHandlerIntegrationUser(t *testing.T, db *sql.DB) uuid.UUID {
 		t.Fatalf("seed user failed: %v", err)
 	}
 	return userID
+}
+
+func TestVaultHandlerDepositAndWithdrawIntegration(t *testing.T) {
+	db := openHandlerIntegrationDB(t)
+	applyHandlerIntegrationMigrations(t, db)
+	resetHandlerIntegrationTables(t, db)
+
+	userID := seedHandlerIntegrationUser(t, db)
+	otherUserID := seedHandlerIntegrationUser(t, db)
+
+	repository := postgres.NewVaultRepository(db)
+	vaultService := service.NewVaultService(repository)
+	handler := NewVaultHandler(vaultService)
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	server := httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
+	defer server.Close()
+
+	// Create a vault first
+	response, err := http.Post(
+		server.URL+"/api/v1/vaults",
+		"application/json",
+		bytes.NewBufferString(`{"contract_address":"CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","currency":"USDC"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST /api/v1/vaults error = %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", response.StatusCode)
+	}
+
+	var created vault.Vault
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	// Test: Deposit to vault
+	depositResponse, err := http.Post(
+		server.URL+"/api/v1/vaults/"+created.ID.String()+"/deposit",
+		"application/json",
+		bytes.NewBufferString(`{"amount":"100.50","asset":"USDC"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST /api/v1/vaults/{id}/deposit error = %v", err)
+	}
+	defer depositResponse.Body.Close()
+
+	if depositResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 for deposit, got %d", depositResponse.StatusCode)
+	}
+
+	var depositedVault vault.Vault
+	if err := json.NewDecoder(depositResponse.Body).Decode(&depositedVault); err != nil {
+		t.Fatalf("decode deposit response: %v", err)
+	}
+
+	if depositedVault.TotalDeposited.Cmp(decimal.RequireFromString("100.50")) != 0 {
+		t.Fatalf("expected total_deposited 100.50, got %v", depositedVault.TotalDeposited)
+	}
+
+	// Test: Withdraw from vault
+	withdrawResponse, err := http.Post(
+		server.URL+"/api/v1/vaults/"+created.ID.String()+"/withdraw",
+		"application/json",
+		bytes.NewBufferString(`{"amount":"50.00","asset":"USDC"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST /api/v1/vaults/{id}/withdraw error = %v", err)
+	}
+	defer withdrawResponse.Body.Close()
+
+	if withdrawResponse.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for withdraw, got %d", withdrawResponse.StatusCode)
+	}
+
+	var withdrawnVault vault.Vault
+	if err := json.NewDecoder(withdrawResponse.Body).Decode(&withdrawnVault); err != nil {
+		t.Fatalf("decode withdraw response: %v", err)
+	}
+
+	if withdrawnVault.CurrentBalance.Cmp(decimal.RequireFromString("50.50")) != 0 {
+		t.Fatalf("expected current_balance 50.50 after withdrawal, got %v", withdrawnVault.CurrentBalance)
+	}
+
+	// Test: Deposit with invalid amount (zero)
+	invalidResponse, err := http.Post(
+		server.URL+"/api/v1/vaults/"+created.ID.String()+"/deposit",
+		"application/json",
+		bytes.NewBufferString(`{"amount":"0","asset":"USDC"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST invalid deposit error = %v", err)
+	}
+	defer invalidResponse.Body.Close()
+
+	if invalidResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for zero deposit, got %d", invalidResponse.StatusCode)
+	}
+
+	// Test: Deposit with invalid amount (negative)
+	invalidNegResponse, err := http.Post(
+		server.URL+"/api/v1/vaults/"+created.ID.String()+"/deposit",
+		"application/json",
+		bytes.NewBufferString(`{"amount":"-50","asset":"USDC"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST invalid negative deposit error = %v", err)
+	}
+	defer invalidNegResponse.Body.Close()
+
+	if invalidNegResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for negative deposit, got %d", invalidNegResponse.StatusCode)
+	}
+
+	// Test: Deposit to non-existent vault
+	notFoundResponse, err := http.Post(
+		server.URL+"/api/v1/vaults/"+uuid.New().String()+"/deposit",
+		"application/json",
+		bytes.NewBufferString(`{"amount":"100","asset":"USDC"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST to non-existent vault error = %v", err)
+	}
+	defer notFoundResponse.Body.Close()
+
+	if notFoundResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-existent vault, got %d", notFoundResponse.StatusCode)
+	}
+
+	// Test: Unauthorized deposit (other user's vault)
+	noop := service.NoopVaultDepositInvoker{}
+	vaultService.SetDepositInvoker(noop)
+
+	otherUserServer := httptest.NewServer(fakeAuthMiddleware(otherUserID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
+	defer otherUserServer.Close()
+
+	forbiddenResponse, err := http.Post(
+		otherUserServer.URL+"/api/v1/vaults/"+created.ID.String()+"/deposit",
+		"application/json",
+		bytes.NewBufferString(`{"amount":"100","asset":"USDC"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST to other user vault error = %v", err)
+	}
+	defer forbiddenResponse.Body.Close()
+
+	if forbiddenResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for other user's vault, got %d", forbiddenResponse.StatusCode)
+	}
 }

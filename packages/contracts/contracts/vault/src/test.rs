@@ -1,21 +1,66 @@
 #![cfg(test)]
 
+//! Authorization test matrix for every protected Vault entrypoint.
+//!
+//! Role-negative calls use valid arguments with `mock_all_auths`, isolating
+//! the role guard. Signature-negative calls clear auths with `mock_auths(&[])`.
+//! Read-only APIs and the deliberately permissionless `process_emergency_queue`
+//! are outside this protected-entrypoint matrix.
+//!
+//! | Entrypoint | Unauthorized / unsigned test | Authorized / revoked test |
+//! | --- | --- | --- |
+//! | `initialize` | `initialize_without_admin_signature_is_rejected` | `vault_initializes_correctly` / n/a |
+//! | `set_max_deposit` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
+//! | `set_min_deposit` | same as above, plus `set_min_deposit_by_non_admin_panics` | same as above |
+//! | `set_rebalance_threshold` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
+//! | `set_rebalance_slippage` | same as above | same as above |
+//! | `set_circuit_breaker_config` | same as above | same as above |
+//! | `set_early_withdrawal_fee` | same as above | same as above |
+//! | `set_fee_config` | same as above | same as above |
+//! | `set_emergency_fee` | same as above | same as above |
+//! | `set_allocation_strategy` | same as above | same as above |
+//! | `set_rebalance_cooldown` | same as above | same as above |
+//! | `pause`, `unpause` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
+//! | `grant_role`, `revoke_role` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
+//! | `transfer_admin` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_transfer_wrappers_enforce_authorization` |
+//! | `accept_admin` | `accept_admin_rejects_wrong_successor`, `accept_admin_requires_successor_signature` | `admin_transfer_wrappers_enforce_authorization` / n/a |
+//! | `report_yield` | `manager_entrypoints_reject_outsider`, `manager_entrypoints_require_signature` | `manager_entrypoints_accept_then_reject_revoked_manager` |
+//! | `harvest` | `harvest_without_user_signature_is_rejected` | `test_harvest_basic` / n/a |
+//! | `harvest_vault` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
+//! | `rebalance` | `admin_entrypoints_reject_outsider`, `operator_entrypoints_require_signature` | `operator_entrypoints_accept_then_reject_revoked_operator` |
+//! | `record_source_allocation` | same as `rebalance` | same as `rebalance` |
+//! | `collect_fees` | `manager_entrypoints_reject_outsider`, `manager_entrypoints_require_signature` | `manager_entrypoints_accept_then_reject_revoked_manager` |
+//! | `deposit` | `deposit_without_user_signature_is_rejected` | `first_deposit_creates_one_to_one_shares` / n/a |
+//! | `withdraw` | `withdraw_without_user_signature_is_rejected` | `full_withdrawal_leaves_zero_balance` / n/a |
+//! | `emergency_withdraw` | `emergency_withdraw_without_user_signature_is_rejected` | `emergency_withdraw_works_when_paused` / n/a |
+//! | `emergency_withdraw_all` | `emergency_withdraw_all_without_user_signature_is_rejected` | `emergency_withdraw_all_exits_all_active_positions` / n/a |
+
 extern crate std;
 
-use soroban_sdk::{
-    contract, contractimpl,
-    testutils::{Address as _, Ledger, LedgerInfo},
-    token, Address, Env, String,
-};
 use nester_access_control::Role;
+use soroban_sdk::{
+    contract, contractimpl, symbol_short,
+    testutils::{Address as _, Ledger, LedgerInfo},
+    token, Address, Env, String, Symbol,
+};
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
-use crate::{CircuitBreakerConfig, FeeConfig, VaultContract, VaultContractClient, VaultStatus};
+use crate::{
+    CircuitBreakerConfig, FeeConfig, Severity, VaultContract, VaultContractClient, VaultStatus,
+};
+
+macro_rules! assert_rejected {
+    ($call:expr, $entrypoint:literal) => {
+        assert!(
+            $call.is_err(),
+            concat!($entrypoint, " must reject this caller")
+        );
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
 
 #[contract]
 pub struct MockTreasury;
@@ -62,7 +107,8 @@ fn setup() -> (
     token::StellarAssetClient<'static>,
     VaultContractClient<'static>,
     Address,
-) {    let env = Env::default();
+) {
+    let env = Env::default();
     env.mock_all_auths();
 
     // -----------------------------
@@ -77,8 +123,10 @@ fn setup() -> (
     let token_id = sac_contract.address();
 
     // Create token client
-    let sac: token::StellarAssetClient<'static> =
-        token::StellarAssetClient::new(unsafe { core::mem::transmute(&env) }, &token_id);
+    let sac: token::StellarAssetClient<'static> = token::StellarAssetClient::new(
+        unsafe { core::mem::transmute::<&Env, &'static Env>(&env) },
+        &token_id,
+    );
 
     // -----------------------------
     // Vault setup
@@ -89,8 +137,10 @@ fn setup() -> (
     let vault_id = env.register_contract(None, VaultContract);
     let vault_token_id = env.register_contract(None, VaultTokenContract);
 
-    let vault: VaultContractClient<'static> =
-        VaultContractClient::new(unsafe { core::mem::transmute(&env) }, &vault_id);
+    let vault: VaultContractClient<'static> = VaultContractClient::new(
+        unsafe { core::mem::transmute::<&Env, &'static Env>(&env) },
+        &vault_id,
+    );
 
     // Pass admin, deposit token, vault token, and treasury.
     vault.initialize(&admin, &token_id, &vault_token_id, &treasury);
@@ -117,11 +167,15 @@ fn setup() -> (
     (env, admin, sac, vault, treasury)
 }
 
+fn bind_strategy(vault: &VaultContractClient, admin: &Address, strategy: &Address) {
+    vault.register_callee(admin, strategy);
+    vault.set_allocation_strategy(admin, strategy);
+}
+
 /// Mint `amount` tokens to `recipient` using the Stellar asset admin client.
 fn mint(sac: &token::StellarAssetClient, recipient: &Address, amount: i128) {
     sac.mint(recipient, &amount);
 }
-
 
 // ---------------------------------------------------------------------------
 // Cross-contract pause & idempotence (issue #54 acceptance criteria)
@@ -182,7 +236,6 @@ fn advance_time(env: &Env, seconds: u64) {
         ..env.ledger().get()
     });
 }
-
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -278,7 +331,7 @@ fn deposit_of_zero_is_rejected() {
 fn deposit_of_negative_amount_is_rejected() {
     let (_env, _admin, _token, vault, _treasury) = setup();
     let user = Address::generate(&_env);
-    vault.deposit(&user, &(-1 * XLM), &0);
+    vault.deposit(&user, &(-XLM), &0);
 }
 
 #[test]
@@ -361,7 +414,10 @@ fn withdrawal_does_not_charge_perf_fee_on_preexisting_yield() {
     vault.withdraw(&bob, &bob_shares, &0);
 
     // Bob only pays early-withdrawal fee (0.1% of 1000 = 1), no performance fee.
-    assert_eq!(token::Client::new(&env, &token.address).balance(&bob), 999 * XLM);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&bob),
+        999 * XLM
+    );
 }
 
 #[test]
@@ -385,7 +441,10 @@ fn withdrawal_charges_perf_fee_only_on_realized_user_yield() {
     vault.withdraw(&user, &shares, &0);
 
     // Gross assets = 2000, performance fee = 100, early fee = 2, net = 1898.
-    assert_eq!(token::Client::new(&env, &token.address).balance(&user), 1_898 * XLM);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user),
+        1_898 * XLM
+    );
 }
 
 #[test]
@@ -417,6 +476,134 @@ fn performance_fee_charges_only_realized_yield_not_principal() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Impairment regression test (issue #451 / PR #275)
+//
+// The original performance-fee issue explicitly required:
+//   "User deposits at rate 1.0, rate halves (impairment) → zero performance fee."
+//
+// The withdraw path skips the performance fee whenever `yield_part =
+// assets_to_withdraw - principal` is not strictly positive. This test proves
+// that zero-performance-fee invariant holds after a loss halves the share
+// price, so an impaired position is never charged a fee on a gain it never had.
+// ---------------------------------------------------------------------------
+#[test]
+fn impairment_charges_zero_performance_fee() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Disable the early-withdrawal fee so the assertion isolates performance-fee
+    // behaviour and the withdrawn amount is unambiguous.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    // Deposit at the initial share price of 1.0.
+    vault.deposit(&user, &deposit, &0);
+    assert_eq!(
+        vault.share_price(),
+        10_000_000,
+        "deposit should occur at rate 1.0"
+    );
+
+    // Impairment: report a loss that halves the share price (1.0 -> 0.5).
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(-(500 * XLM)));
+    assert_eq!(
+        vault.share_price(),
+        5_000_000,
+        "rate should halve after impairment"
+    );
+
+    // The preview must show no performance fee owed on an impaired position.
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert_eq!(
+        preview.performance_fee_deducted, 0,
+        "no performance fee may be charged when the position has lost value"
+    );
+
+    // The actual withdrawal returns the impaired value (500 XLM) with no fees
+    // siphoned off: 1000 shares now worth 0.5 each.
+    vault.withdraw(&user, &shares, &0);
+    assert_eq!(
+        token::Client::new(&env, &token.address).balance(&user),
+        500 * XLM,
+        "user receives the full impaired value with zero performance fee"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Impairment regression test (issue #636)
+//
+// Proves the zero-performance-fee invariant when a real loss reduces the
+// vault's underlying token balance below deposited principal. Tokens are
+// transferred out of the vault first; the Manager then reports the loss via
+// `report_yield` (yield accrual path) so share price tracks the impairment.
+// ---------------------------------------------------------------------------
+#[test]
+fn test_impairment_produces_zero_performance_fee() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Disable early-withdrawal fee so assertions isolate performance-fee behaviour.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    vault.deposit(&user, &deposit, &0);
+    assert_eq!(
+        vault.share_price(),
+        10_000_000,
+        "deposit should occur at rate 1.0"
+    );
+
+    let vault_addr = vault.address.clone();
+    let token_client = token::Client::new(&env, &token.address);
+    assert_eq!(token_client.balance(&vault_addr), deposit);
+
+    // Simulate a real loss: transfer tokens out of the vault so underlying
+    // balance falls below the deposited amount (mock_all_auths authorises the
+    // vault as sender).
+    let loss = 400 * XLM;
+    let loss_sink = Address::generate(&env);
+    token_client.transfer(&vault_addr, &loss_sink, &loss);
+    assert!(
+        token_client.balance(&vault_addr) < deposit,
+        "underlying balance must fall below the deposited amount"
+    );
+
+    // Yield accrual path: Manager reports negative yield matching the physical loss.
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(-loss));
+
+    let impaired_assets = deposit - loss;
+    assert_eq!(
+        vault.share_price(),
+        6_000_000,
+        "share price must reflect the impairment without fee extraction"
+    );
+
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    let performance_fee_collected = preview.performance_fee_deducted;
+    assert_eq!(
+        performance_fee_collected, 0,
+        "impairment must not collect any performance fee"
+    );
+
+    vault.withdraw(&user, &shares, &0);
+    assert_eq!(
+        token_client.balance(&user),
+        impaired_assets,
+        "user receives the full impaired value with zero performance fee"
+    );
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #17)")]
 fn withdraw_reverts_when_min_assets_out_is_not_met() {
@@ -426,6 +613,133 @@ fn withdraw_reverts_when_min_assets_out_is_not_met() {
 
     vault.deposit(&user, &(1_000 * XLM), &0);
     vault.withdraw(&user, &(500 * XLM), &(500 * XLM + STROOP));
+}
+
+// Regression for #448: `withdrawal_fee_preview().net_amount_received` is the
+// post-fee amount actually transferred, so a caller can use it directly as
+// `min_assets_out` for a fee-bearing withdrawal without tripping slippage.
+//
+// No time is advanced, so no management fee accrues (elapsed = 0) and the
+// preview models every fee the withdrawal applies exactly: the reported yield
+// triggers a performance fee, and remaining inside the MinLockPeriod triggers
+// the early-withdrawal fee.
+#[test]
+fn withdrawal_fee_preview_net_is_slippage_safe_as_min_assets_out() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(500 * XLM));
+    // Back the reported yield with real tokens so the vault can pay it out
+    // (report_yield only updates share-price accounting).
+    mint(&token, &vault.address, 500 * XLM);
+
+    let shares = vault.get_shares(&user);
+    let preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert!(
+        preview.performance_fee_deducted > 0,
+        "expected a performance fee on realized yield"
+    );
+    assert!(
+        preview.early_withdrawal_fee_deducted > 0,
+        "expected an early-withdrawal fee inside the lock period"
+    );
+    assert!(preview.net_amount_received < preview.gross_asset_value);
+
+    let before = token::Client::new(&env, &token.address).balance(&user);
+
+    // Using the NET preview as the slippage floor must succeed.
+    vault.withdraw(&user, &shares, &preview.net_amount_received);
+
+    let after = token::Client::new(&env, &token.address).balance(&user);
+    // The user receives exactly the previewed net amount — the preview is an
+    // exact (not merely conservative) floor.
+    assert_eq!(after - before, preview.net_amount_received);
+}
+
+// Regression for #448: the GROSS preview (`preview_withdraw` /
+// `gross_asset_value`) must NOT be used as `min_assets_out` — on a fee-bearing
+// withdrawal the transfer is below gross, so it reverts with SlippageExceeded
+// (#17). This is exactly the failure mode the issue describes.
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn gross_preview_as_min_assets_out_trips_slippage_on_fee_bearing_withdrawal() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(500 * XLM));
+
+    let shares = vault.get_shares(&user);
+    let gross = vault.preview_withdraw(&shares);
+    // gross > net (fees apply) => SlippageExceeded.
+    vault.withdraw(&user, &shares, &gross);
+}
+
+// preview_withdraw_net must always be <= preview_withdraw (gross).
+#[test]
+fn preview_withdraw_net_le_preview_withdraw() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(200 * XLM));
+    mint(&token, &vault.address, 200 * XLM);
+
+    let shares = vault.get_shares(&user);
+    let gross = vault.preview_withdraw(&shares);
+    let net = vault.preview_withdraw_net(&shares);
+    assert!(net <= gross, "net must be <= gross");
+}
+
+// No early-withdrawal fee when outside the lock period.
+// preview_withdraw_net is worst-case (always deducts both fees), so the
+// result is still <= gross. The user-aware withdrawal_fee_preview is the
+// right tool when the lock period is known to have elapsed.
+#[test]
+fn preview_withdraw_net_no_early_fee_after_lock() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    // Advance past the lock period (DAY seconds).
+    env.ledger().set(LedgerInfo {
+        timestamp: DAY + 1,
+        ..env.ledger().get()
+    });
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(200 * XLM));
+    mint(&token, &vault.address, 200 * XLM);
+
+    let shares = vault.get_shares(&user);
+    let gross = vault.preview_withdraw(&shares);
+    let net = vault.preview_withdraw_net(&shares);
+
+    // preview_withdraw_net is always worst-case — net <= gross regardless of
+    // lock status. The user-aware withdrawal_fee_preview returns a tighter
+    // estimate once the lock has elapsed.
+    assert!(net <= gross);
+
+    // Confirm withdrawal_fee_preview correctly omits the early fee after lock.
+    let fee_preview = vault.withdrawal_fee_preview(&user, &shares);
+    assert_eq!(
+        fee_preview.early_withdrawal_fee_deducted, 0,
+        "no early fee after lock"
+    );
+    assert!(
+        fee_preview.net_amount_received >= net,
+        "user-aware preview >= worst-case net"
+    );
 }
 
 #[test]
@@ -553,8 +867,17 @@ fn withdrawal_after_lock_period_has_no_early_fee() {
     assert_eq!(vault.get_total_deposits(), 0);
 }
 
+/// A withdrawal exactly at the rolling window boundary still counts toward
+/// the cumulative sum (the boundary is inclusive), so two 100-XLM
+/// withdrawals 60s apart against a 60s window both land in the same
+/// window and cumulatively exceed the 10%-of-1000-XLM threshold.
+///
+/// Historically this hard-paused the vault via a panic
+/// (`CircuitBreakerTriggered`). Under the staged breaker (#817) a velocity
+/// breach instead escalates severity to `Throttled` and lets the triggering
+/// withdrawal complete — the vault stays open, only the *next* deposit or
+/// withdrawal decision is informed by the new severity.
 #[test]
-#[should_panic(expected = "Error(Contract, #11)")]
 fn circuit_breaker_uses_rolling_window_across_boundary() {
     let (env, admin, token, vault, _treasury) = setup();
     let user = Address::generate(&env);
@@ -571,9 +894,11 @@ fn circuit_breaker_uses_rolling_window_across_boundary() {
 
     vault.deposit(&user, &deposit_amount, &0);
     vault.withdraw(&user, &(100 * XLM), &0);
+    assert_eq!(vault.get_breaker_status().severity, Severity::Normal);
 
     advance_time(&env, 60);
     vault.withdraw(&user, &(100 * XLM), &0);
+    assert_eq!(vault.get_breaker_status().severity, Severity::Throttled);
 }
 
 // ---------------------------------------------------------------------------
@@ -755,7 +1080,7 @@ fn emergency_withdraw_queues_when_liquidity_insufficient() {
     let preview = vault.emergency_withdraw_preview(&user);
     assert_eq!(preview.vault_liquid_reserves, 9995890411);
     assert_eq!(preview.estimated_return, 10000000000);
-    assert_eq!(preview.can_process, false);
+    assert!(!preview.can_process);
 
     let returned = vault.emergency_withdraw(&user);
 
@@ -809,7 +1134,7 @@ fn test_read_only_queries() {
 
     mint(&token, &user, deposit);
     vault.deposit(&user, &deposit, &0);
-    
+
     assert_eq!(vault.total_shares(), deposit);
     assert_eq!(vault.share_price(), 10_000_000); // 1.0 share price initialized
 
@@ -818,9 +1143,8 @@ fn test_read_only_queries() {
     vault.report_yield(&admin, &(500 * XLM));
 
     assert_eq!(vault.total_shares(), deposit);
-    assert_eq!(vault.share_price(), 10_000_000); // Share price stays 1:1 in accumulator accounting
-    assert_eq!(vault.pending_yield(&user), 500 * XLM);
-    
+    assert_eq!(vault.share_price(), 15_000_000); // 1.5 share price
+
     // estimated fees — advance less than DAY so we remain within the
     // MinLockPeriod (= DAY) window and still incur an early-withdrawal fee.
     advance_time(&env, DAY / 2);
@@ -829,11 +1153,18 @@ fn test_read_only_queries() {
 
     // withdrawal preview
     let preview = vault.withdrawal_fee_preview(&user, &deposit);
-    assert_eq!(preview.gross_asset_value, 1_000 * XLM);
+    assert_eq!(preview.gross_asset_value, 1_500 * XLM);
+    assert!(preview.early_withdrawal_fee_deducted > 0);
+    assert!(preview.performance_fee_deducted > 0);
+    assert_eq!(preview.management_fee_deducted, 0);
+    assert!(preview.net_amount_received > 0);
+    assert!(preview.net_amount_received < preview.gross_asset_value);
 
-    // pending yield & unreported yield
-    mint(&token, &vault.address, 700 * XLM);
-    assert_eq!(vault.get_unreported_yield(), 200 * XLM);
+    // pending yield
+    // pending yield is contract balance minus liquid reserves
+    // Let's directly mint to contract to simulate un-reported yield
+    mint(&token, &vault.address, 200 * XLM);
+    assert_eq!(vault.pending_yield(), 200 * XLM);
 }
 
 // LiquidReserved tests — verifies collect_fees cannot over-draw committed funds
@@ -945,93 +1276,1387 @@ fn process_emergency_queue_decrements_liquid_reserved() {
     );
 }
 
+/// Regression test for the zero-performance-fee-on-impairment invariant (#451).
+///
+/// When a vault is impaired (`yield_part < 0`), `withdraw` must NOT charge a
+/// performance fee. The fee guard is `if yield_part > 0` in `lib.rs`; a future
+/// refactor could silently drop it and start charging fees on losses. This test
+/// locks the behaviour in: with the early-withdrawal fee disabled, an impaired
+/// withdrawal returns the full impaired value with no fee skimmed off.
+#[test]
+fn withdrawal_charges_no_perf_fee_on_impairment() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+
+    // Isolate performance-fee behaviour by disabling the early-withdrawal fee.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.early_withdrawal_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.deposit(&user, &deposit, &0);
+
+    // Simulate a 20% impairment: total assets drop from 1000 to 800.
+    vault.report_yield(&admin, &(-(200 * XLM)));
+
+    let shares = vault.get_shares(&user);
+    vault.withdraw(&user, &shares, &0);
+
+    // yield_part = 800 - 1000 = -200 (< 0) => no performance fee. The user
+    // recovers the full impaired 800 XLM, not 780 after a wrongful 10% fee.
+    // Soroban arithmetic is deterministic integer math (no FP rounding), so
+    // an exact equality is the right contract — per-review feedback.
+    let balance = token::Client::new(&env, &token.address).balance(&user);
+    assert_eq!(
+        balance,
+        800 * XLM,
+        "impairment must not charge a performance fee"
+    );
+}
+
+#[contract]
+struct MockStrategy;
+#[contractimpl]
+impl MockStrategy {
+    pub fn calculate_rebalance_deltas(
+        env: Env,
+        _current: soroban_sdk::Vec<crate::CurrentAllocationView>,
+        _total: i128,
+    ) -> soroban_sdk::Vec<crate::AllocationDeltaView> {
+        let mut deltas = soroban_sdk::Vec::new(&env);
+        deltas.push_back(crate::AllocationDeltaView {
+            source_id: Symbol::new(&env, "aave"),
+            delta: -400 * 10_000_000, // Withdraw 400
+        });
+        deltas
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Time-Weighted Yield Accumulator & Anti-Yield-Sniping Tests (Issue #803)
+// Harvest Tests (issue #518)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_harvest_yield_distribution() {
-    let (env, admin, token, vault, _treasury) = setup();
-    let alice = Address::generate(&env);
-    let deposit_amount = 1_000 * XLM;
+fn test_harvest_basic() {
+    // deposit, report_yield for user (as Manager), harvest returns correct amounts
+    let (env, admin, token, vault, treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
 
-    mint(&token, &alice, deposit_amount);
-    vault.deposit(&alice, &deposit_amount, &0);
+    // Mint tokens into the vault so the treasury transfer can succeed.
+    mint(&token, &vault.address, 500 * XLM);
 
+    // Grant admin the Manager role so they can call report_yield
     vault.grant_role(&admin, &admin, &Role::Manager);
     let yield_amount = 200 * XLM;
-    mint(&token, &vault.address, yield_amount);
     vault.report_yield(&admin, &yield_amount);
 
-    // Alice has 200 XLM pending yield
-    assert_eq!(vault.pending_yield(&alice), yield_amount);
+    // Advance time so the harvest timestamp is non-zero and verifiable.
+    advance_time(&env, DAY);
+    let harvest_time = env.ledger().timestamp();
 
-    // Alice harvests yield
-    let harvested = vault.harvest(&alice);
-    assert_eq!(harvested, yield_amount);
+    let shares_before = vault.get_shares(&user);
 
-    // Alice's pending yield is now 0
-    assert_eq!(vault.pending_yield(&alice), 0);
-    assert_eq!(token::Client::new(&env, &token.address).balance(&alice), yield_amount);
+    let result = vault.harvest(&user);
+
+    assert_eq!(result.gross_yield, yield_amount);
+    // performance_fee_bps = 1000 (10%)
+    assert_eq!(result.performance_fee, 20 * XLM);
+    assert_eq!(result.net_yield, 180 * XLM);
+    assert!(result.compounded);
+    assert_eq!(result.user, user);
+
+    // new_share_balance must be >= shares before harvest (net yield minted new shares)
+    assert!(
+        result.new_share_balance >= shares_before,
+        "share balance should have grown after compounding"
+    );
+
+    // Performance fee must have been sent to treasury (not sitting in accrued fees)
+    let treasury_token = token::Client::new(&env, &token.address);
+    let treasury_balance = treasury_token.balance(&treasury);
+    assert!(
+        treasury_balance >= 20 * XLM,
+        "treasury should have received the performance fee"
+    );
+
+    // last_harvest_at timestamp must be set to current ledger time
+    let harvested_at = vault.get_last_harvest_at(&user);
+    assert_eq!(
+        harvested_at, harvest_time,
+        "last_harvest_at should match ledger timestamp at harvest"
+    );
 }
 
 #[test]
-fn test_yield_sniping_prevention() {
+fn test_harvest_zero_yield() {
+    // harvest with no yield returns zeros and compounded=false
     let (env, admin, token, vault, _treasury) = setup();
-    let alice = Address::generate(&env);
-    let bob = Address::generate(&env);
-    let amount = 1_000 * XLM;
+    let user = Address::generate(&env);
+    let deposit = 500 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
 
-    mint(&token, &alice, amount);
-    mint(&token, &bob, amount);
+    // Advance time so harvest timestamp is verifiable.
+    advance_time(&env, DAY);
+    let harvest_time = env.ledger().timestamp();
 
-    // Alice deposits BEFORE yield is reported
-    vault.deposit(&alice, &amount, &0);
+    // user never had report_yield called on their behalf — zero pending yield
+    let result = vault.harvest(&user);
 
-    // Admin reports yield
-    vault.grant_role(&admin, &admin, &Role::Manager);
-    let yield_amount = 400 * XLM;
-    mint(&token, &vault.address, yield_amount);
-    vault.report_yield(&admin, &yield_amount);
+    assert_eq!(result.gross_yield, 0);
+    assert_eq!(result.performance_fee, 0);
+    assert_eq!(result.net_yield, 0);
+    assert!(!result.compounded);
+    assert_eq!(result.user, user);
 
-    // Bob deposits AFTER yield is reported
-    vault.deposit(&bob, &amount, &0);
+    // last_harvest_at is still updated for zero-yield harvest
+    let harvested_at = vault.get_last_harvest_at(&user);
+    assert_eq!(
+        harvested_at, harvest_time,
+        "last_harvest_at should be set even on zero-yield harvest"
+    );
 
-    // Alice is entitled to 400 XLM yield; Bob is entitled to 0 XLM yield
-    assert_eq!(vault.pending_yield(&alice), 400 * XLM);
-    assert_eq!(vault.pending_yield(&bob), 0);
-
-    let bob_harvested = vault.harvest(&bob);
-    assert_eq!(bob_harvested, 0);
-
-    let alice_harvested = vault.harvest(&alice);
-    assert_eq!(alice_harvested, 400 * XLM);
+    // Admin also has zero yield initially
+    let admin_result = vault.harvest(&admin);
+    assert_eq!(admin_result.gross_yield, 0);
+    assert!(!admin_result.compounded);
 }
 
 #[test]
-fn test_proportional_time_weighted_yield_distribution() {
-    let (env, admin, token, vault, _treasury) = setup();
-    let alice = Address::generate(&env);
-    let bob = Address::generate(&env);
-    let amount = 1_000 * XLM;
+fn test_harvest_vault() {
+    // report_yield, then harvest_vault collects fees, transfers to treasury, resets counter
+    let (env, admin, token, vault, treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
 
-    mint(&token, &alice, amount);
-    mint(&token, &bob, amount);
+    // Mint extra tokens into vault so the treasury transfer can succeed.
+    mint(&token, &vault.address, 500 * XLM);
 
-    // Both deposit equal amounts
-    vault.deposit(&alice, &amount, &0);
-    vault.deposit(&bob, &amount, &0);
-
-    // Admin reports yield
     vault.grant_role(&admin, &admin, &Role::Manager);
-    let yield_amount = 600 * XLM;
-    mint(&token, &vault.address, yield_amount);
+    let yield_amount = 500 * XLM;
     vault.report_yield(&admin, &yield_amount);
 
-    // Both get 50% of the yield (300 XLM each)
-    assert_eq!(vault.pending_yield(&alice), 300 * XLM);
-    assert_eq!(vault.pending_yield(&bob), 300 * XLM);
+    let result = vault.harvest_vault(&admin);
 
-    assert_eq!(vault.harvest(&alice), 300 * XLM);
-    assert_eq!(vault.harvest(&bob), 300 * XLM);
+    assert_eq!(result.total_gross_yield, yield_amount);
+    // 10% performance fee
+    assert_eq!(result.total_fee_collected, 50 * XLM);
+    assert_eq!(result.total_net_yield, 450 * XLM);
+    assert_eq!(result.positions_harvested, 1);
+
+    // Fee must be at treasury, not sitting in accrued fees
+    let treasury_token = token::Client::new(&env, &token.address);
+    let treasury_balance = treasury_token.balance(&treasury);
+    assert!(
+        treasury_balance >= 50 * XLM,
+        "treasury should have received harvest_vault fee"
+    );
+
+    // Counter should be reset: a second harvest_vault returns zeros
+    let second = vault.harvest_vault(&admin);
+    assert_eq!(second.total_gross_yield, 0);
+    assert_eq!(second.total_fee_collected, 0);
+    assert_eq!(second.positions_harvested, 0);
 }
+
+#[test]
+#[should_panic]
+fn test_harvest_paused_vault() {
+    // harvest panics when vault is paused
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(100 * XLM));
+
+    vault.pause(&admin);
+    // harvest must panic (require_active fails)
+    vault.harvest(&admin);
+}
+
+#[test]
+fn test_harvest_fee_calculation() {
+    // Verify fee_bps is applied correctly across different fee configs
+    let (env, admin, token, vault, treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    // Mint tokens into vault so the treasury transfer can succeed.
+    mint(&token, &vault.address, 500 * XLM);
+
+    // Override to 20% performance fee
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.performance_fee_bps = 2000;
+    vault.set_fee_config(&admin, &fee_config);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    let yield_amount = 1_000 * XLM;
+    vault.report_yield(&admin, &yield_amount);
+
+    let result = vault.harvest(&user);
+
+    assert_eq!(result.gross_yield, yield_amount);
+    // 20% of 1000 = 200
+    assert_eq!(result.performance_fee, 200 * XLM);
+    assert_eq!(result.net_yield, 800 * XLM);
+    assert!(result.compounded);
+
+    // Fee goes to treasury, not accrued internally
+    let treasury_token = token::Client::new(&env, &token.address);
+    let treasury_balance = treasury_token.balance(&treasury);
+    assert!(
+        treasury_balance >= 200 * XLM,
+        "treasury should have received 20% performance fee"
+    );
+}
+
+#[test]
+fn test_harvest_resets_user_yield_to_zero() {
+    // After harvest, a second harvest returns zero yield
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(300 * XLM));
+
+    let first = vault.harvest(&user);
+    assert_eq!(first.gross_yield, 300 * XLM);
+    assert!(first.compounded);
+
+    // Second harvest on the same user should return zeros
+    let second = vault.harvest(&user);
+    assert_eq!(second.gross_yield, 0);
+    assert!(!second.compounded);
+}
+
+#[test]
+fn test_harvest_impairment_zero_fee() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+
+    // Simulate impairment: Reduce total assets below principal.
+    vault.report_yield(&admin, &(-(200 * XLM)));
+
+    // Try harvesting
+    let result = vault.harvest(&user);
+
+    assert_eq!(result.gross_yield, -(200 * XLM));
+    assert_eq!(result.performance_fee, 0);
+    assert_eq!(result.net_yield, 0);
+
+    // Ensure principal hasn't been reduced by fees
+    let principal = vault.get_principal(&user);
+    assert_eq!(principal, deposit);
+}
+
+#[test]
+fn test_harvest_impairment_no_fee_charged() {
+    // When yield is negative (impairment), no performance fee should be charged
+    // and user's pending yield should be reduced (floored at zero).
+    let (env, admin, token, vault, treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+
+    // Report positive yield first, then a larger impairment to net to zero
+    vault.report_yield(&admin, &(100 * XLM));
+    vault.report_yield(&admin, &(-(200 * XLM))); // impairment wipes pending yield to zero
+
+    // After impairment reduces pending yield to zero, harvest should be a no-op
+    let result = vault.harvest(&admin);
+    assert_eq!(
+        result.gross_yield, 0,
+        "impairment should reduce pending yield to zero"
+    );
+    assert_eq!(result.performance_fee, 0, "no fee on impairment");
+    assert!(!result.compounded);
+
+    // Treasury must not have received any fee
+    let treasury_token = token::Client::new(&env, &token.address);
+    let treasury_balance = treasury_token.balance(&treasury);
+    assert_eq!(
+        treasury_balance, 0,
+        "treasury must receive no fee when yield is non-positive"
+    );
+}
+
+#[test]
+fn test_harvest_new_share_balance_increases() {
+    // After harvest, user's share balance should be greater than before
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    mint(&token, &vault.address, 500 * XLM);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(500 * XLM));
+
+    let shares_before = vault.get_shares(&admin);
+    let result = vault.harvest(&admin);
+
+    assert!(
+        result.new_share_balance >= shares_before,
+        "share balance must not decrease after harvest with positive yield"
+    );
+    assert_eq!(
+        result.new_share_balance,
+        vault.get_shares(&admin),
+        "new_share_balance in result must match on-chain balance"
+    );
+}
+
+#[test]
+fn rebalance_with_net_negative_delta_increases_liquid_reserves() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let strategy_id = Address::generate(&env); // Mock strategy
+    bind_strategy(&vault, &admin, &strategy_id);
+
+    let user = Address::generate(&env);
+    mint(&token, &user, 1000 * XLM);
+    vault.deposit(&user, &(1000 * XLM), &0);
+
+    // Initial reserves = 1000
+    // Record allocation to a source to simulate deployment
+    let source_id = Symbol::new(&env, "aave");
+    vault.grant_role(&admin, &admin, &Role::Operator);
+    vault.record_source_allocation(&admin, &source_id, &(1000 * XLM));
+
+    // Deployed total = 1000.
+    // We need to mock calculate_rebalance_deltas to return a negative delta.
+
+    let real_strategy_id = env.register_contract(None, MockStrategy);
+    bind_strategy(&vault, &admin, &real_strategy_id);
+
+    vault.rebalance(&admin);
+
+    // Let's check another way. emergency_withdraw uses liquid reserves.
+    vault.pause(&admin);
+    let _principal = vault.get_shares(&user); // 1000 shares
+
+    // We have 1000 tokens in contract.
+    // We processed rebalance which increased liquid reserves bookkeeping to 1400.
+    // Now if we try to emergency_withdraw 1000, it should succeed because 1400 >= 1000.
+    let withdrawn = vault.emergency_withdraw(&user);
+    assert_eq!(withdrawn, 1000 * XLM);
+}
+
+// ---------------------------------------------------------------------------
+// Rebalance slippage guard (issue #638)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rebalance_slippage_default_and_configurable_per_vault() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    assert_eq!(vault.get_rebalance_slippage(), 50); // default 0.5%
+    vault.set_rebalance_slippage(&admin, &200);
+    assert_eq!(vault.get_rebalance_slippage(), 200);
+}
+
+#[test]
+#[should_panic]
+fn set_rebalance_slippage_rejects_out_of_range() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    vault.set_rebalance_slippage(&admin, &6_000); // > MAX_REBALANCE_SLIPPAGE_BPS
+}
+
+#[test]
+fn rebalance_succeeds_within_slippage_tolerance() {
+    // A normal negative-delta rebalance must not be blocked by the guard.
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1000 * XLM);
+    vault.deposit(&user, &(1000 * XLM), &0);
+
+    let source_id = Symbol::new(&env, "aave");
+    vault.grant_role(&admin, &admin, &Role::Operator);
+    vault.record_source_allocation(&admin, &source_id, &(1000 * XLM));
+
+    let strategy_id = env.register_contract(None, MockStrategy);
+    bind_strategy(&vault, &admin, &strategy_id);
+
+    let _ = vault.rebalance(&admin); // should not panic
+}
+
+#[test]
+fn rebalance_slippage_guard_allows_when_within_floor() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    env.as_contract(&vault.address, || {
+        // Realised proceeds at or above the floor: no revert.
+        super::enforce_rebalance_slippage(&env, 100, 100);
+        super::enforce_rebalance_slippage(&env, 100, 250);
+    });
+}
+
+#[test]
+#[should_panic]
+fn rebalance_slippage_guard_reverts_when_below_floor() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    env.as_contract(&vault.address, || {
+        // Realised proceeds below the floor → SlippageExceeded.
+        super::enforce_rebalance_slippage(&env, 100, 99);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Minimum deposit enforcement (issue #730)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #21)")]
+fn deposit_below_min_deposit_panics() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    // 5 XLM is below the 10 XLM minimum — must panic.
+    vault.deposit(&user, &(5 * XLM), &0);
+}
+
+#[test]
+fn deposit_exactly_at_min_deposit_succeeds() {
+    let (_env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    let shares = vault.deposit(&user, &(10 * XLM), &0);
+    assert_eq!(shares, 10 * XLM);
+}
+
+#[test]
+fn deposit_above_min_deposit_succeeds() {
+    let (_env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&_env);
+    mint(&token, &user, 100 * XLM);
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    let shares = vault.deposit(&user, &(50 * XLM), &0);
+    assert_eq!(shares, 50 * XLM);
+}
+
+#[test]
+#[should_panic]
+fn set_min_deposit_by_non_admin_panics() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+
+    vault.set_min_deposit(&outsider, &(10 * XLM));
+}
+
+#[test]
+fn get_min_deposit_returns_zero_when_unset() {
+    let (_env, _admin, _token, vault, _treasury) = setup();
+    assert_eq!(vault.get_min_deposit(), 0);
+}
+
+#[test]
+fn get_min_deposit_returns_configured_value() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    vault.set_min_deposit(&admin, &(10 * XLM));
+    assert_eq!(vault.get_min_deposit(), 10 * XLM);
+}
+
+// ---------------------------------------------------------------------------
+// Emergency Withdraw All Positions Tests (issue #736)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emergency_withdraw_all_exits_all_active_positions() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let aave = symbol_short!("aave");
+    let blend = symbol_short!("blend");
+    vault.record_source_allocation(&admin, &aave, &(600 * XLM));
+    vault.record_source_allocation(&admin, &blend, &(400 * XLM));
+
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(result.succeeded.len(), 2, "both positions should be exited");
+    assert_eq!(result.failed.len(), 0, "no positions should fail");
+
+    // Allocations are cleared after a successful emergency exit.
+    let allocations = vault.get_current_allocations();
+    for view in allocations.iter() {
+        assert_eq!(view.amount, 0, "position should be unwound to zero");
+    }
+}
+
+#[test]
+fn emergency_withdraw_all_skips_inactive_positions() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let aave = symbol_short!("aave");
+    let blend = symbol_short!("blend");
+    vault.record_source_allocation(&admin, &aave, &(500 * XLM));
+    // Inactive position: zero allocation.
+    vault.record_source_allocation(&admin, &blend, &0);
+
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(
+        result.succeeded.len(),
+        1,
+        "only the active position is exited"
+    );
+    assert_eq!(result.failed.len(), 0);
+    assert_eq!(result.succeeded.get(0).unwrap().protocol, aave);
+}
+
+#[test]
+fn emergency_withdraw_all_allows_partial_success() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let aave = symbol_short!("aave");
+    let blend = symbol_short!("blend");
+    // Unwinding `aave` would overflow the vault's reserves, so it must fail
+    // while `blend` still completes — partial success.
+    vault.record_source_allocation(&admin, &aave, &i128::MAX);
+    vault.record_source_allocation(&admin, &blend, &(400 * XLM));
+
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(result.failed.len(), 1, "overflowing position should fail");
+    assert_eq!(result.failed.get(0).unwrap().protocol, aave);
+    assert_eq!(
+        result.succeeded.len(),
+        1,
+        "healthy position should still exit"
+    );
+    assert_eq!(result.succeeded.get(0).unwrap().protocol, blend);
+}
+
+#[test]
+fn emergency_withdraw_all_with_no_positions_returns_empty() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(result.succeeded.len(), 0);
+    assert_eq!(result.failed.len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Systematic negative-authorization matrix
+// ---------------------------------------------------------------------------
+
+/// Give the vault real assets, a deployed source, a strategy contract, and no
+/// cooldown. A role check removed from `rebalance` therefore turns a rejected
+/// call into a successful call instead of merely reaching another panic.
+fn prepare_authorized_rebalance(
+    env: &Env,
+    admin: &Address,
+    token: &token::StellarAssetClient,
+    vault: &VaultContractClient,
+) -> (Address, Symbol) {
+    let user = Address::generate(env);
+    mint(token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let source_id = symbol_short!("aave");
+    vault.record_source_allocation(admin, &source_id, &(1_000 * XLM));
+    let strategy_id = env.register_contract(None, MockStrategy);
+    bind_strategy(vault, admin, &strategy_id);
+    vault.set_rebalance_cooldown(admin, &0);
+    (strategy_id, source_id)
+}
+
+fn authorization_fee_config(treasury: &Address) -> FeeConfig {
+    FeeConfig {
+        management_fee_bps: 25,
+        performance_fee_bps: 500,
+        early_withdrawal_fee_bps: 15,
+        treasury_address: treasury.clone(),
+    }
+}
+
+fn authorization_circuit_breaker_config() -> CircuitBreakerConfig {
+    CircuitBreakerConfig {
+        threshold_bps: 10_000,
+        window_seconds: 3_600,
+    }
+}
+
+#[test]
+fn initialize_without_admin_signature_is_rejected() {
+    let env = Env::default();
+    env.mock_auths(&[]);
+    let admin = Address::generate(&env);
+    let token_id = Address::generate(&env);
+    let vault_token_id = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let vault_id = env.register_contract(None, VaultContract);
+    let vault = VaultContractClient::new(&env, &vault_id);
+
+    assert_rejected!(
+        vault.try_initialize(&admin, &token_id, &vault_token_id, &treasury),
+        "initialize"
+    );
+}
+
+#[test]
+fn admin_entrypoints_reject_outsider() {
+    let (env, admin, token, vault, treasury) = setup();
+    let (strategy_id, source_id) = prepare_authorized_rebalance(&env, &admin, &token, &vault);
+    let outsider = Address::generate(&env);
+    let role_target = Address::generate(&env);
+    let successor = Address::generate(&env);
+    let fee_config = authorization_fee_config(&treasury);
+    let breaker_config = authorization_circuit_breaker_config();
+
+    // Keep revoke_role's arguments valid and away from last-admin protection.
+    vault.grant_role(&admin, &role_target, &Role::Operator);
+
+    assert_rejected!(
+        vault.try_set_max_deposit(&outsider, &(2_000 * XLM)),
+        "set_max_deposit"
+    );
+    assert_rejected!(
+        vault.try_set_min_deposit(&outsider, &XLM),
+        "set_min_deposit"
+    );
+    assert_rejected!(
+        vault.try_set_rebalance_threshold(&outsider, &500),
+        "set_rebalance_threshold"
+    );
+    assert_rejected!(
+        vault.try_set_rebalance_slippage(&outsider, &100),
+        "set_rebalance_slippage"
+    );
+    assert_rejected!(
+        vault.try_set_circuit_breaker_config(&outsider, &breaker_config),
+        "set_circuit_breaker_config"
+    );
+    assert_rejected!(
+        vault.try_set_early_withdrawal_fee(&outsider, &10),
+        "set_early_withdrawal_fee"
+    );
+    assert_rejected!(
+        vault.try_set_fee_config(&outsider, &fee_config),
+        "set_fee_config"
+    );
+    assert_rejected!(
+        vault.try_set_emergency_fee(&outsider, &100),
+        "set_emergency_fee"
+    );
+    assert_rejected!(
+        vault.try_set_allocation_strategy(&outsider, &strategy_id),
+        "set_allocation_strategy"
+    );
+    assert_rejected!(
+        vault.try_set_rebalance_cooldown(&outsider, &0),
+        "set_rebalance_cooldown"
+    );
+    assert_rejected!(
+        vault.try_grant_role(&outsider, &role_target, &Role::Operator),
+        "grant_role"
+    );
+    assert_rejected!(
+        vault.try_revoke_role(&outsider, &role_target, &Role::Operator),
+        "revoke_role"
+    );
+    assert_rejected!(
+        vault.try_transfer_admin(&outsider, &successor),
+        "transfer_admin"
+    );
+    assert_rejected!(vault.try_harvest_vault(&outsider), "harvest_vault");
+    assert_rejected!(vault.try_rebalance(&outsider), "rebalance");
+    assert_rejected!(
+        vault.try_record_source_allocation(&outsider, &source_id, &(1_000 * XLM)),
+        "record_source_allocation"
+    );
+    assert_rejected!(vault.try_collect_fees(&outsider), "collect_fees");
+    assert_rejected!(vault.try_pause(&outsider), "pause");
+    assert_rejected!(vault.try_unpause(&outsider), "unpause");
+}
+
+#[test]
+fn admin_entrypoints_require_admin_signature() {
+    let (env, admin, token, vault, treasury) = setup();
+    let (strategy_id, source_id) = prepare_authorized_rebalance(&env, &admin, &token, &vault);
+    let role_target = Address::generate(&env);
+    let successor = Address::generate(&env);
+    let fee_config = authorization_fee_config(&treasury);
+    let breaker_config = authorization_circuit_breaker_config();
+    vault.grant_role(&admin, &role_target, &Role::Operator);
+
+    // `admin` still holds every required role. Only its signature is absent.
+    env.mock_auths(&[]);
+    assert_rejected!(
+        vault.try_set_max_deposit(&admin, &(2_000 * XLM)),
+        "set_max_deposit"
+    );
+    assert_rejected!(vault.try_set_min_deposit(&admin, &XLM), "set_min_deposit");
+    assert_rejected!(
+        vault.try_set_rebalance_threshold(&admin, &500),
+        "set_rebalance_threshold"
+    );
+    assert_rejected!(
+        vault.try_set_rebalance_slippage(&admin, &100),
+        "set_rebalance_slippage"
+    );
+    assert_rejected!(
+        vault.try_set_circuit_breaker_config(&admin, &breaker_config),
+        "set_circuit_breaker_config"
+    );
+    assert_rejected!(
+        vault.try_set_early_withdrawal_fee(&admin, &10),
+        "set_early_withdrawal_fee"
+    );
+    assert_rejected!(
+        vault.try_set_fee_config(&admin, &fee_config),
+        "set_fee_config"
+    );
+    assert_rejected!(
+        vault.try_set_emergency_fee(&admin, &100),
+        "set_emergency_fee"
+    );
+    assert_rejected!(
+        vault.try_set_allocation_strategy(&admin, &strategy_id),
+        "set_allocation_strategy"
+    );
+    assert_rejected!(
+        vault.try_set_rebalance_cooldown(&admin, &0),
+        "set_rebalance_cooldown"
+    );
+    assert_rejected!(
+        vault.try_grant_role(&admin, &role_target, &Role::Operator),
+        "grant_role"
+    );
+    assert_rejected!(
+        vault.try_revoke_role(&admin, &role_target, &Role::Operator),
+        "revoke_role"
+    );
+    assert_rejected!(
+        vault.try_transfer_admin(&admin, &successor),
+        "transfer_admin"
+    );
+    assert_rejected!(vault.try_harvest_vault(&admin), "harvest_vault");
+    assert_rejected!(vault.try_rebalance(&admin), "rebalance");
+    assert_rejected!(
+        vault.try_record_source_allocation(&admin, &source_id, &(1_000 * XLM)),
+        "record_source_allocation"
+    );
+    assert_rejected!(vault.try_collect_fees(&admin), "collect_fees");
+    assert_rejected!(vault.try_pause(&admin), "pause");
+    assert_rejected!(vault.try_unpause(&admin), "unpause");
+}
+
+#[test]
+fn admin_entrypoints_accept_then_reject_revoked_admin() {
+    let (env, admin, token, vault, treasury) = setup();
+    let (strategy_id, source_id) = prepare_authorized_rebalance(&env, &admin, &token, &vault);
+    let delegated_admin = Address::generate(&env);
+    let role_target = Address::generate(&env);
+    let successor = Address::generate(&env);
+    let fee_config = authorization_fee_config(&treasury);
+    let breaker_config = authorization_circuit_breaker_config();
+    vault.grant_role(&admin, &delegated_admin, &Role::Admin);
+
+    // Every Admin entrypoint accepts an authenticated account holding Admin.
+    vault.set_max_deposit(&delegated_admin, &(2_000 * XLM));
+    vault.set_min_deposit(&delegated_admin, &XLM);
+    vault.set_rebalance_threshold(&delegated_admin, &500);
+    vault.set_rebalance_slippage(&delegated_admin, &100);
+    vault.set_circuit_breaker_config(&delegated_admin, &breaker_config);
+    vault.set_early_withdrawal_fee(&delegated_admin, &10);
+    vault.set_fee_config(&delegated_admin, &fee_config);
+    vault.set_emergency_fee(&delegated_admin, &100);
+    bind_strategy(&vault, &delegated_admin, &strategy_id);
+    vault.set_rebalance_cooldown(&delegated_admin, &0);
+    vault.harvest_vault(&delegated_admin);
+    vault.record_source_allocation(&delegated_admin, &source_id, &(1_000 * XLM));
+    vault.rebalance(&delegated_admin);
+    vault.collect_fees(&delegated_admin);
+    vault.pause(&delegated_admin);
+    vault.unpause(&delegated_admin);
+
+    vault.grant_role(&delegated_admin, &role_target, &Role::Operator);
+    vault.record_source_allocation(&role_target, &source_id, &(1_000 * XLM));
+    vault.revoke_role(&delegated_admin, &role_target, &Role::Operator);
+    assert_rejected!(
+        vault.try_record_source_allocation(&role_target, &source_id, &(1_000 * XLM)),
+        "record_source_allocation after Operator revoke"
+    );
+
+    assert_eq!(vault.get_max_deposit(), 2_000 * XLM);
+    assert_eq!(vault.get_min_deposit(), XLM);
+    assert_eq!(vault.get_rebalance_threshold(), 500);
+    assert_eq!(vault.get_rebalance_slippage(), 100);
+    assert_eq!(vault.get_rebalance_cooldown(), 0);
+
+    // Restore a valid deployed allocation for the post-revocation rebalance.
+    vault.record_source_allocation(&admin, &source_id, &(1_000 * XLM));
+    vault.grant_role(&admin, &role_target, &Role::Operator);
+    vault.revoke_role(&admin, &delegated_admin, &Role::Admin);
+
+    // The same address is still authenticated by mock_all_auths, but its Admin
+    // role is gone. Every call must now fail at authorization.
+    assert_rejected!(
+        vault.try_set_max_deposit(&delegated_admin, &(2_500 * XLM)),
+        "set_max_deposit after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_min_deposit(&delegated_admin, &XLM),
+        "set_min_deposit after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_rebalance_threshold(&delegated_admin, &500),
+        "set_rebalance_threshold after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_rebalance_slippage(&delegated_admin, &100),
+        "set_rebalance_slippage after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_circuit_breaker_config(&delegated_admin, &breaker_config),
+        "set_circuit_breaker_config after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_early_withdrawal_fee(&delegated_admin, &10),
+        "set_early_withdrawal_fee after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_fee_config(&delegated_admin, &fee_config),
+        "set_fee_config after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_emergency_fee(&delegated_admin, &100),
+        "set_emergency_fee after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_allocation_strategy(&delegated_admin, &strategy_id),
+        "set_allocation_strategy after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_set_rebalance_cooldown(&delegated_admin, &0),
+        "set_rebalance_cooldown after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_grant_role(&delegated_admin, &role_target, &Role::Operator),
+        "grant_role after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_revoke_role(&delegated_admin, &role_target, &Role::Operator),
+        "revoke_role after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_transfer_admin(&delegated_admin, &successor),
+        "transfer_admin after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_harvest_vault(&delegated_admin),
+        "harvest_vault after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_rebalance(&delegated_admin),
+        "rebalance after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_record_source_allocation(&delegated_admin, &source_id, &(1_000 * XLM)),
+        "record_source_allocation after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_collect_fees(&delegated_admin),
+        "collect_fees after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_pause(&delegated_admin),
+        "pause after Admin revoke"
+    );
+    assert_rejected!(
+        vault.try_unpause(&delegated_admin),
+        "unpause after Admin revoke"
+    );
+}
+
+#[test]
+fn admin_transfer_wrappers_enforce_authorization() {
+    let (_env, admin, _token, vault, _treasury) = setup();
+    let successor = Address::generate(&_env);
+
+    vault.transfer_admin(&admin, &successor);
+    vault.accept_admin(&successor);
+    vault.set_max_deposit(&successor, &(2_000 * XLM));
+
+    // accept_admin atomically revokes the proposing admin.
+    assert_rejected!(
+        vault.try_set_max_deposit(&admin, &(3_000 * XLM)),
+        "former Admin after accept_admin"
+    );
+}
+
+#[test]
+fn accept_admin_rejects_wrong_successor() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let successor = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    vault.transfer_admin(&admin, &successor);
+
+    assert_rejected!(vault.try_accept_admin(&outsider), "accept_admin");
+    // A failed impersonation must not consume the valid proposal.
+    vault.accept_admin(&successor);
+    vault.set_max_deposit(&successor, &(2_000 * XLM));
+}
+
+#[test]
+fn accept_admin_requires_successor_signature() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let successor = Address::generate(&env);
+    vault.transfer_admin(&admin, &successor);
+
+    env.mock_auths(&[]);
+    assert_rejected!(vault.try_accept_admin(&successor), "accept_admin");
+}
+
+#[test]
+fn manager_entrypoints_reject_outsider() {
+    let (env, _admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+
+    assert_rejected!(vault.try_report_yield(&outsider, &0), "report_yield");
+    assert_rejected!(vault.try_collect_fees(&outsider), "collect_fees");
+}
+
+#[test]
+fn manager_entrypoints_accept_then_reject_revoked_manager() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let manager = Address::generate(&env);
+    vault.grant_role(&admin, &manager, &Role::Manager);
+
+    // Manager is deliberately not an Admin, exercising the Manager branches.
+    vault.report_yield(&manager, &0);
+    vault.collect_fees(&manager);
+
+    vault.revoke_role(&admin, &manager, &Role::Manager);
+    assert_rejected!(
+        vault.try_report_yield(&manager, &0),
+        "report_yield after Manager revoke"
+    );
+    assert_rejected!(
+        vault.try_collect_fees(&manager),
+        "collect_fees after Manager revoke"
+    );
+}
+
+#[test]
+fn manager_entrypoints_require_signature() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let manager = Address::generate(&env);
+    vault.grant_role(&admin, &manager, &Role::Manager);
+
+    env.mock_auths(&[]);
+    assert_rejected!(vault.try_report_yield(&manager, &0), "report_yield");
+    assert_rejected!(vault.try_collect_fees(&manager), "collect_fees");
+}
+
+#[test]
+fn operator_entrypoints_accept_then_reject_revoked_operator() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let (_strategy_id, source_id) = prepare_authorized_rebalance(&env, &admin, &token, &vault);
+    let operator = Address::generate(&env);
+    vault.grant_role(&admin, &operator, &Role::Operator);
+
+    // Operator is deliberately not an Admin, exercising the Operator branches.
+    vault.record_source_allocation(&operator, &source_id, &(1_000 * XLM));
+    vault.rebalance(&operator);
+
+    vault.record_source_allocation(&admin, &source_id, &(1_000 * XLM));
+    vault.revoke_role(&admin, &operator, &Role::Operator);
+    assert_rejected!(
+        vault.try_record_source_allocation(&operator, &source_id, &(1_000 * XLM)),
+        "record_source_allocation after Operator revoke"
+    );
+    assert_rejected!(
+        vault.try_rebalance(&operator),
+        "rebalance after Operator revoke"
+    );
+}
+
+#[test]
+fn operator_entrypoints_require_signature() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let (_strategy_id, source_id) = prepare_authorized_rebalance(&env, &admin, &token, &vault);
+    let operator = Address::generate(&env);
+    vault.grant_role(&admin, &operator, &Role::Operator);
+
+    env.mock_auths(&[]);
+    assert_rejected!(
+        vault.try_record_source_allocation(&operator, &source_id, &(1_000 * XLM)),
+        "record_source_allocation"
+    );
+    assert_rejected!(vault.try_rebalance(&operator), "rebalance");
+}
+
+#[test]
+fn deposit_without_user_signature_is_rejected() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    env.mock_auths(&[]);
+    assert_rejected!(vault.try_deposit(&user, &(100 * XLM), &0), "deposit");
+}
+
+#[test]
+fn withdraw_without_user_signature_is_rejected() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    vault.deposit(&user, &(100 * XLM), &0);
+
+    env.mock_auths(&[]);
+    assert_rejected!(vault.try_withdraw(&user, &(100 * XLM), &0), "withdraw");
+}
+
+#[test]
+fn harvest_without_user_signature_is_rejected() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    vault.deposit(&user, &(100 * XLM), &0);
+
+    env.mock_auths(&[]);
+    assert_rejected!(vault.try_harvest(&user), "harvest");
+}
+
+#[test]
+fn emergency_withdraw_without_user_signature_is_rejected() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    vault.deposit(&user, &(100 * XLM), &0);
+    vault.pause(&admin);
+
+    env.mock_auths(&[]);
+    assert_rejected!(vault.try_emergency_withdraw(&user), "emergency_withdraw");
+}
+
+#[test]
+fn emergency_withdraw_all_without_user_signature_is_rejected() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+    vault.deposit(&user, &(100 * XLM), &0);
+
+    env.mock_auths(&[]);
+    assert_rejected!(
+        vault.try_emergency_withdraw_all(&user),
+        "emergency_withdraw_all"
+    );
+}
+
+#[test]
+fn measure_reentrancy_guard_resource_cost_on_deposit_and_withdraw() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 100 * XLM);
+
+    env.budget().reset_tracker();
+    vault.deposit(&user, &(10 * XLM), &0);
+    let deposit_cpu = env.budget().cpu_instruction_cost();
+    let deposit_mem = env.budget().memory_bytes_cost();
+
+    env.budget().reset_tracker();
+    vault.withdraw(&user, &(5 * XLM), &0);
+    let withdraw_cpu = env.budget().cpu_instruction_cost();
+    let withdraw_mem = env.budget().memory_bytes_cost();
+
+    assert!(deposit_cpu > 0);
+    assert!(withdraw_cpu > 0);
+    std::println!(
+        "reentrancy_guard_deposit_cpu={deposit_cpu} reentrancy_guard_deposit_mem={deposit_mem} \
+         reentrancy_guard_withdraw_cpu={withdraw_cpu} reentrancy_guard_withdraw_mem={withdraw_mem}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Property-based invariant test suite (proptest)
+// ---------------------------------------------------------------------------
+mod proptests {
+    use super::*;
+    use crate::conversion;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Property 1a: Pure conversion round-trip invariant
+        /// `shares_to_assets_down(assets_to_shares_down(a, TA, TS), TA + a, TS + shares) <= a`
+        /// Converted assets never exceed original assets for any initial assets and shares.
+        #[test]
+        fn prop_pure_conversion_roundtrip(
+            initial_assets in 1_i128..1_000_000_000 * XLM,
+            initial_shares in 1_i128..1_000_000_000 * XLM,
+            deposit_amount in nester_common::MIN_DEPOSIT_AMOUNT..100_000_000 * XLM,
+        ) {
+            let shares_minted = conversion::assets_to_shares_down(
+                deposit_amount,
+                initial_assets,
+                initial_shares,
+            ).unwrap();
+
+            let assets_back = conversion::shares_to_assets_down(
+                shares_minted,
+                initial_assets + deposit_amount,
+                initial_shares + shares_minted,
+            ).unwrap();
+
+            prop_assert!(
+                assets_back <= deposit_amount,
+                "Round-trip assets returned ({assets_back}) must not exceed deposited ({deposit_amount})"
+            );
+        }
+
+        /// Property 1b: Full contract deposit-then-withdraw round-trip invariant
+        /// `withdraw(shares(deposit(a))) <= a`
+        /// Withdrawing immediately minted shares never returns more than the deposited amount.
+        #[test]
+        fn prop_contract_deposit_withdraw_roundtrip(
+            deposit_amount in nester_common::MIN_DEPOSIT_AMOUNT..1_000_000 * XLM,
+        ) {
+            let (env, admin, token, vault, _treasury) = setup();
+            let user = Address::generate(&env);
+            mint(&token, &user, deposit_amount);
+
+            // Disable early-withdrawal fee to isolate rounding math
+            let mut fee_config = vault.get_fee_config();
+            fee_config.early_withdrawal_fee_bps = 0;
+            vault.set_fee_config(&admin, &fee_config);
+
+            let initial_user_token_bal = token::Client::new(&env, &token.address).balance(&user);
+
+            let shares_minted = vault.deposit(&user, &deposit_amount, &0);
+            vault.withdraw(&user, &shares_minted, &0);
+
+            let final_user_token_bal = token::Client::new(&env, &token.address).balance(&user);
+            prop_assert!(
+                final_user_token_bal <= initial_user_token_bal,
+                "User balance after deposit & withdraw ({final_user_token_bal}) must be <= initial ({initial_user_token_bal})"
+            );
+        }
+
+        /// Property 2: Economic Invariant — No value creation across multi-user sequences
+        /// Across randomized deposit and withdrawal sequences with optional yield,
+        /// cumulative assets returned to users never exceeds total deposited + positive yield.
+        #[test]
+        fn prop_no_value_creation_multi_user(
+            dep1 in nester_common::MIN_DEPOSIT_AMOUNT..500_000 * XLM,
+            dep2 in nester_common::MIN_DEPOSIT_AMOUNT..500_000 * XLM,
+            yield_amount in 0_i128..100_000 * XLM,
+            withdraw_pct_1 in 1_u32..100_u32,
+            withdraw_pct_2 in 1_u32..100_u32,
+        ) {
+            let (env, admin, token, vault, _treasury) = setup();
+            let alice = Address::generate(&env);
+            let bob = Address::generate(&env);
+
+            mint(&token, &alice, dep1);
+            mint(&token, &bob, dep2);
+
+            // User 1 deposits
+            let alice_shares = vault.deposit(&alice, &dep1, &0);
+
+            // Report yield if any
+            if yield_amount > 0 {
+                vault.grant_role(&admin, &admin, &Role::Manager);
+                vault.report_yield(&admin, &yield_amount);
+                mint(&token, &vault.address, yield_amount);
+            }
+
+            // User 2 deposits
+            let bob_shares = vault.deposit(&bob, &dep2, &0);
+
+            // Partial or full withdrawals
+            let alice_withdraw_shares = alice_shares * (withdraw_pct_1 as i128) / 100;
+            let bob_withdraw_shares = bob_shares * (withdraw_pct_2 as i128) / 100;
+
+            if alice_withdraw_shares > 0 {
+                vault.withdraw(&alice, &alice_withdraw_shares, &0);
+            }
+            if bob_withdraw_shares > 0 {
+                vault.withdraw(&bob, &bob_withdraw_shares, &0);
+            }
+
+            let alice_bal = token::Client::new(&env, &token.address).balance(&alice);
+            let bob_bal = token::Client::new(&env, &token.address).balance(&bob);
+
+            let total_received = alice_bal + bob_bal;
+            let max_possible = dep1 + dep2 + yield_amount;
+
+            prop_assert!(
+                total_received <= max_possible,
+                "Total assets withdrawn ({total_received}) exceeds total deposited + yield ({max_possible})"
+            );
+        }
+
+        /// Property 3: Share Price Monotonicity under positive yield & exact halving under 50% impairment
+        #[test]
+        fn prop_share_price_monotonicity_and_impairment(
+            initial_deposit in nester_common::MIN_DEPOSIT_AMOUNT..1_000_000 * XLM,
+            yield_pct in 1_i128..100_i128,
+        ) {
+            let (env, admin, token, vault, _treasury) = setup();
+            let user = Address::generate(&env);
+            mint(&token, &user, initial_deposit);
+            vault.deposit(&user, &initial_deposit, &0);
+
+            let price_before = vault.share_price();
+
+            // Positive yield increases share price
+            let yield_val = initial_deposit * yield_pct / 100;
+            vault.grant_role(&admin, &admin, &Role::Manager);
+            vault.report_yield(&admin, &yield_val);
+
+            let price_after_yield = vault.share_price();
+            prop_assert!(
+                price_after_yield > price_before,
+                "Share price after positive yield ({price_after_yield}) must be > before ({price_before})"
+            );
+
+            // Impairment: loss equal to 50% of current total assets halves share price
+            let current_total_assets = vault.get_total_deposits();
+            let loss = current_total_assets / 2;
+            vault.report_yield(&admin, &(-loss));
+
+            let price_after_impairment = vault.share_price();
+            // Expected price after 50% loss: half of price_after_yield
+            let expected_halved_price = price_after_yield / 2;
+
+            prop_assert!(
+                (price_after_impairment - expected_halved_price).abs() <= 1,
+                "Share price after 50% impairment ({price_after_impairment}) must equal half of post-yield price ({expected_halved_price}) within rounding tolerance",
+                price_after_impairment = price_after_impairment,
+                expected_halved_price = expected_halved_price
+            );
+
+            // Impaired withdrawal charges zero performance fee
+            let shares = vault.get_shares(&user);
+            let fee_preview = vault.withdrawal_fee_preview(&user, &shares);
+            prop_assert_eq!(
+                fee_preview.performance_fee_deducted,
+                0,
+                "Impaired position must be charged 0 performance fee"
+            );
+        }
+
+        /// Property 4: Inflation attack resistance / First-depositor protection
+        ///
+        /// ERC-4626 Inflation Attack Scenario:
+        /// 1. Attacker deposits a tiny amount (MIN_DEPOSIT_AMOUNT = 10_000_000).
+        /// 2. Attacker inflates vault assets via yield report / direct transfer.
+        /// 3. Victim attempts to deposit `b`.
+        ///
+        /// Mitigation Verification:
+        /// - If victim specifies `min_shares_out > 0` and the ratio would round victim's shares to 0,
+        ///   `deposit` panics with `SlippageExceeded` (protecting victim funds from being stolen).
+        /// - If victim deposits enough assets to receive shares (> 0), victim receives their exact
+        ///   proportional value upon withdrawal, preventing value theft by the first depositor.
+        #[test]
+        fn prop_first_depositor_inflation_attack_resistance(
+            attacker_deposit in nester_common::MIN_DEPOSIT_AMOUNT..(nester_common::MIN_DEPOSIT_AMOUNT * 2),
+            direct_transfer in 1_000 * XLM..100_000 * XLM,
+            victim_deposit in nester_common::MIN_DEPOSIT_AMOUNT..50_000 * XLM,
+        ) {
+            let (env, admin, token, vault, _treasury) = setup();
+            let attacker = Address::generate(&env);
+            let victim = Address::generate(&env);
+
+            mint(&token, &attacker, attacker_deposit + direct_transfer);
+            mint(&token, &victim, victim_deposit);
+
+            // 1. Attacker makes initial small deposit
+            let attacker_shares = vault.deposit(&attacker, &attacker_deposit, &0);
+            prop_assert!(attacker_shares > 0);
+
+            // 2. Attacker inflates vault assets via yield report / direct transfer
+            vault.grant_role(&admin, &admin, &Role::Manager);
+            vault.report_yield(&admin, &direct_transfer);
+            mint(&token, &vault.address, direct_transfer);
+
+            // 3. Check victim deposit behavior
+            let total_assets = vault.get_total_deposits();
+            let total_shares = vault.get_shares(&attacker);
+
+            // Pure math preview of expected shares for victim
+            let expected_victim_shares = conversion::assets_to_shares_down(
+                victim_deposit,
+                total_assets,
+                total_shares,
+            ).unwrap();
+
+            if expected_victim_shares == 0 {
+                // If victim's deposit is diluted to 0 shares by the inflation,
+                // passing min_shares_out = 1 must revert with SlippageExceeded, protecting victim.
+                let try_res = vault.try_deposit(&victim, &victim_deposit, &1);
+                prop_assert!(
+                    try_res.is_err(),
+                    "Deposit rounding to 0 shares must be rejected when min_shares_out > 0"
+                );
+            } else {
+                // If victim receives shares (>0), victim must be able to redeem assets proportionally
+                let victim_shares = vault.deposit(&victim, &victim_deposit, &0);
+                prop_assert_eq!(victim_shares, expected_victim_shares);
+
+                // Gross redeemable assets (preview_withdraw returns gross share value)
+                let victim_gross_redeemable = vault.preview_withdraw(&victim_shares);
+                let total_assets_now = total_assets + victim_deposit;
+                let total_shares_now = total_shares + victim_shares;
+                let expected_redeemable = conversion::shares_to_assets_down(
+                    victim_shares,
+                    total_assets_now,
+                    total_shares_now,
+                ).unwrap();
+
+                prop_assert!(
+                    victim_gross_redeemable == expected_redeemable,
+                    "Victim gross redeemable assets ({victim_gross_redeemable}) must equal expected share of vault ({expected_redeemable})",
+                    victim_gross_redeemable = victim_gross_redeemable,
+                    expected_redeemable = expected_redeemable
+                );
+            }
+        }
+    }
+}
+

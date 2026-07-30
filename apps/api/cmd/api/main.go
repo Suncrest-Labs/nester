@@ -1,37 +1,47 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 
+	"github.com/golang-migrate/migrate/v4"
+	migratedb "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
-	dbpkg "github.com/suncrestlabs/nester/apps/api/internal/db"
+	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
+	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
+	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+	"github.com/suncrestlabs/nester/apps/api/internal/scheduler"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	performancesvc "github.com/suncrestlabs/nester/apps/api/internal/service/performance"
+	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
+	"github.com/suncrestlabs/nester/apps/api/internal/services"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
+	"github.com/suncrestlabs/nester/apps/api/internal/valuation"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
@@ -58,6 +68,13 @@ func run() error {
 		return err
 	}
 
+	// Created early (rather than just before ListenAndServe, as before) so
+	// components that need to release resources as soon as shutdown begins —
+	// notably scheduler leadership below — can hook directly into it instead
+	// of only unwinding via defer after the HTTP server finishes draining.
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	pgPool, err := repository.NewPostgresDB(cfg.Database())
 	if err != nil {
 		return err
@@ -69,9 +86,34 @@ func run() error {
 
 	if cfg.Startup().EnableAutoMigrate() {
 		baseLogger.Info("running database migrations", "dir", cfg.Startup().MigrationsDir())
-		if err := dbpkg.MigrateUp(db, cfg.Startup().MigrationsDir()); err != nil {
-			return fmt.Errorf("auto-migrate: %w", err)
+
+		// Dedicated *sql.DB for the migrator: m.Close() closes the instance
+		// passed to WithInstance, so it must not be the one repositories use.
+		migDB := stdlib.OpenDBFromPool(pgPool.Pool)
+
+		driver, err := migratedb.WithInstance(migDB, &migratedb.Config{})
+		if err != nil {
+			_ = migDB.Close()
+			return fmt.Errorf("auto-migrate: init driver: %w", err)
 		}
+
+		m, err := migrate.NewWithDatabaseInstance(
+			"file://"+cfg.Startup().MigrationsDir(),
+			"postgres", driver)
+		if err != nil {
+			_ = migDB.Close()
+			return fmt.Errorf("auto-migrate: new migrate instance: %w", err)
+		}
+
+		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+			_, _ = m.Close()
+			return fmt.Errorf("auto-migrate: up: %w", err)
+		}
+
+		if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
+			return fmt.Errorf("auto-migrate: close: source=%v db=%v", srcErr, dbErr)
+		}
+
 		baseLogger.Info("database migrations complete")
 	} else {
 		baseLogger.Info("auto-migrate disabled; skipping migrations")
@@ -81,23 +123,81 @@ func run() error {
 		return err
 	}
 
+	// Scheduler leader election (#846): elects one instance to run the five
+	// singleton background job loops below (rebalancer, recurring deposits,
+	// APY deviation, goal deadline reminders, protocol health). See
+	// internal/scheduler/leadership.go for the advisory-lock design and
+	// failover semantics. Hooked directly into shutdownCtx (created above,
+	// before the OS signal fires) rather than an independent context, so the
+	// lock releases as soon as shutdown begins instead of only once the HTTP
+	// server finishes draining — letting another instance take over sooner.
+	schedulerLeadership := scheduler.NewLeadership(
+		db,
+		scheduler.LeadershipConfig{
+			LockKey:           cfg.SchedulerLeadership().LockKey(),
+			HeartbeatInterval: cfg.SchedulerLeadership().HeartbeatInterval(),
+		},
+		baseLogger.WithGroup("scheduler-leadership"),
+	)
+	go schedulerLeadership.Run(shutdownCtx)
+
+	systemStateRepository := postgres.NewSystemStateRepository(db)
+
 	vaultRepository := postgres.NewVaultRepository(db)
 	vaultService := service.NewVaultService(vaultRepository)
+	vaultService.SetHarvestDefaultCompound(cfg.Stellar().HarvestDefaultCompound())
 	vaultHandler := handler.NewVaultHandler(vaultService)
+
+	yieldHarvestRepository := postgres.NewYieldHarvestRepository(db)
+	yieldHarvestService := service.NewYieldHarvestService(yieldHarvestRepository)
+	vaultService.SetYieldHarvestRecorder(yieldHarvestService)
+
+	portfolioService := service.NewPortfolioService(vaultRepository)
+	portfolioHandler := handler.NewPortfolioHandler(portfolioService)
 
 	transactionRepository := postgres.NewTransactionRepository(db)
 	transactionService := service.NewTransactionService(transactionRepository, cfg.Stellar().HorizonURL())
+	// Balance is moved only after a deposit/withdrawal is confirmed on-chain
+	// (issue #496); the vault repository applies it idempotently by tx hash.
+	transactionService.SetBalanceApplier(vaultRepository)
 	transactionHandler := handler.NewTransactionHandler(transactionService)
+	transactionHandler.SetVaultRepository(vaultRepository)
 
-	settlementRepository := postgres.NewSettlementRepository(db)
-	settlementService := service.NewSettlementService(settlementRepository)
-	settlementHandler := handler.NewSettlementHandler(settlementService)
+	bankAccountRepository := postgres.NewBankAccountRepository(db)
+	var accountCipher *cryptopkg.AccountCipher
+	if ac := cfg.AccountCipher(); ac.Configured() {
+		cipher, cipherErr := cryptopkg.NewAccountCipherWithKeys(ac.ActiveVersion(), ac.Keys(), ac.FingerprintKey())
+		if cipherErr != nil {
+			return fmt.Errorf("bank account cipher: %w", cipherErr)
+		}
+		accountCipher = cipher
+	}
+
+	paystackResolver := service.NewPaystackResolver(cfg.Bank().PaystackKey())
+	flutterwaveResolver := service.NewFlutterwaveResolver(cfg.Bank().FlutterwaveKey())
+	bankService := service.NewBankService(paystackResolver, flutterwaveResolver)
+	bankHandler := handler.NewBankHandler(bankService)
+
+	bankAccountService := service.NewBankAccountService(bankAccountRepository, accountCipher, bankService)
+	bankAccountHandler := handler.NewBankAccountHandler(bankAccountService)
 
 	userRepository := postgres.NewUserRepository(db)
 	userService := service.NewUserService(userRepository)
+	if accountCipher != nil {
+		userService.WithCipher(accountCipher)
+	}
 	userHandler := handler.NewUserHandler(userService)
+	userVaultsSvc := service.NewUserVaultsService(vaultRepository)
+	userHandler.SetUserVaultsService(userVaultsSvc)
+	notificationRepository := postgres.NewNotificationRepository(db)
+	notificationHandler := handler.NewNotificationHandler(notificationRepository)
+
+	settlementRepository := postgres.NewSettlementRepository(db)
+	settlementService := service.NewSettlementService(settlementRepository, bankAccountService)
+	settlementHandler := handler.NewSettlementHandler(settlementService, userService)
 
 	adminRepository := postgres.NewAdminRepository(db)
+	goalTemplateRepo := postgres.NewGoalTemplateRepository(db)
 
 	var chainInvoker service.VaultChainInvoker
 	if secret := cfg.Stellar().OperatorSecret(); secret != "" {
@@ -106,6 +206,7 @@ func run() error {
 			cfg.Stellar().HorizonURL(),
 			cfg.Stellar().NetworkPassphrase(),
 			secret,
+			cfg.Stellar().WithdrawalSlippageBps(),
 		)
 		if err != nil {
 			return fmt.Errorf("init chain invoker: %w", err)
@@ -116,56 +217,133 @@ func run() error {
 
 	adminService := service.NewAdminService(
 		adminRepository,
+		vaultRepository,
 		chainInvoker,
 		cfg.Stellar().HorizonURL(),
 		cfg.SettlementProviderURL(),
+		cfg.Stellar().AllocationStrategyAddress(),
+		cfg.Allocation().MinWeightPercent(),
 	)
-	adminHandler := handler.NewAdminHandler(adminService)
-	adminHandler.SetEventSyncer(&mainEventSyncer{
-		db:     db,
-		rpcURL: cfg.Stellar().RPCURL(),
-		logger: baseLogger,
+	adminService.SetTemplateRepository(goalTemplateRepo)
+	adminHandler := handler.NewAdminHandler(adminService, userService)
+	adminHandler.SetEventSyncer(&stellarpkg.EventSyncer{
+		DB:      db,
+		SysRepo: systemStateRepository,
+		RPCURL:  cfg.Stellar().RPCURL(),
+		Logger:  baseLogger,
 	})
+	adminHandler.SetLeadership(schedulerLeadership)
 
-	var challengeStore service.ChallengeStore
+	// A single shared Redis client (nil when REDIS_ADDR is unset) powers both the
+	// challenge store and the distributed rate limiters. When nil, both fall back
+	// to in-memory implementations suitable for single-instance deployments.
+	var redisClient *redis.Client
 	if addr := cfg.Redis().Addr(); addr != "" {
-		redisClient := redis.NewClient(&redis.Options{Addr: addr})
-		challengeStore = service.NewRedisChallengeStore(redisClient, cfg.Auth().ChallengeExpiry())
-		baseLogger.Info("challenge store: redis", "addr", addr)
-	} else {
-		challengeStore = service.NewInMemoryChallengeStore(cfg.Auth().ChallengeExpiry())
-		baseLogger.Info("challenge store: in-memory (single-instance only)")
+		redisClient = redis.NewClient(&redis.Options{Addr: addr})
 	}
 
-	authService := service.NewAuthService(challengeStore, userService, cfg.Auth())
-	authHandler := handler.NewAuthHandler(authService)
+	var challengeStore service.ChallengeStore
+	var revocationCache service.RevocationCache
+	if redisClient != nil {
+		challengeStore = service.NewRedisChallengeStore(redisClient, cfg.Auth().ChallengeExpiry())
+		revocationCache = service.NewRedisRevocationCache(redisClient)
+		baseLogger.Info("challenge store: redis", "addr", cfg.Redis().Addr())
+		baseLogger.Info("revocation cache: redis", "addr", cfg.Redis().Addr())
+	} else {
+		challengeStore = service.NewInMemoryChallengeStore(cfg.Auth().ChallengeExpiry())
+		revocationCache = service.NewInMemoryRevocationCache()
+		baseLogger.Info("challenge store: in-memory (single-instance only)")
+		baseLogger.Info("revocation cache: in-memory (single-instance only)")
+	}
 
-	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL())
+	sessionRepository := postgres.NewSessionRepository(db)
+	auditLogger := postgres.NewPostgresAuditLogger(db)
+	anomalyDetector := service.NoopAnomalyDetector{}
+
+	activityEventRepo := postgres.NewActivityEventRepository(db)
+	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)
+	nudgeOutcomeService := service.NewNudgeOutcomeService(nudgeHistoryRepo)
+
+	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL(), cfg.Stellar().USDCIssuer())
 	rateHandler := handler.NewRateHandler(oracleService)
 
-	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (string, error) {
+	// maxWSConnsPerIP bounds simultaneous WebSocket connections from one
+	// client IP (nester#828), mirroring the per-route rate limits already
+	// applied via middleware.NewLimiter below. 0 would mean unlimited.
+	const maxWSConnsPerIP = 20
+
+	wsHub := ws.NewHub(baseLogger.WithGroup("websocket"), func(token string) (userID, sessionID string, err error) {
 		if token == "" {
-			return "", fmt.Errorf("missing token")
+			return "", "", fmt.Errorf("missing token")
 		}
 		claims, err := auth.ParseJWT(token, cfg.Auth().Secret())
 		if err != nil {
-			return "", fmt.Errorf("invalid token: %w", err)
+			return "", "", fmt.Errorf("invalid token: %w", err)
 		}
-		return claims.Subject, nil
-	}, cfg.AllowedOrigins())
+		if claims.SessionID != "" {
+			revoked, err := revocationCache.IsRevoked(context.Background(), claims.SessionID)
+			if err != nil {
+				return "", "", fmt.Errorf("session verification unavailable: %w", err)
+			}
+			if revoked {
+				return "", "", fmt.Errorf("session revoked")
+			}
+		}
+		return claims.Subject, claims.SessionID, nil
+	}, cfg.AllowedOrigins(), redisClient, maxWSConnsPerIP)
 
 	wsCtx, wsCancel := context.WithCancel(context.Background())
 	defer wsCancel()
 	go wsHub.Run(wsCtx)
+	vaultHandler.SetWSHub(wsHub)
+
+	// Real-time portfolio valuation (#832): aggregates each user's positions,
+	// pending deposits, accrued yield, goal allocations, and claimable rewards to
+	// the stroop, prices multi-asset holdings through an oracle with confidence
+	// propagation, caches per user, and pushes fresh valuations over WebSocket on
+	// event-driven invalidation.
+	valuationService := valuation.NewService(valuation.Deps{
+		Positions: valuation.NewVaultPositionSource(vaultRepository),
+		Pending:   valuation.NewTxPendingSource(transactionRepository),
+		Goals:     valuation.NewGoalAllocationSource(postgres.NewSavingsGoalRepository(db)),
+		Oracle:    valuation.NewStaticOracle(nil),
+		Cache:     valuation.NewCache(30 * time.Second),
+		Notifier:  valuation.NewWSNotifier(wsHub),
+		Logger:    baseLogger.WithGroup("valuation"),
+	})
+	valuationHandler := handler.NewValuationHandler(valuationService)
+
+	authService := service.NewAuthService(challengeStore, userService, sessionRepository, revocationCache, anomalyDetector, auditLogger, wsHub, cfg.Auth())
+	authHandler := handler.NewAuthHandler(authService, cfg.Environment() != "development", userService, nudgeOutcomeService, activityEventRepo)
 
 	performanceRepository := postgres.NewPerformanceRepository(db)
-	performanceService := performancesvc.NewService(performanceRepository)
-	performanceHandler := handler.NewPerformanceHandler(performanceService)
+	vaultRepository = postgres.NewVaultRepository(db)
+	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
+	performanceHandler := handler.NewPerformanceHandler(performanceService, handler.NewVaultOwnerAdapter(vaultRepository))
+
+	// Projection service for compound interest calculations, plus the Monte
+	// Carlo savings forecast (#843), which needs the goal/schedule repos to
+	// ground contribution behavior in the user's own history.
+	projectionCalculator := service.NewCompoundInterestCalculator()
+	projectionService := service.NewProjectionService(
+		projectionCalculator,
+		vaultRepository,
+		performanceRepository,
+		postgres.NewSavingsGoalRepository(db),
+		postgres.NewSavingsScheduleRepository(db),
+	)
+	projectionHandler := handler.NewProjectionHandler(projectionService)
+
+	contractReader := stellarpkg.NewContractReader(
+		cfg.Stellar().RPCURL(),
+		cfg.Stellar().NetworkPassphrase(),
+		"",
+	)
 
 	tracker := performancesvc.NewTracker(
 		performanceRepository,
 		vaultRepository,
-		nil, // BalanceProvider: wire to a Stellar adapter once the on-chain reader is exposed.
+		contractReader,
 		cfg.Performance().SnapshotInterval(),
 	)
 	trackerCtx, cancelTracker := context.WithCancel(context.Background())
@@ -176,15 +354,137 @@ func run() error {
 		}
 	}()
 
+	tvlRepository := postgres.NewTVLRepository(db)
+	tvlService := tvlsvc.NewService(tvlRepository, vaultRepository)
+	tvlHandler := handler.NewTVLHandler(tvlService)
+
+	tvlTracker := tvlsvc.NewTracker(
+		tvlRepository,
+		vaultRepository,
+		contractReader,
+		cfg.TVL().RefreshInterval(),
+	).WithLogger(baseLogger.WithGroup("tvl-tracker"))
+	tvlCtx, cancelTVL := context.WithCancel(context.Background())
+	defer cancelTVL()
+	go func() {
+		if err := tvlTracker.Run(tvlCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("tvl tracker stopped", "error", err.Error())
+		}
+	}()
+
+	apyRefresher := performancesvc.NewAPYRefresher(
+		performancesvc.APYRefresherConfig{
+			Interval:              cfg.APYRefresh().RefreshInterval(),
+			BroadcastThresholdBPS: cfg.APYRefresh().BroadcastThresholdBPS(),
+			RegistryAddress:       cfg.Stellar().YieldRegistryContract(),
+		},
+		performanceRepository,
+		vaultRepository,
+		&performancesvc.RegistryReader{
+			Reader:  contractReader,
+			Address: cfg.Stellar().YieldRegistryContract(),
+		},
+		func(vaultID uuid.UUID, previousBPS, currentBPS uint32) {
+			wsHub.BroadcastEvent(ws.Event{
+				Channel: "vaults:global",
+				Type:    ws.EventYieldAccrued,
+				Data: map[string]any{
+					"vault_id":     vaultID.String(),
+					"previous_bps": previousBPS,
+					"current_bps":  currentBPS,
+				},
+			})
+		},
+	).WithLogger(baseLogger.WithGroup("apy-refresher"))
+	apyCtx, cancelAPY := context.WithCancel(context.Background())
+	defer cancelAPY()
+	go func() {
+		if err := apyRefresher.Run(apyCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("apy refresher stopped", "error", err.Error())
+		}
+	}()
+
+	// Background reconciliation of pending transactions: polls Horizon so a
+	// transaction's status is confirmed even when the client never calls
+	// GET /api/v1/transactions/{hash}. Broadcasts a WebSocket event on change.
+	var nudgeEngineSvc *service.NudgeEngineService
+
+	txPoller := service.NewTransactionPoller(
+		service.TransactionPollerConfig{
+			Enabled:  cfg.TransactionPoller().Enabled(),
+			Interval: cfg.TransactionPoller().Interval(),
+			MinAge:   cfg.TransactionPoller().MinAge(),
+		},
+		transactionService,
+		func(ctx context.Context, tx transaction.Transaction) {
+			wsHub.BroadcastEvent(transactionStatusEvent(tx))
+			// A confirmed deposit/withdrawal changes settled net worth: drop the
+			// cached valuation and push a fresh one (#832 event-driven invalidation).
+			if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
+				valuationService.Invalidate(v.UserID)
+			}
+			if tx.Status == transaction.StatusCompleted && tx.Type == transaction.TypeDeposit {
+				if v, err := vaultRepository.GetVault(ctx, tx.VaultID); err == nil {
+					_ = nudgeOutcomeService.RecordDeposit(ctx, v.UserID, time.Now())
+					if nudgeEngineSvc != nil {
+						_ = nudgeEngineSvc.EvaluateAndDispatch(ctx, v.UserID)
+					}
+				}
+			}
+		},
+		baseLogger.WithGroup("tx-poller"),
+	)
+	pollerCtx, cancelPoller := context.WithCancel(context.Background())
+	defer cancelPoller()
+	go txPoller.Run(pollerCtx)
+
+	// notificationRateLimit/-Window bound how many notifications a user can
+	// receive per category in a burst (#829's "a burst of deposits does not
+	// produce a burst of near-identical notifications"). Safety-category
+	// events bypass this entirely (see notifications.Category doc comment).
+	const notificationRateLimit = 20
+	const notificationRateWindow = 5 * time.Minute
+	notificationRateLimiter := middleware.NewLimiter(redisClient, "notifications", notificationRateLimit, notificationRateWindow)
+
+	// notificationDedup is process-local when Redis isn't configured, and
+	// Redis-backed (cross-instance) otherwise — same dual-mode pattern as
+	// middleware.NewLimiter above.
+	var notificationDedup notifications.Deduplicator = notifications.NewInMemoryDeduplicator()
+	if redisClient != nil {
+		notificationDedup = notifications.NewRedisDeduplicator(redisClient)
+	}
+
+	notificationDispatcher := notifications.New(
+		[]notifications.Channel{
+			notifications.NewWebSocketChannel(wsHub),
+		},
+		notificationRepository,
+		nil,
+		notifications.WithDeduplicator(notificationDedup),
+		notifications.WithRateLimiter(notificationRateLimiter),
+	)
+
+	// notificationDispatcher2 carries the real Push channel — separate from
+	// notificationDispatcher above (WebSocket-only) because a failed
+	// WebSocket delivery is never retried by design (see
+	// notifications.RetryEnqueuer's doc comment), while a failed Push send
+	// is. NoopPushSender is the same placeholder nudgeNotificationDispatcher
+	// already uses below — a real provider integration is deliberately
+	// deferred (see #829's commit message).
+	notificationDispatcher2 := notifications.New(
+		[]notifications.Channel{
+			notifications.NewPushChannel(notifications.NoopPushSender{}, notificationRepository),
+		},
+		notificationRepository,
+		nil,
+		notifications.WithDeduplicator(notificationDedup),
+		notifications.WithRateLimiter(notificationRateLimiter),
+	)
+
 	var ready atomic.Bool
 	ready.Store(true)
 
 	depHTTPClient := &http.Client{Timeout: cfg.Startup().DependencyTimeout()}
-
-	paystackResolver := service.NewPaystackResolver(cfg.Bank().PaystackKey())
-	flutterwaveResolver := service.NewFlutterwaveResolver(cfg.Bank().FlutterwaveKey())
-	bankService := service.NewBankService(paystackResolver, flutterwaveResolver)
-	bankHandler := handler.NewBankHandler(bankService)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", livenessHandler(&ready))
@@ -201,30 +501,505 @@ func run() error {
 		environment:  cfg.Environment(),
 		buildVersion: version,
 	}))
+	yieldHarvestHandler := handler.NewYieldHarvestHandler(yieldHarvestService)
+	yieldHarvestHandler.Register(mux)
+
 	vaultHandler.Register(mux)
+
+	// Read-only history for the fair-exit queue (#814), penalty escrow
+	// (#805), and slippage-safe rebalance (#810) event projections.
+	fairExitRepo := postgres.NewFairExitRepository(db)
+	fairExitHandler := handler.NewFairExitHandler(vaultService, fairExitRepo)
+	fairExitHandler.Register(mux)
+
+	portfolioHandler.Register(mux)
+	valuationHandler.Register(mux)
 	transactionHandler.Register(mux)
 	settlementHandler.Register(mux)
+
+	// Unified activity feed (deposits/withdrawals/rebalances/settlements/
+	// yield harvests) backing the dApp's transaction-history page.
+	activityRepository := postgres.NewActivityRepository(db)
+	activityService := service.NewActivityService(activityRepository)
+	activityHandler := handler.NewActivityHandler(activityService)
+	activityHandler.Register(mux)
 	userHandler.Register(mux)
+	notificationHandler.Register(mux)
 	adminHandler.Register(mux)
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
 	performanceHandler.Register(mux)
+	tvlHandler.Register(mux)
+	projectionHandler.Register(mux)
+	analyticsHandler := handler.NewAnalyticsHandler(performanceService)
+	analyticsHandler.Register(mux)
+
+	// Risk service
+	riskService := services.NewRiskService(vaultRepository)
+	riskHandler := handler.NewRiskHandler(riskService)
+	riskHandler.Register(mux)
+
+	// Vault analytics (APY volatility, Sharpe, Sortino, drawdown, win rate)
+	vaultAnalyticsSvc := service.NewVaultAnalyticsService(performanceRepository)
+	vaultAnalyticsHandler := handler.NewVaultAnalyticsHandler(vaultAnalyticsSvc)
+	vaultAnalyticsHandler.Register(mux)
+
+	// Yield opportunities (DeFiLlama Stellar pools)
+	yieldSvc := service.NewYieldService("")
+	// Warm the Stellar yield cache in the background so the first user request
+	// doesn't pay the DeFiLlama round-trip (#667). Failure is non-fatal: the
+	// lazy-load path still works.
+	go func() {
+		warmCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		start := time.Now()
+		if pools, err := yieldSvc.WarmCache(warmCtx); err != nil {
+			baseLogger.Warn("yield cache warm failed", "error", err)
+		} else {
+			baseLogger.Info("yield cache warmed", "chain", "Stellar", "pools", pools, "duration_ms", time.Since(start).Milliseconds())
+		}
+	}()
+	yieldBookmarkSvc := service.NewYieldBookmarkService(db, yieldSvc)
+	protocolTVLRepo := postgres.NewProtocolTVLRepository(db)
+	yieldHandler := handler.NewYieldHandler(yieldSvc, yieldBookmarkSvc)
+	yieldHandler.SetTVLRepository(protocolTVLRepo)
+	yieldHandler.Register(mux)
+	yieldBookmarkHandler := handler.NewYieldBookmarkHandler(yieldBookmarkSvc)
+	yieldBookmarkHandler.Register(mux)
+
+	// Protocol health checker — alerts users when a protocol's TVL drops >20% in 24h.
+	protocolHealthChecker := scheduler.NewProtocolHealthChecker(
+		scheduler.ProtocolHealthConfig{
+			Enabled:  true,
+			Interval: 30 * time.Minute,
+		},
+		vaultRepository,
+		yieldSvc,
+		protocolTVLRepo,
+		scheduler.DispatcherProtocolHealthNotifier{Dispatcher: notificationDispatcher},
+		baseLogger.WithGroup("protocol-health"),
+	)
+	protocolHealthChecker.SetLeaderChecker(schedulerLeadership)
+	protocolHealthCtx, cancelProtocolHealth := context.WithCancel(context.Background())
+	defer cancelProtocolHealth()
+	go protocolHealthChecker.Run(protocolHealthCtx)
+
+	// APY deviation alert (#846): notifies a vault's users when its APY drops
+	// >20% from its 30-day mean. Notification-only, but gated behind
+	// scheduler leadership like the other four jobs (see
+	// APYDeviationJob.SetLeaderChecker for the shared dedup-race rationale).
+	// Previously built and tested (apy_deviation.go/apy_deviation_adapters.go)
+	// but never wired into main.go before #846.
+	apyDeviationJob := scheduler.NewAPYDeviationJob(
+		scheduler.APYDeviationJobFromEnv(),
+		scheduler.VaultAPYListerFunc(func(ctx context.Context) ([]scheduler.APYVaultInfo, error) {
+			infos, err := vaultRepository.ListActiveVaultsForAPYCheck(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]scheduler.APYVaultInfo, len(infos))
+			for i, v := range infos {
+				out[i] = scheduler.APYVaultInfo{
+					ID:                 v.ID,
+					UserID:             v.UserID,
+					Currency:           v.Currency,
+					LastAPYAlertSentAt: v.LastAPYAlertSentAt,
+				}
+			}
+			return out, nil
+		}),
+		performanceRepository,
+		vaultRepository,
+		notificationDispatcher,
+		baseLogger.WithGroup("apy-deviation"),
+	)
+	apyDeviationJob.SetLeaderChecker(schedulerLeadership)
+	apyDeviationCtx, cancelAPYDeviation := context.WithCancel(context.Background())
+	defer cancelAPYDeviation()
+	go apyDeviationJob.Run(apyDeviationCtx)
+
+	// User watchlist
+	watchlistSvc := service.NewWatchlistService(db)
+	watchlistHandler := handler.NewWatchlistHandler(watchlistSvc)
+	watchlistHandler.Register(mux)
+
+	// Savings goals
+	savingsGoalRepo := postgres.NewSavingsGoalRepository(db)
+	// Intelligence proxy (forwards to Python service)
+	intelURL := cfg.Intelligence().ServiceURL()
+	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
+	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
+		BaseURL: intelURL,
+		APIKey:  cfg.Intelligence().ServiceAPIKey(),
+		Timeout: cfg.Intelligence().Timeout(),
+	})
+
+	nudgeCopyGen := service.CompositeCopyGenerator{
+		Template: nudge.TemplateCopyGenerator{},
+		LLM:      service.LLMCopyGenerator{Client: prometheusClient},
+	}
+
+	savingsStreakRepo := postgres.NewSavingsStreakRepository(db)
+
+	// Nudges dispatch over their own push-enabled dispatcher: the shared
+	// `notificationDispatcher` above is constructed with zero channels
+	// (websocket is still disabled), so nudges need their own live channel
+	// rather than silently persisting-but-never-delivering.
+	nudgeNotificationDispatcher := notifications.New(
+		[]notifications.Channel{
+			notifications.NewPushChannel(notifications.NoopPushSender{}, notificationRepository),
+		},
+		notificationRepository,
+		nil,
+		notifications.WithDeduplicator(notificationDedup),
+		notifications.WithRateLimiter(notificationRateLimiter),
+	)
+
+	nudgeEngineSvc = service.NewNudgeEngineService(
+		savingsGoalRepo,
+		savingsStreakRepo,
+		transactionRepository,
+		userRepository,
+		usersignal.HeuristicSegmentProvider{UserRepo: userRepository, GoalRepo: savingsGoalRepo},
+		usersignal.HeuristicEngagementProvider{UserRepo: userRepository},
+		usersignal.HeuristicTimingProvider{Activity: activityEventRepo, UserRepo: userRepository},
+		nudgeHistoryRepo,
+		nudgeHistoryRepo,
+		nudgeHistoryRepo,
+		nudgeCopyGen,
+		service.DispatcherNudgeNotifier{Dispatcher: nudgeNotificationDispatcher},
+	)
+
+	nudgeEngineJob := scheduler.NewNudgeEngineJob(
+		scheduler.NudgeEngineConfig{
+			Enabled:  true,
+			Interval: 1 * time.Hour,
+		},
+		savingsGoalRepo,
+		nudgeEngineSvc,
+		baseLogger.WithGroup("nudge-engine"),
+	)
+	nudgeCtx, cancelNudge := context.WithCancel(context.Background())
+	defer cancelNudge()
+	go nudgeEngineJob.Run(nudgeCtx)
+
+	webhookRepo := postgres.NewWebhookRepository(db)
+	webhookSvc := service.NewWebhookService(webhookRepo)
+	webhookHandler := handler.NewWebhookHandler(webhookSvc)
+	webhookHandler.Register(mux)
+	// Per-goal notification preferences (mute/digest frequency).
+	goalNotificationRepo := postgres.NewGoalNotificationRepository(db)
+	goalNotificationPrefSvc := service.NewGoalNotificationPreferenceService(goalNotificationRepo, savingsGoalRepo)
+	savingsGoalSvc := service.NewSavingsGoalService(
+		savingsGoalRepo,
+		vaultRepository,
+		service.CompositeGoalMilestoneNotifier{
+			Notifiers: []service.GoalMilestoneNotifier{
+				service.DispatcherGoalMilestoneNotifier{
+					Dispatcher:  notificationDispatcher2,
+					Preferences: goalNotificationRepo,
+				},
+				service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
+				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
+			},
+		},
+	)
+	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
+	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
+	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
+	savingsGoalSvc.SetTemplateRepository(goalTemplateRepo)
+	// Honor each goal's auto_compound preference when its vault is harvested (#task1).
+	vaultService.SetGoalYieldRouter(savingsGoalSvc)
+
+	minDeposit, _ := decimal.NewFromString(cfg.RecurringDeposit().MinDepositAmount())
+	savingsScheduleRepo := postgres.NewSavingsScheduleRepository(db)
+	savingsScheduleSvc := service.NewSavingsScheduleService(savingsScheduleRepo, savingsGoalRepo, vaultRepository, minDeposit)
+	savingsGoalHandler := handler.NewSavingsGoalHandler(savingsGoalSvc, savingsScheduleSvc)
+	savingsGoalHandler.SetNotificationPreferenceManager(goalNotificationPrefSvc)
+	savingsGoalHandler.Register(mux)
+
+	goalNotificationDigestJob := scheduler.NewGoalNotificationDigestJob(
+		scheduler.GoalNotificationDigestConfig{Enabled: true, Interval: time.Hour},
+		goalNotificationRepo,
+		notificationDispatcher2,
+		baseLogger.WithGroup("goal-notification-digest"),
+	)
+	goalDigestCtx, cancelGoalDigest := context.WithCancel(context.Background())
+	defer cancelGoalDigest()
+	go goalNotificationDigestJob.Run(goalDigestCtx)
+
+	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
+	savingsScheduleHandler.Register(mux)
+
+	// Goal deadline reminders are handled by the unified nudge engine
+	// (nudge.NudgeTypeDeadlineReminder / EvaluateDeadlineReminderTrigger)
+	// rather than a dedicated scheduler job — see nudgeEngineJob below.
+
+	ledgerVaultService := service.NewVaultService(vaultRepository)
+	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
+	goalProgressSvc := service.NewGoalProgressService(savingsGoalRepo)
+
+	// Durable async job queue (#824): the shared worker pool and producer
+	// client. Handlers are registered below before the worker starts. The
+	// client is passed to producers (harvest engine, chain invoker, and —
+	// as of #846 — the recurring-deposit job below) so they enqueue durable
+	// work instead of doing it inline.
+	jobQueueRepo := postgres.NewJobRepository(db)
+	jobQueueMetrics := jobqueue.NewStdMetrics()
+	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+
+	// Durable retry for failed notification deliveries (#829), now that the
+	// job queue client exists. Only notificationDispatcher2 gets a
+	// RetryEnqueuer: it's the only one of the two dispatchers above with a
+	// real Push channel registered. notificationDispatcher only has
+	// WebSocket registered, and WebSocket failures are never retried by
+	// design (see notifications.RetryEnqueuer's doc comment) — wiring retry
+	// there would only ever enqueue jobs for Email/Push that it has no
+	// adapter to actually redeliver.
+	notificationDispatcher2.SetRetryEnqueuer(notifications.NewJobQueueRetryEnqueuer(jobQueueClient))
+
+	// Recurring deposit sweep (#846): classified SINGLETON (money-moving —
+	// see RecurringDepositJob's doc comment). The sweep loop itself only
+	// enqueues a durable per-occurrence job onto jobQueueClient rather than
+	// recording the deposit inline; RecurringDepositJobHandler (registered
+	// on jobWorker below) does the actual ledger write, giving it the same
+	// lease/retry/backoff at-least-once guarantees as the harvest engine.
+	recurringDepositJob := scheduler.NewRecurringDepositJob(
+		scheduler.RecurringDepositConfig{
+			Enabled:  cfg.RecurringDeposit().Enabled(),
+			Interval: cfg.RecurringDeposit().Interval(),
+		},
+		savingsScheduleRepo,
+		jobQueueClient,
+		goalProgressSvc,
+		baseLogger.WithGroup("recurring-deposit"),
+	)
+	recurringDepositJob.SetLeaderChecker(schedulerLeadership)
+	recurringCtx, cancelRecurring := context.WithCancel(context.Background())
+	defer cancelRecurring()
+	go recurringDepositJob.Run(recurringCtx)
+
+	// Savings goal soft-delete recovery purge (#924): hard-deletes goals
+	// whose deleted_at is older than savingsgoal.SavingsGoalRecoveryWindow.
+	// Runs daily; leader-elected like the other sweep jobs to avoid every
+	// instance racing to purge the same rows.
+	savingsGoalPurgeJob := scheduler.NewSavingsGoalPurgeJob(
+		savingsGoalRepo,
+		baseLogger.WithGroup("savings-goal-purge"),
+	)
+	savingsGoalPurgeJob.SetLeaderChecker(schedulerLeadership)
+	savingsGoalPurgeCtx, cancelSavingsGoalPurge := context.WithCancel(context.Background())
+	defer cancelSavingsGoalPurge()
+	go savingsGoalPurgeJob.Run(savingsGoalPurgeCtx, 24*time.Hour)
+
+	jobWorker := jobqueue.NewWorker(
+		jobQueueRepo,
+		jobqueue.Config{
+			Enabled:            cfg.JobQueue().Enabled(),
+			PollInterval:       cfg.JobQueue().PollInterval(),
+			Lease:              cfg.JobQueue().Lease(),
+			HeartbeatInterval:  cfg.JobQueue().HeartbeatInterval(),
+			JobTimeout:         cfg.JobQueue().JobTimeout(),
+			DefaultConcurrency: cfg.JobQueue().DefaultConcurrency(),
+			Backoff: jobqueue.BackoffConfig{
+				Base: cfg.JobQueue().BackoffBase(),
+				Max:  cfg.JobQueue().BackoffMax(),
+			},
+			StatsInterval: cfg.JobQueue().StatsInterval(),
+			DrainTimeout:  cfg.JobQueue().DrainTimeout(),
+		},
+		baseLogger.WithGroup("job-queue"),
+		jobQueueMetrics,
+	)
+	// Yield harvest orchestration engine (#845): evaluates vaults on a cadence,
+	// applies the economic gate (harvest iff accrued yield > gas + margin),
+	// defers under network congestion, and submits harvests as idempotent jobs
+	// on the queue above. Its job handler is registered on the worker before Run.
+	harvestMargin, err := decimal.NewFromString(cfg.Harvest().Margin())
+	if err != nil {
+		return fmt.Errorf("HARVEST_ENGINE_MARGIN: %w", err)
+	}
+	harvestGasFee, err := decimal.NewFromString(cfg.Harvest().GasFee())
+	if err != nil {
+		return fmt.Errorf("HARVEST_ENGINE_GAS_FEE: %w", err)
+	}
+	harvestExecutor := harvest.NewServiceExecutor(vaultService, userService)
+	jobWorker.Register(harvest.DefaultJobType,
+		harvest.NewJobHandler(harvestExecutor, baseLogger.WithGroup("harvest-job")), 0)
+
+	// Notification retry (#829): redelivers a failed Push notification via
+	// notificationDispatcher2 (see the RetryEnqueuer wiring above for why
+	// only that dispatcher is used here).
+	jobWorker.Register(notifications.NotificationRetryJobType,
+		notifications.NewNotificationRetryJobHandler(notificationDispatcher2), 0)
+
+	// Recurring-deposit occurrence handler (#846): processes the jobs
+	// recurringDepositJob (above) enqueues. Fixes the #846 idempotency bug —
+	// see scheduled_deposit_adapters.go's RecordScheduledDeposit doc comment.
+	jobWorker.Register(scheduler.RecurringDepositJobType,
+		scheduler.NewRecurringDepositJobHandler(
+			scheduledDepositSvc,
+			savingsScheduleRepo,
+			scheduler.NotificationDepositNotifier{Dispatcher: notificationDispatcher},
+			baseLogger.WithGroup("recurring-deposit-handler"),
+		), 0)
+
+	harvestEngine := harvest.New(
+		harvest.Config{
+			Enabled:  cfg.Harvest().Enabled(),
+			Interval: cfg.Harvest().Interval(),
+			Margin:   harvestMargin,
+			Window:   cfg.Harvest().Window(),
+		},
+		harvest.NewRepoSource(vaultRepository),
+		harvest.NewStaticGasOracle(harvestGasFee),
+		jobQueueClient,
+		baseLogger.WithGroup("harvest-engine"),
+	)
+	harvestHandler := handler.NewHarvestHandler(harvestEngine)
+	harvestHandler.Register(mux)
+	harvestCtx, cancelHarvest := context.WithCancel(context.Background())
+	defer cancelHarvest()
+	go harvestEngine.Run(harvestCtx)
+
+	jobQueueCtx, cancelJobQueue := context.WithCancel(context.Background())
+	defer cancelJobQueue()
+	go func() {
+		if err := jobWorker.Run(jobQueueCtx); err != nil && !errors.Is(err, context.Canceled) {
+			baseLogger.Error("job queue worker stopped", "error", err.Error())
+		}
+	}()
+
+	// User vault rebalance (suggestions + execution)
+	vaultRebalanceSvc := service.NewVaultRebalanceService(vaultRepository, adminService)
+	vaultHandler.SetRebalanceService(vaultRebalanceSvc)
+
+	// Rebalance rate limiter (3 per hour per user)
+	rebalanceRateLimiter := middleware.WalletRateLimiter(
+		cfg.RateLimit().RebalanceLimit(),
+		cfg.RateLimit().RebalanceWindow(),
+		walletKeyFromContext,
+	)
+	vaultHandler.SetRebalanceRateLimiter(rebalanceRateLimiter)
+
+	intelligenceHandler := handler.NewIntelligenceHandler(intelProxy, prometheusClient)
+	intelligenceHandler.Register(mux)
+
+	// AI progress coaching (#112): on-demand endpoint plus a weekly background nudge.
+	savingsGoalHandler.SetCoachingProvider(prometheusClient)
+	goalCoachingScheduler := service.NewGoalCoachingScheduler(
+		savingsGoalRepo,
+		prometheusClient,
+		nudgeNotificationDispatcher,
+		baseLogger.WithGroup("goal-coaching"),
+		nudgeHistoryRepo,
+	)
+	goalCoachingCtx, cancelGoalCoaching := context.WithCancel(context.Background())
+	defer cancelGoalCoaching()
+	go goalCoachingScheduler.Run(goalCoachingCtx, 7*24*time.Hour)
+
+	intelRelay := service.NewRelayHandler(http.DefaultClient, service.RelayConfig{
+		BaseURL: intelURL,
+		APIKey:  cfg.Intelligence().ServiceAPIKey(),
+		Timeout: cfg.Intelligence().Timeout(),
+	})
+	intelligenceRelayHandler := handler.NewIntelligenceRelayHandler(intelRelay)
+	intelligenceRelayHandler.Register(mux)
+
+	// Periodic financial insight digest (#859): a deterministic ledger
+	// source endpoint (consumed by the intelligence service via the relay),
+	// a cache/audit table, and a leader-elected daily job that generates and
+	// delivers a digest once per user per completed period.
+	digestRepository := postgres.NewDigestRepository(db)
+	digestLedgerService := service.NewDigestLedgerService(savingsGoalRepo, yieldHarvestRepository, savingsStreakRepo)
+	digestHandler := handler.NewDigestHandler(digestLedgerService, digestRepository)
+	digestHandler.Register(mux)
+
+	digestJob := scheduler.NewDigestJob(
+		scheduler.DigestJobConfig{Enabled: true, Interval: 24 * time.Hour},
+		notificationRepository,
+		digestRepository,
+		prometheusClient,
+		nudgeNotificationDispatcher,
+		baseLogger.WithGroup("digest"),
+	)
+	digestJob.SetLeaderChecker(schedulerLeadership)
+	digestCtx, cancelDigest := context.WithCancel(context.Background())
+	defer cancelDigest()
+	go digestJob.Run(digestCtx)
+
+	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
+	performanceSnapshotsHandler.Register(mux)
+
+	toolAuditRepo := postgres.NewToolAuditRepository(db)
+	toolAuditSvc := service.NewToolAuditService(toolAuditRepo)
+	toolAuditHandler := handler.NewToolAuditHandler(toolAuditSvc)
+	toolAuditHandler.Register(mux)
+
 	bankHandler.Register(mux)
+	bankAccountHandler.Register(mux)
 
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
+
+	// APY snapshot scheduler and history endpoint
+	apySnapshotRepo := postgres.NewAPYSnapshotRepository(db)
+	apySvc := service.NewAPYService(apySnapshotRepo)
+	apyHandler := handler.NewAPYHandler(apySvc)
+	apyHandler.Register(mux)
+	apySchedulerCtx, cancelAPYScheduler := context.WithCancel(context.Background())
+	defer cancelAPYScheduler()
+	go apySvc.StartScheduler(apySchedulerCtx)
 
 	authRules := []middleware.RouteRule{
 		{PathPrefix: "/health", Public: true},
 		{PathPrefix: "/healthz", Public: true},
 		{PathPrefix: "/readyz", Public: true},
 		{PathPrefix: "/ws", Public: true},
-		{PathPrefix: "/api/v1/auth/", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/challenge", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/verify", Public: true},
+		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/refresh", Public: true},
+		// No blanket "/api/v1/auth/" rule: logout, logout-all, and sessions
+		// must stay protected and fall through to the "/api/v1/" catch-all.
 		{PathPrefix: "/api/v1/banks/", Public: true},
+		{PathPrefix: "/api/v1/yields/", Public: true},
+		{PathPrefix: "/api/v1/savings-goals/shared/", Public: true},
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
+		{PathPrefix: "/api/v1/internal/", Role: "service"},
 		{PathPrefix: "/api/v1/", Public: false},
 	}
-	authenticator := middleware.Authenticate(cfg.Auth().Secret(), authRules)
-	globalLimiter := middleware.IPRateLimiter(cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow())
+	authenticator := middleware.Authenticate(cfg.Auth().Secret(), cfg.Auth().ServiceAPIKey(), authRules, revocationCache)
+	// Tell the rate-limit client-IP extractor how many trusted proxies sit in
+	// front of the API so it derives the originating client IP from
+	// X-Forwarded-For instead of collapsing all traffic onto the proxy address.
+	middleware.ConfigureClientIP(cfg.RateLimit().TrustedProxyCount())
+
+	// globalLimiter bounds every request per client IP, but skips liveness /
+	// readiness / metrics endpoints so orchestrators can always reach them. It is
+	// distributed across instances when Redis is configured.
+	globalLimiter := middleware.GlobalRateLimiter(
+		middleware.NewLimiter(redisClient, "global", cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow()),
+		[]string{"/health", "/healthz", "/readyz", "/metrics"},
+	)
+	// authRouteLimiter applies a strict per-IP limit to the unauthenticated auth
+	// handshake to blunt credential-stuffing. Keyed by IP because no user exists
+	// yet at challenge/verify time.
+	authRouteLimiter := middleware.SensitiveRouteLimiter(
+		middleware.NewLimiter(redisClient, "auth", cfg.RateLimit().AuthLimit(), cfg.RateLimit().AuthWindow()),
+		[]middleware.RouteMatch{
+			{Method: http.MethodPost, Path: "/api/v1/auth/challenge"},
+			{Method: http.MethodPost, Path: "/api/v1/auth/verify"},
+		},
+		"authentication rate limit exceeded",
+	)
+	// settlementLimiter applies a strict per-user limit to settlement creation to
+	// prevent settlement spam. Placed after authentication so it keys by user ID.
+	settlementLimiter := middleware.SensitiveUserRouteLimiter(
+		middleware.NewLimiter(redisClient, "settlement", cfg.RateLimit().SettlementLimit(), cfg.RateLimit().SettlementWindow()),
+		[]middleware.RouteMatch{
+			{Method: http.MethodPost, Path: "/api/v1/settlements"},
+		},
+		"settlement rate limit exceeded",
+	)
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 	walletLimiter := middleware.WalletRateLimiter(
 		cfg.RateLimit().WalletLimit(),
@@ -235,15 +1010,24 @@ func run() error {
 
 	server := &http.Server{
 		Addr: cfg.Server().Address(),
+		// cors is outermost of the request-processing middleware (after only
+		// SecurityHeaders/RecoverPanic) so that rate-limit 429 responses from
+		// globalLimiter and authRouteLimiter still carry CORS headers and remain
+		// readable to browser clients. OPTIONS preflights are short-circuited by
+		// cors and never reach the limiters.
 		Handler: middleware.SecurityHeaders(cfg.Environment())(
 			middleware.RecoverPanic(baseLogger)(
-				globalLimiter(
-					cors(
-						writeLimiter(
-							authenticator(
-								walletLimiter(
-									middleware.LimitRequestBody(1 * 1024 * 1024)(
-										middleware.Logging(baseLogger)(mux),
+				cors(
+					globalLimiter(
+						authRouteLimiter(
+							writeLimiter(
+								authenticator(
+									settlementLimiter(
+										walletLimiter(
+											middleware.LimitRequestBody(1 * 1024 * 1024)(
+												middleware.Logging(baseLogger)(mux),
+											),
+										),
 									),
 								),
 							),
@@ -269,10 +1053,7 @@ func run() error {
 		"auto_migrate", cfg.Startup().EnableAutoMigrate(),
 	)
 
-	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	startEventIndexer(shutdownCtx, baseLogger, db, cfg.Stellar().RPCURL())
+	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, cfg.Stellar().RPCURL())
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -311,6 +1092,27 @@ func run() error {
 		"uptime", time.Since(startedAt).String(),
 	)
 	return nil
+}
+
+// transactionStatusEvent maps a reconciled transaction to the WebSocket event
+// the dApp listens for on the "vaults:global" channel. Confirmed deposits and
+// withdrawals get their dedicated event type; everything else (failures, other
+// types) uses the generic status_changed event.
+func transactionStatusEvent(tx transaction.Transaction) ws.Event {
+	eventType := ws.EventStatusChanged
+	if tx.Status == transaction.StatusCompleted {
+		switch tx.Type {
+		case transaction.TypeDeposit:
+			eventType = ws.EventDepositConfirmed
+		case transaction.TypeWithdrawal:
+			eventType = ws.EventWithdrawalConfirmed
+		}
+	}
+	return ws.Event{
+		Channel: "vaults:global",
+		Type:    eventType,
+		Data:    tx,
+	}
 }
 
 func walletKeyFromContext(r *http.Request) string {
@@ -483,422 +1285,4 @@ func pingStellarDependencies(logger *slog.Logger, cfg *config.Config) error {
 	}
 
 	return nil
-}
-
-func startEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, rpcURL string) {
-	if strings.TrimSpace(rpcURL) == "" {
-		logger.Warn("event indexer disabled: STELLAR_RPC_URL is empty")
-		return
-	}
-	if err := ensureIndexerTables(ctx, db); err != nil {
-		logger.Error("event indexer disabled: failed to initialize tables", "error", err)
-		return
-	}
-
-	go func() {
-		client := &http.Client{Timeout: 8 * time.Second}
-		ticker := time.NewTicker(6 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				startLedger, err := getLastIndexedLedger(ctx, db)
-				if err != nil {
-					logger.Error("event indexer failed to load cursor", "error", err)
-					continue
-				}
-
-				contractIDs, err := loadVaultContractIDs(ctx, db)
-				if err != nil {
-					logger.Error("event indexer failed to load vault contracts", "error", err)
-					continue
-				}
-				if len(contractIDs) == 0 {
-					continue
-				}
-
-				events, latestLedger, err := fetchSorobanEvents(ctx, client, rpcURL, contractIDs, startLedger)
-				if err != nil {
-					logger.Error("event indexer fetch failed", "error", err)
-					continue
-				}
-
-				for _, event := range events {
-					processed, err := applyIndexedEvent(ctx, db, event)
-					if err != nil {
-						logger.Error("event indexer failed to apply event", "event_id", event.ID, "contract_id", event.ContractID, "event_type", event.EventType, "error", err)
-						continue
-					}
-					if !processed {
-						logger.Debug("event indexer skipped duplicate event", "event_id", event.ID)
-					}
-				}
-
-				if err := setLastIndexedLedger(ctx, db, latestLedger); err != nil {
-					logger.Error("event indexer failed to persist cursor", "ledger", latestLedger, "error", err)
-				}
-			}
-		}
-	}()
-}
-
-func loadVaultContractIDs(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(
-		ctx,
-		`SELECT DISTINCT contract_address FROM vaults WHERE deleted_at IS NULL AND contract_address <> ''`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	contractIDs := make([]string, 0)
-	for rows.Next() {
-		var contractID string
-		if err := rows.Scan(&contractID); err != nil {
-			return nil, err
-		}
-		contractIDs = append(contractIDs, contractID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return contractIDs, nil
-}
-
-type indexedEvent struct {
-	ID         string
-	ContractID string
-	EventType  string
-	Ledger     uint64
-	Data       map[string]any
-}
-
-func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (bool, error) {
-	if strings.TrimSpace(event.ID) == "" {
-		return false, fmt.Errorf("event id is required")
-	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	inserted, err := markEventProcessed(ctx, tx, event)
-	if err != nil {
-		return false, err
-	}
-	if !inserted {
-		return false, tx.Commit()
-	}
-
-	switch strings.ToLower(strings.TrimSpace(event.EventType)) {
-	case "pause":
-		_, err := tx.ExecContext(
-			ctx,
-			`UPDATE vaults SET status = 'paused', updated_at = NOW() WHERE contract_address = $1 AND deleted_at IS NULL`,
-			event.ContractID,
-		)
-		if err != nil {
-			return false, err
-		}
-	case "unpause":
-		_, err := tx.ExecContext(
-			ctx,
-			`UPDATE vaults SET status = 'active', updated_at = NOW() WHERE contract_address = $1 AND deleted_at IS NULL`,
-			event.ContractID,
-		)
-		if err != nil {
-			return false, err
-		}
-	case "deposit":
-		amount, ok := extractEventAmount(event)
-		if !ok {
-			return false, fmt.Errorf("deposit event missing parseable amount")
-		}
-		_, err := tx.ExecContext(
-			ctx,
-			`UPDATE vaults
-			 SET total_deposited = total_deposited + $1::numeric,
-			     current_balance = current_balance + $1::numeric,
-			     updated_at = NOW()
-			 WHERE contract_address = $2 AND deleted_at IS NULL`,
-			amount.String(),
-			event.ContractID,
-		)
-		if err != nil {
-			return false, err
-		}
-	case "withdraw", "withdrawal":
-		amount, ok := extractEventAmount(event)
-		if !ok {
-			return false, fmt.Errorf("withdraw event missing parseable amount")
-		}
-		_, err := tx.ExecContext(
-			ctx,
-			`UPDATE vaults
-			 SET current_balance = current_balance - $1::numeric,
-			     updated_at = NOW()
-			 WHERE contract_address = $2 AND deleted_at IS NULL`,
-			amount.String(),
-			event.ContractID,
-		)
-		if err != nil {
-			return false, err
-		}
-	default:
-		// Keep cursor continuity even for unsupported events.
-	}
-
-	return true, tx.Commit()
-}
-
-func extractEventAmount(event indexedEvent) (decimal.Decimal, bool) {
-	if event.Data == nil {
-		return decimal.Zero, false
-	}
-
-	for _, key := range []string{"amount", "value"} {
-		raw, ok := event.Data[key]
-		if !ok {
-			continue
-		}
-
-		switch v := raw.(type) {
-		case string:
-			value, err := decimal.NewFromString(strings.TrimSpace(v))
-			if err != nil {
-				return decimal.Zero, false
-			}
-			return value, true
-		case json.Number:
-			value, err := decimal.NewFromString(v.String())
-			if err != nil {
-				return decimal.Zero, false
-			}
-			return value, true
-		case int:
-			return decimal.NewFromInt(int64(v)), true
-		case int64:
-			return decimal.NewFromInt(v), true
-		case float64:
-			value, err := decimal.NewFromString(fmt.Sprintf("%v", v))
-			if err != nil {
-				return decimal.Zero, false
-			}
-			return value, true
-		}
-	}
-
-	return decimal.Zero, false
-}
-
-func fetchSorobanEvents(
-	ctx context.Context,
-	client *http.Client,
-	rpcURL string,
-	contractIDs []string,
-	startLedger uint64,
-) ([]indexedEvent, uint64, error) {
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      "nester-indexer",
-		"method":  "getEvents",
-		"params": map[string]any{
-			"startLedger": startLedger,
-			"filters": []map[string]any{
-				{
-					"type":        "contract",
-					"contractIds": contractIDs,
-				},
-			},
-			"pagination": map[string]any{"limit": 200},
-		},
-	})
-	if err != nil {
-		return nil, 0, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, 0, fmt.Errorf("rpc returned %d: %s", resp.StatusCode, string(payload))
-	}
-
-	var rpcResp struct {
-		Result struct {
-			LatestLedger uint64 `json:"latestLedger"`
-			Events       []struct {
-				ID         string         `json:"id"`
-				ContractID string         `json:"contractId"`
-				Ledger     uint64         `json:"ledger"`
-				Topic      []interface{}  `json:"topic"`
-				Value      map[string]any `json:"value"`
-			} `json:"events"`
-		} `json:"result"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-
-	decoder := json.NewDecoder(resp.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(&rpcResp); err != nil {
-		return nil, 0, err
-	}
-	if rpcResp.Error != nil {
-		return nil, 0, fmt.Errorf("rpc error: %s", rpcResp.Error.Message)
-	}
-
-	events := make([]indexedEvent, 0, len(rpcResp.Result.Events))
-	for _, raw := range rpcResp.Result.Events {
-		eventType := ""
-		if len(raw.Topic) > 0 {
-			if topic, ok := raw.Topic[0].(string); ok {
-				eventType = topic
-			}
-		}
-		if eventType == "" {
-			continue
-		}
-		events = append(events, indexedEvent{
-			ID:         raw.ID,
-			ContractID: raw.ContractID,
-			EventType:  eventType,
-			Ledger:     raw.Ledger,
-			Data:       raw.Value,
-		})
-	}
-
-	return events, rpcResp.Result.LatestLedger, nil
-}
-
-func ensureIndexerTables(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS event_indexer_state (
-    id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    last_indexed_ledger BIGINT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`); err != nil {
-		return err
-	}
-
-	if _, err := db.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS processed_chain_events (
-    event_id TEXT PRIMARY KEY,
-    contract_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    ledger BIGINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`); err != nil {
-		return err
-	}
-
-	_, err := db.ExecContext(ctx, `
-INSERT INTO event_indexer_state (id, last_indexed_ledger)
-VALUES (1, 0)
-ON CONFLICT (id) DO NOTHING`)
-	return err
-}
-
-func getLastIndexedLedger(ctx context.Context, db *sql.DB) (uint64, error) {
-	var ledger uint64
-	err := db.QueryRowContext(ctx, `SELECT last_indexed_ledger FROM event_indexer_state WHERE id = 1`).Scan(&ledger)
-	if err != nil {
-		return 0, err
-	}
-	return ledger, nil
-}
-
-func setLastIndexedLedger(ctx context.Context, db *sql.DB, ledger uint64) error {
-	_, err := db.ExecContext(ctx, `
-UPDATE event_indexer_state
-SET last_indexed_ledger = GREATEST(last_indexed_ledger, $1::bigint),
-    updated_at = NOW()
-WHERE id = 1`, ledger)
-	return err
-}
-
-func markEventProcessed(ctx context.Context, tx *sql.Tx, event indexedEvent) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
-INSERT INTO processed_chain_events (event_id, contract_id, event_type, ledger)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (event_id) DO NOTHING`,
-		event.ID,
-		event.ContractID,
-		event.EventType,
-		event.Ledger,
-	)
-	if err != nil {
-		return false, err
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return rowsAffected == 1, nil
-}
-
-type mainEventSyncer struct {
-	db     *sql.DB
-	rpcURL string
-	logger *slog.Logger
-}
-
-func (s *mainEventSyncer) SyncEvents(ctx context.Context) (int, error) {
-	if err := ensureIndexerTables(ctx, s.db); err != nil {
-		return 0, fmt.Errorf("indexer tables: %w", err)
-	}
-
-	startLedger, err := getLastIndexedLedger(ctx, s.db)
-	if err != nil {
-		return 0, fmt.Errorf("load cursor: %w", err)
-	}
-
-	contractIDs, err := loadVaultContractIDs(ctx, s.db)
-	if err != nil {
-		return 0, fmt.Errorf("load contracts: %w", err)
-	}
-	if len(contractIDs) == 0 {
-		return 0, nil
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	events, latestLedger, err := fetchSorobanEvents(ctx, client, s.rpcURL, contractIDs, startLedger)
-	if err != nil {
-		return 0, fmt.Errorf("fetch events: %w", err)
-	}
-
-	processed := 0
-	for _, event := range events {
-		ok, err := applyIndexedEvent(ctx, s.db, event)
-		if err != nil {
-			s.logger.Error("admin sync: failed to apply event", "event_id", event.ID, "error", err)
-			continue
-		}
-		if ok {
-			processed++
-		}
-	}
-
-	if err := setLastIndexedLedger(ctx, s.db, latestLedger); err != nil {
-		s.logger.Error("admin sync: failed to persist cursor", "ledger", latestLedger, "error", err)
-	}
-
-	return processed, nil
 }

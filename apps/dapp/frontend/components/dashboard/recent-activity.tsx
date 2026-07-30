@@ -30,7 +30,7 @@ export function RecentActivity({ transactions }: RecentActivityProps) {
     const latestItems = transactions.slice(0, 5);
 
     return (
-        <div className="mt-8 rounded-2xl border border-border bg-white overflow-hidden shadow-sm hover:border-black/15 transition-all">
+        <div className="mt-8 rounded-2xl border border-border bg-white dark:bg-[#100F0F] overflow-hidden shadow-sm hover:border-black/15 dark:hover:border-white/15 transition-all">
             <div className="px-6 py-5 border-b border-border bg-secondary/10 flex items-center justify-between">
                 <h2 className="font-heading text-lg font-light text-foreground">
                     Recent Activity

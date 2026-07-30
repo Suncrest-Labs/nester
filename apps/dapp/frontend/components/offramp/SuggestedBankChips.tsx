@@ -54,7 +54,7 @@ export function SuggestedBankChips({ selectedCode, onSelect }: SuggestedBankChip
                 "px-3 py-1.5 rounded-full text-xs font-medium border transition-all",
                 isSelected
                   ? "bg-foreground text-background border-foreground"
-                  : "bg-white text-foreground border-border hover:border-foreground/30 hover:bg-secondary/50"
+                  : "bg-white dark:bg-[#100F0F] text-foreground border-border hover:border-foreground/30 hover:bg-secondary/50"
               )}
             >
               {bank.shortName}

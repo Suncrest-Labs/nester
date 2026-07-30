@@ -33,13 +33,13 @@ clean:
 
 # Docker Compose — local development
 
-dev: ## Start all services with Docker Compose
+dev: ## Start all services with Docker Compose (migrations auto-apply)
 	docker compose up --build
 
 dev-down: ## Stop all services
 	docker compose down
 
-dev-reset: ## Reset database volumes and restart
+dev-reset: ## Destructive reset of database volumes and restart (use only for full rebuilds)
 	docker compose down -v && docker compose up --build
 
 dev-logs: ## Tail logs for all services

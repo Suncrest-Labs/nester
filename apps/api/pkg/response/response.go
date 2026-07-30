@@ -18,9 +18,12 @@ type ErrorBody struct {
 }
 
 type Meta struct {
-	Page       int `json:"page,omitempty"`
-	PerPage    int `json:"per_page,omitempty"`
-	TotalCount int `json:"total_count,omitempty"`
+	Page       int    `json:"page,omitempty"`
+	PerPage    int    `json:"per_page,omitempty"`
+	TotalCount int    `json:"total_count,omitempty"`
+	TotalPages int    `json:"total_pages,omitempty"`
+	NextCursor string `json:"next_cursor,omitempty"`
+	PrevCursor string `json:"prev_cursor,omitempty"`
 }
 
 // OK returns a success response with data
@@ -28,6 +31,39 @@ func OK(data interface{}) Response {
 	return Response{
 		Success: true,
 		Data:    data,
+	}
+}
+
+// PaginatedOK returns a success response with list data and pagination metadata.
+func PaginatedOK(data interface{}, page, perPage, totalCount int, nextCursor string) Response {
+	totalPages := 0
+	if perPage > 0 && totalCount > 0 {
+		totalPages = (totalCount + perPage - 1) / perPage
+	}
+	return Response{
+		Success: true,
+		Data:    data,
+		Meta: &Meta{
+			Page:       page,
+			PerPage:    perPage,
+			TotalCount: totalCount,
+			TotalPages: totalPages,
+			NextCursor: nextCursor,
+		},
+	}
+}
+
+// PaginatedCursorOK returns a success response with list data and
+// bidirectional keyset-cursor pagination metadata (no page/per_page/total
+// count — those aren't well-defined for a keyset-paginated feed).
+func PaginatedCursorOK(data interface{}, nextCursor, prevCursor string) Response {
+	return Response{
+		Success: true,
+		Data:    data,
+		Meta: &Meta{
+			NextCursor: nextCursor,
+			PrevCursor: prevCursor,
+		},
 	}
 }
 

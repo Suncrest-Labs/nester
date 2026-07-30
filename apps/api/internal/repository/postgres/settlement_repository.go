@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
+	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
 
 type SettlementRepository struct {
@@ -82,45 +83,70 @@ func (r *SettlementRepository) GetByID(ctx context.Context, id uuid.UUID) (offra
 	return model, nil
 }
 
-func (r *SettlementRepository) GetByUserID(
+func (r *SettlementRepository) ListByUserID(
 	ctx context.Context,
 	userID uuid.UUID,
-	statusFilter offramp.SettlementStatus,
-) ([]offramp.Settlement, error) {
-	var (
-		query string
-		args  []any
-	)
+	filter offramp.UserListFilter,
+) ([]offramp.Settlement, int, string, error) {
+	where, args := buildUserSettlementWhere(userID, filter)
 
-	if statusFilter == "" {
-		query = `
-			SELECT id, user_id, vault_id,
-			       amount, currency, fiat_currency, fiat_amount, exchange_rate,
-			       destination_type, destination_provider,
-			       destination_account_number, destination_account_name, destination_bank_code,
-			       status, retry_count, error_message, notes, estimated_fee, created_at, completed_at
-			FROM settlements
-			WHERE user_id = $1
-			ORDER BY created_at DESC
-		`
-		args = []any{userID.String()}
-	} else {
-		query = `
-			SELECT id, user_id, vault_id,
-			       amount, currency, fiat_currency, fiat_amount, exchange_rate,
-			       destination_type, destination_provider,
-			       destination_account_number, destination_account_name, destination_bank_code,
-			       status, retry_count, error_message, notes, estimated_fee, created_at, completed_at
-			FROM settlements
-			WHERE user_id = $1 AND status = $2
-			ORDER BY created_at DESC
-		`
-		args = []any{userID.String(), string(statusFilter)}
+	countQuery := `SELECT COUNT(*) FROM settlements WHERE ` + where
+	var total int
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, "", mapSettlementError(err)
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	sortColumn := sanitizeUserSettlementSort(filter.SortField)
+	order := sanitizeOrder(filter.SortOrder)
+	useKeyset := filter.Cursor != "" && sortColumn == "created_at" && order == "DESC"
+
+	limit := filter.PerPage + 1
+	listArgs := append([]any(nil), args...)
+	selectWhere := where
+
+	if useKeyset {
+		cursor, err := listquery.DecodeSettlementCursor(filter.Cursor)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		keyset, updatedArgs := settlementKeysetClause(cursor, listArgs)
+		listArgs = updatedArgs
+		selectWhere = where + " AND " + keyset
+	}
+
+	var listQuery string
+	if useKeyset {
+		listQuery = fmt.Sprintf(`
+			SELECT id, user_id, vault_id,
+			       amount, currency, fiat_currency, fiat_amount, exchange_rate,
+			       destination_type, destination_provider,
+			       destination_account_number, destination_account_name, destination_bank_code,
+			       status, retry_count, error_message, notes, estimated_fee, created_at, completed_at
+			FROM settlements
+			WHERE %s
+			ORDER BY %s %s, id DESC
+			LIMIT $%d
+		`, selectWhere, sortColumn, order, len(listArgs)+1) // #nosec G201
+		listArgs = append(listArgs, limit)
+	} else {
+		offset := (filter.Page - 1) * filter.PerPage
+		listQuery = fmt.Sprintf(`
+			SELECT id, user_id, vault_id,
+			       amount, currency, fiat_currency, fiat_amount, exchange_rate,
+			       destination_type, destination_provider,
+			       destination_account_number, destination_account_name, destination_bank_code,
+			       status, retry_count, error_message, notes, estimated_fee, created_at, completed_at
+			FROM settlements
+			WHERE %s
+			ORDER BY %s %s
+			LIMIT $%d OFFSET $%d
+		`, selectWhere, sortColumn, order, len(listArgs)+1, len(listArgs)+2) // #nosec G201
+		listArgs = append(listArgs, filter.PerPage, offset)
+	}
+
+	rows, err := r.db.QueryContext(ctx, listQuery, listArgs...)
 	if err != nil {
-		return nil, mapSettlementError(err)
+		return nil, 0, "", mapSettlementError(err)
 	}
 	defer rows.Close()
 
@@ -128,16 +154,24 @@ func (r *SettlementRepository) GetByUserID(
 	for rows.Next() {
 		model, err := scanSettlement(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, "", err
 		}
 		settlements = append(settlements, model)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, "", err
 	}
 
-	return settlements, nil
+	nextCursor := ""
+	if useKeyset {
+		if len(settlements) > filter.PerPage {
+			last := settlements[filter.PerPage-1]
+			nextCursor = listquery.EncodeSettlementCursor(last.CreatedAt, last.ID)
+			settlements = settlements[:filter.PerPage]
+		}
+	}
+
+	return settlements, total, nextCursor, nil
 }
 
 func (r *SettlementRepository) UpdateStatus(

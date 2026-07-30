@@ -1,0 +1,21 @@
+[package]
+name = "savings-goal-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "savings_goal"
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+nester-common = { path = "../../libs/common" }
+nester-access-control = { path = "../access_control" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+nester-test-utils = { path = "../../libs/test_utils" }
+vault-factory-contract = { path = "../vault_factory" }
+dummy-vault-fixture = { path = "../test_fixtures/dummy_vault" }

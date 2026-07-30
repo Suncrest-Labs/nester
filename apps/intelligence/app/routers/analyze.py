@@ -1,18 +1,31 @@
 """Structured analysis endpoints — insights, sentiment, vault recommendations."""
 
 import re
+import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.dependencies.auth import verify_jwt
+from app.models.portfolio import PortfolioAnalysisResponse
+from app.models.recommendation import (
+    AnalyzeRequest,
+    Recommendation,
+    VaultRecommendationRequest,
+    VaultRecommendationResponse,
+)
 from app.services.prometheus import (
+    analyze_portfolio,
+    analyze_recommendation,
     get_market_sentiment,
     get_portfolio_insights,
     get_vault_recommendations,
+    get_yield_recommendation,
+    recommend_vaults,
 )
+from app.services.sentiment_history import history as get_sentiment_history
 
 router = APIRouter(dependencies=[Depends(verify_jwt)])
 
@@ -37,11 +50,16 @@ def _validate_id(value: str, field: str) -> str:
     )
 
 
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", "") or str(uuid.uuid4())
+
+
 @router.get("/portfolio/{user_id}/insights")
 @_limiter.limit("20/minute")
 async def portfolio_insights(
     request: Request,
     user_id: str,
+    language: str | None = Query(None, description="Preferred response language"),
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> list[dict[str, Any]]:
     """Return AI-generated portfolio insight cards for a user.
@@ -55,14 +73,85 @@ async def portfolio_insights(
             detail="You are not authorised to access this user's insights",
         )
     safe_user_id = _validate_id(user_id, "user_id")
-    return await get_portfolio_insights(safe_user_id)
+    return await get_portfolio_insights(safe_user_id, language)
 
 
 @router.get("/market/sentiment")
 @_limiter.limit("30/minute")
-async def market_sentiment(request: Request) -> dict[str, Any]:
+async def market_sentiment(
+    request: Request,
+    language: str | None = Query(None, description="Preferred response language"),
+) -> dict[str, Any]:
     """Return current market sentiment for the Stellar DeFi / stablecoin space."""
-    return await get_market_sentiment()
+    return await get_market_sentiment(language)
+
+
+@router.get("/market/sentiment/history")
+@_limiter.limit("30/minute")
+async def market_sentiment_history(request: Request, days: int = 7) -> dict[str, Any]:
+    """Return recorded market sentiment points for the trend sparkline (#939).
+
+    `days` is clamped to [1, 30]; points are recorded each time
+    /market/sentiment is computed successfully, so the series starts sparse
+    and fills in over time.
+    """
+    clamped_days = max(1, min(days, 30))
+    return {"days": clamped_days, "points": get_sentiment_history(clamped_days)}
+
+
+@router.get("/recommend/vault")
+@_limiter.limit("20/minute")
+async def yield_recommendation(
+    request: Request,
+    language: str | None = Query(None, description="Preferred response language"),
+    claims: dict[str, Any] = Depends(verify_jwt),  # noqa: ARG001
+) -> dict[str, Any]:
+    """Return an AI-picked yield opportunity based on live DeFiLlama and CoinGecko data."""
+    return await get_yield_recommendation(language)
+
+
+@router.post("/analyze", response_model=Recommendation)
+@_limiter.limit("20/minute")
+async def analyze(
+    request: Request,
+    body: AnalyzeRequest,
+    claims: dict[str, Any] = Depends(verify_jwt),
+) -> Recommendation:
+    """Return a confidence-annotated recommendation for a user prompt.
+
+    The prompt is length-bounded by ``AnalyzeRequest`` and screened for
+    prompt-injection attempts inside ``analyze_recommendation``; flagged
+    prompts get a refused-but-schema-conformant ``Recommendation`` back,
+    never free-form text.
+    """
+    prompt = body.prompt.strip()
+    if not prompt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required"
+        )
+    language = body.get("language")
+    return await analyze_recommendation(
+        prompt,
+        claims.get("sub", ""),
+        request_id=_request_id(request),
+        language=language,
+    )
+
+
+@router.post("/recommend/vault", response_model=VaultRecommendationResponse)
+@_limiter.limit("20/minute")
+async def recommend_vault(
+    request: Request,
+    body: VaultRecommendationRequest,
+    claims: dict[str, Any] = Depends(verify_jwt),
+) -> VaultRecommendationResponse:
+    """Return an AI-picked vault allocation based on live APY and risk data."""
+    return await recommend_vaults(
+        body,
+        claims.get("sub", ""),
+        request_id=_request_id(request),
+        language=body.language,
+    )
 
 
 @router.get("/vaults/{vault_id}/recommendations")
@@ -70,8 +159,41 @@ async def market_sentiment(request: Request) -> dict[str, Any]:
 async def vault_recommendations(
     request: Request,
     vault_id: str,
+    language: str | None = Query(None, description="Preferred response language"),
     claims: dict[str, Any] = Depends(verify_jwt),  # noqa: ARG001
 ) -> dict[str, Any]:
     """Return AI commentary and recommendations for a specific vault."""
     safe_vault_id = _validate_id(vault_id, "vault_id")
-    return await get_vault_recommendations(safe_vault_id)
+    return await get_vault_recommendations(safe_vault_id, language)
+
+
+@router.post("/portfolio/analyze", response_model=PortfolioAnalysisResponse)
+@_limiter.limit("5/hour")
+async def portfolio_analyze(
+    request: Request,
+    language: str | None = Query(None, description="Preferred response language"),
+    claims: dict[str, Any] = Depends(verify_jwt),
+) -> PortfolioAnalysisResponse:
+    """Return structured portfolio analysis using Claude tool use.
+
+    Analyzes the authenticated user's vault positions and produces:
+    - Structured breakdown (allocation, risk level, recommendations)
+    - Narrative explanation
+    - Confidence level
+
+    Requires authentication via Bearer JWT token.
+    Rate limited to 5 requests per hour per user (expensive operation).
+
+    Authorization: Bearer <JWT>
+    Returns: PortfolioAnalysisResponse with analysis, narrative, and confidence.
+    """
+    user_id = claims.get("sub", "")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User ID not found in token",
+        )
+
+    return await analyze_portfolio(
+        user_id, request_id=_request_id(request), language=language
+    )

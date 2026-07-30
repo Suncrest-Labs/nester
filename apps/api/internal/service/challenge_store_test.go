@@ -51,6 +51,28 @@ func TestInMemoryChallengeStore_ExpiredEntryReturnsNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrChallengeNotFound)
 }
 
+func TestInMemoryChallengeStore_BackgroundCleanupEvictsExpiredEntries(t *testing.T) {
+	store := NewInMemoryChallengeStore(10 * time.Millisecond)
+	ctx := context.Background()
+
+	for i := 0; i < 100; i++ {
+		require.NoError(t, store.Set(
+			ctx,
+			fmt.Sprintf("WALLET_%d", i),
+			fmt.Sprintf("hex%d", i),
+		))
+	}
+
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.m) == 0
+	}, 250*time.Millisecond, 10*time.Millisecond)
+
+	_, err := store.GetAndDelete(ctx, "WALLET_0")
+	assert.ErrorIs(t, err, ErrChallengeNotFound)
+}
+
 func TestInMemoryChallengeStore_SetOverwritesPreviousChallenge(t *testing.T) {
 	store := NewInMemoryChallengeStore(5 * time.Minute)
 	ctx := context.Background()

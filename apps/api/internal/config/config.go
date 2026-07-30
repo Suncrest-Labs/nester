@@ -13,11 +13,21 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// defaultDevJWTSecret is the placeholder value shipped in .env.example. It is long
+// enough to pass the length check, so it is rejected explicitly outside development.
+const defaultDevJWTSecret = "dev-nester-jwt-secret-change-in-production"
+
+// maxKeyVersionLen bounds an account cipher key version label so it fits the
+// bank_accounts.key_version VARCHAR(32) column.
+const maxKeyVersionLen = 32
+
 type Config struct {
 	environment           string
 	server                ServerConfig
 	database              DatabaseConfig
 	stellar               StellarConfig
+	intelligence          IntelligenceConfig
+	allocation            AllocationConfig
 	redis                 RedisConfig
 	settlementProviderURL string
 	auth                  AuthConfig
@@ -25,8 +35,61 @@ type Config struct {
 	log                   LogConfig
 	allowedOrigins        []string
 	performance           PerformanceConfig
+	tvl                   TVLConfig
+	apyRefresh            APYRefreshConfig
 	startup               StartupConfig
 	bank                  BankConfig
+	bankAccountCipherKey  string
+	accountCipher         AccountCipherConfig
+	transactionPoller     TransactionPollerConfig
+	recurringDeposit      RecurringDepositConfig
+	jobQueue              JobQueueConfig
+	harvest               HarvestConfig
+	rebalancer            RebalancerConfig
+	schedulerLeadership   SchedulerLeadershipConfig
+}
+
+// AccountCipherConfig holds the versioned key set used to encrypt sensitive
+// account numbers at rest. It supports non-destructive rotation: one active key
+// seals new writes while every configured version remains available to decrypt
+// historical rows.
+type AccountCipherConfig struct {
+	activeVersion  string
+	keys           map[string]string
+	fingerprintKey string
+}
+
+// Configured reports whether at least one encryption key is available.
+func (a AccountCipherConfig) Configured() bool {
+	return len(a.keys) > 0
+}
+
+// ActiveVersion is the key version used for new encryptions.
+func (a AccountCipherConfig) ActiveVersion() string {
+	return a.activeVersion
+}
+
+// Keys returns a copy of the version -> base64 key map.
+func (a AccountCipherConfig) Keys() map[string]string {
+	out := make(map[string]string, len(a.keys))
+	for k, v := range a.keys {
+		out[k] = v
+	}
+	return out
+}
+
+// FingerprintKey is the optional stable pepper (base64) for uniqueness
+// fingerprints. An empty value lets the cipher default to the legacy key.
+func (a AccountCipherConfig) FingerprintKey() string {
+	return a.fingerprintKey
+}
+
+// TransactionPollerConfig governs the background loop that reconciles pending
+// transactions against Horizon (see internal/service.TransactionPoller).
+type TransactionPollerConfig struct {
+	enabled  bool
+	interval time.Duration
+	minAge   time.Duration
 }
 
 // StartupConfig governs one-shot work performed before the server begins
@@ -39,6 +102,17 @@ type StartupConfig struct {
 
 type PerformanceConfig struct {
 	snapshotInterval time.Duration
+}
+
+// TVLConfig governs the background TVL snapshot worker.
+type TVLConfig struct {
+	refreshInterval time.Duration
+}
+
+// APYRefreshConfig governs polling yield_registry for on-chain APY updates.
+type APYRefreshConfig struct {
+	refreshInterval       time.Duration
+	broadcastThresholdBPS int
 }
 
 type ServerConfig struct {
@@ -59,25 +133,50 @@ type DatabaseConfig struct {
 }
 
 type StellarConfig struct {
-	networkPassphrase string
-	rpcURL            string
-	horizonURL        string
-	operatorSecret    string
+	networkPassphrase         string
+	rpcURL                    string
+	horizonURL                string
+	operatorSecret            string
+	stellarUSDCIssuer         string
+	yieldRegistryContract     string
+	allocationStrategyAddress string
+	withdrawalSlippageBps     int
+	harvestDefaultCompound    bool
+}
+
+type AllocationConfig struct {
+	minWeightPercent int
+}
+
+type IntelligenceConfig struct {
+	baseURL       string
+	serviceAPIKey string
+	timeout       time.Duration
 }
 
 type AuthConfig struct {
-	secret          string
-	tokenExpiry     time.Duration
-	challengeExpiry time.Duration
+	secret                  string
+	serviceAPIKey           string
+	accessTokenExpiry       time.Duration
+	refreshTokenExpiry      time.Duration
+	absoluteSessionLifetime time.Duration
+	challengeExpiry         time.Duration
 }
 
 type RateLimitConfig struct {
-	globalLimit  int
-	globalWindow time.Duration
-	writeLimit   int
-	writeWindow  time.Duration
-	walletLimit  int
-	walletWindow time.Duration
+	globalLimit       int
+	globalWindow      time.Duration
+	writeLimit        int
+	writeWindow       time.Duration
+	walletLimit       int
+	walletWindow      time.Duration
+	rebalanceLimit    int
+	rebalanceWindow   time.Duration
+	authLimit         int
+	authWindow        time.Duration
+	settlementLimit   int
+	settlementWindow  time.Duration
+	trustedProxyCount int
 }
 
 type LogConfig struct {
@@ -128,27 +227,50 @@ func Load() (*Config, error) {
 			connectionTimeout: loader.durationDefault("DATABASE_CONNECTION_TIMEOUT", 5*time.Second),
 		},
 		stellar: StellarConfig{
-			networkPassphrase: loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
-			rpcURL:            loader.requiredURL("STELLAR_RPC_URL"),
-			horizonURL:        loader.requiredURL("STELLAR_HORIZON_URL"),
-			operatorSecret:    loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
+			networkPassphrase:         loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
+			rpcURL:                    loader.requiredURL("STELLAR_RPC_URL"),
+			horizonURL:                loader.requiredURL("STELLAR_HORIZON_URL"),
+			operatorSecret:            loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
+			stellarUSDCIssuer:         loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+			yieldRegistryContract:     loader.stringDefault("YIELD_REGISTRY_CONTRACT", ""),
+			allocationStrategyAddress: loader.stringDefault("STELLAR_ALLOCATION_STRATEGY_ADDRESS", ""),
+			withdrawalSlippageBps:     loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
+			harvestDefaultCompound:    loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
+		},
+		intelligence: IntelligenceConfig{
+			baseURL:       loader.stringDefault("INTELLIGENCE_BASE_URL", loader.stringDefault("INTELLIGENCE_SERVICE_URL", "http://localhost:8000")),
+			serviceAPIKey: loader.stringDefault("INTELLIGENCE_SERVICE_API_KEY", ""),
+			timeout:       loader.durationDefault("INTELLIGENCE_TIMEOUT", loader.durationDefault("INTELLIGENCE_SERVICE_TIMEOUT", 10*time.Second)),
+		},
+		allocation: AllocationConfig{
+			minWeightPercent: loader.intDefault("MIN_ALLOCATION_WEIGHT", 5),
 		},
 		redis: RedisConfig{
 			addr: loader.stringDefault("REDIS_ADDR", ""),
 		},
 		settlementProviderURL: loader.stringDefault("SETTLEMENT_PROVIDER_URL", ""),
 		auth: AuthConfig{
-			secret:          loader.requiredString("AUTH_JWT_SECRET"),
-			tokenExpiry:     loader.durationDefault("AUTH_TOKEN_EXPIRY", 24*time.Hour),
-			challengeExpiry: loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
+			secret:                  loader.requiredString("AUTH_JWT_SECRET"),
+			serviceAPIKey:           loader.stringDefault("NESTER_SERVICE_API_KEY", ""),
+			accessTokenExpiry:       loader.durationDefault("AUTH_ACCESS_TOKEN_EXPIRY", 5*time.Minute),
+			refreshTokenExpiry:      loader.durationDefault("AUTH_REFRESH_TOKEN_EXPIRY", 7*24*time.Hour),
+			absoluteSessionLifetime: loader.durationDefault("AUTH_ABSOLUTE_SESSION_LIFETIME", 30*24*time.Hour),
+			challengeExpiry:         loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
 		},
 		rateLimit: RateLimitConfig{
-			globalLimit:  loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
-			globalWindow: loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
-			writeLimit:   loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
-			writeWindow:  loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
-			walletLimit:  loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
-			walletWindow: loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
+			globalLimit:       loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
+			globalWindow:      loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
+			writeLimit:        loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
+			writeWindow:       loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
+			walletLimit:       loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
+			walletWindow:      loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
+			rebalanceLimit:    loader.intDefault("RATELIMIT_REBALANCE_LIMIT", 3),
+			rebalanceWindow:   loader.durationDefault("RATELIMIT_REBALANCE_WINDOW", 1*time.Hour),
+			authLimit:         loader.intDefault("RATELIMIT_AUTH_LIMIT", 10),
+			authWindow:        loader.durationDefault("RATELIMIT_AUTH_WINDOW", 1*time.Minute),
+			settlementLimit:   loader.intDefault("RATELIMIT_SETTLEMENT_LIMIT", 5),
+			settlementWindow:  loader.durationDefault("RATELIMIT_SETTLEMENT_WINDOW", 1*time.Minute),
+			trustedProxyCount: loader.intDefault("RATELIMIT_TRUSTED_PROXY_COUNT", 0),
 		},
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
@@ -158,8 +280,15 @@ func Load() (*Config, error) {
 		performance: PerformanceConfig{
 			snapshotInterval: loader.durationDefault("PERFORMANCE_SNAPSHOT_INTERVAL", 1*time.Hour),
 		},
+		tvl: TVLConfig{
+			refreshInterval: loader.durationDefault("TVL_REFRESH_INTERVAL", 15*time.Minute),
+		},
+		apyRefresh: APYRefreshConfig{
+			refreshInterval:       loader.durationDefault("APY_REFRESH_INTERVAL", 5*time.Minute),
+			broadcastThresholdBPS: loader.intDefault("APY_BROADCAST_THRESHOLD", 50),
+		},
 		startup: StartupConfig{
-			enableAutoMigrate: loader.boolDefault("ENABLE_AUTO_MIGRATE", false),
+			enableAutoMigrate: loader.boolDefault("RUN_MIGRATIONS", false),
 			migrationsDir:     loader.stringDefault("MIGRATIONS_DIR", "./migrations"),
 			dependencyTimeout: loader.durationDefault("STARTUP_DEPENDENCY_TIMEOUT", 5*time.Second),
 		},
@@ -167,7 +296,52 @@ func Load() (*Config, error) {
 			paystackKey:    loader.stringDefault("PAYSTACK_SECRET_KEY", ""),
 			flutterwaveKey: loader.stringDefault("FLUTTERWAVE_SECRET_KEY", ""),
 		},
+		bankAccountCipherKey: loader.stringDefault("BANK_ACCOUNT_ENCRYPTION_KEY", ""),
+		transactionPoller: TransactionPollerConfig{
+			enabled:  loader.boolDefault("TX_POLLER_ENABLED", true),
+			interval: loader.durationDefault("TX_POLLER_INTERVAL", 15*time.Second),
+			minAge:   loader.durationDefault("TX_POLLER_MIN_AGE", 30*time.Second),
+		},
+		recurringDeposit: RecurringDepositConfig{
+			enabled:    loader.boolDefault("RECURRING_DEPOSIT_ENABLED", true),
+			interval:   loader.durationDefault("RECURRING_DEPOSIT_INTERVAL", time.Hour),
+			minDeposit: loader.stringDefault("MIN_DEPOSIT_AMOUNT", "0"),
+		},
+		harvest: HarvestConfig{
+			enabled:  loader.boolDefault("HARVEST_ENGINE_ENABLED", true),
+			interval: loader.durationDefault("HARVEST_ENGINE_INTERVAL", time.Hour),
+			window:   loader.durationDefault("HARVEST_ENGINE_WINDOW", time.Hour),
+			margin:   loader.stringDefault("HARVEST_ENGINE_MARGIN", "0.10"),
+			gasFee:   loader.stringDefault("HARVEST_ENGINE_GAS_FEE", "0.05"),
+		},
+		jobQueue: JobQueueConfig{
+			enabled:            loader.boolDefault("JOB_QUEUE_ENABLED", true),
+			pollInterval:       loader.durationDefault("JOB_QUEUE_POLL_INTERVAL", time.Second),
+			lease:              loader.durationDefault("JOB_QUEUE_LEASE", 30*time.Second),
+			heartbeatInterval:  loader.durationDefault("JOB_QUEUE_HEARTBEAT_INTERVAL", 10*time.Second),
+			jobTimeout:         loader.durationDefault("JOB_QUEUE_JOB_TIMEOUT", 2*time.Minute),
+			defaultConcurrency: loader.intDefault("JOB_QUEUE_DEFAULT_CONCURRENCY", 4),
+			backoffBase:        loader.durationDefault("JOB_QUEUE_BACKOFF_BASE", 2*time.Second),
+			backoffMax:         loader.durationDefault("JOB_QUEUE_BACKOFF_MAX", 5*time.Minute),
+			statsInterval:      loader.durationDefault("JOB_QUEUE_STATS_INTERVAL", 30*time.Second),
+			drainTimeout:       loader.durationDefault("JOB_QUEUE_DRAIN_TIMEOUT", 25*time.Second),
+		},
+		rebalancer: RebalancerConfig{
+			enabled:       loader.boolDefault("REBALANCER_ENABLED", true),
+			interval:      time.Duration(loader.intDefault("REBALANCER_INTERVAL_MINUTES", 15)) * time.Minute,
+			minAPYGainBPS: int64(loader.intDefault("REBALANCER_MIN_APY_GAIN_BPS", 50)),
+		},
+		schedulerLeadership: SchedulerLeadershipConfig{
+			lockKey:           int64(loader.intDefault("SCHEDULER_LEADER_LOCK_KEY", 846000)),
+			heartbeatInterval: loader.durationDefault("SCHEDULER_LEADER_HEARTBEAT_INTERVAL", 3*time.Second),
+		},
 	}
+
+	if cfg.bankAccountCipherKey == "" && environment == "development" {
+		cfg.bankAccountCipherKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	}
+
+	cfg.accountCipher = loader.accountCipherConfig(cfg.bankAccountCipherKey)
 
 	cfg.validate(&loader)
 
@@ -192,6 +366,34 @@ func (c Config) Database() DatabaseConfig {
 
 func (c Config) Stellar() StellarConfig {
 	return c.stellar
+}
+
+func (c Config) Allocation() AllocationConfig {
+	return c.allocation
+}
+
+func (c Config) Intelligence() IntelligenceConfig {
+	return c.intelligence
+}
+
+func (i IntelligenceConfig) BaseURL() string {
+	return i.baseURL
+}
+
+func (i IntelligenceConfig) ServiceURL() string {
+	return i.baseURL
+}
+
+func (i IntelligenceConfig) ServiceAPIKey() string {
+	return i.serviceAPIKey
+}
+
+func (i IntelligenceConfig) Timeout() time.Duration {
+	return i.timeout
+}
+
+func (s StellarConfig) USDCIssuer() string {
+	return s.stellarUSDCIssuer
 }
 
 func (c Config) SettlementProviderURL() string {
@@ -238,6 +440,26 @@ func (p PerformanceConfig) SnapshotInterval() time.Duration {
 	return p.snapshotInterval
 }
 
+func (c Config) TVL() TVLConfig {
+	return c.tvl
+}
+
+func (t TVLConfig) RefreshInterval() time.Duration {
+	return t.refreshInterval
+}
+
+func (c Config) APYRefresh() APYRefreshConfig {
+	return c.apyRefresh
+}
+
+func (a APYRefreshConfig) RefreshInterval() time.Duration {
+	return a.refreshInterval
+}
+
+func (a APYRefreshConfig) BroadcastThresholdBPS() int {
+	return a.broadcastThresholdBPS
+}
+
 // AllowedOrigins returns the list of origins permitted to make cross-origin
 // requests to the API. An empty slice disables cross-origin access.
 func (c Config) AllowedOrigins() []string {
@@ -253,6 +475,124 @@ func (r RedisConfig) Addr() string {
 func (c Config) Bank() BankConfig {
 	return c.bank
 }
+
+func (c Config) BankAccountEncryptionKey() string {
+	return c.bankAccountCipherKey
+}
+
+// AccountCipher returns the versioned key set used to encrypt account numbers.
+func (c Config) AccountCipher() AccountCipherConfig {
+	return c.accountCipher
+}
+
+func (c Config) TransactionPoller() TransactionPollerConfig {
+	return c.transactionPoller
+}
+
+func (t TransactionPollerConfig) Enabled() bool {
+	return t.enabled
+}
+
+func (t TransactionPollerConfig) Interval() time.Duration {
+	return t.interval
+}
+
+func (t TransactionPollerConfig) MinAge() time.Duration {
+	return t.minAge
+}
+
+// RecurringDepositConfig governs the hourly savings schedule deposit loop.
+type RecurringDepositConfig struct {
+	enabled    bool
+	interval   time.Duration
+	minDeposit string
+}
+
+func (c Config) RecurringDeposit() RecurringDepositConfig {
+	return c.recurringDeposit
+}
+
+func (r RecurringDepositConfig) Enabled() bool {
+	return r.enabled
+}
+
+func (r RecurringDepositConfig) Interval() time.Duration {
+	return r.interval
+}
+
+func (r RecurringDepositConfig) MinDepositAmount() string {
+	return r.minDeposit
+}
+
+// JobQueueConfig governs the durable async job queue worker pool (#824).
+type JobQueueConfig struct {
+	enabled            bool
+	pollInterval       time.Duration
+	lease              time.Duration
+	heartbeatInterval  time.Duration
+	jobTimeout         time.Duration
+	defaultConcurrency int
+	backoffBase        time.Duration
+	backoffMax         time.Duration
+	statsInterval      time.Duration
+	drainTimeout       time.Duration
+}
+
+// HarvestConfig governs the yield-harvest orchestration engine (#845).
+type HarvestConfig struct {
+	enabled  bool
+	interval time.Duration
+	window   time.Duration
+	margin   string
+	gasFee   string
+}
+
+func (c Config) Harvest() HarvestConfig         { return c.harvest }
+func (h HarvestConfig) Enabled() bool           { return h.enabled }
+func (h HarvestConfig) Interval() time.Duration { return h.interval }
+func (h HarvestConfig) Window() time.Duration   { return h.window }
+func (h HarvestConfig) Margin() string          { return h.margin }
+func (h HarvestConfig) GasFee() string          { return h.gasFee }
+
+// RebalancerConfig governs the automated vault rebalance-decision loop
+// (nester#372; wired into main.go as part of #846). Money-moving: gated
+// behind scheduler leadership so only one instance evaluates and submits.
+type RebalancerConfig struct {
+	enabled       bool
+	interval      time.Duration
+	minAPYGainBPS int64
+}
+
+func (c Config) Rebalancer() RebalancerConfig      { return c.rebalancer }
+func (r RebalancerConfig) Enabled() bool           { return r.enabled }
+func (r RebalancerConfig) Interval() time.Duration { return r.interval }
+func (r RebalancerConfig) MinAPYGainBPS() int64    { return r.minAPYGainBPS }
+
+// SchedulerLeadershipConfig governs the Postgres-advisory-lock leader
+// election that gates all five scheduler background job loops (#846). See
+// internal/scheduler/leadership.go for the full design rationale.
+type SchedulerLeadershipConfig struct {
+	lockKey           int64
+	heartbeatInterval time.Duration
+}
+
+func (c Config) SchedulerLeadership() SchedulerLeadershipConfig { return c.schedulerLeadership }
+func (s SchedulerLeadershipConfig) LockKey() int64              { return s.lockKey }
+func (s SchedulerLeadershipConfig) HeartbeatInterval() time.Duration {
+	return s.heartbeatInterval
+}
+
+func (c Config) JobQueue() JobQueueConfig                 { return c.jobQueue }
+func (j JobQueueConfig) Enabled() bool                    { return j.enabled }
+func (j JobQueueConfig) PollInterval() time.Duration      { return j.pollInterval }
+func (j JobQueueConfig) Lease() time.Duration             { return j.lease }
+func (j JobQueueConfig) HeartbeatInterval() time.Duration { return j.heartbeatInterval }
+func (j JobQueueConfig) JobTimeout() time.Duration        { return j.jobTimeout }
+func (j JobQueueConfig) DefaultConcurrency() int          { return j.defaultConcurrency }
+func (j JobQueueConfig) BackoffBase() time.Duration       { return j.backoffBase }
+func (j JobQueueConfig) BackoffMax() time.Duration        { return j.backoffMax }
+func (j JobQueueConfig) StatsInterval() time.Duration     { return j.statsInterval }
+func (j JobQueueConfig) DrainTimeout() time.Duration      { return j.drainTimeout }
 
 func (b BankConfig) PaystackKey() string {
 	return b.paystackKey
@@ -315,8 +655,25 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("AUTH_JWT_SECRET must be at least 32 characters")
 	}
 
-	if c.auth.tokenExpiry <= 0 {
-		loader.addError("AUTH_TOKEN_EXPIRY must be greater than 0")
+	if (c.environment == "production" || c.environment == "staging") &&
+		strings.TrimSpace(c.auth.secret) == defaultDevJWTSecret {
+		loader.addError("AUTH_JWT_SECRET must not use the development default in production or staging")
+	}
+
+	if c.auth.accessTokenExpiry <= 0 {
+		loader.addError("AUTH_ACCESS_TOKEN_EXPIRY must be greater than 0")
+	}
+	if c.auth.refreshTokenExpiry <= 0 {
+		loader.addError("AUTH_REFRESH_TOKEN_EXPIRY must be greater than 0")
+	}
+	if c.auth.absoluteSessionLifetime <= 0 {
+		loader.addError("AUTH_ABSOLUTE_SESSION_LIFETIME must be greater than 0")
+	}
+	if c.auth.accessTokenExpiry >= c.auth.refreshTokenExpiry {
+		loader.addError("AUTH_ACCESS_TOKEN_EXPIRY must be less than AUTH_REFRESH_TOKEN_EXPIRY")
+	}
+	if c.auth.refreshTokenExpiry >= c.auth.absoluteSessionLifetime {
+		loader.addError("AUTH_REFRESH_TOKEN_EXPIRY must be less than AUTH_ABSOLUTE_SESSION_LIFETIME")
 	}
 
 	if c.auth.challengeExpiry <= 0 {
@@ -329,6 +686,11 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.rateLimit.globalWindow <= 0 {
 		loader.addError("RATELIMIT_GLOBAL_WINDOW must be greater than 0")
+	} else if c.rateLimit.globalWindow < time.Millisecond {
+		// The Redis limiter converts the window to whole milliseconds for
+		// PEXPIRE; a sub-millisecond window truncates to 0 and the counter would
+		// expire immediately, silently disabling enforcement.
+		loader.addError("RATELIMIT_GLOBAL_WINDOW must be at least 1ms")
 	}
 
 	if c.rateLimit.writeLimit <= 0 {
@@ -346,6 +708,31 @@ func (c *Config) validate(loader *envLoader) {
 	if c.rateLimit.walletWindow <= 0 {
 		loader.addError("RATELIMIT_WALLET_WINDOW must be greater than 0")
 	}
+	if c.rateLimit.rebalanceLimit <= 0 {
+		loader.addError("RATELIMIT_REBALANCE_LIMIT must be greater than 0")
+	}
+	if c.rateLimit.rebalanceWindow <= 0 {
+		loader.addError("RATELIMIT_REBALANCE_WINDOW must be greater than 0")
+	}
+	if c.rateLimit.authLimit <= 0 {
+		loader.addError("RATELIMIT_AUTH_LIMIT must be greater than 0")
+	}
+	if c.rateLimit.authWindow <= 0 {
+		loader.addError("RATELIMIT_AUTH_WINDOW must be greater than 0")
+	} else if c.rateLimit.authWindow < time.Millisecond {
+		loader.addError("RATELIMIT_AUTH_WINDOW must be at least 1ms")
+	}
+	if c.rateLimit.settlementLimit <= 0 {
+		loader.addError("RATELIMIT_SETTLEMENT_LIMIT must be greater than 0")
+	}
+	if c.rateLimit.settlementWindow <= 0 {
+		loader.addError("RATELIMIT_SETTLEMENT_WINDOW must be greater than 0")
+	} else if c.rateLimit.settlementWindow < time.Millisecond {
+		loader.addError("RATELIMIT_SETTLEMENT_WINDOW must be at least 1ms")
+	}
+	if c.rateLimit.trustedProxyCount < 0 {
+		loader.addError("RATELIMIT_TRUSTED_PROXY_COUNT must be zero or greater")
+	}
 
 	if !isOneOf(c.log.level, "debug", "info", "warn", "error") {
 		loader.addError("LOG_LEVEL must be one of debug, info, warn, error")
@@ -359,6 +746,46 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.performance.snapshotInterval <= 0 {
 		loader.addError("PERFORMANCE_SNAPSHOT_INTERVAL must be greater than 0")
+	}
+
+	if c.tvl.refreshInterval <= 0 {
+		loader.addError("TVL_REFRESH_INTERVAL must be greater than 0")
+	}
+
+	if c.apyRefresh.refreshInterval <= 0 {
+		loader.addError("APY_REFRESH_INTERVAL must be greater than 0")
+	}
+
+	if c.apyRefresh.broadcastThresholdBPS < 0 {
+		loader.addError("APY_BROADCAST_THRESHOLD must not be negative")
+	}
+
+	if c.transactionPoller.interval <= 0 {
+		loader.addError("TX_POLLER_INTERVAL must be greater than 0")
+	}
+
+	if c.transactionPoller.minAge < 0 {
+		loader.addError("TX_POLLER_MIN_AGE must not be negative")
+	}
+
+	if c.recurringDeposit.interval <= 0 {
+		loader.addError("RECURRING_DEPOSIT_INTERVAL must be greater than 0")
+	}
+
+	if c.stellar.withdrawalSlippageBps <= 0 || c.stellar.withdrawalSlippageBps > 300 {
+		loader.addError("WITHDRAWAL_SLIPPAGE_BPS must be between 1 and 300")
+	}
+
+	if c.allocation.minWeightPercent < 1 || c.allocation.minWeightPercent > 100 {
+		loader.addError("MIN_ALLOCATION_WEIGHT must be between 1 and 100")
+	}
+
+	// Require at least one payment provider key in production/staging so
+	// offramp features (bank list, account resolution) work at deploy time
+	// rather than failing silently when a user first triggers them.
+	if (c.environment == "production" || c.environment == "staging") &&
+		c.bank.paystackKey == "" && c.bank.flutterwaveKey == "" {
+		loader.addError("at least one of PAYSTACK_SECRET_KEY or FLUTTERWAVE_SECRET_KEY must be set in production")
 	}
 }
 
@@ -447,6 +874,26 @@ func (s StellarConfig) OperatorSecret() string {
 	return s.operatorSecret
 }
 
+func (s StellarConfig) YieldRegistryContract() string {
+	return s.yieldRegistryContract
+}
+
+func (s StellarConfig) AllocationStrategyAddress() string {
+	return s.allocationStrategyAddress
+}
+
+func (s StellarConfig) WithdrawalSlippageBps() int {
+	return s.withdrawalSlippageBps
+}
+
+func (s StellarConfig) HarvestDefaultCompound() bool {
+	return s.harvestDefaultCompound
+}
+
+func (a AllocationConfig) MinWeightPercent() int {
+	return a.minWeightPercent
+}
+
 func (l LogConfig) Level() string {
 	return l.level
 }
@@ -459,8 +906,20 @@ func (a AuthConfig) Secret() string {
 	return a.secret
 }
 
-func (a AuthConfig) TokenExpiry() time.Duration {
-	return a.tokenExpiry
+func (a AuthConfig) ServiceAPIKey() string {
+	return a.serviceAPIKey
+}
+
+func (a AuthConfig) AccessTokenExpiry() time.Duration {
+	return a.accessTokenExpiry
+}
+
+func (a AuthConfig) RefreshTokenExpiry() time.Duration {
+	return a.refreshTokenExpiry
+}
+
+func (a AuthConfig) AbsoluteSessionLifetime() time.Duration {
+	return a.absoluteSessionLifetime
 }
 
 func (a AuthConfig) ChallengeExpiry() time.Duration {
@@ -489,6 +948,34 @@ func (r RateLimitConfig) WalletLimit() int {
 
 func (r RateLimitConfig) WalletWindow() time.Duration {
 	return r.walletWindow
+}
+
+func (r RateLimitConfig) RebalanceLimit() int {
+	return r.rebalanceLimit
+}
+
+func (r RateLimitConfig) RebalanceWindow() time.Duration {
+	return r.rebalanceWindow
+}
+
+func (r RateLimitConfig) AuthLimit() int {
+	return r.authLimit
+}
+
+func (r RateLimitConfig) AuthWindow() time.Duration {
+	return r.authWindow
+}
+
+func (r RateLimitConfig) SettlementLimit() int {
+	return r.settlementLimit
+}
+
+func (r RateLimitConfig) SettlementWindow() time.Duration {
+	return r.settlementWindow
+}
+
+func (r RateLimitConfig) TrustedProxyCount() int {
+	return r.trustedProxyCount
 }
 
 type envLoader struct {
@@ -577,6 +1064,82 @@ func (l *envLoader) durationDefault(key string, fallback time.Duration) time.Dur
 		return fallback
 	}
 	return value
+}
+
+// accountCipherConfig parses the versioned encryption key set.
+//
+// When ACCOUNT_CIPHER_KEYS is set it takes precedence and must be a comma-
+// separated list of "version:base64key" pairs, with ACCOUNT_CIPHER_ACTIVE_KEY
+// naming one of those versions. Otherwise it falls back to the single legacy
+// BANK_ACCOUNT_ENCRYPTION_KEY registered as version "v1" (matching the
+// key_version column default), preserving existing single-key deployments.
+func (l *envLoader) accountCipherConfig(legacyKey string) AccountCipherConfig {
+	fingerprintKey := l.stringDefault("ACCOUNT_CIPHER_FINGERPRINT_KEY", "")
+	active := l.stringDefault("ACCOUNT_CIPHER_ACTIVE_KEY", "")
+
+	keysRaw, hasKeys := l.lookup("ACCOUNT_CIPHER_KEYS")
+	if hasKeys {
+		keys := make(map[string]string)
+		for _, pair := range strings.Split(keysRaw, ",") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			version, keyB64, ok := strings.Cut(pair, ":")
+			version = strings.TrimSpace(version)
+			keyB64 = strings.TrimSpace(keyB64)
+			if !ok || version == "" || keyB64 == "" {
+				l.addError(`ACCOUNT_CIPHER_KEYS entries must be "version:base64key"`)
+				continue
+			}
+			// key_version is persisted as VARCHAR(32); reject anything that would
+			// pass startup only to fail at the database boundary on write/rotation.
+			if len(version) > maxKeyVersionLen {
+				l.addError(fmt.Sprintf("ACCOUNT_CIPHER_KEYS version %q exceeds %d characters", version, maxKeyVersionLen))
+				continue
+			}
+			if _, dup := keys[version]; dup {
+				l.addError(fmt.Sprintf("ACCOUNT_CIPHER_KEYS has duplicate version %q", version))
+				continue
+			}
+			keys[version] = keyB64
+		}
+
+		// A non-empty setting that parses to zero usable entries (e.g. "," or
+		// ": ") must fail closed rather than silently disabling encryption.
+		if len(keys) == 0 {
+			l.addError("ACCOUNT_CIPHER_KEYS must contain at least one valid version:base64key entry")
+		}
+		if active == "" {
+			l.addError("ACCOUNT_CIPHER_ACTIVE_KEY is required when ACCOUNT_CIPHER_KEYS is set")
+		} else if _, ok := keys[active]; !ok && len(keys) > 0 {
+			l.addError("ACCOUNT_CIPHER_ACTIVE_KEY must match a version listed in ACCOUNT_CIPHER_KEYS")
+		}
+		// Without a v1 key, an empty fingerprint pepper would track the active key
+		// and shift the blind index on every rotation, permitting duplicate
+		// accounts. Require an explicit, rotation-independent pepper in that case.
+		if len(keys) > 0 && fingerprintKey == "" {
+			if _, hasV1 := keys["v1"]; !hasV1 {
+				l.addError("ACCOUNT_CIPHER_FINGERPRINT_KEY is required when ACCOUNT_CIPHER_KEYS has no v1 key")
+			}
+		}
+
+		return AccountCipherConfig{activeVersion: active, keys: keys, fingerprintKey: fingerprintKey}
+	}
+
+	// Backward compatibility: fall back to the single legacy key as version "v1".
+	if strings.TrimSpace(legacyKey) != "" {
+		return AccountCipherConfig{
+			activeVersion:  "v1",
+			keys:           map[string]string{"v1": legacyKey},
+			fingerprintKey: fingerprintKey,
+		}
+	}
+
+	if active != "" || fingerprintKey != "" {
+		l.addError("ACCOUNT_CIPHER_ACTIVE_KEY/ACCOUNT_CIPHER_FINGERPRINT_KEY set but no keys are configured (set ACCOUNT_CIPHER_KEYS or BANK_ACCOUNT_ENCRYPTION_KEY)")
+	}
+	return AccountCipherConfig{}
 }
 
 func (l *envLoader) lookup(key string) (string, bool) {

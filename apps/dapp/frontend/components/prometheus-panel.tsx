@@ -133,7 +133,7 @@ export function PrometheusPanel() {
                         initial={{ opacity: 0, scale: 0.9, y: 20 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                        className="fixed bottom-8 right-8 z-[60] flex h-[600px] w-[400px] flex-col overflow-hidden rounded-3xl border border-white/10 bg-white shadow-2xl shadow-black/20"
+                        className="fixed bottom-8 right-8 z-[60] flex h-[600px] w-[400px] flex-col overflow-hidden rounded-3xl border border-white/10 bg-white dark:bg-[#100F0F] shadow-2xl shadow-black/20"
                     >
                         {/* Header */}
                         <div className="flex items-center justify-between border-b border-border bg-brand-dark px-6 py-4 text-white">
@@ -183,15 +183,15 @@ export function PrometheusPanel() {
                                 >
                                     <div className={cn(
                                         "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border",
-                                        m.role === "user" ? "bg-white" : "bg-brand-dark text-white"
+                                        m.role === "user" ? "bg-white dark:bg-[#100F0F]" : "bg-brand-dark text-white"
                                     )}>
                                         {m.role === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
                                     </div>
                                     <div className={cn(
                                         "max-w-[80%] rounded-2xl px-4 py-3 text-sm shadow-sm",
-                                        m.role === "user" 
-                                            ? "bg-brand-dark text-white rounded-tr-none" 
-                                            : "bg-white text-foreground border border-border rounded-tl-none"
+                                        m.role === "user"
+                                            ? "bg-brand-dark text-white rounded-tr-none"
+                                            : "bg-white dark:bg-[#100F0F] text-foreground border border-border rounded-tl-none"
                                     )}>
                                         {m.content || (
                                             <div className="flex gap-1 py-1">
@@ -206,7 +206,7 @@ export function PrometheusPanel() {
                         </div>
 
                         {/* Input Area */}
-                        <div className="border-t border-border bg-white p-4">
+                        <div className="border-t border-border bg-white dark:bg-[#100F0F] p-4">
                             <div className="flex items-center gap-2 rounded-2xl border border-border bg-slate-50 px-4 py-2 focus-within:border-brand-dark/30 transition-colors">
                                 <input
                                     type="text"

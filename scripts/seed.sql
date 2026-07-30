@@ -64,10 +64,34 @@ CREATE INDEX IF NOT EXISTS idx_settlements_user_id ON settlements(user_id);
 CREATE INDEX IF NOT EXISTS idx_settlements_vault_id ON settlements(vault_id);
 CREATE INDEX IF NOT EXISTS idx_settlements_status ON settlements(status);
 
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role       VARCHAR(50) NOT NULL,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    granted_by UUID        REFERENCES users(id),
+    PRIMARY KEY (user_id, role)
+);
+
+CREATE TABLE IF NOT EXISTS system_state (
+    key        TEXT        PRIMARY KEY,
+    value      TEXT        NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed the event-indexer cursor.
+INSERT INTO system_state (key, value)
+VALUES ('event_indexer.last_ledger', '0')
+ON CONFLICT (key) DO NOTHING;
+
 -- Seed data
 
 INSERT INTO users (id, wallet_address, display_name, kyc_status, created_at, updated_at) VALUES
-    ('550e8400-e29b-41d4-a716-446655440001', 'GDUMMYWALLET000000000000000000000000000000000000000000001', 'Test User', 'approved', NOW(), NOW());
+    ('550e8400-e29b-41d4-a716-446655440001', 'GBDZVKPNWE5K3VQXXS3F2XW56XG6Y74NXZ4L6R445VMBG6X5D74NXR7Z', 'Test User', 'approved', NOW(), NOW())
+ON CONFLICT DO NOTHING;
+
+INSERT INTO user_roles (user_id, role, granted_at, granted_by) VALUES
+    ('550e8400-e29b-41d4-a716-446655440001', 'admin', NOW(), NULL)
+ON CONFLICT DO NOTHING;
 
 INSERT INTO vaults (id, user_id, contract_address, total_deposited, current_balance, currency, status) VALUES
     ('550e8400-e29b-41d4-a716-446655440010',
@@ -77,7 +101,8 @@ INSERT INTO vaults (id, user_id, contract_address, total_deposited, current_bala
     ('550e8400-e29b-41d4-a716-446655440011',
      '550e8400-e29b-41d4-a716-446655440001',
      'CCLQBFQKIIASLN7MXDQFAUXHQXPKR5ZVGKIMKNBZMKWL4LNKQXQXQAB',
-     5000.00, 5150.25, 'USDC', 'active');
+     5000.00, 5150.25, 'USDC', 'active')
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO allocations (id, vault_id, protocol, amount, apy, allocated_at) VALUES
     ('550e8400-e29b-41d4-a716-446655440020',
@@ -88,7 +113,8 @@ INSERT INTO allocations (id, vault_id, protocol, amount, apy, allocated_at) VALU
      'Aave', 4000.00, 7.2500, NOW()),
     ('550e8400-e29b-41d4-a716-446655440022',
      '550e8400-e29b-41d4-a716-446655440011',
-     'Compound', 5000.00, 6.8000, NOW());
+     'Compound', 5000.00, 6.8000, NOW())
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO settlements (
     id, user_id, vault_id, amount, currency, fiat_currency, fiat_amount,
@@ -117,4 +143,5 @@ INSERT INTO settlements (
      200.00, 'USDC', 'NGN', 330000.00, 1650.00,
      'bank_transfer', 'paystack', '9876543210', 'Test User', '058',
      'fiat_dispatched',
-     NOW() - INTERVAL '1 hour', NULL);
+     NOW() - INTERVAL '1 hour', NULL)
+ON CONFLICT (id) DO NOTHING;

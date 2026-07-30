@@ -16,7 +16,8 @@ import {
 import { usePortfolio } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
-import { type Vault as VaultDefinition, type MarketStrategy } from "@/lib/mock-vaults";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import type { Vault as VaultDefinition, MarketStrategy } from "@/lib/types/vault";
 import {
   executeVaultDeposit,
   UserRejectedError,
@@ -107,7 +108,7 @@ function ModalShell({
                 </div>
                 <button
                   onClick={onClose}
-                  className="rounded-full border border-border bg-white p-2 text-muted-foreground transition-colors hover:text-foreground"
+                  className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -174,6 +175,7 @@ function getVaultMeta(vault: VaultDefinition) {
 export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const { address } = useWallet();
   const { getAvailableBalance, recordDeposit, refreshBalances } = usePortfolio();
+  const { isOffline } = useOfflineStatus();
 
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
@@ -194,10 +196,15 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
       ? userAssetOverride
       : vaultDefaultAsset;
 
-  useEffect(() => {
-    setUserAssetOverride(null);
-    setSelectedStrategy(vault?.strategies?.[0] ?? null);
-  }, [vault?.id]);
+  // Avoid setState in effect by keeping state in sync with a key,
+  // but for simplicity we will handle the vault switch in the parent or track the previous vault id.
+  const [prevVaultId, setPrevVaultId] = useState(vault?.id);
+  
+  if (vault?.id !== prevVaultId) {
+      setPrevVaultId(vault?.id);
+      setUserAssetOverride(null);
+      setSelectedStrategy(vault?.strategies?.[0] ?? null);
+  }
 
 
   const amount = Number(amountInput) || 0;
@@ -210,10 +217,10 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
     if (amount > balance)
       return `Insufficient balance. You have ${formatCurrency(balance)} ${selectedAsset} available.`;
     return null;
-  }, [amount, balance]);
+  }, [amount, balance, selectedAsset]);
 
   const canSubmit =
-    !!vault && !!address && amount > 0 && !validationError && state === "input";
+    !!vault && !!address && amount > 0 && !validationError && state === "input" && !isOffline;
 
   const effectiveApy = selectedStrategy ? selectedStrategy.apy / 100 : (meta ? meta.apy : 0);
   const estimatedYield = amount * effectiveApy;
@@ -283,7 +290,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
           {/* ── Left: amount + preview ── */}
           <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
-            <div className="rounded-3xl border border-border bg-white p-5">
+            <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
@@ -371,7 +378,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   />
                   <div className="flex items-center gap-2">
                     {supportedAssets.length > 1 ? (
-                      <div className="flex rounded-full border border-border bg-white p-0.5 shadow-sm">
+                      <div className="flex rounded-full border border-border bg-white dark:bg-[#100F0F] p-0.5 shadow-sm">
                         {supportedAssets.map((a) => (
                           <button
                             key={a}
@@ -394,14 +401,14 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                         ))}
                       </div>
                     ) : (
-                      <span className="rounded-full bg-white px-3 py-2 text-sm font-medium text-foreground shadow-sm">
+                      <span className="rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-sm font-medium text-foreground shadow-sm">
                         {selectedAsset}
                       </span>
                     )}
                     <button
                       onClick={() => setAmountInput(balance.toFixed(2))}
                       disabled={state !== "input" && state !== "error"}
-                      className="rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 disabled:opacity-40"
+                      className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
                     >
                       Max
                     </button>
@@ -454,7 +461,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
 
           {/* ── Right: transaction flow (lg+ only) ── */}
           <div className="hidden lg:block p-6">
-            <div className="rounded-3xl border border-border bg-white p-5 h-full">
+            <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5 h-full">
               <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
                 Transaction Flow
               </p>
@@ -527,7 +534,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                 <Link
                   href={receipt.explorerUrl}
                   target="_blank"
-                  className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:shadow"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:shadow"
                 >
                   View on Stellar Explorer
                   <ExternalLink className="h-3.5 w-3.5" />
@@ -545,11 +552,20 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
             </div>
           )}
 
+          {isOffline && state === "input" && (
+            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <div className="flex items-start gap-2 text-sm text-amber-700">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>You need an internet connection to complete this transaction.</span>
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-3">
             <button
               onClick={reset}
               disabled={state === "signing" || state === "submitting"}
-              className="flex-1 rounded-full border border-border bg-white px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 disabled:opacity-40"
+              className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
             >
               {state === "success" ? "Close" : "Cancel"}
             </button>

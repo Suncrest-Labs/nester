@@ -95,9 +95,9 @@ func TestVaultRepositoryIntegrationCRUD(t *testing.T) {
 		t.Fatalf("expected 2 allocations, got %d", len(fetched.Allocations))
 	}
 
-	userVaults, err := repository.GetUserVaults(ctx, userID)
+	userVaults, _, err := repository.ListUserVaults(ctx, userID, vault.UserListFilter{Page: 1, PerPage: 100})
 	if err != nil {
-		t.Fatalf("GetUserVaults() error = %v", err)
+		t.Fatalf("ListUserVaults() error = %v", err)
 	}
 	if len(userVaults) != 1 {
 		t.Fatalf("expected 1 vault for user, got %d", len(userVaults))
@@ -179,7 +179,12 @@ func TestVaultRepositoryIntegrationRecordDepositConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	deposit := func() {
 		defer wg.Done()
-		if err := repository.RecordDeposit(ctx, created.ID, decimal.RequireFromString("10")); err != nil {
+		if err := repository.RecordDeposit(ctx, created.ID, vault.TransactionRecord{
+			UserID:               userID,
+			Amount:               decimal.RequireFromString("10"),
+			SharesMintedOrBurned: decimal.RequireFromString("10"),
+			SharePriceAtTime:     decimal.NewFromInt(1),
+		}); err != nil {
 			t.Errorf("RecordDeposit() error = %v", err)
 		}
 	}
@@ -221,12 +226,47 @@ func openIntegrationDB(t *testing.T) *sql.DB {
 func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 
+	// Wipe every table in the public schema before applying. The docker
+	// volume persists across container restarts, so tables created in prior
+	// runs must be dropped to avoid non-idempotent CREATE TABLE statements
+	// (e.g. 006_create_settlements_table) failing on the second run. CASCADE
+	// pulls in dependent objects; schema_migrations and any tables outside
+	// the public schema are untouched.
+	if _, err := db.Exec(`
+		DO $$
+		DECLARE r record;
+		BEGIN
+			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+			END LOOP;
+		END$$;
+	`); err != nil {
+		t.Fatalf("drop tables: %v", err)
+	}
+
+	// 033 must run BEFORE 023: 033 renames vault_transactions.tx_hash →
+	// transaction_hash, and 023 creates the UNIQUE INDEX on that column. 035
+	// is a byte-identical duplicate of 033 whose non-idempotent RENAME COLUMN
+	// would fail on re-runs, so it is intentionally skipped.
+	// 010 and 020 are deliberately omitted: they DROP users.email and RENAME
+	// users.name → display_name, which would break the seed helpers that
+	// INSERT into users (id, email, name). Apply either via a separate,
+	// opt-in helper if user-profile tests are extended.
 	for _, name := range []string{
 		"001_create_users_table.up.sql",
-		"004_create_vaults_table.up.sql",
+		"002_create_vaults_table.up.sql",
 		"005_create_allocations_table.up.sql",
 		"006_create_settlements_table.up.sql",
-		"007_update_users_table.up.sql",
+		"007_add_vault_deleted_at.up.sql",
+		"008_add_vault_transactions.up.sql",
+		"014_add_missing_columns.up.sql",
+		"027_user_profile_fields.up.sql",
+		"033_update_vault_transactions.up.sql",
+		"023_vault_transactions_hash_unique.up.sql",
+		"036_allow_harvest_transaction_type.up.sql",
+		"042_create_yield_harvests.up.sql",
+		"074_add_vault_name_description_search.up.sql",
+		"075_add_vault_transactions_memo_search.up.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)
@@ -242,7 +282,7 @@ func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 func resetIntegrationTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	if _, err := db.Exec(`TRUNCATE TABLE settlements, allocations, vaults, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE settlements, allocations, vault_transactions, yield_harvests, vaults, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE failed: %v", err)
 	}
 }

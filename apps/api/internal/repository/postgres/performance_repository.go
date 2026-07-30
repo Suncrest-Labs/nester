@@ -159,6 +159,87 @@ func (r *PerformanceRepository) ListAPY(ctx context.Context, vaultID uuid.UUID) 
 	return out, rows.Err()
 }
 
+// APYHistoryForVault fetches snapshot rows within the requested window and
+// buckets them by day or week, returning the average share_price-derived APY
+// per bucket.
+func (r *PerformanceRepository) APYHistoryForVault(
+	ctx context.Context,
+	vaultID uuid.UUID,
+	since time.Time,
+	interval string, // "daily" | "weekly"
+) ([]performance.APYDataPoint, error) {
+	truncUnit := "day"
+	if interval == "weekly" {
+		truncUnit = "week"
+	}
+
+	stmt := `
+        SELECT
+            date_trunc($3, snapshot_at)::date AS bucket,
+            AVG(
+                CASE
+                    WHEN total_deposited::numeric > 0
+                    THEN ((total_balance::numeric / total_deposited::numeric) - 1) * 100
+                    ELSE 0
+                END
+            ) AS avg_apy
+        FROM vault_performance_snapshots
+        WHERE vault_id = $1 AND snapshot_at >= $2
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    `
+	rows, err := r.db.QueryContext(ctx, stmt, vaultID, since, truncUnit)
+	if err != nil {
+		return nil, fmt.Errorf("apy history query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []performance.APYDataPoint
+	for rows.Next() {
+		var dp performance.APYDataPoint
+		var t time.Time
+		var apy float64
+		if err := rows.Scan(&t, &apy); err != nil {
+			return nil, err
+		}
+		dp.Date = t.Format("2006-01-02")
+		dp.APY = decimal.NewFromFloat(apy).StringFixed(2)
+		out = append(out, dp)
+	}
+	return out, rows.Err()
+}
+
+// APYStatsForVault returns min, max and avg APY over the window using snapshots.
+func (r *PerformanceRepository) APYStatsForVault(
+	ctx context.Context,
+	vaultID uuid.UUID,
+	since time.Time,
+) (min, max, avg decimal.Decimal, err error) {
+	stmt := `
+        SELECT
+            MIN(CASE WHEN total_deposited::numeric > 0 THEN ((total_balance::numeric / total_deposited::numeric) - 1)*100 ELSE 0 END),
+            MAX(CASE WHEN total_deposited::numeric > 0 THEN ((total_balance::numeric / total_deposited::numeric) - 1)*100 ELSE 0 END),
+            AVG(CASE WHEN total_deposited::numeric > 0 THEN ((total_balance::numeric / total_deposited::numeric) - 1)*100 ELSE 0 END)
+        FROM vault_performance_snapshots
+        WHERE vault_id = $1 AND snapshot_at >= $2
+    `
+	var minStr, maxStr, avgStr sql.NullString
+	if err = r.db.QueryRowContext(ctx, stmt, vaultID, since).Scan(&minStr, &maxStr, &avgStr); err != nil {
+		return
+	}
+	if minStr.Valid {
+		min, _ = decimal.NewFromString(minStr.String)
+	}
+	if maxStr.Valid {
+		max, _ = decimal.NewFromString(maxStr.String)
+	}
+	if avgStr.Valid {
+		avg, _ = decimal.NewFromString(avgStr.String)
+	}
+	return
+}
+
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }

@@ -1,13 +1,14 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Error,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env, Error,
     IntoVal, Symbol, Val, Vec,
 };
 
 use nester_access_control::{AccessControl, Role};
 use nester_common::{
-    emit_event, fees::mul_div, ContractError, ProtocolType, SourceStatus, BASIS_POINT_SCALE,
+    emit_event, fees::mul_div, CalleeAllowlist, ContractError, ProtocolType, SourceStatus,
+    with_reentrancy_guard, BASIS_POINT_SCALE,
 };
 
 const STRATEGY: Symbol = symbol_short!("STRATEGY");
@@ -52,6 +53,7 @@ impl<'a> RegistryClient<'a> {
     }
 
     fn get_active_sources(&self) -> Vec<RegistrySource> {
+        CalleeAllowlist::assert_allowed(self.env, self.contract_id);
         self.env.invoke_contract(
             self.contract_id,
             &Symbol::new(self.env, "get_active_sources"),
@@ -112,6 +114,7 @@ pub enum VaultType {
 pub struct StrategyParams {
     pub rebalance_threshold_bps: u32,
     pub max_weight_bps: u32,
+    pub min_weight_bps: u32,
 }
 
 #[contracttype]
@@ -123,6 +126,7 @@ enum DataKey {
     Allocation(Symbol),
     RebalanceThresholdBps,
     MaxWeightBps,
+    MinWeightBps,
 }
 
 #[contract]
@@ -141,9 +145,11 @@ impl AllocationStrategyContract {
         vault_type: VaultType,
     ) {
         AccessControl::initialize(&env, &admin);
+        nester_common::Upgrade::init_schema_version(&env, 1);
         env.storage()
             .instance()
             .set(&DataKey::RegistryId, &registry_id);
+        CalleeAllowlist::register(&env, &registry_id);
         env.storage()
             .instance()
             .set(&DataKey::VaultType, &vault_type);
@@ -156,6 +162,9 @@ impl AllocationStrategyContract {
         env.storage()
             .instance()
             .set(&DataKey::MaxWeightBps, &params.max_weight_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinWeightBps, &params.min_weight_bps);
 
         let default_weights = build_default_weights(&env, &registry_id, &vault_type);
         env.storage()
@@ -179,6 +188,11 @@ impl AllocationStrategyContract {
                 .instance()
                 .get(&DataKey::MaxWeightBps)
                 .unwrap(),
+            min_weight_bps: env
+                .storage()
+                .instance()
+                .get(&DataKey::MinWeightBps)
+                .unwrap(),
         }
     }
 
@@ -187,6 +201,7 @@ impl AllocationStrategyContract {
         caller: Address,
         rebalance_threshold_bps: u32,
         max_weight_bps: u32,
+        min_weight_bps: u32,
     ) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -194,6 +209,8 @@ impl AllocationStrategyContract {
         if rebalance_threshold_bps > BASIS_POINT_SCALE
             || max_weight_bps == 0
             || max_weight_bps > BASIS_POINT_SCALE
+            || min_weight_bps == 0
+            || min_weight_bps >= max_weight_bps
         {
             panic_with_error!(&env, ContractError::InvalidOperation);
         }
@@ -204,18 +221,29 @@ impl AllocationStrategyContract {
         env.storage()
             .instance()
             .set(&DataKey::MaxWeightBps, &max_weight_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinWeightBps, &min_weight_bps);
     }
 
     pub fn set_weights(env: Env, caller: Address, weights: Vec<AllocationWeight>) {
+        with_reentrancy_guard(env, |env| Self::set_weights_internal(env, caller, weights));
+    }
+
+    fn set_weights_internal(env: Env, caller: Address, weights: Vec<AllocationWeight>) {
         caller.require_auth();
         require_admin_or_operator(&env, &caller);
 
         validate_weight_sum(&env, &weights);
 
         let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let params = Self::get_strategy_params(env.clone());
 
         for weight in weights.iter() {
-            if weight.weight_bps < 100 {
+            if weight.weight_bps < params.min_weight_bps {
+                panic_with_error!(&env, ContractError::ConfigOutOfRange);
+            }
+            if weight.weight_bps > params.max_weight_bps {
                 panic_with_error!(&env, ContractError::ConfigOutOfRange);
             }
             if !registry_has_source(&env, &registry_id, &weight.source_id) {
@@ -319,7 +347,7 @@ impl AllocationStrategyContract {
         target_weights: Vec<AllocationWeight>,
     ) -> bool {
         let threshold = Self::get_strategy_params(env).rebalance_threshold_bps;
-        let mut seen = Vec::new(&current_weights.env());
+        let mut seen = Vec::new(current_weights.env());
 
         for weight in current_weights.iter() {
             if !contains_symbol(&seen, &weight.source_id) {
@@ -343,6 +371,42 @@ impl AllocationStrategyContract {
         false
     }
 
+    /// Returns the yield-maximizing allocation for `vault_id` given current
+    /// registry data: 100% (10_000 bps) to the highest-APY active source.
+    /// Weights sum to 10_000 bps; empty when the registry has no active sources.
+    ///
+    /// `vault_id` is accepted for the rebalancing scheduler's interface (and
+    /// future per-vault keying); this strategy instance represents the vault.
+    pub fn get_optimal_allocation(env: Env, vault_id: Address) -> Vec<AllocationWeight> {
+        let _ = &vault_id;
+        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let sources = registry_get_active_sources(&env, &registry_id);
+        optimal_allocation_from_sources(&env, &sources)
+    }
+
+    /// Returns true when rebalancing `vault_id` is warranted: the spread
+    /// between the optimal allocation's APY and the vault's current weighted
+    /// APY (computed from live registry APYs) exceeds `threshold_bps`.
+    ///
+    /// The Go rebalancing scheduler invokes this read-only check via Soroban
+    /// RPC to decide whether to trigger a rebalance.
+    pub fn should_rebalance(env: Env, vault_id: Address, threshold_bps: u32) -> bool {
+        let _ = &vault_id;
+        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let sources = registry_get_active_sources(&env, &registry_id);
+        if sources.is_empty() {
+            return false;
+        }
+
+        let current_weights = Self::get_weights(env.clone());
+        let current_apy = weighted_apy_for(&current_weights, &sources);
+
+        let optimal = optimal_allocation_from_sources(&env, &sources);
+        let optimal_apy = weighted_apy_for(&optimal, &sources);
+
+        optimal_apy.saturating_sub(current_apy) > threshold_bps
+    }
+
     /// Compute per-source transfers required to move from `current_allocations`
     /// to the stored target weights, given `total` assets across all sources.
     ///
@@ -355,30 +419,134 @@ impl AllocationStrategyContract {
         current_allocations: Vec<CurrentAllocation>,
         total: i128,
     ) -> Vec<AllocationDelta> {
+        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
         let target_weights = Self::get_weights(env.clone());
-        let target_amounts = allocation_amounts(&target_weights, total);
-
-        let mut deltas = Vec::new(&env);
+        
+        let mut adjusted_weights = Vec::new(&env);
+        let mut healthy_weight_sum = 0_u32;
+        let mut total_to_redistribute = total;
         let mut seen = Vec::new(&env);
+        let mut deltas = Vec::new(&env);
 
-        for (source_id, target_amount) in target_amounts.iter() {
-            let current = current_amount_for(&current_allocations, &source_id);
-            seen.push_back(source_id.clone());
-            deltas.push_back(AllocationDelta {
-                source_id,
-                delta: target_amount - current,
-            });
+        // First pass: identify healthy targets and freeze/drain unhealthy ones.
+        for w in target_weights.iter() {
+            seen.push_back(w.source_id.clone());
+            let status = registry_get_source_status(&env, &registry_id, &w.source_id);
+            let current = current_amount_for(&current_allocations, &w.source_id);
+
+            match status {
+                SourceStatus::Active => {
+                    adjusted_weights.push_back(w.clone());
+                    healthy_weight_sum += w.weight_bps;
+                }
+                SourceStatus::Paused => {
+                    // Skip: keep current allocation, delta = 0
+                    total_to_redistribute -= current;
+                    deltas.push_back(AllocationDelta {
+                        source_id: w.source_id.clone(),
+                        delta: 0,
+                    });
+                    nester_common::emit_event_with_sym(
+                        &env,
+                        STRATEGY,
+                        Symbol::new(&env, "protocol_skipped"),
+                        w.source_id,
+                        status,
+                    );
+                }
+                SourceStatus::Deprecated | SourceStatus::Exploit => {
+                    // Drain: target = 0, delta = -current
+                    deltas.push_back(AllocationDelta {
+                        source_id: w.source_id.clone(),
+                        delta: -current,
+                    });
+                    nester_common::emit_event_with_sym(
+                        &env,
+                        STRATEGY,
+                        Symbol::new(&env, "protocol_skipped"),
+                        w.source_id,
+                        status,
+                    );
+                }
+            }
         }
 
-        // Surface sources held but not in current target weights so callers
-        // know to drain them entirely.
+        // Surface sources held but NOT in current target weights.
         for current in current_allocations.iter() {
             if !contains_symbol(&seen, &current.source_id) {
+                let status = registry_get_source_status(&env, &registry_id, &current.source_id);
+                // Non-target sources are always drained.
                 deltas.push_back(AllocationDelta {
-                    source_id: current.source_id,
+                    source_id: current.source_id.clone(),
                     delta: -current.amount,
                 });
+                if !matches!(status, SourceStatus::Active) {
+                    nester_common::emit_event_with_sym(
+                        &env,
+                        STRATEGY,
+                        Symbol::new(&env, "protocol_skipped"),
+                        current.source_id,
+                        status,
+                    );
+                }
             }
+        }
+
+        // Second pass: redistribute remaining funds among Active protocols.
+        if healthy_weight_sum > 0 && total_to_redistribute > 0 {
+            let scale = healthy_weight_sum as i128;
+            let mut distributed = 0_i128;
+            let mut max_idx = None;
+            let mut max_w = 0_u32;
+
+            for w in adjusted_weights.iter() {
+                let current = current_amount_for(&current_allocations, &w.source_id);
+                // target = total_to_redistribute * w.weight_bps / healthy_weight_sum
+                let target = match mul_div(total_to_redistribute, w.weight_bps as i128, scale) {
+                    Ok(v) => v,
+                    Err(e) => panic_with_error!(&env, e),
+                };
+                distributed += target;
+                if w.weight_bps > max_w {
+                    max_w = w.weight_bps;
+                    max_idx = Some(deltas.len());
+                }
+                deltas.push_back(AllocationDelta {
+                    source_id: w.source_id,
+                    delta: target - current,
+                });
+            }
+
+            // Remainder adjustment for rounding.
+            if let Some(idx) = max_idx {
+                let remainder = total_to_redistribute - distributed;
+                if remainder != 0 {
+                    let mut d = deltas.get(idx).unwrap();
+                    d.delta += remainder;
+                    deltas.set(idx, d);
+                }
+            }
+        } else if total_to_redistribute > 0 {
+            // No healthy protocols to take the funds!
+            // In a real system, these would stay in the vault. 
+            // Here we must still satisfy delta conservation if total was sum(current).
+            // This case implies we are withdrawing everything to the vault.
+            // The current rebalance architecture (sum=0) doesn't allow net withdrawal
+            // unless we represent the vault as a destination.
+        }
+
+        // Enforce delta conservation: the sum of all deltas must be <= 0.
+        // A negative sum means funds are being withdrawn to the vault.
+        let mut delta_sum: i128 = 0;
+        for d in deltas.iter() {
+            delta_sum = delta_sum
+                .checked_add(d.delta)
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        }
+        
+        if delta_sum > 0 {
+            // We cannot create funds.
+            panic_with_error!(&env, ContractError::AllocationError);
         }
 
         deltas
@@ -450,7 +618,63 @@ impl AllocationStrategyContract {
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
     }
+
+    // -----------------------------------------------------------------------
+    // Upgradeability & Schema Migration
+    // -----------------------------------------------------------------------
+
+    /// Proposes a new WASM upgrade for the allocation strategy.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY (48 hours).
+    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &admin,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY,
+            eta,
+        );
+    }
+
+    /// Cancels a pending WASM upgrade for the allocation strategy.
+    ///
+    /// Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, admin: Address) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &admin);
+    }
+
+    /// Executes a matured WASM upgrade for the allocation strategy.
+    ///
+    /// Execution is permissionless after maturity.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
+
+    /// Retrieves pending upgrade details if present.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
+    }
+
+    /// Returns current contract schema version.
+    pub fn get_schema_version(env: Env) -> u32 {
+        nester_common::Upgrade::get_schema_version(&env)
+    }
+
+    /// Bumps schema version if needed (idempotent).
+    pub fn migrate(env: Env) -> u32 {
+        let current = nester_common::Upgrade::get_schema_version(&env);
+        let target = 1u32;
+        if current < target {
+            nester_common::Upgrade::set_schema_version(&env, target);
+            target
+        } else {
+            current
+        }
+    }
 }
+
 
 // ---------------------------------------------------------------------------
 // Private helpers
@@ -507,9 +731,7 @@ fn suggest_weights_from_sources(env: &Env, sources: Vec<RegistrySource>) -> Vec<
 
 fn source_score(source: &RegistrySource) -> i128 {
     let raw_risk = source.risk_rating;
-    let clamped_risk = if raw_risk == 0 {
-        MAX_RISK_RATING
-    } else if raw_risk > MAX_RISK_RATING {
+    let clamped_risk = if raw_risk == 0 || raw_risk > MAX_RISK_RATING {
         MAX_RISK_RATING
     } else {
         raw_risk
@@ -525,11 +747,57 @@ fn source_score(source: &RegistrySource) -> i128 {
     apy * risk_factor
 }
 
-/// Panic with [`ContractError::Unauthorized`] unless `account` holds Admin or
-/// Operator. Day-to-day operations (e.g. weight updates) are open to both.
+/// Yield-maximizing allocation: 100% (10_000 bps) to the highest-APY active
+/// source. Returns an empty vector when there are no sources.
+fn optimal_allocation_from_sources(
+    env: &Env,
+    sources: &Vec<RegistrySource>,
+) -> Vec<AllocationWeight> {
+    let mut weights = Vec::new(env);
+    if sources.is_empty() {
+        return weights;
+    }
+    let mut best = sources.get(0).unwrap();
+    for source in sources.iter() {
+        if source.current_apy_bps > best.current_apy_bps {
+            best = source;
+        }
+    }
+    weights.push_back(AllocationWeight {
+        source_id: best.id.clone(),
+        weight_bps: BASIS_POINT_SCALE,
+    });
+    weights
+}
+
+/// Weighted APY (in bps) of `weights` using live source APYs. Sources absent
+/// from `sources` (inactive/removed) contribute 0 APY, correctly lowering the
+/// weighted result so drift is detected.
+fn weighted_apy_for(weights: &Vec<AllocationWeight>, sources: &Vec<RegistrySource>) -> u32 {
+    let mut acc: u64 = 0;
+    for weight in weights.iter() {
+        let apy = apy_for_source(sources, &weight.source_id);
+        acc += (weight.weight_bps as u64) * (apy as u64);
+    }
+    (acc / BASIS_POINT_SCALE as u64) as u32
+}
+
+fn apy_for_source(sources: &Vec<RegistrySource>, source_id: &Symbol) -> u32 {
+    for source in sources.iter() {
+        if &source.id == source_id {
+            return source.current_apy_bps;
+        }
+    }
+    0
+}
+
+/// Panic with [`ContractError::Unauthorized`] unless `account` holds Admin,
+/// Operator, or the narrower [`Role::RebalanceKeeper`] (issue #820).
+/// Day-to-day operations (e.g. weight updates) are open to all three.
 fn require_admin_or_operator(env: &Env, account: &Address) {
     if !AccessControl::has_role(env, account, Role::Admin)
         && !AccessControl::has_role(env, account, Role::Operator)
+        && !AccessControl::has_role(env, account, Role::RebalanceKeeper)
     {
         panic_with_error!(env, ContractError::Unauthorized);
     }
@@ -540,18 +808,22 @@ fn default_strategy_params(vault_type: &VaultType) -> StrategyParams {
         VaultType::Conservative => StrategyParams {
             rebalance_threshold_bps: 250,
             max_weight_bps: 5_000,
+            min_weight_bps: 500,
         },
         VaultType::Balanced => StrategyParams {
             rebalance_threshold_bps: 500,
             max_weight_bps: 6_500,
+            min_weight_bps: 500,
         },
         VaultType::Growth => StrategyParams {
             rebalance_threshold_bps: 750,
             max_weight_bps: 8_500,
+            min_weight_bps: 500,
         },
         VaultType::DeFi500 => StrategyParams {
             rebalance_threshold_bps: 100,
             max_weight_bps: 10_000,
+            min_weight_bps: 200,
         },
     }
 }
@@ -633,7 +905,7 @@ fn even_distribution(env: &Env, count: usize) -> Vec<u32> {
 }
 
 fn proportional_with_cap(env: &Env, scores: &Vec<i128>, max_weight_bps: u32) -> Vec<u32> {
-    if scores.len() == 0 {
+    if scores.is_empty() {
         return Vec::new(env);
     }
 
@@ -785,7 +1057,7 @@ fn compute_weights(env: &Env, apys: Vec<SourceApy>) -> Vec<AllocationWeight> {
         }
     }
 
-    if eligible_indices.len() > 0 {
+    if !eligible_indices.is_empty() {
         let computed = match vault_type {
             VaultType::DeFi500 => even_distribution(env, eligible_indices.len() as usize),
             _ => proportional_with_cap(env, &scores, params.max_weight_bps),
@@ -812,7 +1084,7 @@ fn persist_allocations(env: &Env, total_amount: i128, weights: &Vec<AllocationWe
 fn allocation_amounts(weights: &Vec<AllocationWeight>, total_amount: i128) -> Vec<(Symbol, i128)> {
     let scale = BASIS_POINT_SCALE as i128;
     let env = weights.env();
-    let mut out = Vec::new(&env);
+    let mut out = Vec::new(env);
     let mut total_allocated = 0_i128;
     let mut max_index = None;
     let mut max_weight = 0_u32;
@@ -825,7 +1097,7 @@ fn allocation_amounts(weights: &Vec<AllocationWeight>, total_amount: i128) -> Ve
         total_allocated += amount;
         if weight.weight_bps > max_weight {
             max_weight = weight.weight_bps;
-            max_index = Some(index as usize);
+            max_index = Some(index);
         }
         out.push_back((weight.source_id, amount));
     }
@@ -869,6 +1141,7 @@ fn lookup_weight(weights: &Vec<AllocationWeight>, target: &Symbol) -> u32 {
 }
 
 fn registry_has_source(env: &Env, registry_id: &Address, source_id: &Symbol) -> bool {
+    CalleeAllowlist::assert_allowed(env, registry_id);
     env.invoke_contract(
         registry_id,
         &Symbol::new(env, "has_source"),
@@ -881,6 +1154,7 @@ fn registry_get_source_status(
     registry_id: &Address,
     source_id: &Symbol,
 ) -> SourceStatus {
+    CalleeAllowlist::assert_allowed(env, registry_id);
     env.invoke_contract(
         registry_id,
         &Symbol::new(env, "get_source_status"),
@@ -889,6 +1163,7 @@ fn registry_get_source_status(
 }
 
 fn registry_get_active_sources(env: &Env, registry_id: &Address) -> Vec<RegistrySource> {
+    CalleeAllowlist::assert_allowed(env, registry_id);
     match env.try_invoke_contract::<Vec<RegistrySource>, Error>(
         registry_id,
         &Symbol::new(env, "get_active_sources"),

@@ -2,6 +2,7 @@
   "name": "nester",
   "private": true,
   "scripts": {
+    "preinstall": "npx only-allow pnpm",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",

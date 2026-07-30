@@ -20,7 +20,7 @@ export interface UseBankResolverResult {
   accountInfo: AccountInfo | null;
 }
 
-const DEBOUNCE_MS = 400;
+const DEBOUNCE_MS = 500;
 
 export function useBankResolver(
   accountNumber: string,
@@ -33,20 +33,30 @@ export function useBankResolver(
   // Track the latest request so stale responses are discarded.
   const requestIdRef = useRef(0);
 
+  const [prevInputs, setPrevInputs] = useState({ accountNumber, bankCode, country });
+  const ready =
+    accountNumber.length === 10 &&
+    /^\d{10}$/.test(accountNumber) &&
+    bankCode.length > 0;
+
+  // Reset synchronously if inputs change and become invalid
+  if (
+    (prevInputs.accountNumber !== accountNumber ||
+      prevInputs.bankCode !== bankCode ||
+      prevInputs.country !== country)
+  ) {
+    setPrevInputs({ accountNumber, bankCode, country });
+    if (!ready) {
+      setResolveState("idle");
+      setAccountInfo(null);
+    }
+  }
+
   useEffect(() => {
     // Clear any pending debounce timer.
     if (timerRef.current) clearTimeout(timerRef.current);
 
-    // Nigerian NUBAN must be exactly 10 digits — validate client-side
-    // before firing a paid API call.
-    const ready =
-      accountNumber.length === 10 &&
-      /^\d{10}$/.test(accountNumber) &&
-      bankCode.length > 0;
-
     if (!ready) {
-      setResolveState("idle");
-      setAccountInfo(null);
       return;
     }
 
@@ -77,7 +87,7 @@ export function useBankResolver(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [accountNumber, bankCode, country]);
+  }, [accountNumber, bankCode, country, ready]);
 
   return { resolveState, accountInfo };
 }

@@ -1,2 +1,0 @@
-# nesterr_mobile
- 

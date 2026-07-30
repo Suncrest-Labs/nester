@@ -20,14 +20,6 @@ pub fn initialized_key() -> Symbol {
     symbol_short!("init")
 }
 
-pub fn yield_index_key() -> Symbol {
-    symbol_short!("y_idx")
-}
-
-pub fn user_yield_index_key() -> Symbol {
-    symbol_short!("u_idx")
-}
-
-pub fn user_accrued_key() -> Symbol {
-    symbol_short!("u_acc")
+pub fn reentrancy_lock_key() -> Symbol {
+    symbol_short!("RE_LOCK")
 }

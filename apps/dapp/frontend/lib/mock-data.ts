@@ -116,3 +116,82 @@ export const mockPerformanceHistory = Array.from({ length: 30 }, (_, i) => {
 });
 
 
+export type LoadingState = "loading" | "error" | "success" | "empty";
+
+// Enhanced mock data with loading states
+export const mockDataWithStates = {
+  // Simulated API responses with different states
+  getDashboardData: (state: LoadingState = "success") => {
+    switch (state) {
+      case "loading":
+        return { 
+          isLoading: true, 
+          data: null, 
+          error: null 
+        };
+      case "error":
+        return { 
+          isLoading: false, 
+          data: null, 
+          error: new Error("Failed to load dashboard data") 
+        };
+      case "empty":
+        return { 
+          isLoading: false, 
+          data: {
+            positions: [],
+            transactions: [],
+            stats: {
+              totalBalance: 0,
+              totalYieldEarned: 0,
+              activeVaults: 0,
+              prometheusInsights: 0
+            }
+          }, 
+          error: null 
+        };
+      case "success":
+      default:
+        return { 
+          isLoading: false, 
+          data: {
+            positions: mockVaultPositions,
+            transactions: mockTransactions.slice(0, 5),
+            stats: mockPortfolioStats
+          }, 
+          error: null 
+        };
+    }
+  },
+
+  getVaultsData: (state: LoadingState = "success") => {
+    switch (state) {
+      case "loading":
+        return { isLoading: true, data: null, error: null };
+      case "error":
+        return { isLoading: false, data: null, error: new Error("Failed to load vaults") };
+      case "empty":
+        return { isLoading: false, data: [], error: null };
+      case "success":
+      default:
+        return { isLoading: false, data: mockVaultPositions, error: null };
+    }
+  },
+
+  getTransactionsData: (state: LoadingState = "success") => {
+    switch (state) {
+      case "loading":
+        return { isLoading: true, data: null, error: null };
+      case "error":
+        return { isLoading: false, data: null, error: new Error("Network error") };
+      case "empty":
+        return { isLoading: false, data: [], error: null };
+      case "success":
+      default:
+        return { isLoading: false, data: mockTransactions, error: null };
+    }
+  },
+
+  // Simulate network delays
+  delay: (ms: number = 2000) => new Promise(resolve => setTimeout(resolve, ms)),
+};

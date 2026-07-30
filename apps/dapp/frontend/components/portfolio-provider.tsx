@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { useWallet } from "@/components/wallet-provider";
-import { getVaultById, type SupportedAsset } from "@/lib/vault-data";
+import { getVaultContractById as getVaultById, type SupportedAsset } from "@/lib/vault-contracts";
 import { useNetwork } from "@/hooks/useNetwork";
 
 export type PortfolioTransactionType =

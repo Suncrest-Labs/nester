@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -69,7 +70,7 @@ func (c *PrometheusClient) GetVaultRecommendations(ctx context.Context, vaultID 
 	}
 
 	endpoint := fmt.Sprintf(
-		"%s/api/v1/vaults/%s/recommendations",
+		"%s/vaults/%s/recommendations",
 		c.cfg.BaseURL,
 		url.PathEscape(vaultID),
 	)
@@ -94,7 +95,7 @@ func (c *PrometheusClient) GetMarketSentiment(ctx context.Context) (*intelligenc
 		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
 	}
 
-	endpoint := fmt.Sprintf("%s/api/v1/intelligence/market", c.cfg.BaseURL)
+	endpoint := fmt.Sprintf("%s/market/sentiment", c.cfg.BaseURL)
 	var report intelligence.SentimentReport
 	err := c.doRequest(ctx, endpoint, &report)
 	if err != nil {
@@ -117,7 +118,7 @@ func (c *PrometheusClient) GetPortfolioInsights(ctx context.Context, userID stri
 	}
 
 	endpoint := fmt.Sprintf(
-		"%s/api/v1/users/%s/insights",
+		"%s/portfolio/%s/insights",
 		c.cfg.BaseURL,
 		url.PathEscape(userID),
 	)
@@ -132,10 +133,104 @@ func (c *PrometheusClient) GetPortfolioInsights(ctx context.Context, userID stri
 	return &insights, nil
 }
 
+func (c *PrometheusClient) CreateSavingsPlan(ctx context.Context, request intelligence.SavingsPlanRequest) (*intelligence.SavingsPlanResponse, error) {
+	if !c.canCall() {
+		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
+	}
+
+	endpoint := fmt.Sprintf("%s/api/v1/intelligence/savings-plan", c.cfg.BaseURL)
+	var response intelligence.SavingsPlanResponse
+	err := c.doPostRequest(ctx, endpoint, request, &response)
+	if err != nil {
+		c.recordFailure()
+		return nil, fmt.Errorf("failed to create savings plan: %w", err)
+	}
+
+	return &response, nil
+}
+
+// GetGoalCoaching requests a weekly AI-generated progress assessment and
+// deposit schedule for a single savings goal (issue #112). Unlike the other
+// Get* methods this is not cached: coaching should reflect the goal's latest
+// progress each time it is requested.
+func (c *PrometheusClient) GetGoalCoaching(ctx context.Context, request intelligence.CoachingRequest) (*intelligence.CoachingResponse, error) {
+	if !c.canCall() {
+		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
+	}
+
+	endpoint := fmt.Sprintf("%s/intelligence/coaching", c.cfg.BaseURL)
+	var response intelligence.CoachingResponse
+	err := c.doPostRequest(ctx, endpoint, request, &response)
+	if err != nil {
+		c.recordFailure()
+		return nil, fmt.Errorf("failed to get goal coaching: %w", err)
+	}
+
+	return &response, nil
+}
+
+// GenerateDigest requests the periodic personalized financial insight
+// digest for one user/period (#859). Like coaching, this is not cached at
+// this layer — the intelligence service owns the one-generation-per-period
+// cache (keyed by user+period+facts hash) so a re-request after the
+// underlying data hasn't changed is a cheap hit rather than a fresh LLM call.
+func (c *PrometheusClient) GenerateDigest(ctx context.Context, request intelligence.DigestGenerateRequest) (*intelligence.DigestGenerateResponse, error) {
+	if !c.canCall() {
+		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
+	}
+
+	endpoint := fmt.Sprintf("%s/intelligence/digest/generate", c.cfg.BaseURL)
+	var response intelligence.DigestGenerateResponse
+	err := c.doPostRequest(ctx, endpoint, request, &response)
+	if err != nil {
+		c.recordFailure()
+		return nil, fmt.Errorf("failed to generate digest: %w", err)
+	}
+
+	return &response, nil
+}
+
+func (c *PrometheusClient) GenerateNudgeCopy(ctx context.Context, req intelligence.NudgeCopyRequest) (*intelligence.NudgeCopyResponse, error) {
+	if !c.canCall() {
+		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
+	}
+
+	endpoint := fmt.Sprintf("%s/intelligence/nudges/copy", c.cfg.BaseURL)
+	var response intelligence.NudgeCopyResponse
+	err := c.doPostRequest(ctx, endpoint, req, &response)
+	if err != nil {
+		c.recordFailure()
+		return nil, fmt.Errorf("failed to generate nudge copy: %w", err)
+	}
+
+	return &response, nil
+}
+
 func (c *PrometheusClient) doRequest(ctx context.Context, endpoint string, target any) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	return c.doHTTPRequest(ctx, "GET", endpoint, nil, target)
+}
+
+func (c *PrometheusClient) doPostRequest(ctx context.Context, endpoint string, body any, target any) error {
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request body: %w", err)
+	}
+	return c.doHTTPRequest(ctx, "POST", endpoint, bodyJSON, target)
+}
+
+func (c *PrometheusClient) doHTTPRequest(ctx context.Context, method string, endpoint string, body []byte, target any) error {
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
 	if err != nil {
 		return err
+	}
+
+	if method == "POST" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	if c.cfg.APIKey != "" {

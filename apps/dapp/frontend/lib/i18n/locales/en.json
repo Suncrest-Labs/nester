@@ -1,0 +1,44 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "retry": "Try again",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Your portfolio at a glance",
+    "totalBalance": "Total balance",
+    "totalYieldEarned": "Total yield earned",
+    "activeVaults": "Active vaults",
+    "recentActivity": "Recent activity",
+    "noActivity": "No activity yet"
+  },
+  "savings": {
+    "title": "Savings",
+    "subtitle": "Choose a savings plan and start earning yield on your USDC.",
+    "createPlan": "Create Plan",
+    "totalDeposited": "Total Deposited",
+    "yieldEarned": "Yield Earned",
+    "newGoal": "New goal",
+    "noGoals": "You don't have any savings goals yet",
+    "onTrack": "On track",
+    "atRisk": "At risk",
+    "targetLabel": "Target",
+    "deadlineLabel": "Deadline"
+  },
+  "offramp": {
+    "title": "Cash Out",
+    "subtitle": "Convert crypto to fiat, directly to your bank account",
+    "amountLabel": "Amount",
+    "bankLabel": "Bank",
+    "accountNumberLabel": "Account number",
+    "offlineMessage": "You're offline — withdrawals are paused",
+    "enterAmount": "Enter an amount",
+    "selectBank": "Select a bank"
+  },
+  "settings": {
+    "language": "Language",
+    "languageDescription": "Choose the language used across the app"
+  }
+}

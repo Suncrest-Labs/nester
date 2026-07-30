@@ -1,39 +1,76 @@
-import { useQuery } from '@tanstack/react-query';
+"use client";
 
-export interface Vault {
-  id: string;
-  name: string;
-  strategy: string;
-  contractAddress: string;
-  minDeposit: number;
-  apy?: number;
-  tvl?: number;
-  asset: "USDC" | "XLM";
-  managementFeePct?: number;
-  performanceFeePct?: number;
+/**
+ * useVaults — live vault data for the authenticated user.
+ *
+ * Polls every 30 s so the dashboard stays fresh without WebSocket overhead.
+ */
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import { api, type ApiVault, type ApiPerformanceSummary, ApiError } from "@/lib/api/client";
+
+const POLL_INTERVAL = 30_000; // 30 s
+
+export interface VaultWithPerf extends ApiVault {
+  performance?: ApiPerformanceSummary;
 }
 
-export function formatTvl(value: number | undefined): string {
-  if (value === undefined) return "TVL unavailable";
-  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`;
-  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
-  return `$${value}`;
+interface UseVaultsResult {
+  vaults: VaultWithPerf[];
+  isLoading: boolean;
+  error: string | null;
+  refresh: () => void;
 }
 
-export function useVaults() {
-  return useQuery({
-    queryKey: ['vaults'],
-    queryFn: async () => {
-      const res = await fetch('/api/v1/vaults');
-      if (!res.ok) throw new Error('Failed to fetch vaults');
-      const vaults = await res.json() as Vault[];
-      return vaults.map((v) => ({
-        ...v,
-        asset: (v.asset ?? (v.name.toLowerCase().includes("xlm") ? "XLM" : "USDC")) as "USDC" | "XLM",
-      }));
-    },
-    refetchInterval: 60000,
-    staleTime: 30000,
-  });
+export function useVaults(userId?: string | null): UseVaultsResult {
+  const [vaults, setVaults] = useState<VaultWithPerf[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchVaults = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const raw = await api.vaults.list(userId || undefined);
+
+      // Enrich with performance summary (best-effort — don't fail if it errors)
+      const enriched: VaultWithPerf[] = await Promise.all(
+        raw.map(async (v) => {
+          try {
+            const performance = await api.performance.getSummary(v.id);
+            return { ...v, performance };
+          } catch {
+            return v;
+          }
+        })
+      );
+
+      setVaults(enriched);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // Token expired — don't surface as a noisy error
+        setVaults([]);
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load vaults");
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (userId === null) return;
+    fetchVaults();
+    timerRef.current = setInterval(fetchVaults, POLL_INTERVAL);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [userId, fetchVaults]);
+
+  return { vaults, isLoading, error, refresh: fetchVaults };
 }

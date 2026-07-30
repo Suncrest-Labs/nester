@@ -20,7 +20,7 @@ function AllocationTooltip({
   if (!active || !payload?.length) return null;
   const d = payload[0].payload as VaultAllocation;
   return (
-    <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm text-xs">
+    <div className="rounded-xl border border-border bg-white dark:bg-[#100F0F] p-2.5 shadow-sm text-xs">
       <p className="font-medium text-foreground">{d.protocol}</p>
       <p className="text-muted-foreground">{d.percentage}% allocation</p>
       <p className="text-muted-foreground">{d.apy.toFixed(1)}% APY</p>
@@ -34,48 +34,52 @@ export function AllocationDonut({
   allocations: VaultAllocation[];
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-white p-6">
-      <h2 className="font-heading text-lg font-light text-foreground mb-6">
+    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-6">
+      <h2 id="allocation-title" className="font-heading text-lg font-light text-foreground mb-6">
         Allocation Breakdown
       </h2>
-      <ResponsiveContainer width="100%" height={200}>
-        <PieChart>
-          <Pie
-            data={allocations}
-            dataKey="percentage"
-            nameKey="protocol"
-            cx="50%"
-            cy="50%"
-            innerRadius={55}
-            outerRadius={85}
-            paddingAngle={allocations.length > 1 ? 3 : 0}
-            strokeWidth={0}
-          >
-            {allocations.map((entry, index) => (
-              <Cell key={index} fill={entry.color} />
-            ))}
-          </Pie>
-          <Tooltip content={AllocationTooltip} />
-        </PieChart>
-      </ResponsiveContainer>
-      <div className="mt-4 divide-y divide-border">
+      <div className="w-full h-[200px]" role="img" aria-labelledby="allocation-title" aria-label="Donut chart showing asset distribution across protocols">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={allocations}
+              dataKey="percentage"
+              nameKey="protocol"
+              cx="50%"
+              cy="50%"
+              innerRadius={55}
+              outerRadius={85}
+              paddingAngle={allocations.length > 1 ? 3 : 0}
+              strokeWidth={0}
+            >
+              {allocations.map((entry, index) => (
+                <Cell key={index} fill={entry.color} />
+              ))}
+            </Pie>
+            <Tooltip content={AllocationTooltip} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-4 divide-y divide-border" role="list" aria-label="Allocation details">
         {allocations.map((a) => (
           <div
             key={a.protocol}
             className="flex items-center justify-between py-3"
+            role="listitem"
           >
             <div className="flex items-center gap-2.5">
               <span
                 className="h-2.5 w-2.5 rounded-full shrink-0"
                 style={{ background: a.color }}
+                aria-hidden="true"
               />
-              <span className="text-sm text-foreground">{a.protocol}</span>
+              <span className="text-sm text-foreground font-medium">{a.protocol}</span>
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-sm font-medium text-foreground">
+              <span className="text-sm font-bold text-foreground">
                 {a.percentage}%
               </span>
-              <span className="text-xs text-muted-foreground w-16 text-right">
+              <span className="text-xs text-muted-foreground w-16 text-right font-medium">
                 {a.apy.toFixed(1)}% APY
               </span>
             </div>

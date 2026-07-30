@@ -1,4 +1,4 @@
-import { formatTvl } from "@/lib/mock-vaults";
+import { formatTvl } from "@/app/vaults/page";
 
 interface VaultMetricsProps {
   currentApy: number;
@@ -9,7 +9,7 @@ interface VaultMetricsProps {
 export function VaultMetrics({ currentApy, tvl, userCount }: VaultMetricsProps) {
   return (
     <div className="grid grid-cols-3 gap-3">
-      <div className="rounded-2xl border border-border bg-white p-4">
+      <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
         <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">
           APY
         </p>
@@ -17,7 +17,7 @@ export function VaultMetrics({ currentApy, tvl, userCount }: VaultMetricsProps) 
           {currentApy.toFixed(1)}%
         </p>
       </div>
-      <div className="rounded-2xl border border-border bg-white p-4">
+      <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
         <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">
           TVL
         </p>
@@ -25,7 +25,7 @@ export function VaultMetrics({ currentApy, tvl, userCount }: VaultMetricsProps) 
           {formatTvl(tvl)}
         </p>
       </div>
-      <div className="rounded-2xl border border-border bg-white p-4">
+      <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
         <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">
           Users
         </p>

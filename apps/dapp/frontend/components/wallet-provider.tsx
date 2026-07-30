@@ -21,8 +21,14 @@ export interface WalletInfo {
     isAvailable: boolean;
 }
 
+export interface WalletUser {
+    address: string | null;
+    name?: string | null;
+}
+
 interface WalletState {
     address: string | null;
+    user: WalletUser | null;
     isConnected: boolean;
     isConnecting: boolean;
     wallets: WalletInfo[];
@@ -34,6 +40,7 @@ interface WalletState {
 
 const WalletContext = createContext<WalletState>({
     address: null,
+    user: null,
     isConnected: false,
     isConnecting: false,
     wallets: [],
@@ -223,6 +230,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         <WalletContext.Provider
             value={{
                 address,
+                user: address ? { address } : null,
                 isConnected: !!address,
                 isConnecting,
                 wallets,

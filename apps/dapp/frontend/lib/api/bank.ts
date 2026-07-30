@@ -1,6 +1,7 @@
 // lib/api/bank.ts
 // All bank-related API calls go through the Go API so provider secrets
 // (Paystack / Flutterwave keys) are never exposed to the browser.
+import { getAccessToken as getStoredToken } from "@/lib/auth/token-store";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
@@ -115,7 +116,9 @@ export async function resolveAccountName(
       }
     );
 
-    if (res.status === 404) return { status: "not_found" };
+    // 422: Paystack resolved but found no matching account (valid format, wrong combo).
+    // 404: legacy fallback for older API versions.
+    if (res.status === 422 || res.status === 404) return { status: "not_found" };
     if (res.status === 429) return { status: "provider_error" }; // rate limited
     if (res.status === 503) return { status: "provider_error" }; // both providers down
     if (!res.ok) return { status: "provider_error" };
@@ -128,10 +131,4 @@ export async function resolveAccountName(
     // Network error — treat as provider error so the UI shows the yellow warning.
     return { status: "provider_error" };
   }
-}
-
-/** Pull the JWT from wherever the app stores it (localStorage key used by auth). */
-function getStoredToken(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem("nester_token") ?? "";
 }

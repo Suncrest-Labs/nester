@@ -93,4 +93,26 @@ type SnapshotRepository interface {
 	FirstAtOrAfter(ctx context.Context, vaultID uuid.UUID, since time.Time) (Snapshot, error)
 	UpsertAPY(ctx context.Context, record APYRecord) error
 	ListAPY(ctx context.Context, vaultID uuid.UUID) ([]APYRecord, error)
+	APYHistoryForVault(ctx context.Context, vaultID uuid.UUID, since time.Time, interval string) ([]APYDataPoint, error)
+	APYStatsForVault(ctx context.Context, vaultID uuid.UUID, since time.Time) (min, max, avg decimal.Decimal, err error)
 }
+
+// APYDataPoint represents one bucket in the APY history response.
+type APYDataPoint struct {
+	Date string `json:"date"` // YYYY-MM-DD
+	APY  string `json:"apy"`  // decimal string, e.g. "10.45"
+}
+
+// APYHistoryResponse is the payload for GET /api/v1/vaults/{id}/apy-history.
+type APYHistoryResponse struct {
+	VaultID      string         `json:"vault_id"`
+	Period       string         `json:"period"`
+	Interval     string         `json:"interval"`
+	CurrentAPY   string         `json:"current_apy"`
+	AvgAPY       string         `json:"avg_apy"`
+	MinAPY       string         `json:"min_apy"`
+	MaxAPY       string         `json:"max_apy"`
+	DataComplete bool           `json:"data_complete"`
+	DataPoints   []APYDataPoint `json:"data_points"`
+}
+

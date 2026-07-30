@@ -83,7 +83,7 @@ export function BankCombobox({
         disabled={disabled || loading}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          "w-full flex items-center justify-between px-4 py-3 rounded-xl border bg-white transition-colors min-h-[52px]",
+          "w-full flex items-center justify-between px-4 py-3 rounded-xl border bg-white dark:bg-[#100F0F] transition-colors min-h-[52px]",
           error
             ? "border-red-500"
             : open
@@ -125,7 +125,7 @@ export function BankCombobox({
 
       {/* Dropdown panel */}
       {open && !loading && (
-        <div className="absolute left-0 right-0 top-full mt-1 rounded-xl border border-border bg-white shadow-lg z-30 flex flex-col max-h-64">
+        <div className="absolute left-0 right-0 top-full mt-1 rounded-xl border border-border bg-white dark:bg-[#100F0F] shadow-lg z-30 flex flex-col max-h-64">
           {/* Search input */}
           <div className="px-3 py-2 border-b border-border flex items-center gap-2">
             <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />

@@ -1,6 +1,6 @@
 """JWT authentication dependency for all protected intelligence endpoints."""
 
-from typing import Any
+from typing import Any, Optional
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
@@ -15,7 +15,7 @@ _bearer = HTTPBearer(auto_error=False)
 
 def verify_jwt(
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> dict[str, Any]:
     """Validate a Bearer JWT and return its claims.
 

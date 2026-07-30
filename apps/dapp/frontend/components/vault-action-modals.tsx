@@ -2,6 +2,9 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useStellarFeeEstimate } from "@/hooks/useStellarFeeEstimate";
+import { NetworkFeeDisplay } from "@/components/stellar/NetworkFeeEstimate";
+import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { motion, AnimatePresence } from "framer-motion";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -32,7 +35,7 @@ import {
     TransactionTimeoutError,
 } from "@/lib/stellar/transaction";
 import { cn } from "@/lib/utils";
-import { type VaultDefinition, type SupportedAsset, vaultDefinitions, getVaultById } from "@/lib/vault-data";
+import { type VaultContract as VaultDefinition, type SupportedAsset, vaultContracts as vaultDefinitions, getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 import { useWallet } from "@/components/wallet-provider";
 import { useNetwork } from "@/hooks/useNetwork";
 
@@ -89,7 +92,7 @@ function ModalShell({
                                 </div>
                                 <button
                                     onClick={onClose}
-                                    className="rounded-full border border-border bg-white p-2 text-muted-foreground transition-colors hover:text-foreground"
+                                    className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
                                 >
                                     <X className="h-4 w-4" />
                                 </button>
@@ -162,7 +165,23 @@ export function DepositModal({
     const amountInput = watch("amount");
     const amount = Number(amountInput) || 0;
     const [showLargeWarning, setShowLargeWarning] = useState(false);
-    
+    const { prices: tokenPrices } = useTokenPrices();
+
+    const depositFeeParams = useMemo(() => {
+        if (!vault || !address || amount <= 0) return null;
+        const contractId =
+            selectedAsset === "XLM"
+                ? vault.contractXlmAddress || vault.contractAddress
+                : vault.contractAddress;
+        return { walletAddress: address, contractId, amount };
+    }, [vault, address, amount, selectedAsset]);
+
+    const { estimate: depositFee, loading: depositFeeLoading } = useStellarFeeEstimate(
+        "deposit",
+        depositFeeParams,
+        open && state === "input" && amount > 0
+    );
+
     const canSubmit = !!vault && !!address && isValid && amount > 0;
     const estimatedYield = vault ? amount * vault.apy : 0;
     const sharesReceived = amount;
@@ -243,7 +262,7 @@ export function DepositModal({
             {vault && (
                 <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
                     <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
-                        <div className="rounded-3xl border border-border bg-white p-5">
+                        <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
                             <div className="mb-4">
                                 <span className={cn(
                                     "text-xs font-medium px-2 py-1 rounded-full uppercase tracking-wider",
@@ -307,7 +326,7 @@ export function DepositModal({
                                                 />
                                                 <div className="flex items-center gap-2">
                                                     {assets.length > 1 ? (
-                                                        <div className="flex rounded-full border border-border bg-white p-0.5 shadow-sm">
+                                                        <div className="flex rounded-full border border-border bg-white dark:bg-[#100F0F] p-0.5 shadow-sm">
                                                             {assets.map((a) => (
                                                                 <button
                                                                     key={a}
@@ -329,7 +348,7 @@ export function DepositModal({
                                                             ))}
                                                         </div>
                                                     ) : (
-                                                        <span className="rounded-full bg-white px-3 py-2 text-sm font-medium text-foreground shadow-sm">
+                                                        <span className="rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-sm font-medium text-foreground shadow-sm">
                                                             {selectedAsset}
                                                         </span>
                                                     )}
@@ -340,7 +359,7 @@ export function DepositModal({
                                                             trigger("amount");
                                                             setShowLargeWarning(false);
                                                         }}
-                                                        className="rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15"
+                                                        className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
                                                     >
                                                         Max
                                                     </button>
@@ -360,6 +379,13 @@ export function DepositModal({
                                     )}
                                 />
                             </div>
+
+                            <NetworkFeeDisplay
+                                estimate={depositFee}
+                                loading={depositFeeLoading}
+                                amount={amount}
+                                xlmUsdPrice={tokenPrices.XLM}
+                            />
 
                             <div className="mt-6 space-y-3 rounded-2xl border border-border bg-secondary/30 p-4">
                                 <div className="flex items-center justify-between text-sm">
@@ -405,7 +431,7 @@ export function DepositModal({
                     </div>
 
                     <div className="p-6">
-                        <div className="rounded-3xl border border-border bg-white p-5">
+                        <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
                             <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
                                 Transaction Flow
                             </p>
@@ -464,12 +490,12 @@ export function DepositModal({
                                         <Link
                                             href={receipt.explorerUrl}
                                             target="_blank"
-                                            className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm"
+                                            className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground shadow-sm"
                                         >
                                             View on Explorer
                                             <ExternalLink className="h-3.5 w-3.5" />
                                         </Link>
-                                        <span className="inline-flex items-center rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-700">
+                                        <span className="inline-flex items-center rounded-full border border-emerald-200 bg-white dark:bg-[#100F0F] px-3 py-2 text-xs text-emerald-700">
                                             {receipt.walletPopupUsed
                                                 ? "Wallet signature captured"
                                                 : "Mock signature used"}
@@ -515,7 +541,7 @@ export function DepositModal({
                             <div className="mt-5 flex gap-3">
                                 <button
                                     onClick={reset}
-                                    className="flex-1 rounded-full border border-border bg-white px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15"
+                                    className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
                                 >
                                     {state === "success" ? "Close" : "Cancel"}
                                 </button>
@@ -559,7 +585,6 @@ export function WithdrawModal({
     onClose: () => void;
     position: PortfolioPosition | null;
 }) {
-    const { currentNetwork } = useNetwork();
     const { address } = useWallet();
     const { getWithdrawalQuote, recordWithdrawal } = usePortfolio();
 
@@ -594,6 +619,7 @@ export function WithdrawModal({
     const [showLargeWarning, setShowLargeWarning] = useState(false);
     const [state, setState] = useState<ActionState>("input");
     const [error, setError] = useState("");
+    const { prices: tokenPrices } = useTokenPrices();
     const [receipt, setReceipt] = useState<{
         txHash: string;
         explorerUrl: string;
@@ -605,6 +631,27 @@ export function WithdrawModal({
     const quote = useMemo(
         () => (position ? getWithdrawalQuote(position.id, amount) : null),
         [amount, getWithdrawalQuote, position]
+    );
+
+    const withdrawFeeParams = useMemo(() => {
+        if (!position || !address || amount <= 0 || !quote) return null;
+        const vaultDef = getVaultById(position.vaultId);
+        const contractId =
+            position.asset === "XLM"
+                ? vaultDef?.contractXlmAddress || vaultDef?.contractAddress || ""
+                : vaultDef?.contractAddress || "";
+        if (!contractId) return null;
+        return {
+            walletAddress: address,
+            contractId,
+            shares: quote.sharesBurned,
+        };
+    }, [position, address, amount, quote]);
+
+    const { estimate: withdrawFee, loading: withdrawFeeLoading } = useStellarFeeEstimate(
+        "withdraw",
+        withdrawFeeParams,
+        open && state === "input" && amount > 0
     );
 
     const canSubmit =
@@ -640,6 +687,7 @@ export function WithdrawModal({
                 walletAddress: address,
                 contractId,
                 shares: quote.sharesBurned,
+                minAssetsOut: quote.netAmount,
             });
             const signedXdr = await signTransaction(xdr);
 
@@ -698,7 +746,7 @@ export function WithdrawModal({
                 <div className="p-6 space-y-4">
                     {/* Position stats */}
                     <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-2xl border border-border bg-white p-4">
+                        <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
                             <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
                                 Current value
                             </p>
@@ -709,7 +757,7 @@ export function WithdrawModal({
                                 {formatCurrency(position.shares)} nVault shares
                             </p>
                         </div>
-                        <div className="rounded-2xl border border-border bg-white p-4">
+                        <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
                             <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
                                 Yield earned
                             </p>
@@ -747,7 +795,7 @@ export function WithdrawModal({
                             render={({ field: { onChange, onBlur, value } }) => (
                                 <>
                                     <div className={cn(
-                                        "flex items-center gap-3 rounded-2xl border bg-white px-4 py-4",
+                                        "flex items-center gap-3 rounded-2xl border bg-white dark:bg-[#100F0F] px-4 py-4",
                                         errors.amount ? "border-red-500" : "border-border"
                                     )}>
                                         <input
@@ -781,7 +829,7 @@ export function WithdrawModal({
                                                     trigger("amount");
                                                     setShowLargeWarning(false);
                                                 }}
-                                                className="rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15"
+                                                className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
                                             >
                                                 Max
                                             </button>
@@ -795,8 +843,15 @@ export function WithdrawModal({
                         />
                     </div>
 
+                    <NetworkFeeDisplay
+                        estimate={withdrawFee}
+                        loading={withdrawFeeLoading}
+                        amount={amount}
+                        xlmUsdPrice={tokenPrices.XLM}
+                    />
+
                     {/* Breakdown */}
-                    <div className="space-y-2.5 rounded-2xl border border-border bg-white p-4 text-sm">
+                    <div className="space-y-2.5 rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 text-sm">
                         {[
                             { label: "Gross proceeds", value: `${formatCurrency(quote?.grossAmount ?? 0)} ${position.asset ?? "USDC"}` },
                             { label: "Early exit penalty", value: `${formatCurrency(quote ? quote.grossAmount - quote.netAmount : 0)} ${position.asset ?? "USDC"}` },
@@ -826,7 +881,7 @@ export function WithdrawModal({
                                 <Link
                                     href={receipt.explorerUrl}
                                     target="_blank"
-                                    className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm"
+                                    className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground shadow-sm"
                                 >
                                     View on Explorer
                                     <ExternalLink className="h-3.5 w-3.5" />
@@ -861,7 +916,7 @@ export function WithdrawModal({
                     <div className="flex gap-3 pt-2">
                         <button
                             onClick={reset}
-                            className="flex-1 rounded-full border border-border bg-white px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15"
+                            className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
                         >
                             {state === "success" ? "Close" : "Cancel"}
                         </button>
@@ -1044,7 +1099,7 @@ export function TransferModal({
                 <div className="grid grid-cols-1 gap-0 md:grid-cols-2">
                     {/* Left — source info + destination picker */}
                     <div className="border-b border-border p-6 md:border-b-0 md:border-r">
-                        <div className="rounded-3xl border border-border bg-white p-5">
+                        <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
                             <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
                                 From Vault
                             </p>
@@ -1078,7 +1133,7 @@ export function TransferModal({
                                                 "w-full rounded-2xl border px-4 py-3 text-left transition-colors",
                                                 selectedVaultId === vault.id
                                                     ? "border-foreground bg-foreground/5"
-                                                    : "border-border bg-white hover:border-black/15"
+                                                    : "border-border bg-white dark:bg-[#100F0F] hover:border-black/15 dark:hover:border-white/15"
                                             )}
                                         >
                                             <div className="flex items-center justify-between">
@@ -1101,7 +1156,7 @@ export function TransferModal({
 
                     {/* Right — amount + confirm */}
                     <div className="p-6">
-                        <div className="rounded-3xl border border-border bg-white p-5">
+                        <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
                             <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
                                 Transfer Amount
                             </p>
@@ -1113,7 +1168,7 @@ export function TransferModal({
                                     render={({ field: { onChange, onBlur, value } }) => (
                                         <>
                                             <div className={cn(
-                                                "flex items-center gap-3 rounded-2xl border bg-white px-4 py-4",
+                                                "flex items-center gap-3 rounded-2xl border bg-white dark:bg-[#100F0F] px-4 py-4",
                                                 errors.amount ? "border-red-500" : "border-border"
                                             )}>
                                                 <input
@@ -1146,7 +1201,7 @@ export function TransferModal({
                                                             onChange(position.currentValue.toFixed(2));
                                                             trigger("amount");
                                                         }}
-                                                        className="rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15"
+                                                        className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
                                                     >
                                                         Max
                                                     </button>
@@ -1203,12 +1258,12 @@ export function TransferModal({
                                         <Link
                                             href={receipt.explorerUrl}
                                             target="_blank"
-                                            className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm"
+                                            className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground shadow-sm"
                                         >
                                             View on Explorer
                                             <ExternalLink className="h-3.5 w-3.5" />
                                         </Link>
-                                        <span className="inline-flex items-center rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-700">
+                                        <span className="inline-flex items-center rounded-full border border-emerald-200 bg-white dark:bg-[#100F0F] px-3 py-2 text-xs text-emerald-700">
                                             {receipt.walletPopupUsed ? "Wallet signature captured" : "Mock signature used"}
                                         </span>
                                     </div>
@@ -1226,7 +1281,7 @@ export function TransferModal({
                                 <button
                                     type="button"
                                     onClick={reset}
-                                    className="flex-1 rounded-full border border-border bg-white px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15"
+                                    className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
                                 >
                                     {state === "success" ? "Close" : "Cancel"}
                                 </button>
