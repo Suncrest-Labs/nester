@@ -10,6 +10,7 @@ crate-type = ["rlib"]
 [dependencies]
 soroban-sdk        = { workspace = true, features = ["testutils"] }
 nester-common      = { path = "../common" }
+nester-access-control = { path = "../../contracts/access_control" }
 vault-contract     = { path = "../../contracts/vault" }
 vault-token-contract = { path = "../../contracts/vault_token" }
 yield-registry-contract = { path = "../../contracts/yield_registry" }

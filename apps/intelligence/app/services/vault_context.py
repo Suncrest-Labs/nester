@@ -268,6 +268,76 @@ class VaultContextFetcher:
 
         return fallback_rates
 
+    async def fetch_savings_goals(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Fetch the user's savings goals from the Nester API.
+
+        Returns a list of goal dicts with fields such as id, name, target_amount,
+        current_amount, currency, deadline, avg_weekly_deposit, vault_id, status.
+        """
+        url = f"{self.api_base_url}/api/v1/users/savings-goals"
+        headers = {
+            "Authorization": f"Bearer {self.service_api_key}",
+            "Content-Type": "application/json",
+            "X-User-Id": user_id,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(f"Failed to fetch savings goals: {response.status}")
+                        return []
+                    payload = await response.json()
+                    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+                    return list(data) if isinstance(data, list) else []
+        except Exception as e:
+            logger.warning(f"Error fetching savings goals for user {user_id}: {e}")
+            return []
+
+    async def fetch_vault_rebalance_suggestion(
+        self, vault_id: str, user_id: str
+    ) -> Dict[str, Any]:
+        """
+        Fetch the deterministic rebalance suggestion already computed by the Go
+        API's vault rebalance service (`scheduler.Decide`, issue #110). This
+        does not re-derive the suggestion -- it surfaces the existing computed
+        output as one grounding signal for yield-related recommendations.
+
+        Returns a dict such as {has_suggestion, current_allocations,
+        recommended_allocations, expected_apy_gain_bps, expected_apy_gain_pct,
+        confidence, reason}, or {} if unavailable.
+        """
+        if not vault_id or not user_id:
+            return {}
+
+        url = f"{self.api_base_url}/api/v1/vaults/{vault_id}/rebalance-suggestion"
+        headers = {
+            "Authorization": f"Bearer {self.service_api_key}",
+            "Content-Type": "application/json",
+            "X-User-Id": user_id,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            f"Failed to fetch rebalance suggestion for vault {vault_id}: "
+                            f"{response.status}"
+                        )
+                        return {}
+                    payload = await response.json()
+                    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+                    return dict(data) if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning(f"Error fetching rebalance suggestion for vault {vault_id}: {e}")
+            return {}
+
     def build_context_block(
         self, vaults: List[Dict[str, Any]], market_rates: List[Dict[str, Any]]
     ) -> str:

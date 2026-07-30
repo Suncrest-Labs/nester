@@ -41,13 +41,5 @@ export const savingsSchedules = {
       body: JSON.stringify(input),
     }),
   delete: (goalId: string) =>
-    fetch(
-      `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1"}/users/savings-goals/${goalId}/schedule`,
-      {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("nester_token") ?? "" : ""}`,
-        },
-      }
-    ),
+    apiRequest<void>(`/users/savings-goals/${goalId}/schedule`, { method: "DELETE" }),
 };

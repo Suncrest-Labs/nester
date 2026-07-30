@@ -12,6 +12,7 @@ type UserListFilter struct {
 	Currency     string
 	MinBalance   *string
 	CreatedAfter *time.Time
+	Search       string
 }
 
 // ListFilter drives paginated listing of all vaults (public endpoint).

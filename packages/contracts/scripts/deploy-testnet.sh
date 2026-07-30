@@ -286,3 +286,8 @@ echo "Next steps:"
 echo "  1. Copy the contents of $OUTPUT_FILE into:"
 echo "     apps/dapp/frontend/.env.local"
 echo "  2. Restart the dapp dev server"
+echo "  3. Upgrade workflow:"
+echo "     - Propose:  stellar contract invoke --id <CONTRACT_ID> -- propose_upgrade --admin <UPGRADER> --new_wasm_hash <HASH> --eta <ETA>"
+echo "     - Execute:  stellar contract invoke --id <CONTRACT_ID> -- execute_upgrade --caller <CALLER> --wasm_hash <HASH>"
+echo "     - Migrate:  stellar contract invoke --id <CONTRACT_ID> -- migrate"
+

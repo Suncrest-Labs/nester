@@ -25,6 +25,14 @@ class PortfolioContext(BaseModel):
 class CoachingRequest(BaseModel):
     goal: SavingsGoalContext
     portfolio: PortfolioContext
+    # Opt-out (#935): callers that already know the user has disabled
+    # AI-driven nudges/insights set this to False so the intelligence
+    # service refuses to generate anything, as a second layer of
+    # enforcement independent of the caller's own check. Defaults True so
+    # existing/on-demand callers that don't set it (an explicit,
+    # user-initiated "get my coaching" request, which opt-out doesn't
+    # apply to) are unaffected.
+    ai_insights_enabled: bool = True
 
 
 class DepositScheduleItem(BaseModel):

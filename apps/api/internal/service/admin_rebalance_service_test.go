@@ -116,6 +116,9 @@ func (rebalanceVaultRepo) ReplaceAllocations(context.Context, uuid.UUID, []vault
 func (rebalanceVaultRepo) UpdateVault(context.Context, uuid.UUID, string, vault.VaultStatus) error {
 	return nil
 }
+func (rebalanceVaultRepo) UpdateHarvestFrequency(context.Context, uuid.UUID, string) error {
+	return nil
+}
 func (rebalanceVaultRepo) RecordWithdrawal(context.Context, uuid.UUID, vault.TransactionRecord) error {
 	return nil
 }

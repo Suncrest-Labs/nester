@@ -11,6 +11,7 @@ type User struct {
 	WalletAddress string
 	Scopes        []string
 	Roles         []string
+	SessionID     string
 }
 
 // HasScope reports whether the user holds the given scope.

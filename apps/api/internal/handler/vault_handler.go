@@ -78,6 +78,7 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/vaults/{id}/allocations", h.getAllocations)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/harvest", h.harvestVault)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/harvest/preview", h.previewHarvest)
+	mux.HandleFunc("PATCH /api/v1/vaults/{id}/harvest-frequency", h.updateHarvestFrequency)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/my-position", h.getMyPosition)
 	// GET /api/v1/vaults/{id}/projection is registered by ProjectionHandler
 	mux.HandleFunc("GET /api/v1/vaults/{id}/preview-deposit", h.previewDeposit)
@@ -100,6 +101,10 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 
 type harvestVaultRequest struct {
 	Compound *bool `json:"compound"`
+}
+
+type updateHarvestFrequencyRequest struct {
+	HarvestFrequency string `json:"harvest_frequency"`
 }
 
 func (h *VaultHandler) createVault(w http.ResponseWriter, r *http.Request) {
@@ -153,9 +158,20 @@ func (h *VaultHandler) getVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
 	model, err := h.service.GetVault(r.Context(), vaultID)
 	if err != nil {
 		h.writeDomainError(w, r, err)
+		return
+	}
+
+	if model.UserID.String() != user.ID {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
 		return
 	}
 
@@ -241,6 +257,7 @@ func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
 		Currency:     params.Currency,
 		MinBalance:   params.MinBalance,
 		CreatedAfter: params.CreatedAfter,
+		Search:       params.Search,
 	})
 	if err != nil {
 		h.writeDomainError(w, r, err)
@@ -298,6 +315,36 @@ func (h *VaultHandler) harvestVault(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, http.StatusOK, response.OK(result))
 }
 
+// updateHarvestFrequency sets how often the harvest engine considers this
+// vault for a harvest ("daily" or "weekly"). Only the vault owner may change
+// it (#940).
+func (h *VaultHandler) updateHarvestFrequency(w http.ResponseWriter, r *http.Request) {
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	var req updateHarvestFrequencyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+
+	userID, err := h.authenticatedUserID(w, r)
+	if err != nil {
+		return
+	}
+
+	result, err := h.service.UpdateHarvestFrequency(r.Context(), vaultID, userID, req.HarvestFrequency)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(result))
+}
+
 func (h *VaultHandler) previewHarvest(w http.ResponseWriter, r *http.Request) {
 	vaultID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -332,9 +379,20 @@ func (h *VaultHandler) getAllocations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return
+	}
+
 	v, err := h.service.GetVault(r.Context(), vaultID)
 	if err != nil {
 		h.writeDomainError(w, r, err)
+		return
+	}
+
+	if v.UserID.String() != user.ID {
+		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
 		return
 	}
 
@@ -678,7 +736,7 @@ func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
 	case errors.Is(err, vault.ErrUserNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("user"))
-	case errors.Is(err, vault.ErrInvalidVault), errors.Is(err, vault.ErrInvalidAmount), errors.Is(err, vault.ErrInvalidAllocation):
+	case errors.Is(err, vault.ErrInvalidVault), errors.Is(err, vault.ErrInvalidAmount), errors.Is(err, vault.ErrInvalidAllocation), errors.Is(err, vault.ErrInvalidHarvestFrequency):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	case errors.Is(err, vault.ErrBelowMinDeposit):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))

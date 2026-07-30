@@ -192,6 +192,40 @@ func TestAllocationProtocolValidation(t *testing.T) {
 	}
 }
 
+func TestParseHarvestFrequencyValidValues(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"daily", HarvestFrequencyDaily},
+		{"DAILY", HarvestFrequencyDaily},
+		{"  daily  ", HarvestFrequencyDaily},
+		{"weekly", HarvestFrequencyWeekly},
+		{"WEEKLY", HarvestFrequencyWeekly},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseHarvestFrequency(tt.input)
+			if err != nil {
+				t.Fatalf("ParseHarvestFrequency(%q) unexpected error: %v", tt.input, err)
+			}
+			if got != tt.expected {
+				t.Fatalf("ParseHarvestFrequency(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseHarvestFrequencyInvalidValues(t *testing.T) {
+	for _, input := range []string{"", "monthly", "hourly", "biweekly"} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := ParseHarvestFrequency(input); err != ErrInvalidHarvestFrequency {
+				t.Fatalf("ParseHarvestFrequency(%q) err = %v, want ErrInvalidHarvestFrequency", input, err)
+			}
+		})
+	}
+}
+
 func trimSpace(s string) string {
 	// Simple trim implementation for testing
 	start := 0

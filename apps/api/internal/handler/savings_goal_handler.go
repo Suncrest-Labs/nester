@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/intelligence"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsschedule"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
@@ -25,8 +26,10 @@ type SavingsGoalManager interface {
 	Create(ctx context.Context, userID uuid.UUID, in service.CreateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Get(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error)
+	ListPaginated(ctx context.Context, userID uuid.UUID, filter service.SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error)
 	Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error)
 	Delete(ctx context.Context, userID, goalID uuid.UUID) error
+	Restore(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error)
 	Pause(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
 	Resume(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error)
@@ -43,16 +46,29 @@ type SavingsGoalManager interface {
 }
 
 type SavingsGoalHandler struct {
-	svc       SavingsGoalManager
-	schedules SavingsScheduleActiveReader
+	svc              SavingsGoalManager
+	schedules        SavingsScheduleActiveReader
+	coachingProvider GoalCoachingProvider
 }
 
 type SavingsScheduleActiveReader interface {
 	GetActive(ctx context.Context, userID, goalID uuid.UUID) (*savingsschedule.SavingsSchedule, error)
 }
 
+// GoalCoachingProvider requests an AI-generated progress assessment and
+// deposit schedule for a savings goal from the intelligence service (#112).
+type GoalCoachingProvider interface {
+	GetGoalCoaching(ctx context.Context, request intelligence.CoachingRequest) (*intelligence.CoachingResponse, error)
+}
+
 func NewSavingsGoalHandler(svc SavingsGoalManager, schedules SavingsScheduleActiveReader) *SavingsGoalHandler {
 	return &SavingsGoalHandler{svc: svc, schedules: schedules}
+}
+
+// SetCoachingProvider wires the AI coaching backend. Left nil, the
+// /coaching endpoint responds 503 rather than failing to construct the handler.
+func (h *SavingsGoalHandler) SetCoachingProvider(p GoalCoachingProvider) {
+	h.coachingProvider = p
 }
 
 func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
@@ -62,10 +78,14 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}", h.get)
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}", h.update)
 	mux.HandleFunc("DELETE /api/v1/users/savings-goals/{id}", h.delete)
+	// #924 soft-delete recovery
+	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/restore", h.restore)
 	// #718 pause/resume
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/pause", h.pause)
 	mux.HandleFunc("PATCH /api/v1/users/savings-goals/{id}/resume", h.resume)
 	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}/contributions", h.listContributions)
+	// #112 AI progress coaching
+	mux.HandleFunc("GET /api/v1/users/savings-goals/{id}/coaching", h.coaching)
 	// #716 manual completion
 	mux.HandleFunc("POST /api/v1/users/savings-goals/{id}/complete", h.complete)
 	// #684 archive / #721 unarchive
@@ -84,24 +104,28 @@ func (h *SavingsGoalHandler) Register(mux *http.ServeMux) {
 }
 
 type createSavingsGoalRequest struct {
-	TargetAmount json.Number `json:"target_amount"`
-	Currency     string      `json:"currency"`
-	Deadline     string      `json:"deadline"`
-	Description  string      `json:"description"`
-	Category     string      `json:"category"`
-	Name         string      `json:"name"`
-	Emoji        string      `json:"emoji"`
-	VaultID      *string     `json:"vault_id,omitempty"`
+	TargetAmount    json.Number  `json:"target_amount"`
+	Currency        string       `json:"currency"`
+	Deadline        string       `json:"deadline"`
+	Description     string       `json:"description"`
+	Category        string       `json:"category"`
+	Name            string       `json:"name"`
+	Emoji           string       `json:"emoji"`
+	VaultID         *string      `json:"vault_id,omitempty"`
+	MinContribution *json.Number `json:"min_contribution,omitempty"`
+	MaxContribution *json.Number `json:"max_contribution,omitempty"`
 }
 
 type updateSavingsGoalRequest struct {
-	TargetAmount *json.Number `json:"target_amount"`
-	Currency     *string      `json:"currency"`
-	Deadline     *string      `json:"deadline"`
-	Description  *string      `json:"description"`
-	Category     *string      `json:"category"`
-	Name         *string      `json:"name"`
-	Emoji        *string      `json:"emoji"`
+	TargetAmount    *json.Number `json:"target_amount"`
+	Currency        *string      `json:"currency"`
+	Deadline        *string      `json:"deadline"`
+	Description     *string      `json:"description"`
+	Category        *string      `json:"category"`
+	Name            *string      `json:"name"`
+	Emoji           *string      `json:"emoji"`
+	MinContribution *json.Number `json:"min_contribution,omitempty"`
+	MaxContribution *json.Number `json:"max_contribution,omitempty"`
 }
 
 func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -134,15 +158,27 @@ func (h *SavingsGoalHandler) create(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault_id must be a valid UUID"))
 		return
 	}
+	minContribution, err := parseOptionalDecimal(req.MinContribution)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("min_contribution must be a valid number"))
+		return
+	}
+	maxContribution, err := parseOptionalDecimal(req.MaxContribution)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("max_contribution must be a valid number"))
+		return
+	}
 	goal, err := h.svc.Create(r.Context(), userID, service.CreateSavingsGoalInput{
-		TargetAmount: target,
-		Currency:     req.Currency,
-		Deadline:     deadline,
-		Description:  req.Description,
-		Category:     req.Category,
-		Name:         req.Name,
-		Emoji:        req.Emoji,
-		VaultID:      vaultID,
+		TargetAmount:    target,
+		Currency:        req.Currency,
+		Deadline:        deadline,
+		Description:     req.Description,
+		Category:        req.Category,
+		Name:            req.Name,
+		Emoji:           req.Emoji,
+		VaultID:         vaultID,
+		MinContribution: minContribution,
+		MaxContribution: maxContribution,
 	})
 	if err != nil {
 		h.writeError(w, r, err)
@@ -247,19 +283,80 @@ type savingsGoalDetail struct {
 	ActiveSchedule *savingsschedule.SavingsSchedule `json:"active_schedule,omitempty"`
 }
 
+// coaching returns an on-demand AI-generated progress assessment and deposit
+// schedule for the goal (#112). The same underlying call is made on a
+// weekly cadence by GoalCoachingScheduler so users get a fresh nudge even
+// without opening the app.
+func (h *SavingsGoalHandler) coaching(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	if h.coachingProvider == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "UNAVAILABLE", "coaching service not configured"))
+		return
+	}
+	goal, err := h.svc.Get(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+
+	result, err := h.coachingProvider.GetGoalCoaching(r.Context(), goalCoachingRequest(goal))
+	if err != nil {
+		logpkg.FromContext(r.Context()).Error("goal coaching failed", "error", err.Error())
+		response.WriteJSON(w, http.StatusBadGateway, response.Err(http.StatusBadGateway, "UPSTREAM_ERROR", err.Error()))
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(result))
+}
+
+// goalCoachingRequest builds the intelligence service request payload from an
+// already-progress-enriched savings goal.
+func goalCoachingRequest(goal savingsgoal.SavingsGoal) intelligence.CoachingRequest {
+	targetAmount, _ := goal.TargetAmount.Float64()
+	currentAmount, _ := goal.CurrentAmount.Float64()
+	return intelligence.CoachingRequest{
+		Goal: intelligence.SavingsGoalContext{
+			ID:            goal.ID.String(),
+			TargetAmount:  targetAmount,
+			Currency:      goal.Currency,
+			Deadline:      goal.Deadline.Format(time.RFC3339),
+			Description:   goal.Description,
+			CurrentAmount: currentAmount,
+			ProgressPct:   goal.ProgressPct,
+		},
+		Portfolio: intelligence.PortfolioContext{
+			TotalBalanceUSD: currentAmount,
+		},
+	}
+}
+
 func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.authenticatedUserID(w, r)
 	if !ok {
 		return
 	}
-	includeArchived := strings.TrimSpace(r.URL.Query().Get("include_archived")) == "true"
-	goals, err := h.svc.List(
-		r.Context(),
-		userID,
-		strings.TrimSpace(r.URL.Query().Get("category")),
-		strings.TrimSpace(r.URL.Query().Get("status")),
-		includeArchived,
-	)
+	params, err := listquery.ParseSavingsGoalList(r)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	goals, total, err := h.svc.ListPaginated(r.Context(), userID, service.SavingsGoalListFilter{
+		Page:            params.Page.Page,
+		PerPage:         params.Page.PerPage,
+		SortField:       params.Sort.Field,
+		SortOrder:       params.Sort.Order,
+		Category:        params.Category,
+		Status:          params.Status,
+		IncludeArchived: params.IncludeArchived,
+		Search:          params.Search,
+	})
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -267,7 +364,7 @@ func (h *SavingsGoalHandler) list(w http.ResponseWriter, r *http.Request) {
 	if goals == nil {
 		goals = []savingsgoal.SavingsGoal{}
 	}
-	response.WriteJSON(w, http.StatusOK, response.OK(goals))
+	response.WriteJSON(w, http.StatusOK, response.PaginatedOK(goals, params.Page.Page, params.Page.PerPage, total, ""))
 }
 
 func (h *SavingsGoalHandler) summary(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +425,18 @@ func (h *SavingsGoalHandler) update(w http.ResponseWriter, r *http.Request) {
 	in.Category = req.Category
 	in.Name = req.Name
 	in.Emoji = req.Emoji
+	minContribution, err := parseOptionalDecimal(req.MinContribution)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("min_contribution must be a valid number"))
+		return
+	}
+	maxContribution, err := parseOptionalDecimal(req.MaxContribution)
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("max_contribution must be a valid number"))
+		return
+	}
+	in.MinContribution = minContribution
+	in.MaxContribution = maxContribution
 
 	goal, err := h.svc.Update(r.Context(), userID, goalID, in)
 	if err != nil {
@@ -352,6 +461,25 @@ func (h *SavingsGoalHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// restore undoes a soft delete within the recovery window (#924).
+func (h *SavingsGoalHandler) restore(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	goalID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("goal id must be a valid UUID"))
+		return
+	}
+	goal, err := h.svc.Restore(r.Context(), userID, goalID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(goal))
 }
 
 func (h *SavingsGoalHandler) pause(w http.ResponseWriter, r *http.Request) {
@@ -581,9 +709,19 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_PAUSED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrGoalArchived):
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_ARCHIVED", err.Error()))
+	case errors.Is(err, savingsgoal.ErrGoalNotDeleted):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "GOAL_NOT_DELETED", err.Error()))
+	case errors.Is(err, savingsgoal.ErrRecoveryWindowExpired):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "RECOVERY_WINDOW_EXPIRED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrUnauthorized):
 		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "vault does not belong to you"))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	case errors.Is(err, savingsgoal.ErrInvalidAmount):
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	case errors.Is(err, savingsgoal.ErrInvalidContributionLimits):
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	case errors.Is(err, savingsgoal.ErrContributionOutOfRange):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:
 		logpkg.FromContext(r.Context()).Error("savings goal handler failed", "error", err.Error())
@@ -610,6 +748,19 @@ func parseTargetAmount(n json.Number) (decimal.Decimal, error) {
 		return decimal.Zero, err
 	}
 	return decimal.NewFromFloat(f), nil
+}
+
+// parseOptionalDecimal parses an optional per-contribution limit (#922),
+// treating an absent field as "not provided" (nil, nil).
+func parseOptionalDecimal(n *json.Number) (*decimal.Decimal, error) {
+	if n == nil {
+		return nil, nil
+	}
+	amount, err := parseTargetAmount(*n)
+	if err != nil {
+		return nil, err
+	}
+	return &amount, nil
 }
 
 func readJSONBody(r *http.Request) ([]byte, error) {

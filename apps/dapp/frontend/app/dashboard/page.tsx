@@ -30,6 +30,7 @@ import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
 import { AppShell } from "@/components/app-shell";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { useLocale, useTranslations } from "@/context/locale-context";
 import { formatDistanceToNow } from "date-fns";
 import { useVaults, type VaultWithPerf } from "@/hooks/useVaults";
 import { useSettlements } from "@/hooks/useSettlements";
@@ -451,6 +452,8 @@ export default function Dashboard() {
     const { isConnected, address } = useWallet();
     const { isAuthenticated, userId, isSigningIn, signIn } = useAuth();
     const { prices: tokenPrices } = useTokenPrices();
+    const { formatCurrency } = useLocale();
+    const t = useTranslations();
     const router = useRouter();
     const [selectedVault, setSelectedVault] = useState<VaultWithPerf | null>(null);
     const [chartPeriod, setChartPeriod] = useState<ChartPeriod>("1M");
@@ -583,9 +586,9 @@ export default function Dashboard() {
                     ) : (
                         <div>
                             <p className="text-[42px] font-light leading-none text-black dark:text-white tracking-[-0.02em]" aria-live="polite">
-                                ${fmtUsd(totalBalanceUsd)}
+                                {formatCurrency(totalBalanceUsd, "USD")}
                             </p>
-                            <p className="mt-2 text-[12px] text-black/35 dark:text-white/35 tracking-wide">Protocol Balance</p>
+                            <p className="mt-2 text-[12px] text-black/35 dark:text-white/35 tracking-wide">{t("dashboard.totalBalance")}</p>
                             {lastSynced && (
                                 <p className="mt-1.5 text-[11px] text-black/25 dark:text-white/25">
                                     Last updated {formatDistanceToNow(lastSynced)} ago
@@ -605,12 +608,12 @@ export default function Dashboard() {
                             )}
                         </div>
                         <div className="flex items-center justify-between">
-                            <span className="text-[13px] text-black/40 dark:text-white/40">Total earnings</span>
+                            <span className="text-[13px] text-black/40 dark:text-white/40">{t("dashboard.totalYieldEarned")}</span>
                             {vaultsLoading ? (
                                 <div className="h-4 w-16 animate-pulse rounded bg-black/[0.06] dark:bg-white/[0.06]" />
                             ) : (
                                 <span className="text-[13px] font-medium text-black dark:text-white">
-                                    ${fmtUsd(totalYield)}
+                                    {formatCurrency(totalYield, "USD")}
                                 </span>
                             )}
                         </div>
@@ -710,7 +713,7 @@ export default function Dashboard() {
                 className="mt-8 rounded-2xl dash-border bg-white dark:bg-[#100F0F]"
             >
                 <div className="px-8 pt-7">
-                    <h2 className="text-[16px] font-semibold text-black dark:text-white">Recent Activity</h2>
+                    <h2 className="text-[16px] font-semibold text-black dark:text-white">{t("dashboard.recentActivity")}</h2>
                 </div>
                 <div className="px-8 pb-8 pt-6">
                     <ActivityFeed

@@ -177,8 +177,19 @@ def screen_input(text: str, *, request_id: str, user_id: str = "") -> ScreenResu
 def _wrap(tag: str, content: str, max_chars: int) -> str:
     truncated = content[:max_chars]
     close_tag = f"</{tag}>"
-    # Neutralise any attempt to smuggle a fake closing tag to escape the block.
-    escaped = truncated.replace(close_tag, "").replace(f"<{tag}>", "")
+    open_re = re.compile(re.escape(f"<{tag}>"), re.IGNORECASE)
+    close_re = re.compile(re.escape(close_tag), re.IGNORECASE)
+    # Neutralise any attempt to smuggle a fake open/closing tag to escape the
+    # block. A single pass isn't enough: overlapping fragments like
+    # "<user_mess<user_message>age>" only become a complete tag after the
+    # inner one is stripped, so repeat (case-insensitively) until a fixed
+    # point is reached and nothing more is removable.
+    escaped = truncated
+    while True:
+        stripped = close_re.sub("", open_re.sub("", escaped))
+        if stripped == escaped:
+            break
+        escaped = stripped
     return f"<{tag}>\n{escaped}\n{close_tag}"
 
 
@@ -264,3 +275,37 @@ def append_disclaimer(text: str) -> str:
     if NON_ADVICE_DISCLAIMER in text:
         return text
     return f"{text}\n\n{NON_ADVICE_DISCLAIMER}"
+
+def validate_numeric_grounding(text: str, allowed_facts: dict[str, str]) -> bool:
+    """Reject generated copy that states a number not present in the facts
+    it was given. Deliberately currency-symbol-agnostic: Nester is
+    Nigeria-first and Naira amounts are rarely written with a leading '$',
+    so a check that only looked for '$amount' or 'NN%' patterns would miss
+    the common case and let a wrong Naira figure through ungrounded.
+
+    Small bare integers (day-of-month, streak counts under 10, etc.) are
+    common and legitimate in prose that isn't quoting a fact, so only
+    numbers with a decimal point or at least two digits are treated as
+    "amount-shaped" and checked; every one of those must appear, in some
+    form, among the allowed fact values.
+    """
+    candidates = re.findall(r"\d[\d,]*(?:\.\d+)?%?", text)
+    if not candidates:
+        return True
+
+    allowed_vals = [str(v) for v in allowed_facts.values() if v]
+
+    for raw in candidates:
+        is_percent = raw.endswith("%")
+        token = raw.rstrip("%").replace(",", "")
+        if not token or token == ".":
+            continue
+        # Bare single/double-digit integers without a decimal point are too
+        # common in ordinary prose (dates, list numbers, short counts) to
+        # treat as a quoted fact — but a percentage is always fact-shaped
+        # regardless of digit count (an "8%" vs "15%" APY mismatch matters).
+        if not is_percent and "." not in token and len(token) <= 2:
+            continue
+        if not any(token in av or av in token for av in allowed_vals):
+            return False
+    return True

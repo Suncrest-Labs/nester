@@ -7,6 +7,7 @@ import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
+from app.models.preferences import ResponsePreferences
 from app.services import guardrails
 from app.services.prometheus import stream_chat
 
