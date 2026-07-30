@@ -3,8 +3,12 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { InsightsDashboard } from "@/components/ai/insights-dashboard"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
+const { mockUseWallet } = vi.hoisted(() => ({
+  mockUseWallet: vi.fn(() => ({ address: "GABC123456789", isConnected: true })),
+}))
+
 vi.mock("@/components/wallet-provider", () => ({
-  useWallet: () => ({ address: "GABC123456789", isConnected: true }),
+  useWallet: mockUseWallet,
 }))
 
 vi.mock("@/components/auth-provider", () => ({
@@ -119,15 +123,17 @@ describe("InsightsDashboard", () => {
     })
   })
 
-  it("shows connect wallet prompt when no address", async () => {
-    const { useWallet: mockUseWallet } = await import("@/components/wallet-provider")
-    vi.mocked(mockUseWallet).mockReturnValueOnce({
+  it("shows connect wallet prompt when no address", () => {
+    mockUseWallet.mockReturnValueOnce({
       address: null,
       isConnected: false,
     })
 
     renderWithQuery(<InsightsDashboard />)
     expect(screen.getByText("Connect your wallet to see AI insights")).toBeInTheDocument()
+
+    // Reset to default for subsequent tests
+    mockUseWallet.mockReturnValue({ address: "GABC123456789", isConnected: true })
   })
 
   it("renders market sentiment when available", async () => {
@@ -136,5 +142,7 @@ describe("InsightsDashboard", () => {
     await waitFor(() => {
       expect(screen.getByText("High Yield Opportunity")).toBeInTheDocument()
     })
+
+    expect(screen.getByText("Market conditions are favorable.")).toBeInTheDocument()
   })
 })
