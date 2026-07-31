@@ -495,13 +495,11 @@ impl YieldRegistryContract {
             }
         };
 
-        // The adapter answered, so it is alive: clear the failure streak.
-        source.failure_count = 0;
-
         match reading.confidence {
             ApyConfidence::Unavailable => {
                 // Unknown is not zero. Keep the last value, flag it unknown,
                 // and let consumers decide (allocation logic must ignore it).
+                source.failure_count = 0;
                 source.apy_confidence = ApyConfidence::Unavailable;
                 touch_source(&env, &mut source);
                 save_source(&env, &id, &source);
@@ -535,6 +533,7 @@ impl YieldRegistryContract {
                     };
                 }
 
+                source.failure_count = 0;
                 source.apy_confidence = reading.confidence.clone();
                 commit_apy_update(&env, &id, &mut source, reading.apy_bps);
             }
