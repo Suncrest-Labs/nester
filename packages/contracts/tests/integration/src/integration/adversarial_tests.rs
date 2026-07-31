@@ -129,18 +129,10 @@ fn registered_strategy_rebalance_invokes_allowlisted_callee() {
 
     let aave = symbol_short!("aave");
     let blend = symbol_short!("blend");
-    h.registry().register_source(
-        &h.admin,
-        &aave,
-        &h.create_user(),
-        &nester_common::ProtocolType::Lending,
-    );
-    h.registry().register_source(
-        &h.admin,
-        &blend,
-        &h.create_user(),
-        &nester_common::ProtocolType::Lending,
-    );
+    h.registry()
+        .register_source(&h.admin, &aave, &h.create_user(), &None, &nester_common::ProtocolType::Lending);
+    h.registry()
+        .register_source(&h.admin, &blend, &h.create_user(), &None, &nester_common::ProtocolType::Lending);
     h.strategy()
         .update_strategy_params(&h.admin, &500u32, &10_000u32, &100u32);
     let weights = soroban_sdk::vec![

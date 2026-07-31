@@ -368,3 +368,136 @@ class TestVaultContextFetcher:
     def test_generate_risk_recommendation_high_tier_liquidity(self, fetcher):
         recommendation = fetcher._generate_risk_recommendation("high", "liquidity_risk", {})
         assert "consider reducing position size" in recommendation
+
+
+class TestCrossUserIsolation:
+    """Regression coverage for a shared VaultContextFetcher instance.
+
+    Prometheus (app/services/prometheus.py) and the savings service both keep
+    a single long-lived VaultContextFetcher rather than creating one per
+    request. The only state that instance carries across calls is the
+    market-rates cache, which is deliberately global (not user data). Every
+    per-user fetch must stay scoped to the user_id/vault_id passed into that
+    call — nothing may be cached, stored, or reused across users.
+    """
+
+    @pytest.fixture
+    def fetcher(self):
+        return VaultContextFetcher(
+            api_base_url="https://api.test.com",
+            service_api_key="test-key"
+        )
+
+    @staticmethod
+    def _vault_response(name: str, balance: float, vault_id: str) -> dict:
+        return {
+            "vaults": [
+                {
+                    "name": name,
+                    "total_balance_usd": balance,
+                    "average_apy": 0.05,
+                    "allocations": [],
+                    "id": vault_id,
+                }
+            ]
+        }
+
+    @staticmethod
+    def _cm_for(payload: dict) -> AsyncMock:
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value=payload)
+        cm = AsyncMock()
+        cm.__aenter__.return_value = mock_response
+        return cm
+
+    @pytest.mark.asyncio
+    async def test_fetch_user_vaults_does_not_leak_across_users(self, fetcher):
+        user_a_payload = self._vault_response("User A Vault", 1000.0, "vault-a")
+        user_b_payload = self._vault_response("User B Vault", 5000.0, "vault-b")
+
+        with patch('aiohttp.ClientSession') as mock_session:
+            mock_session_instance = MagicMock()
+            mock_session.return_value.__aenter__.return_value = mock_session_instance
+            # Three sequential calls on the *same* fetcher instance: user A,
+            # then user B, then user A again. If any user-scoped state were
+            # cached on `self`, the second "user-a" call or the "user-b"
+            # call would return the wrong user's vault.
+            mock_session_instance.get.side_effect = [
+                self._cm_for(user_a_payload),
+                self._cm_for(user_b_payload),
+                self._cm_for(user_a_payload),
+            ]
+
+            result_a = await fetcher.fetch_user_vaults("user-a")
+            result_b = await fetcher.fetch_user_vaults("user-b")
+            result_a_again = await fetcher.fetch_user_vaults("user-a")
+
+        assert result_a[0]["name"] == "User A Vault"
+        assert result_a[0]["balance_usd"] == 1000.0
+        assert result_b[0]["name"] == "User B Vault"
+        assert result_b[0]["balance_usd"] == 5000.0
+        assert result_a_again[0]["name"] == "User A Vault"
+        assert result_a != result_b
+
+        requested_urls = [
+            call.args[0] for call in mock_session_instance.get.call_args_list
+        ]
+        assert requested_urls[0].endswith("/api/v1/user-vaults/user-a")
+        assert requested_urls[1].endswith("/api/v1/user-vaults/user-b")
+        assert requested_urls[2].endswith("/api/v1/user-vaults/user-a")
+
+    @pytest.mark.asyncio
+    async def test_fetch_vault_risk_does_not_leak_across_vaults(self, fetcher):
+        risk_a = {"overall": 20.0, "tier": "low"}
+        risk_b = {"overall": 80.0, "tier": "high"}
+
+        with patch('aiohttp.ClientSession') as mock_session:
+            mock_session_instance = MagicMock()
+            mock_session.return_value.__aenter__.return_value = mock_session_instance
+            mock_session_instance.get.side_effect = [
+                self._cm_for(risk_a),
+                self._cm_for(risk_b),
+            ]
+
+            result_a = await fetcher.fetch_vault_risk("vault-a")
+            result_b = await fetcher.fetch_vault_risk("vault-b")
+
+        assert result_a["tier"] == "low"
+        assert result_b["tier"] == "high"
+
+        requested_urls = [
+            call.args[0] for call in mock_session_instance.get.call_args_list
+        ]
+        assert requested_urls[0].endswith("/api/v1/vaults/vault-a/risk")
+        assert requested_urls[1].endswith("/api/v1/vaults/vault-b/risk")
+
+    @pytest.mark.asyncio
+    async def test_market_rates_cache_is_shared_but_holds_no_user_data(self, fetcher):
+        """The only cross-call cache on the fetcher is market rates, and market
+        rates carry no user_id or vault_id — confirm the cached payload never
+        picks up per-user fields even if a caller's response shape drifts."""
+        market_payload = {
+            "data": [
+                {"project": "Aave", "symbol": "aUSDC", "apy": 0.065, "tvlUsd": 1, "chain": "e"}
+            ]
+        }
+
+        with patch('aiohttp.ClientSession') as mock_session:
+            mock_response = AsyncMock()
+            mock_response.status = 200
+            mock_response.json = AsyncMock(return_value=market_payload)
+            mock_get_cm = AsyncMock()
+            mock_get_cm.__aenter__.return_value = mock_response
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_get_cm
+            mock_session.return_value.__aenter__.return_value = mock_session_instance
+
+            rates_call_1 = await fetcher.fetch_market_rates()
+            rates_call_2 = await fetcher.fetch_market_rates()
+
+        for rate in rates_call_1 + rates_call_2:
+            assert "user_id" not in rate
+            assert "vault_id" not in rate
+        # Second call should be served from cache, not a second HTTP request.
+        assert mock_session_instance.get.call_count == 1

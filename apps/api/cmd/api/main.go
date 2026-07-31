@@ -234,6 +234,19 @@ func run() error {
 	})
 	adminHandler.SetLeadership(schedulerLeadership)
 
+	// Historical chain backfill/resync tool (#840): operator-triggered via
+	// the admin endpoints below. Reuses applyIndexedEvent (same package,
+	// see internal/stellar/backfill.go's doc comment) so backfilled and
+	// live-indexed events are processed identically.
+	backfillRepo := postgres.NewBackfillRepository(db)
+	backfillRunner := &stellarpkg.Runner{
+		DB:     db,
+		Repo:   backfillRepo,
+		RPCURL: cfg.Stellar().RPCURL(),
+		Logger: baseLogger.WithGroup("backfill"),
+	}
+	adminHandler.SetBackfillRunner(backfillRunner, backfillRepo)
+
 	// A single shared Redis client (nil when REDIS_ADDR is unset) powers both the
 	// challenge store and the distributed rate limiters. When nil, both fall back
 	// to in-memory implementations suitable for single-instance deployments.
@@ -535,7 +548,7 @@ func run() error {
 	analyticsHandler.Register(mux)
 
 	// Risk service
-	riskService := services.NewRiskService(vaultRepository)
+	riskService := services.NewRiskService(vaultRepository, db)
 	riskHandler := handler.NewRiskHandler(riskService)
 	riskHandler.Register(mux)
 
@@ -580,6 +593,24 @@ func run() error {
 		baseLogger.WithGroup("protocol-health"),
 	)
 	protocolHealthChecker.SetLeaderChecker(schedulerLeadership)
+
+	// Predictive deterioration scoring (#857): a continuous, graduated
+	// signal alongside the fixed 24h/20%-drop check above. apySnapshotRepo
+	// is hoisted here (rather than where it's constructed further down,
+	// alongside the APY history endpoint) since the deterioration engine
+	// needs both TVL and APY snapshot history to compute indicators.
+	apySnapshotRepo := postgres.NewAPYSnapshotRepository(db)
+	deteriorationRepo := postgres.NewDeteriorationRepository(db)
+	deteriorationEngine := scheduler.NewDeteriorationEngine(
+		protocolTVLRepo,
+		apySnapshotRepo,
+		deteriorationRepo,
+		adminService,
+		notificationDispatcher,
+		baseLogger.WithGroup("protocol-deterioration"),
+	)
+	protocolHealthChecker.SetDeteriorationEngine(deteriorationEngine)
+
 	protocolHealthCtx, cancelProtocolHealth := context.WithCancel(context.Background())
 	defer cancelProtocolHealth()
 	go protocolHealthChecker.Run(protocolHealthCtx)
@@ -654,7 +685,6 @@ func run() error {
 		notifications.WithDeduplicator(notificationDedup),
 		notifications.WithRateLimiter(notificationRateLimiter),
 	)
-
 	nudgeEngineSvc = service.NewNudgeEngineService(
 		savingsGoalRepo,
 		savingsStreakRepo,
@@ -683,10 +713,39 @@ func run() error {
 	defer cancelNudge()
 	go nudgeEngineJob.Run(nudgeCtx)
 
+	// Durable async job queue (#824): the shared worker pool and producer
+	// client. Hoisted here (rather than further down where the harvest/
+	// recurring-deposit producers are wired) so the webhook delivery
+	// producer below can also enqueue onto it; handlers are registered on
+	// jobWorker further down, before the worker starts.
+	jobQueueRepo := postgres.NewJobRepository(db)
+	jobQueueMetrics := jobqueue.NewStdMetrics()
+	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+
+	// Outbound webhooks (#836): subscriptions with SSRF-validated targets and
+	// encrypted signing secrets; delivery goes through the durable job queue
+	// above (WebhookDeliveryJobHandler, registered on jobWorker further down)
+	// rather than the old ad-hoc goroutine+sleep retry, so it gets the same
+	// at-least-once/backoff/dead-letter guarantees as harvest and recurring
+	// deposits. accountCipher may be nil (unconfigured deployment) — Register
+	// then fails with service.ErrWebhookCipherNotConfigured rather than
+	// panicking, matching bankaccount_service.go's convention.
 	webhookRepo := postgres.NewWebhookRepository(db)
-	webhookSvc := service.NewWebhookService(webhookRepo)
+	webhookDeliveryRepo := postgres.NewWebhookDeliveryRepository(db)
+	webhookSvc := service.NewWebhookService(webhookRepo, webhookDeliveryRepo, accountCipher, jobQueueClient)
+	webhookSvc.SetLogger(baseLogger.WithGroup("webhook-service"))
 	webhookHandler := handler.NewWebhookHandler(webhookSvc)
 	webhookHandler.Register(mux)
+	webhookLimiter := middleware.NewLimiter(redisClient, "webhook-delivery", cfg.JobQueue().DefaultConcurrency()*2, time.Minute)
+	webhookDeliveryHandler := service.NewWebhookDeliveryJobHandler(
+		webhookRepo,
+		webhookDeliveryRepo,
+		accountCipher,
+		webhookLimiter,
+		service.DispatcherSuspensionNotifier{Dispatcher: notificationDispatcher2},
+		baseLogger.WithGroup("webhook-delivery"),
+	)
+
 	// Per-goal notification preferences (mute/digest frequency).
 	goalNotificationRepo := postgres.NewGoalNotificationRepository(db)
 	goalNotificationPrefSvc := service.NewGoalNotificationPreferenceService(goalNotificationRepo, savingsGoalRepo)
@@ -739,14 +798,10 @@ func run() error {
 	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
 	goalProgressSvc := service.NewGoalProgressService(savingsGoalRepo)
 
-	// Durable async job queue (#824): the shared worker pool and producer
-	// client. Handlers are registered below before the worker starts. The
-	// client is passed to producers (harvest engine, chain invoker, and —
-	// as of #846 — the recurring-deposit job below) so they enqueue durable
-	// work instead of doing it inline.
-	jobQueueRepo := postgres.NewJobRepository(db)
-	jobQueueMetrics := jobqueue.NewStdMetrics()
-	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+	// jobQueueRepo / jobQueueMetrics / jobQueueClient (#824) are constructed
+	// earlier, alongside the webhook subscription wiring (#836), since that
+	// producer needs jobQueueClient too. Handlers (including the webhook
+	// delivery handler) are registered on jobWorker below, before it starts.
 
 	// Durable retry for failed notification deliveries (#829), now that the
 	// job queue client exists. Only notificationDispatcher2 gets a
@@ -843,6 +898,14 @@ func run() error {
 			scheduler.NotificationDepositNotifier{Dispatcher: notificationDispatcher},
 			baseLogger.WithGroup("recurring-deposit-handler"),
 		), 0)
+
+	// Webhook delivery (#836): one attempt per job invocation; the queue's
+	// own retry/backoff/dead-letter drives everything past that (see
+	// WebhookDeliveryJobHandler's doc comment). Concurrency uses the
+	// worker's default rather than a dedicated limit — per-subscription
+	// throttling is handled inside the handler via webhookLimiter, so a
+	// wide worker-level concurrency here is safe.
+	jobWorker.Register(service.WebhookDeliveryJobType, webhookDeliveryHandler, 0)
 
 	harvestEngine := harvest.New(
 		harvest.Config{
@@ -941,8 +1004,8 @@ func run() error {
 
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
 
-	// APY snapshot scheduler and history endpoint
-	apySnapshotRepo := postgres.NewAPYSnapshotRepository(db)
+	// APY snapshot scheduler and history endpoint (apySnapshotRepo is
+	// constructed earlier, alongside the deterioration engine wiring above).
 	apySvc := service.NewAPYService(apySnapshotRepo)
 	apyHandler := handler.NewAPYHandler(apySvc)
 	apyHandler.Register(mux)
@@ -1000,6 +1063,23 @@ func run() error {
 		},
 		"settlement rate limit exceeded",
 	)
+	// idempotencyMiddleware (#835) makes the designated write endpoints safe
+	// to retry: a client-supplied Idempotency-Key header is required on
+	// them, and a repeated key returns the original stored response instead
+	// of re-executing the handler. Explicit per-route rather than blanket,
+	// per the issue's own guidance — starting with the two endpoints most
+	// exposed to "client retried after a lost response" (a deposit/withdraw
+	// posted as a transaction, and creating a savings goal). Requires auth
+	// context, so it must sit after authenticator.
+	idempotencyStore := postgres.NewIdempotencyRepository(db)
+	idempotencyMiddleware := middleware.IdempotencyMiddleware(idempotencyStore, []middleware.RouteMatch{
+		{Method: http.MethodPost, Path: "/api/v1/transactions"},
+		{Method: http.MethodPost, Path: "/api/v1/users/savings-goals"},
+	})
+	idempotencyPurgeCtx, cancelIdempotencyPurge := context.WithCancel(context.Background())
+	defer cancelIdempotencyPurge()
+	go runIdempotencyPurge(idempotencyPurgeCtx, idempotencyStore, baseLogger.WithGroup("idempotency-purge"))
+
 	writeLimiter := middleware.WriteMethodRateLimiter(cfg.RateLimit().WriteLimit(), cfg.RateLimit().WriteWindow())
 	walletLimiter := middleware.WalletRateLimiter(
 		cfg.RateLimit().WalletLimit(),
@@ -1022,10 +1102,12 @@ func run() error {
 						authRouteLimiter(
 							writeLimiter(
 								authenticator(
-									settlementLimiter(
-										walletLimiter(
-											middleware.LimitRequestBody(1 * 1024 * 1024)(
-												middleware.Logging(baseLogger)(mux),
+									idempotencyMiddleware(
+										settlementLimiter(
+											walletLimiter(
+												middleware.LimitRequestBody(1 * 1024 * 1024)(
+													middleware.Logging(baseLogger)(mux),
+												),
 											),
 										),
 									),
@@ -1112,6 +1194,33 @@ func transactionStatusEvent(tx transaction.Transaction) ws.Event {
 		Channel: "vaults:global",
 		Type:    eventType,
 		Data:    tx,
+	}
+}
+
+// idempotencyPurgeInterval bounds how often expired idempotency keys are
+// swept, so the table stays bounded without a purge running on every
+// request (#835's TTL requirement).
+const idempotencyPurgeInterval = 15 * time.Minute
+
+// runIdempotencyPurge periodically deletes idempotency_keys rows past
+// their expires_at. Runs until ctx is cancelled (server shutdown).
+func runIdempotencyPurge(ctx context.Context, store *postgres.IdempotencyRepository, logger *slog.Logger) {
+	ticker := time.NewTicker(idempotencyPurgeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := store.PurgeExpired(ctx)
+			if err != nil {
+				logger.Error("idempotency key purge failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				logger.Info("purged expired idempotency keys", "count", n)
+			}
+		}
 	}
 }
 

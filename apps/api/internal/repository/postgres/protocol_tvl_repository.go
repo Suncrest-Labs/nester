@@ -67,6 +67,37 @@ func (r *ProtocolTVLRepository) LatestSnapshot(ctx context.Context, slug string)
 	return r.SnapshotAt(ctx, slug, time.Now().Add(time.Minute))
 }
 
+func (r *ProtocolTVLRepository) ListSince(ctx context.Context, slug string, since time.Time) ([]protocoltvl.Snapshot, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, protocol_slug, tvl_usd::text, snapshotted_at
+		FROM protocol_tvl_snapshots
+		WHERE protocol_slug = $1 AND snapshotted_at >= $2
+		ORDER BY snapshotted_at ASC
+	`, slug, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []protocoltvl.Snapshot
+	for rows.Next() {
+		var (
+			id, protocolSlug, tvlStr string
+			snapshotted              time.Time
+		)
+		if err := rows.Scan(&id, &protocolSlug, &tvlStr, &snapshotted); err != nil {
+			return nil, err
+		}
+		parsedID, _ := uuid.Parse(id)
+		var tvl float64
+		if _, scanErr := parseFloat64FromString(tvlStr, &tvl); scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, protocoltvl.Snapshot{ID: parsedID, ProtocolSlug: protocolSlug, TVLUSD: tvl, SnapshottedAt: snapshotted})
+	}
+	return out, rows.Err()
+}
+
 func (r *ProtocolTVLRepository) CanAlert(ctx context.Context, slug string) (bool, error) {
 	var lastAlerted time.Time
 	err := r.db.QueryRowContext(ctx, `

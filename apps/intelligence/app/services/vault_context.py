@@ -12,6 +12,7 @@ except ImportError:
 import aiohttp
 
 from app.services.i18n import DEFAULT_LANGUAGE, format_amount, format_percentage
+from app.services.source_citation import RetrievalSource, now_utc, parse_as_of
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,7 @@ class VaultContextFetcher:
                         # Filter for Aave, Blend, Compound
                         filtered_rates = []
                         target_protocols = {"aave", "blend", "compound"}
+                        fetched_at = now_utc().isoformat()
 
                         for pool in pools:
                             project = pool.get("project", "").lower()
@@ -199,7 +201,9 @@ class VaultContextFetcher:
                                     "symbol": pool.get("symbol", ""),
                                     "apy": pool.get("apy", 0),
                                     "tvlUsd": pool.get("tvlUsd", 0),
-                                    "chain": pool.get("chain", "")
+                                    "chain": pool.get("chain", ""),
+                                    "source": "defillama",
+                                    "fetched_at": fetched_at,
                                 })
 
                         # Cache the result
@@ -221,13 +225,16 @@ class VaultContextFetcher:
 
         # Fallback to hardcoded rates
         logger.warning("Using fallback market rates")
+        fallback_fetched_at = now_utc().isoformat()
         fallback_rates = [
             {
                 "protocol": "aave",
                 "symbol": "aUSDC",
                 "apy": 0.065,
                 "tvlUsd": 0,
-                "chain": "ethereum"
+                "chain": "ethereum",
+                "source": "fallback",
+                "fetched_at": fallback_fetched_at,
             },
             {
                 "protocol": "blend",
@@ -235,6 +242,8 @@ class VaultContextFetcher:
                 "apy": 0.09,
                 "tvlUsd": 0,
                 "chain": "stellar",
+                "source": "fallback",
+                "fetched_at": fallback_fetched_at,
             },
             {
                 "protocol": "compound",
@@ -242,6 +251,8 @@ class VaultContextFetcher:
                 "apy": 0.058,
                 "tvlUsd": 0,
                 "chain": "ethereum",
+                "source": "fallback",
+                "fetched_at": fallback_fetched_at,
             },
         ]
 
@@ -374,8 +385,13 @@ class VaultContextFetcher:
             for rate in market_rates:
                 protocol = rate.get("protocol", "unknown").upper()
                 apy = rate.get("apy", 0)
+                citation = RetrievalSource(
+                    label=f"{protocol} APY",
+                    protocol=rate.get("source", "defillama"),
+                    as_of=parse_as_of(rate.get("fetched_at")),
+                ).citation()
                 apy_str = format_percentage(apy * 100, language)
-                market_lines.append(f"- {protocol}: {apy_str} APY")
+                market_lines.append(f"- {protocol}: {apy_str} APY {citation}")
 
             market_context = f"""## Current Market Rates (Live)
 {chr(10).join(market_lines)}"""

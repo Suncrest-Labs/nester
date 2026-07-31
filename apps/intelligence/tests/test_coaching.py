@@ -30,6 +30,7 @@ class FakeClient:
 async def test_generate_coaching_returns_structured_schedule(monkeypatch):
     payload = (
         '{"progress_assessment": "You are on track.", '
+        '"session_summary": "Session summary: saving steadily.", '
         '"deposit_schedule": ['
         '{"date": "2026-06-15", "amount_usdc": 100, "note": "First deposit"}], '
         '"nudges": ["Great start!"], "confidence": "high"}'
@@ -54,6 +55,8 @@ async def test_generate_coaching_returns_structured_schedule(monkeypatch):
     assert len(result.deposit_schedule) == 1
     assert result.deposit_schedule[0].amount_usdc == 100
     assert "on track" in result.progress_assessment
+    assert "saving steadily" in result.session_summary
+
 
 
 @pytest.mark.asyncio
@@ -98,7 +101,10 @@ async def test_generate_coaching_preference_wins_over_incidental_description_lan
     """A stored language preference is authoritative even when the goal's
     free-text description happens to be written in a different language.
     """
-    payload = '{"progress_assessment": "ok", "deposit_schedule": [], "nudges": [], "confidence": "high"}'
+    payload = (
+        '{"progress_assessment": "ok", "deposit_schedule": [], '
+        '"nudges": [], "confidence": "high"}'
+    )
     fake_client = FakeClient(payload)
     monkeypatch.setattr(prometheus, "get_client", lambda: fake_client)
     monkeypatch.setattr(prometheus.anthropic.types, "TextBlock", DummyTextBlock, raising=False)

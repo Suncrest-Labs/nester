@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 var errIntelligenceNotConfigured = errors.New("intelligence service not configured")
@@ -43,6 +45,24 @@ func (p *IntelligenceProxy) Forward(w http.ResponseWriter, r *http.Request, upst
 		return
 	}
 
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	if uid := r.Header.Get("X-User-Id"); uid != "" {
+		req.Header.Set("X-User-Id", uid)
+	}
+	// Propagate the correlation ID so the intelligence service can bind it to
+	// its own structured logs and echo it back in responses.
+	// The Logging middleware stores the canonical ID in context; prefer that
+	// over the raw inbound header so we always forward the real value.
+	if rid := logpkg.RequestIDFromContext(r.Context()); rid != "" {
+		req.Header.Set("X-Request-ID", rid)
+	} else if rid = r.Header.Get("X-Request-ID"); rid != "" {
+		req.Header.Set("X-Request-ID", rid)
+	}
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		if errorsIsTimeout(err) {

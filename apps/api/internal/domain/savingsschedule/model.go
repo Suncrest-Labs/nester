@@ -37,18 +37,19 @@ func ParseFrequency(value string) (Frequency, error) {
 }
 
 type SavingsSchedule struct {
-	ID        uuid.UUID       `json:"id"`
-	UserID    uuid.UUID       `json:"user_id"`
-	GoalID    uuid.UUID       `json:"goal_id"`
-	VaultID   uuid.UUID       `json:"vault_id"`
-	Amount    decimal.Decimal `json:"amount"`
-	Currency  string          `json:"currency"`
-	Frequency Frequency       `json:"frequency"`
-	NextRunAt time.Time       `json:"next_run_at"`
-	LastRunAt *time.Time      `json:"last_run_at,omitempty"`
-	IsActive  bool            `json:"is_active"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID               uuid.UUID       `json:"id"`
+	UserID           uuid.UUID       `json:"user_id"`
+	GoalID           uuid.UUID       `json:"goal_id"`
+	VaultID          uuid.UUID       `json:"vault_id"`
+	Amount           decimal.Decimal `json:"amount"`
+	Currency         string          `json:"currency"`
+	Frequency        Frequency       `json:"frequency"`
+	NextRunAt        time.Time       `json:"next_run_at"`
+	LastRunAt        *time.Time      `json:"last_run_at,omitempty"`
+	IsActive         bool            `json:"is_active"`
+	OnchainMandateID *int64          `json:"onchain_mandate_id,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 type Repository interface {
