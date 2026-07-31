@@ -15,7 +15,7 @@
 extern crate std;
 
 use proptest::prelude::*;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::Address;
 
 use nester_test_utils::NesterHarness;
 
@@ -153,6 +153,7 @@ impl ReferenceModel {
         sum_user_shares == self.total_shares
     }
 
+    #[allow(dead_code)]
     fn check_share_price_monotonic(&self, prev_price: i128) -> bool {
         let current = self.share_price();
         current >= prev_price
@@ -197,8 +198,8 @@ proptest! {
                         h.vault().deposit(&users[user_idx], &amount, &0)
                     }));
 
-                    if let Ok(shares) = result {
-                        let model_shares = model.deposit(user_idx, amount);
+                    if let Ok(_shares) = result {
+                        let _model_shares = model.deposit(user_idx, amount);
                         prop_assert!(
                             model.check_conservation(),
                             "share balance consistency violated after deposit"
@@ -273,6 +274,7 @@ proptest! {
 
                     if let Ok(_) = result {
                         model.withdraw(user_idx, shares);
+                        prev_price = model.share_price();
                     }
                 }
                 VaultOp::ReportYield { amount } => {
