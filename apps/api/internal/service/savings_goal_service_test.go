@@ -207,6 +207,25 @@ func (m *memorySavingsGoalRepo) SumGoalDeposits(_ context.Context, goalID uuid.U
 	return decimal.Zero, nil
 }
 
+func (m *memorySavingsGoalRepo) GetByVaultID(_ context.Context, vaultID uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	for _, g := range m.goals {
+		if g.VaultID != nil && *g.VaultID == vaultID {
+			return &g, nil
+		}
+	}
+	return nil, savingsgoal.ErrGoalNotFound
+}
+
+func (m *memorySavingsGoalRepo) CreditYieldBalance(_ context.Context, goalID uuid.UUID, amount decimal.Decimal) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.YieldBalance = g.YieldBalance.Add(amount)
+	m.goals[goalID] = g
+	return nil
+}
+
 func (m *memorySavingsGoalRepo) SetShareToken(_ context.Context, goalID, userID uuid.UUID, token uuid.UUID) error {
 	g, ok := m.goals[goalID]
 	if !ok || g.UserID != userID {

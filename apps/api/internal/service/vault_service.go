@@ -127,7 +127,20 @@ type VaultService struct {
 	depositInvoker         VaultDepositInvoker
 	defaultHarvestCompound bool
 	yieldRecorder          YieldHarvestRecorder
+	goalYieldRouter        GoalYieldRouter
 	sharePriceCache        *sharePriceCache
+}
+
+// GoalYieldRouter lets VaultService honor a savings goal's per-goal
+// auto_compound preference (#task1) when harvesting yield for a vault that
+// is linked to a goal.
+type GoalYieldRouter interface {
+	// GetAutoCompoundForVault returns the auto_compound preference of the
+	// goal linked to vaultID. found is false when no goal is linked.
+	GetAutoCompoundForVault(ctx context.Context, vaultID uuid.UUID) (goalID uuid.UUID, autoCompound bool, found bool, err error)
+	// CreditGoalYieldBalance credits amount to the goal's yield_balance when
+	// its yield was harvested without compounding.
+	CreditGoalYieldBalance(ctx context.Context, goalID uuid.UUID, amount decimal.Decimal) error
 }
 
 // ── Input types ──────────────────────────────────────────────────────────────
@@ -212,6 +225,12 @@ func (s *VaultService) SetHarvestDefaultCompound(compound bool) {
 // history entries whenever HarvestVault succeeds.
 func (s *VaultService) SetYieldHarvestRecorder(recorder YieldHarvestRecorder) {
 	s.yieldRecorder = recorder
+}
+
+// SetGoalYieldRouter wires an optional router so HarvestVault can honor a
+// linked savings goal's per-goal auto_compound preference (#task1).
+func (s *VaultService) SetGoalYieldRouter(router GoalYieldRouter) {
+	s.goalYieldRouter = router
 }
 
 // ── Existing methods ─────────────────────────────────────────────────────────
@@ -645,6 +664,19 @@ func (s *VaultService) HarvestVault(ctx context.Context, input HarvestVaultInput
 	}
 
 	compound := s.defaultHarvestCompound
+	var linkedGoalID uuid.UUID
+	var hasLinkedGoal bool
+	if s.goalYieldRouter != nil {
+		goalID, autoCompound, found, err := s.goalYieldRouter.GetAutoCompoundForVault(ctx, input.VaultID)
+		if err != nil {
+			return HarvestResult{}, err
+		}
+		if found {
+			linkedGoalID = goalID
+			hasLinkedGoal = true
+			compound = autoCompound
+		}
+	}
 	if input.Compound != nil {
 		compound = *input.Compound
 	}
@@ -694,6 +726,15 @@ func (s *VaultService) HarvestVault(ctx context.Context, input HarvestVaultInput
 		TransactionHash: txHash,
 	}); err != nil {
 		return HarvestResult{}, err
+	}
+
+	// Yield that was not compounded back into the vault is credited to the
+	// linked goal's yield_balance instead (#task1), rather than only leaving
+	// the vault's ledger updated.
+	if !compound && hasLinkedGoal && s.goalYieldRouter != nil {
+		if err := s.goalYieldRouter.CreditGoalYieldBalance(ctx, linkedGoalID, netYield); err != nil {
+			return HarvestResult{}, err
+		}
 	}
 
 	if s.yieldRecorder != nil {

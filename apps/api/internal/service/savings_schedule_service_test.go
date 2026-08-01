@@ -114,6 +114,12 @@ func (m *memoryGoalRepo) GetByID(_ context.Context, id uuid.UUID) (*savingsgoal.
 func (m *memoryGoalRepo) Update(context.Context, *savingsgoal.SavingsGoal) error { return nil }
 func (m *memoryGoalRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error     { return nil }
 func (m *memoryGoalRepo) Restore(context.Context, uuid.UUID, uuid.UUID) error    { return nil }
+func (m *memoryGoalRepo) CreditYieldBalance(context.Context, uuid.UUID, decimal.Decimal) error {
+	return nil
+}
+func (m *memoryGoalRepo) GetByVaultID(context.Context, uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	return nil, savingsgoal.ErrGoalNotFound
+}
 func (m *memoryGoalRepo) GetByIDIncludingDeleted(_ context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
 	return m.GetByID(context.Background(), id)
 }

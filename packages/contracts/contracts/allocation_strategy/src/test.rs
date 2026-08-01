@@ -66,6 +66,7 @@ fn reg(
         admin,
         &id,
         &Address::generate(env),
+        &None,
         &RegistryProtocolType::Lending,
     );
 }

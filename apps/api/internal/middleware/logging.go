@@ -25,7 +25,13 @@ func (r *statusRecorder) WriteHeader(status int) {
 func Logging(baseLogger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			requestID := uuid.NewString()
+			// Honour a client-supplied correlation ID (e.g. from a gateway or test
+			// harness); otherwise mint a fresh UUIDv4 for this request.
+			requestID := r.Header.Get("X-Request-ID")
+			if requestID == "" {
+				requestID = uuid.NewString()
+			}
+
 			requestLogger := baseLogger.With("request_id", requestID)
 
 			ctx := logpkg.WithRequestID(r.Context(), requestID)

@@ -60,6 +60,11 @@ const (
 	// goes through the same per-channel Allow() gate as every other event.
 	EventFinancialDigest EventType = "financial_digest"
 	EventSavingsNudge    EventType = "savings_nudge"
+	// EventWebhookSubscriptionSuspended fires once when a webhook subscription
+	// crosses webhook.DeadLetterSuspendThreshold consecutive dead-lettered
+	// deliveries and is auto-suspended (#836) — the owner needs to know their
+	// endpoint stopped receiving events and why.
+	EventWebhookSubscriptionSuspended EventType = "webhook_subscription_suspended"
 )
 
 // DigestCadence values accepted for Preferences.DigestCadence.
@@ -131,22 +136,23 @@ const (
 // computes the union of channels per event, then filters by the user's
 // preferences.
 var eventChannelMatrix = map[EventType][]ChannelKind{
-	EventSettlementCompleted:       {ChannelEmail, ChannelWebSocket, ChannelPush},
-	EventSettlementFailed:          {ChannelEmail, ChannelWebSocket, ChannelPush},
-	EventDepositConfirmed:          {ChannelEmail, ChannelWebSocket, ChannelPush},
-	EventYieldMilestone:            {ChannelPush},
-	EventVaultAPYDrop:              {ChannelEmail, ChannelPush},
-	EventVaultPaused:               {ChannelEmail, ChannelWebSocket},
-	EventRebalanceExecuted:         {ChannelWebSocket},
-	EventKYCApproved:               {ChannelEmail},
-	EventKYCRejected:               {ChannelEmail},
-	EventGoalMilestone:             {ChannelPush},
-	EventScheduledDepositCompleted: {ChannelEmail, ChannelWebSocket, ChannelPush},
-	EventSavingsStreak:             {ChannelPush},
-	EventProtocolHealthAlert:       {ChannelEmail, ChannelPush, ChannelWebSocket},
-	EventGoalCoaching:              {ChannelPush},
-	EventFinancialDigest:           {ChannelEmail, ChannelWebSocket, ChannelPush},
-	EventSavingsNudge:              {ChannelPush, ChannelWebSocket},
+	EventSettlementCompleted:          {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventSettlementFailed:             {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventDepositConfirmed:             {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventYieldMilestone:               {ChannelPush},
+	EventVaultAPYDrop:                 {ChannelEmail, ChannelPush},
+	EventVaultPaused:                  {ChannelEmail, ChannelWebSocket},
+	EventRebalanceExecuted:            {ChannelWebSocket},
+	EventKYCApproved:                  {ChannelEmail},
+	EventKYCRejected:                  {ChannelEmail},
+	EventGoalMilestone:                {ChannelPush},
+	EventScheduledDepositCompleted:    {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventSavingsStreak:                {ChannelPush},
+	EventProtocolHealthAlert:          {ChannelEmail, ChannelPush, ChannelWebSocket},
+	EventGoalCoaching:                 {ChannelPush},
+	EventFinancialDigest:              {ChannelEmail, ChannelWebSocket, ChannelPush},
+	EventSavingsNudge:                 {ChannelPush, ChannelWebSocket},
+	EventWebhookSubscriptionSuspended: {ChannelEmail, ChannelWebSocket},
 }
 
 // ChannelsFor returns the channels configured to deliver the given event,

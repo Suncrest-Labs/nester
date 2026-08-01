@@ -141,3 +141,56 @@ Record the printed CPU instruction and memory byte totals below when validating 
 3. Use `h.vault()`, `h.token()`, `h.registry()`, `h.strategy()` to interact
    with contracts.
 4. Run `make integration-test` to verify.
+
+---
+
+## Property-based invariant tests
+
+`tests/integration/src/integration/property_tests.rs` contains property-based
+tests that validate core vault accounting invariants across thousands of
+randomised operation sequences.
+
+### Invariants tested
+
+| Invariant | Description |
+|-----------|-------------|
+| Share balance consistency | Sum of all user shares equals total_shares |
+| Share price monotonicity | Share price never decreases with positive yield |
+| Round-trip safety | Deposit then withdraw never returns more than deposited |
+| First deposit 1:1 | First deposit into empty vault creates 1:1 shares |
+| Conservation | Total assets equals sum of withdrawable + accrued fees |
+
+### Reference model
+
+A `ReferenceModel` provides an obviously-correct implementation of vault
+accounting. Randomised operations are applied to both the real contract and
+the reference model, and invariants are asserted after each step.
+
+### Running property tests
+
+```bash
+# Default (100 cases)
+cargo test -p nester-integration-tests property_tests
+
+# Deep run (override case count)
+PROPTEST_CASES=1000 cargo test -p nester-integration-tests property_tests
+
+# Specific property
+cargo test -p nester-integration-tests prop_share_balance_consistency
+```
+
+### Reproducing failures
+
+When a property fails, proptest prints the shrunk minimal sequence. The
+persistence file is committed so regressions stay caught. Re-run with the
+same seed to reproduce deterministically.
+
+### Edge cases covered
+
+Generators exercise adversarial values:
+- 1 stroop amounts
+- MIN_DEPOSIT boundary (10_000_000)
+- Large amounts (100_000+ XLM)
+- Empty vault first deposits
+- Full supply withdrawals
+- Long operation sequences (up to 50 operations)
