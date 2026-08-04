@@ -129,7 +129,7 @@ async def analyze(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required"
         )
-    language = body.get("language")
+    language = getattr(body, "language", None)
     return await analyze_recommendation(
         prompt,
         claims.get("sub", ""),

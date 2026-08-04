@@ -275,7 +275,7 @@ _CURRENCY_SYMBOLS: dict[str, str] = {
 def _group_integer(int_part: str, group_sep: str) -> str:
     negative = int_part.startswith("-")
     digits = int_part[1:] if negative else int_part
-    groups = []
+    groups: list[str] = []
     while len(digits) > 3:
         groups.insert(0, digits[-3:])
         digits = digits[:-3]
@@ -364,7 +364,7 @@ def format_date(value: "_dt.date | _dt.datetime | str", language: str) -> str:
     """
     if isinstance(value, str):
         try:
-            parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed: _dt.date = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return value
     else:

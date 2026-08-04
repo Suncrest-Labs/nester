@@ -47,7 +47,7 @@ jobs:
           import sys, json
           meta = json.load(sys.stdin)
           for pkg in meta['packages']:
-              if '/contracts/' in pkg['manifest_path'].replace('\\\\','/') and \
+              if '/contracts/contracts/' in pkg['manifest_path'].replace('\\\\','/') and \
                  '/test_fixtures/' not in pkg['manifest_path'].replace('\\\\','/') and \
                  '/tests/' not in pkg['manifest_path'].replace('\\\\','/'):
                   print(pkg['name'])

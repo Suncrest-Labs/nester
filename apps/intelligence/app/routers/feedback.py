@@ -7,7 +7,7 @@ track response quality over time and feed into evaluation datasets.
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from slowapi import Limiter
@@ -20,7 +20,7 @@ from app.models.feedback import (
     FeedbackRequest,
     FeedbackResponse,
 )
-from app.services.feedback_store import FeedbackEntryDict
+from app.services.feedback_store import FeedbackEntryDict, FeedbackRating
 from app.services.feedback_store import store as feedback_store
 
 router = APIRouter(dependencies=[Depends(verify_jwt)])
@@ -57,7 +57,7 @@ async def submit_feedback(
 
     entry: FeedbackEntryDict = {
         "id": feedback_id,
-        "rating": body.rating,
+        "rating": cast(FeedbackRating, body.rating),
         "comment": body.comment,
         "conversation_id": body.conversation_id,
         "user_id": user_id,

@@ -13,7 +13,7 @@ response quality over time and feeding into evaluation datasets.
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Dict, List, Literal, Optional, Protocol, TypedDict, Union
+from typing import Dict, List, Literal, Optional, Protocol, TypedDict, Union, cast
 
 from app.config import settings
 
@@ -69,7 +69,7 @@ class _RedisFeedbackStore:
             if not raw:
                 return []
             data = list(json.loads(raw))
-            return [FeedbackEntryDict(**item) for item in data]
+            return [cast(FeedbackEntryDict, item) for item in data]
         except Exception as exc:
             logger.warning("Failed to read feedback from Redis: %s", exc)
             self._available = False
