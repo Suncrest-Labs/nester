@@ -17,6 +17,10 @@ jobs:
     environment: staging
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
+        with:
+          # The checked-out workspace is mounted into the k6 container; do not
+          # leave the default GITHUB_TOKEN in .git/config for test code to read.
+          persist-credentials: false
       - name: Run isolated staging soak
         env:
           API_BASE_URL: ${{ secrets.STAGING_LOAD_API_BASE_URL }}

@@ -192,10 +192,65 @@ jobs:
           OUTPUT=$(govulncheck ./... 2>&1)
           EXIT_CODE=$?
           echo "$OUTPUT"
+
+          # Validate .vulnignore unconditionally: an expired, malformed, or
+          # ownerless waiver fails the job regardless of scan results. The
+          # printed accepted IDs are used to filter findings below.
+          ACCEPTED=$(python3 - "${{ github.workspace }}/.vulnignore" <<'PY'
+          import re
+          import sys
+          from datetime import date
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          if not path.exists():
+              print(f"::error::Missing waiver file: {path}", file=sys.stderr)
+              sys.exit(1)
+
+          text = path.read_text()
+          lines = text.splitlines()
+          errors = []
+
+          # Vulnerability IDs are the bare "GO-YYYY-NNNN" lines in the file.
+          vuln_ids = [ln.strip() for ln in lines if re.fullmatch(r"GO-\d{4}-\d+", ln.strip())]
+          if not vuln_ids:
+              print("::error::No vulnerability waivers found in .vulnignore", file=sys.stderr)
+              sys.exit(1)
+
+          for vid in vuln_ids:
+              idx = text.rfind(vid)
+              block = text[max(0, idx - 800):idx]
+              review = re.search(r"Review date:[ \t]*(\d{4}-\d{2}-\d{2})", block)
+              owner = re.search(r"Owner:[ \t]+\S+", block)
+              status = re.search(r"Status:[ \t]+\S+", block)
+              if not review:
+                  errors.append(f"{vid}: missing required 'Review date: YYYY-MM-DD'")
+              else:
+                  try:
+                      if date.fromisoformat(review.group(1)) < date.today():
+                          errors.append(
+                              f"{vid}: waiver review date {review.group(1)} has expired "
+                              f"(today {date.today().isoformat()})"
+                          )
+                  except ValueError:
+                      errors.append(f"{vid}: invalid review date {review.group(1)}")
+              if not owner:
+                  errors.append(f"{vid}: missing required 'Owner:'")
+              if not status:
+                  errors.append(f"{vid}: missing required 'Status:'")
+
+          if errors:
+              for err in errors:
+                  print(f"::error::{err}", file=sys.stderr)
+              sys.exit(1)
+
+          print(" ".join(vuln_ids))
+          PY
+          ) || exit 1
+
           if [ $EXIT_CODE -eq 0 ]; then
             exit 0
           elif [ $EXIT_CODE -eq 3 ]; then
-            ACCEPTED="GO-2026-4316 GO-2026-5004 GO-2026-5037 GO-2026-5039"
             UNKNOWN=$(echo "$OUTPUT" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u | while read id; do
               echo "$ACCEPTED" | grep -qw "$id" || echo "$id"
             done)
@@ -273,63 +328,97 @@ jobs:
 
       - name: Typosquat detection (new npm dependencies)
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          # Check for typosquatting patterns in package.json dependencies
-          # Uses npm package name similarity to detect potential typosquats
-          python3 -c "
-import json, sys, re
-from pathlib import Path
+          # Detect typosquatting patterns in npm packages newly added to the
+          # dapp manifest. Compares the base manifest (merge base for PRs, the
+          # previous commit for pushes) against the head manifest and checks only
+          # dependencies added in this change set, using full scoped package
+          # names so a spoofed @attacker/react cannot hide behind a name
+          # collision with the unscoped "react".
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
 
-pkg = json.loads(Path('apps/dapp/frontend/package.json').read_text())
-known_packages = {'react', 'react-dom', 'next', 'next/router', 'next/navigation',
-    '@tanstack/react-query', 'framer-motion', 'recharts', 'zod', 'react-hook-form',
-    'zustand', 'uuid', 'date-fns', 'ethers', 'viem', 'wagmi', 'axios', 'lodash',
-    '@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-tabs',
-    '@radix-ui/react-tooltip', '@radix-ui/react-popover', '@radix-ui/react-select',
-    'tailwindcss', 'postcss', 'autoprefixer', 'typescript', 'vitest', 'eslint',
-    '@typescript-eslint/eslint-plugin', '@typescript-eslint/parser', 'prettier',
-    'clsx', 'tailwind-merge', 'lucide-react', 'class-variance-authority',
-    '@hookform/resolvers', 'sonner', 'react-hot-toast', 'next-themes',
-    '@starknet-react/core', '@starknet-react/chains', 'starknet',
-    '@stellar/stellar-sdk', '@blend-capital/blend-sdk'}
+          MANIFEST = "apps/dapp/frontend/package.json"
 
-def levenshtein(a, b):
-    m, n = len(a), len(b)
-    dp = [[0]*(n+1) for _ in range(m+1)]
-    for i in range(m+1): dp[i][0] = i
-    for j in range(n+1): dp[0][j] = j
-    for i in range(1, m+1):
-        for j in range(1, n+1):
-            dp[i][j] = min(dp[i-1][j]+1, dp[i][j-1]+1,
-                           dp[i-1][j-1] + (a[i-1] != b[j-1]))
-    return dp[m][n]
+          def load_manifest(ref):
+              """Return dependency names from the manifest at git ref (empty if unavailable)."""
+              if not ref:
+                  return {}
+              try:
+                  out = subprocess.run(
+                      ["git", "show", f"{ref}:{MANIFEST}"],
+                      capture_output=True,
+                      text=True,
+                      timeout=30,
+                  )
+                  if out.returncode != 0:
+                      return {}
+                  return json.loads(out.stdout)
+              except Exception:
+                  return {}
 
-suspicious = []
-for dep in pkg.get('dependencies', {}):
-    name = dep.split('/')[-1] if '/' in dep else dep
-    for known in known_packages:
-        kname = known.split('/')[-1] if '/' in known else known
-        if name != kname and len(name) > 3 and len(kname) > 3:
-            d = levenshtein(name.lower(), kname.lower())
-            if d <= 2 and d > 0:
-                suspicious.append((dep, known, d))
+          def dep_names(pkg):
+              return set(pkg.get("dependencies", {})) | set(pkg.get("devDependencies", {}))
 
-for dep in pkg.get('devDependencies', {}):
-    name = dep.split('/')[-1] if '/' in dep else dep
-    for known in known_packages:
-        kname = known.split('/')[-1] if '/' in known else known
-        if name != kname and len(name) > 3 and len(kname) > 3:
-            d = levenshtein(name.lower(), kname.lower())
-            if d <= 2 and d > 0:
-                suspicious.append((dep, known, d))
+          base_pkg = load_manifest(os.environ.get("BASE_REF", ""))
+          head_pkg = json.loads(Path(MANIFEST).read_text())
+          new_deps = dep_names(head_pkg) - dep_names(base_pkg)
 
-if suspicious:
-    print('::warning::Potential typosquatted dependencies detected:')
-    for dep, known, dist in suspicious:
-        print(f'  {dep} (edit distance {dist} from {known})'
-else:
-    print('No potential typosquats detected')
-"
+          known_packages = {
+              "react", "react-dom", "next", "next/router", "next/navigation",
+              "@tanstack/react-query", "framer-motion", "recharts", "zod",
+              "react-hook-form", "zustand", "uuid", "date-fns", "ethers",
+              "viem", "wagmi", "axios", "lodash",
+              "@radix-ui/react-dialog", "@radix-ui/react-dropdown-menu",
+              "@radix-ui/react-tabs", "@radix-ui/react-tooltip",
+              "@radix-ui/react-popover", "@radix-ui/react-select",
+              "tailwindcss", "postcss", "autoprefixer", "typescript",
+              "vitest", "eslint", "@typescript-eslint/eslint-plugin",
+              "@typescript-eslint/parser", "prettier", "clsx", "tailwind-merge",
+              "lucide-react", "class-variance-authority", "@hookform/resolvers",
+              "sonner", "react-hot-toast", "next-themes", "@starknet-react/core",
+              "@starknet-react/chains", "starknet", "@stellar/stellar-sdk",
+              "@blend-capital/blend-sdk",
+          }
+
+          def levenshtein(a, b):
+              m, n = len(a), len(b)
+              dp = [[0] * (n + 1) for _ in range(m + 1)]
+              for i in range(m + 1):
+                  dp[i][0] = i
+              for j in range(n + 1):
+                  dp[0][j] = j
+              for i in range(1, m + 1):
+                  for j in range(1, n + 1):
+                      dp[i][j] = min(
+                          dp[i - 1][j] + 1,
+                          dp[i][j - 1] + 1,
+                          dp[i - 1][j - 1] + (a[i - 1] != b[j - 1]),
+                      )
+              return dp[m][n]
+
+          suspicious = []
+          for dep in sorted(new_deps):
+              for known in known_packages:
+                  if dep == known:
+                      continue
+                  if len(dep) > 3 and len(known) > 3:
+                      distance = levenshtein(dep.lower(), known.lower())
+                      if 0 < distance <= 2:
+                          suspicious.append((dep, known, distance))
+
+          if suspicious:
+              print("::warning::Potential typosquatted dependencies detected:")
+              for dep, known, distance in suspicious:
+                  print(f"  {dep} (edit distance {distance} from {known})")
+          else:
+              print("No potential typosquats detected")
+          PY
 
   api:
     name: API (Go)
@@ -473,43 +562,61 @@ else:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
 
-      - name: Install cyclonedx-bom (Go)
-        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.3.0
+        with:
+          go-version-file: apps/api/go.mod
 
-      - name: Install syft
+      - name: Install cyclonedx-gomod (Go, pinned release)
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0
+
+      - name: Install syft (pinned release, checksum-verified)
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.19.0
+          SYFT_VERSION=1.50.0
+          ASSET="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "/tmp/${ASSET}" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${ASSET}"
+          curl -sSfL -o "/tmp/syft_${SYFT_VERSION}_checksums.txt" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
+          cd /tmp
+          grep "  ${ASSET}$" "syft_${SYFT_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "${ASSET}"
+          sudo mv /tmp/syft /usr/local/bin/syft
 
       - name: Generate Go API SBOM
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
         working-directory: apps/api
         run: |
           cyclonedx-gomod mod -json -output ../../sbom-api.json .
-          syft dir:. --output cyclonedx-json=sbom-api-syft.json 2>/dev/null || true
+          syft dir:. --output cyclonedx-json=../../sbom-api-syft.json
 
-      - name: Generate frontend SBOM (npm)
+      - name: Generate frontend SBOM (npm/pnpm)
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
         working-directory: apps/dapp/frontend
         run: |
-          npx @cyclonedx/cyclonedx-npm --output-file ../../../sbom-frontend.json --pnpm 2>/dev/null || \
-          npx @cyclonedx/cyclonedx-npm --output-file ../../../sbom-frontend.json 2>/dev/null || true
+          # syft catalogs the pnpm lockfile directly. @cyclonedx/cyclonedx-npm
+          # dropped --pnpm support in v6, so the already-checksum-verified syft
+          # binary (installed above) is used for the frontend SBOM.
+          syft dir:. --output cyclonedx-json=../../../sbom-frontend.json
 
       - name: Generate Python SBOM
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
         working-directory: apps/intelligence
         run: |
-          syft dir:. --output cyclonedx-json=../../sbom-intelligence.json 2>/dev/null || true
+          syft dir:. --output cyclonedx-json=../../sbom-intelligence.json
 
       - name: Generate contracts SBOM (Rust)
         if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
         working-directory: packages/contracts
         run: |
-          syft dir:. --output cyclonedx-json=../../sbom-contracts.json 2>/dev/null || true
+          syft dir:. --output cyclonedx-json=../../sbom-contracts.json
 
       - name: Upload SBOM artifacts
+        # Only run when at least one SBOM-covered component changed; a docs- or
+        # website-only change generates no SBOMs and must not fail the job.
+        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.dapp == 'true' || needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
           name: sbom-artifacts
           path: sbom-*.json
-          if-no-files-found: warn
+          if-no-files-found: error
 

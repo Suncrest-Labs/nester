@@ -150,23 +150,23 @@ Nester implements defence-in-depth for software supply-chain security, covering 
 
 ### Software Bill of Materials (SBOM)
 
-Every CI build generates a CycloneDX-format SBOM for each deployable artifact:
+Every CI build generates a CycloneDX-format SBOM for each deployable artifact affected by the change set:
 - **Go API**: `cyclonedx-gomod` generates the Go module SBOM
-- **Frontend (npm)**: `@cyclonedx/cyclonedx-npm` generates the npm dependency tree SBOM
+- **Frontend (npm/pnpm)**: `syft` generates the pnpm dependency tree SBOM (catalogs `pnpm-lock.yaml` directly)
 - **Intelligence (Python)**: `syft` generates the Python package SBOM
 - **Contracts (Rust)**: `syft` generates the Rust crate SBOM
 
-SBOMs are uploaded as build artifacts and retained per build, so any deployed version has an exact, queryable record of its dependency contents.
+SBOM generation is mandatory for the artifacts touched by a build: a generator failure fails the job, and the artifact upload is configured with `if-no-files-found: error` so a build with missing SBOMs cannot go green. SBOMs are uploaded as build artifacts and retained per build, so any deployed version has an exact, queryable record of its dependency contents.
 
 ### Dependency Pinning and Integrity
 
-All dependencies are pinned to exact versions with integrity verification:
+All package dependencies are pinned to exact versions with integrity verification:
 - **Go**: `go.sum` with checksum database (`GOSUMDB`) verification
 - **npm**: Lockfile (`pnpm-lock.yaml`) with integrity hashes; CI uses `--frozen-lockfile` to reject unrecorded changes
 - **Rust**: `Cargo.lock` with verified crate checksums
-- **Python**: `requirements.txt` with hash-pinned dependencies (`--require-hashes`)
+- **Python**: `requirements.txt` version pins audited by `pip-audit` in CI
 
-CI fails the build if integrity verification fails for any ecosystem.
+CI fails the build if integrity verification fails for any ecosystem. CI tooling is pinned as well: third-party GitHub Actions are pinned to immutable commit SHAs (see below) and the SBOM generators (`cyclonedx-gomod`, `syft`) are installed from exact release versions, with downloaded binaries verified against published checksums.
 
 ### CI Action Pinning
 
@@ -194,7 +194,7 @@ Automated vulnerability scanning runs on every PR and push across all ecosystems
 | Scanner | Ecosystem | Policy |
 |---------|-----------|--------|
 | `gitleaks` | Secrets | No secrets in any commit |
-| `govulncheck` | Go (api) | Known critical/high blocks; accepted vulns in `.vulnignore` |
+| `govulncheck` | Go (api) | Known critical/high blocks; accepted vulns must be waived in `.vulnignore` with a future review date, owner, and status |
 | `gosec` | Go (api) | Medium+ severity; warnings only |
 | `cargo-audit` | Rust (contracts) | All advisories; warnings only |
 | `pnpm audit` | npm (dapp/website) | Moderate+ fails; warnings only |
@@ -220,12 +220,10 @@ Adding a new dependency follows this gated process:
 
 ### Waiver Process
 
-Vulnerability waivers (`.vulnignore`, CI allowlists) require:
-- A documented justification (e.g., "unused transitive dependency", "no attack vector in our usage")
-- A time-bounded review date
-- An owner responsible for re-evaluation
-
-Waivers are auditable and reviewed as part of the release process. Permanent silent suppressions are not permitted.
+`.vulnignore` is the single source of truth for accepted vulnerabilities and is enforced by CI:
+- Every entry requires a documented justification, a time-bounded review date (`Review date: YYYY-MM-DD`), an owner, and a status
+- CI parses `.vulnignore` when filtering vulnerability-scan results and fails the build if any waiver is expired, malformed, or ownerless
+- Waivers are auditable and reviewed as part of the release process; permanent silent suppressions are not permitted
 
 ## Known and Accepted Vulnerabilities
 
@@ -235,7 +233,7 @@ We maintain a list of known vulnerabilities in our dependency chain that we have
 |----|--------|----------|--------|--------|
 | **GO-2026-4316** | `github.com/go-chi/chi` | Medium | Open redirect in unused `RedirectSlashes` middleware. Transitive dependency via `github.com/stellar/go-stellar-sdk`. Middleware not used in codebase. Waiting for upstream fix. | Accepted |
 
-**Mitigation strategy:** Our CI/CD pipeline (`govulncheck` step in `.github/workflows/security.yml`) explicitly allows known accepted vulnerabilities and only fails on new or unreviewed vulnerabilities.
+**Mitigation strategy:** Our CI/CD pipeline (`govulncheck` steps in `.github/workflows/ci.yml` and `.github/workflows/security.yml`) reads the waiver list from `.vulnignore`, only allows vulnerabilities explicitly waived there, fails on any new or unreviewed vulnerability, and fails the build if a waiver is expired, malformed, or ownerless.
 
 To report a vulnerability not listed here, see [Reporting a Vulnerability](#reporting-a-vulnerability) above.
 
