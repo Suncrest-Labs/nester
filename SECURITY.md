@@ -198,12 +198,12 @@ Automated vulnerability scanning runs on every PR and push across all ecosystems
 | `gosec` | Go (api) | Medium+ severity; warnings only |
 | `cargo-audit` | Rust (contracts) | All advisories; warnings only |
 | `pnpm audit` | npm (dapp/website) | Moderate+ fails; warnings only |
-| `pip-audit` | Python (intelligence) | High/critical fails with JSON report |
+| `pip-audit` | Python (intelligence) | Any reported finding fails with JSON report |
 | `bandit` | Python (intelligence) | High-confidence issues |
 | `semgrep` | TypeScript/Next.js | OSS + Pro rules (TypeScript, React, Next.js, secrets) |
 | `CodeQL` | Go, JS/TS, Python | All queries, security-extended suite |
 
-A known critical or high vulnerability in a production dependency blocks the merge/release until remediated or explicitly waived.
+A known vulnerability in a production dependency blocks the merge/release until remediated or explicitly waived.
 
 ### Typosquat Detection
 

@@ -23,7 +23,7 @@ jobs:
     name: x402 Heuristic Contract Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Make audit script executable
         run: chmod +x scripts/contract-audit.sh
@@ -69,14 +69,14 @@ jobs:
           cat ../../wasm-hashes/wasm-hashes.txt
 
       - name: Upload WASM Hashes Artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: contract-wasm-hashes
           path: wasm-hashes/wasm-hashes.txt
 
       - name: Upload audit reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: contract-audit-reports
           path: audit-report-*.json

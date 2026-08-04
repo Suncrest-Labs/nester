@@ -17,20 +17,6 @@
 // Status: Accepted - waiting for upstream fix
 GO-2026-4316
 
-// GO-2026-5004: SQL injection via placeholder confusion with dollar-quoted
-// string literals in github.com/jackc/pgx
-// Justification:
-// - Exploit requires attacker-controlled SQL text mixing $n placeholders with
-//   dollar-quoted string literals; the API builds WHERE clauses with constant
-//   SQL text and binds all values via parameterized arguments (only the
-//   placeholder indices are interpolated, never user input)
-// - Dependency is required for Postgres connectivity
-// - No upstream fix available yet (Fixed in: N/A)
-// Review date: 2027-01-01
-// Owner: security-team
-// Status: Accepted - waiting for upstream fix
-GO-2026-5004
-
 // GO-2026-5037: Inefficient candidate hostname parsing in crypto/x509 (stdlib)
 // Justification:
 // - CPU-exhaustion issue triggered by parsing untrusted certificates; the API
