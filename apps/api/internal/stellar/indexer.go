@@ -467,9 +467,9 @@ func applyPenaltyCharged(ctx context.Context, tx *sql.Tx, event indexedEvent) er
 	reasonVariant, _ := extractEventEnumVariant(event, "reason")
 
 	_, err := tx.ExecContext(ctx, `
-INSERT INTO penalty_events (vault_contract_address, user_address, amount, shares_burned, reason)
-VALUES ($1, $2, $3, $4, $5)`,
-		event.ContractID, user, amount.String(), sharesBurned.String(), penaltyReasonToDB(reasonVariant),
+INSERT INTO penalty_events (vault_contract_address, user_address, amount, shares_burned, reason, ledger_sequence)
+VALUES ($1, $2, $3, $4, $5, $6)`,
+		event.ContractID, user, amount.String(), sharesBurned.String(), penaltyReasonToDB(reasonVariant), event.Ledger,
 	)
 	return err
 }
@@ -481,9 +481,9 @@ func applyPenaltyDistributed(ctx context.Context, tx *sql.Tx, event indexedEvent
 	retainedDust, _ := extractEventField(event, "retained_dust")
 
 	_, err := tx.ExecContext(ctx, `
-INSERT INTO penalty_distributions (vault_contract_address, depositor_amount, treasury_amount, retained_dust)
-VALUES ($1, $2, $3, $4)`,
-		event.ContractID, depositorAmount.String(), treasuryAmount.String(), retainedDust.String(),
+INSERT INTO penalty_distributions (vault_contract_address, depositor_amount, treasury_amount, retained_dust, ledger_sequence)
+VALUES ($1, $2, $3, $4, $5)`,
+		event.ContractID, depositorAmount.String(), treasuryAmount.String(), retainedDust.String(), event.Ledger,
 	)
 	return err
 }
@@ -503,9 +503,9 @@ func applyRebalanceLegExecuted(ctx context.Context, tx *sql.Tx, event indexedEve
 	minOut, _ := extractEventField(event, "min_out")
 
 	_, err := tx.ExecContext(ctx, `
-INSERT INTO vault_rebalance_legs (vault_contract_address, source_id, delta, amount_out, min_out)
-VALUES ($1, $2, $3, $4, $5)`,
-		event.ContractID, sourceID, delta.String(), amountOut.String(), minOut.String(),
+INSERT INTO vault_rebalance_legs (vault_contract_address, source_id, delta, amount_out, min_out, ledger_sequence)
+VALUES ($1, $2, $3, $4, $5, $6)`,
+		event.ContractID, sourceID, delta.String(), amountOut.String(), minOut.String(), event.Ledger,
 	)
 	return err
 }
@@ -524,9 +524,9 @@ func applyRebalanceCompleted(ctx context.Context, tx *sql.Tx, event indexedEvent
 	realizedSlippageBps, _ := extractEventField(event, "realized_slippage_bps")
 
 	_, err := tx.ExecContext(ctx, `
-INSERT INTO vault_rebalance_completions (vault_contract_address, plan_hash, total_value_moved, realized_slippage_bps)
-VALUES ($1, $2, $3, $4)`,
-		event.ContractID, planHash.String(), totalValueMoved.String(), realizedSlippageBps.IntPart(),
+INSERT INTO vault_rebalance_completions (vault_contract_address, plan_hash, total_value_moved, realized_slippage_bps, ledger_sequence)
+VALUES ($1, $2, $3, $4, $5)`,
+		event.ContractID, planHash.String(), totalValueMoved.String(), realizedSlippageBps.IntPart(), event.Ledger,
 	)
 	return err
 }

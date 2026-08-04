@@ -25,6 +25,10 @@ class SavingsPlanRequest(BaseModel):
     time_horizon_months: int
     max_monthly_contribution_usdc: float
     vault_id: str | None = None
+    # User's preferred response language (ISO 639-1, e.g. "fr", "sw"). Shared
+    # with the frontend i18n settings (#789); falls back to auto-detection
+    # when unset (#multilingual).
+    language: str | None = None
 
 
 class ScheduleEntry(BaseModel):

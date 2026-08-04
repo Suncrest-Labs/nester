@@ -25,6 +25,10 @@ class PortfolioContext(BaseModel):
 class CoachingRequest(BaseModel):
     goal: SavingsGoalContext
     portfolio: PortfolioContext
+    # User's preferred response language (ISO 639-1, e.g. "fr", "sw"). Shared
+    # with the frontend i18n settings (#789); falls back to auto-detection
+    # when unset (#multilingual).
+    language: str | None = None
     # Opt-out (#935): callers that already know the user has disabled
     # AI-driven nudges/insights set this to False so the intelligence
     # service refuses to generate anything, as a second layer of
@@ -46,3 +50,5 @@ class CoachingResponse(BaseModel):
     deposit_schedule: list[DepositScheduleItem]
     nudges: list[str]
     confidence: str = "medium"
+    session_summary: str = ""
+

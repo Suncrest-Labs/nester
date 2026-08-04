@@ -27,6 +27,9 @@ async def chat(
         description="User message to Prometheus",
         max_length=guardrails.MAX_USER_MESSAGE_CHARS,
     ),
+    language: str | None = Query(
+        None, description="Preferred response language (ISO 639-1, e.g. 'fr', 'sw')"
+    ),
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> StreamingResponse:
     """Stream a Prometheus AI response as Server-Sent Events.
@@ -34,6 +37,10 @@ async def chat(
     The user ID is sourced from the JWT subject claim — never from the caller.
     Each event is ``data: <text chunk>\\n\\n``.
     The stream terminates with ``data: [DONE]\\n\\n``.
+
+    `language` is the user's stored language preference (shared with the
+    frontend i18n settings, #789); when omitted, Prometheus detects the
+    language of `message` as a fallback (#multilingual).
 
     Message length is bounded (422 if exceeded) and the message itself is
     screened for prompt-injection attempts inside ``stream_chat`` before any
@@ -47,7 +54,7 @@ async def chat(
         )
     request_id: str = getattr(request.state, "request_id", "") or str(uuid.uuid4())
     return StreamingResponse(
-        stream_chat(user_id, message, request_id=request_id),
+        stream_chat(user_id, message, request_id=request_id, language=language),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

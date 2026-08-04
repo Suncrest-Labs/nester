@@ -13,8 +13,9 @@ type Response struct {
 }
 
 type ErrorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 type Meta struct {
@@ -86,6 +87,19 @@ func Err(status int, code string, message string) Response {
 	}
 }
 
+// ErrWithRequestID returns an error response that includes the correlation
+// request ID so clients and support can map a failed response back to logs.
+func ErrWithRequestID(status int, code string, message string, requestID string) Response {
+	return Response{
+		Success: false,
+		Error: &ErrorBody{
+			Code:      code,
+			Message:   message,
+			RequestID: requestID,
+		},
+	}
+}
+
 // NotFound returns a standard Not Found error response
 func NotFound(resource string) Response {
 	return Response{
@@ -110,6 +124,9 @@ func ValidationErr(details string) Response {
 
 // WriteJSON writes the given response to the ResponseWriter with the specified status code
 func WriteJSON(w http.ResponseWriter, status int, data Response) {
+	if data.Error != nil && data.Error.RequestID != "" {
+		w.Header().Set("X-Request-ID", data.Error.RequestID)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)

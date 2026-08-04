@@ -21,9 +21,15 @@ class RecordingDataSource:
 
     def __init__(self) -> None:
         self.called: set[str] = set()
-        self.vaults = [{"name": "Growth Vault", "balance_usd": 1200, "apy": 8.5, "yield_earned": 30}]
-        self.goals = [{"name": "Car", "target_amount": 5000, "current_amount": 1250, "progress_pct": 25}]
-        self.txs = [{"type": "deposit", "amount": 500, "currency": "USDC", "created_at": "2026-06-01"}]
+        self.vaults = [
+            {"name": "Growth Vault", "balance_usd": 1200, "apy": 8.5, "yield_earned": 30}
+        ]
+        self.goals = [
+            {"name": "Car", "target_amount": 5000, "current_amount": 1250, "progress_pct": 25}
+        ]
+        self.txs = [
+            {"type": "deposit", "amount": 500, "currency": "USDC", "created_at": "2026-06-01"}
+        ]
         self.available = [{"name": "Balanced", "apy": 10.0, "risk_tier": "medium"}]
         self.rates = [{"protocol": "aave", "apy": 6.5}]
 
