@@ -44,14 +44,14 @@ jobs:
           # whose manifest path lives under contracts/.
           cargo metadata --no-deps --format-version 1 \
             | python3 -c "
-import sys, json
-meta = json.load(sys.stdin)
-for pkg in meta['packages']:
-    if '/contracts/' in pkg['manifest_path'].replace('\\\\','/') and \
-       '/test_fixtures/' not in pkg['manifest_path'].replace('\\\\','/') and \
-       '/tests/' not in pkg['manifest_path'].replace('\\\\','/'):
-        print(pkg['name'])
-" | while read pkg_name; do
+          import sys, json
+          meta = json.load(sys.stdin)
+          for pkg in meta['packages']:
+              if '/contracts/' in pkg['manifest_path'].replace('\\\\','/') and \
+                 '/test_fixtures/' not in pkg['manifest_path'].replace('\\\\','/') and \
+                 '/tests/' not in pkg['manifest_path'].replace('\\\\','/'):
+                  print(pkg['name'])
+          " | while read pkg_name; do
             echo "Building $pkg_name..."
             cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
           done
