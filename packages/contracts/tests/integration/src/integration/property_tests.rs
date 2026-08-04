@@ -274,6 +274,10 @@ proptest! {
                     if let Ok(_) = result {
                         model.withdraw(user_idx, shares);
                     }
+                    // A full withdrawal empties the vault and resets the share
+                    // price to the initial XLM epoch; track it so the next
+                    // deposit does not look like a decrease.
+                    prev_price = model.share_price();
                 }
                 VaultOp::ReportYield { amount } => {
                     if amount > 0 {

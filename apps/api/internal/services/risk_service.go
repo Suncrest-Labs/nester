@@ -564,9 +564,9 @@ func (s *RiskService) computeWeightedScore(factors []RiskFactor) (float64, float
 
 func (s *RiskService) computeTier(overall float64) string {
 	switch {
-	case overall >= 0 && overall <= 33:
+	case overall >= 0 && overall <= 25:
 		return "low"
-	case overall >= 34 && overall <= 66:
+	case overall >= 26 && overall <= 66:
 		return "medium"
 	case overall >= 67 && overall <= 100:
 		return "high"
