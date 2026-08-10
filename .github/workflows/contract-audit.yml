@@ -42,19 +42,23 @@ jobs:
           # Build only workspace-member contracts (excludes non-member dirs like rent_escrow)
           # Use cargo metadata to enumerate workspace package names, then filter to those
           # whose manifest path lives under contracts/.
+          cat > /tmp/list-contract-packages.py <<'PY'
+          import sys, json
+
+          meta = json.load(sys.stdin)
+          for pkg in meta['packages']:
+              path = pkg['manifest_path'].replace('\\', '/')
+              if '/contracts/' in path \
+                 and '/test_fixtures/' not in path \
+                 and '/tests/' not in path:
+                  print(pkg['name'])
+          PY
           cargo metadata --no-deps --format-version 1 \
-            | python3 -c "
-import sys, json
-meta = json.load(sys.stdin)
-for pkg in meta['packages']:
-    if '/contracts/' in pkg['manifest_path'].replace('\\\\','/') and \
-       '/test_fixtures/' not in pkg['manifest_path'].replace('\\\\','/') and \
-       '/tests/' not in pkg['manifest_path'].replace('\\\\','/'):
-        print(pkg['name'])
-" | while read pkg_name; do
-            echo "Building $pkg_name..."
-            cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
-          done
+            | python3 /tmp/list-contract-packages.py \
+            | while read pkg_name; do
+                echo "Building $pkg_name..."
+                cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
+              done
           mkdir -p ../../wasm-hashes
           echo "# Reproducible WASM Hashes" > ../../wasm-hashes/wasm-hashes.txt
           echo "Generated on: $(date -u)" >> ../../wasm-hashes/wasm-hashes.txt
