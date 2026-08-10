@@ -36,31 +36,28 @@ jobs:
             --exit-code 1
 
   audit-npm:
-    name: Dependency Audit (npm)
+    name: Dependency Audit (pnpm)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        directory:
-          - apps/dapp/frontend
-          - apps/website
-    defaults:
-      run:
-        working-directory: ${{ matrix.directory }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
 
+      # This is a pnpm workspace: the single pnpm-lock.yaml at the repo root
+      # covers every package, and no package-lock.json exists anywhere. The
+      # audit therefore runs once from the root rather than per-directory.
       - name: Warn on moderate vulnerabilities
-        run: npm audit --package-lock-only --audit-level=moderate || true
+        run: pnpm audit --audit-level=moderate || true
 
       - name: Fail on high and critical vulnerabilities
-        run: npm audit --package-lock-only --audit-level=high
+        run: pnpm audit --audit-level=high
 
   audit-go:
     name: Dependency Audit (Go)
