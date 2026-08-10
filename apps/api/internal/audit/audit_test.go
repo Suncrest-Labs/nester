@@ -53,14 +53,14 @@ func setupTestTables(t *testing.T, db *sql.DB) {
 		t.Fatalf("failed to apply 011 migration: %v", err)
 	}
 
-	// 2. Apply 060_add_tamper_evident_audit_fields.up.sql
-	migration060Path := filepath.Join("..", "..", "migrations", "060_add_tamper_evident_audit_fields.up.sql")
-	content060, err := os.ReadFile(migration060Path)
+	// 2. Apply 097_add_tamper_evident_audit_fields.up.sql
+	migration097Path := filepath.Join("..", "..", "migrations", "097_add_tamper_evident_audit_fields.up.sql")
+	content097, err := os.ReadFile(migration097Path)
 	if err != nil {
 		t.Fatalf("failed to read 060 migration: %v", err)
 	}
 
-	_, err = db.Exec(string(content060))
+	_, err = db.Exec(string(content097))
 	if err != nil {
 		t.Fatalf("failed to apply 060 migration: %v", err)
 	}

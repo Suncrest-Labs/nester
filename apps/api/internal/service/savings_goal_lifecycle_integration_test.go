@@ -35,7 +35,7 @@ func applySavingsGoalLifecycleMigrations(t *testing.T, db *sql.DB) {
 		"052_add_savings_goal_share_token.up.sql",
 		"053_add_savings_goal_icon_color.up.sql",
 		"054_add_savings_goal_vault_id.up.sql",
-		"055_add_savings_goal_auto_compound.up.sql",
+		"095_add_savings_goal_auto_compound.up.sql",
 	} {
 		path := filepath.Join("..", "..", "migrations", name)
 		contents, err := os.ReadFile(path)
