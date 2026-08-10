@@ -462,7 +462,9 @@ impl YieldRegistryContract {
     ///   successful call still clears the failure counter: an adapter that
     ///   answers "I don't know" is alive, just uninformative.
     /// * Adapter reports a value → stored, history appended, deviation guard
-    ///   applied exactly as in [`Self::update_apy`].
+    ///   applied exactly as in [`Self::update_apy`]. Only an accepted reading
+    ///   clears the failure counter; a rejected one records a failure, so an
+    ///   adapter pinning a garbage value still degrades its source.
     ///
     /// The deviation guard is deliberately kept on this path: a compromised
     /// or malfunctioning adapter must not be able to move a source's APY
@@ -495,13 +497,11 @@ impl YieldRegistryContract {
             }
         };
 
-        // The adapter answered, so it is alive: clear the failure streak.
-        source.failure_count = 0;
-
         match reading.confidence {
             ApyConfidence::Unavailable => {
                 // Unknown is not zero. Keep the last value, flag it unknown,
                 // and let consumers decide (allocation logic must ignore it).
+                source.failure_count = 0;
                 source.apy_confidence = ApyConfidence::Unavailable;
                 touch_source(&env, &mut source);
                 save_source(&env, &id, &source);
@@ -535,6 +535,7 @@ impl YieldRegistryContract {
                     };
                 }
 
+                source.failure_count = 0;
                 source.apy_confidence = reading.confidence.clone();
                 commit_apy_update(&env, &id, &mut source, reading.apy_bps);
             }
