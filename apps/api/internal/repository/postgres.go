@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,16 +28,20 @@ func NewPostgresDB(cfg config.DatabaseConfig) (*PostgresDB, error) {
 
 	// Clamp into [1, maxPoolConns] before narrowing to int32. PoolSize() is an
 	// int parsed from the environment, so on a 64-bit build it can exceed
-	// int32 range, and pgxpool rejects MaxConns below 1. maxPoolConns is far
-	// inside int32, so the conversion below cannot overflow.
+	// int32 range, and pgxpool rejects MaxConns below 1. The explicit
+	// math.MaxInt32 guard makes the conversion provably in-range.
 	poolSize := cfg.PoolSize()
-	if poolSize > maxPoolConns {
-		poolSize = maxPoolConns
-	}
 	if poolSize < 1 {
 		poolSize = 1
 	}
-	poolConfig.MaxConns = int32(poolSize)
+	if poolSize > maxPoolConns {
+		poolSize = maxPoolConns
+	}
+	if poolSize > math.MaxInt32 {
+		poolSize = math.MaxInt32
+	}
+	maxConns := int32(poolSize)
+	poolConfig.MaxConns = maxConns
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
 	poolConfig.MaxConnLifetime = time.Hour
 	poolConfig.HealthCheckPeriod = poolConfig.MaxConnIdleTime
