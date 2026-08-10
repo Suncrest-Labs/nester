@@ -53,15 +53,17 @@ jobs:
       # This is a pnpm workspace: the single pnpm-lock.yaml at the repo root
       # covers every package, and no package-lock.json exists anywhere. The
       # audit therefore runs once from the root rather than per-directory.
-      - name: Warn on moderate vulnerabilities
+      - name: Warn on moderate and above vulnerabilities
         run: pnpm audit --audit-level=moderate || true
 
-      # TODO(#1025): drop `|| true` once the JS dependency backlog is cleared.
-      # Repairing this job (it had been failing on ENOLOCK, not auditing)
-      # exposed 203 pre-existing findings. Tracked in #1025, which closes by
-      # removing this suppression and the matching one in ci.yml.
-      - name: Fail on high and critical vulnerabilities
-        run: pnpm audit --audit-level=high || true
+      # Enforced, not suppressed. Repairing this job (it had been failing on
+      # ENOLOCK rather than actually auditing) exposed 203 findings; the 6
+      # criticals are now fixed outright via root pnpm.overrides and the jspdf
+      # 4.x bump, leaving 0 critical. The residual 76 high / 60 moderate are
+      # transitive-only under Expo/react-native and Trezor and need upstream
+      # releases; #1025 raises this gate to `high` when they land.
+      - name: Fail on critical vulnerabilities
+        run: pnpm audit --audit-level=critical
 
   audit-go:
     name: Dependency Audit (Go)
