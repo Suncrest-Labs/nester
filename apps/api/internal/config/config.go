@@ -21,6 +21,12 @@ const defaultDevJWTSecret = "dev-nester-jwt-secret-change-in-production"
 // bank_accounts.key_version VARCHAR(32) column.
 const maxKeyVersionLen = 32
 
+// maxDatabasePoolSize bounds DATABASE_POOL_SIZE. The value is narrowed to
+// int32 for pgxpool's MaxConns, so it must stay well inside int32 range on
+// every architecture; the limit is far above any workable pool size, so it
+// only rejects misconfiguration.
+const maxDatabasePoolSize = 10000
+
 type Config struct {
 	environment           string
 	server                ServerConfig
@@ -643,8 +649,14 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("MIGRATIONS_DIR must not be empty")
 	}
 
-	if c.database.poolSize <= 0 {
-		loader.addError("DATABASE_POOL_SIZE must be greater than 0")
+	// Upper bound as well as lower: poolSize is an int parsed from the
+	// environment and is later narrowed to int32 for pgxpool's MaxConns, so an
+	// oversized value would silently overflow. maxDatabasePoolSize is far above
+	// any workable pool size, so this only rejects misconfiguration.
+	if c.database.poolSize <= 0 || c.database.poolSize > maxDatabasePoolSize {
+		loader.addError(fmt.Sprintf(
+			"DATABASE_POOL_SIZE must be between 1 and %d", maxDatabasePoolSize,
+		))
 	}
 
 	if c.database.connectionTimeout <= 0 {
