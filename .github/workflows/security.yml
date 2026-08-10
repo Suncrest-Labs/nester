@@ -44,11 +44,15 @@ jobs:
 
       - uses: pnpm/action-setup@v4
 
+      # No `cache: pnpm` here on purpose. This job never runs `pnpm install`
+      # (audit resolves straight from the lockfile), so the pnpm store is
+      # never created and the post-job cache save fails the whole job with
+      # "Path Validation Error: Path(s) specified in the action for caching
+      # do(es) not exist" even when every audit step passed.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
 
       # This is a pnpm workspace: the single pnpm-lock.yaml at the repo root
       # covers every package, and no package-lock.json exists anywhere. The
