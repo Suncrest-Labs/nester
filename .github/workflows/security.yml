@@ -60,7 +60,7 @@ jobs:
         run: npm audit --package-lock-only --audit-level=moderate || true
 
       - name: Fail on high and critical vulnerabilities
-        run: npm audit --package-lock-only --audit-level=high || true
+        run: npm audit --package-lock-only --audit-level=high
 
   audit-go:
     name: Dependency Audit (Go)
@@ -132,7 +132,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run cargo-audit
-        run: cargo audit || true
+        run: cargo audit
 
   audit-python:
     name: Dependency Audit (Python)
@@ -153,6 +153,10 @@ jobs:
         run: pip install pip-audit
 
       - name: Generate vulnerability report
+        # pip-audit exits non-zero when it finds vulnerabilities. That is not a
+        # failure of this step — the report is still written and the severity
+        # gates below decide what blocks. Only a missing report is fatal, and
+        # the gates raise on that themselves.
         run: pip-audit -r requirements.txt --format json --output pip-audit-report.json || true
 
       - name: Warn on moderate vulnerabilities
@@ -217,7 +221,9 @@ jobs:
 
           if vulns:
               print(f"Found {len(vulns)} high/critical Python vulnerabilities")
-              raise SystemExit(0)
+              for vuln in vulns:
+                  print(f"  {vuln.get('id', 'unknown')}: {vuln.get('description', '')[:120]}")
+              raise SystemExit(1)
 
           print("No high/critical Python vulnerabilities detected")
           PY

@@ -141,7 +141,6 @@ jobs:
 
       - name: Audit JS dependencies (dapp)
         run: pnpm audit --audit-level=moderate
-        continue-on-error: true
 
   security:
     name: Security Scanning
@@ -172,7 +171,6 @@ jobs:
         if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
         run: cargo audit
         working-directory: packages/contracts
-        continue-on-error: true
 
       - uses: actions/setup-go@v5
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
@@ -217,7 +215,6 @@ jobs:
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
         run: gosec -severity medium ./...
         working-directory: apps/api
-        continue-on-error: true
 
       - uses: pnpm/action-setup@v4
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
@@ -236,7 +233,6 @@ jobs:
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
         run: pnpm audit --audit-level=high
         working-directory: apps/dapp/frontend
-        continue-on-error: true
 
       - uses: actions/setup-python@v5
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
@@ -251,13 +247,11 @@ jobs:
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
         run: pip-audit -r requirements.txt
         working-directory: apps/intelligence
-        continue-on-error: true
 
       - name: Run bandit
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
         run: bandit -r app -ll
         working-directory: apps/intelligence
-        continue-on-error: true
 
       - name: Semgrep SAST (TypeScript/Next.js)
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
