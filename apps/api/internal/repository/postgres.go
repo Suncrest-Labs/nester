@@ -21,9 +21,15 @@ func NewPostgresDB(cfg config.DatabaseConfig) (*PostgresDB, error) {
 		return nil, fmt.Errorf("unable to parse database config: %w", err)
 	}
 
+	// Clamp at both ends before narrowing to int32: PoolSize is an int, so a
+	// misconfigured value can be negative or exceed int32 on 64-bit builds,
+	// and pgxpool rejects MaxConns below 1.
 	poolSize := cfg.PoolSize()
 	if poolSize > 25 {
 		poolSize = 25
+	}
+	if poolSize < 1 {
+		poolSize = 1
 	}
 	poolConfig.MaxConns = int32(poolSize)
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
