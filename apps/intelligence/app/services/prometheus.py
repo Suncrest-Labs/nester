@@ -580,7 +580,7 @@ async def stream_chat(
                                 continue
 
                             try:
-                                args = tool.args_model(**block.input)
+                                args = tool.args_model(**cast(dict[str, Any], block.input))
                             except ValidationError as e:
                                 await _audit(
                                     user_id=user_id,

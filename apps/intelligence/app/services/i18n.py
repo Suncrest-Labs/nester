@@ -254,7 +254,7 @@ class _NumberFormat:
 
 _NUMBER_FORMATS: dict[str, _NumberFormat] = {
     "en": _NumberFormat(".", ",", symbol_prefix=True, symbol_space=False),
-    "fr": _NumberFormat(",", " ", symbol_prefix=False, symbol_space=True),
+    "fr": _NumberFormat(",", " ", symbol_prefix=False, symbol_space=True),
     "pt": _NumberFormat(",", ".", symbol_prefix=True, symbol_space=True),
     "sw": _NumberFormat(".", ",", symbol_prefix=True, symbol_space=False),
     "ha": _NumberFormat(".", ",", symbol_prefix=True, symbol_space=False),
@@ -300,17 +300,18 @@ def format_amount(
     number = _group_integer(whole, fmt.group_sep)
     if decimals > 0:
         number = f"{number}{fmt.decimal_sep}{frac}"
-    number = f"{sign}{number}"
 
     code = currency.upper().strip()
     symbol = _CURRENCY_SYMBOLS.get(code)
     if symbol is None:
         # Crypto or unrecognised code — ticker suffix, e.g. "1,250.00 USDC".
-        return f"{number} {code}".strip()
+        return f"{sign}{number} {code}".strip()
 
     if fmt.symbol_prefix:
-        return f"{symbol}{number}" if not fmt.symbol_space else f"{symbol} {number}"
-    return f"{number} {symbol}" if fmt.symbol_space else f"{number}{symbol}"
+        body = f"{symbol} {number}" if fmt.symbol_space else f"{symbol}{number}"
+    else:
+        body = f"{number} {symbol}" if fmt.symbol_space else f"{number}{symbol}"
+    return f"{sign}{body}"
 
 
 def format_percentage(value: float, language: str, decimals: int = 2) -> str:
