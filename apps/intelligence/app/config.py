@@ -6,7 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "Nester Intelligence"
-    host: str = "0.0.0.0"
+    # The service runs in a container and must bind every interface to be
+    # reachable from outside it; 127.0.0.1 would make it unreachable.
+    # Exposure is governed by the network policy and ingress, not by this
+    # default, which is overridable via INTELLIGENCE_HOST.
+    host: str = "0.0.0.0"  # nosec B104
     port: int = 8000
     anthropic_api_key: str = ""
     # claude-sonnet-5 is the current flagship id. Used for explanation-only
