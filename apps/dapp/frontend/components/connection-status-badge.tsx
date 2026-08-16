@@ -11,6 +11,7 @@ interface StatusMeta {
     label: string;
     title: string;
     pulse: boolean;
+    stale: boolean;
 }
 
 // Visual + copy for each connection state. "offline" means every reconnect
@@ -26,6 +27,7 @@ function statusMeta(status: WSConnectionStatus): StatusMeta {
                 label: "Live",
                 title: "Connected and receiving real-time updates",
                 pulse: true,
+                stale: false,
             };
         case "reconnecting":
             return {
@@ -35,6 +37,7 @@ function statusMeta(status: WSConnectionStatus): StatusMeta {
                 label: "Reconnecting…",
                 title: "Connection lost — retrying with back-off",
                 pulse: true,
+                stale: true,
             };
         case "offline":
         default:
@@ -45,8 +48,24 @@ function statusMeta(status: WSConnectionStatus): StatusMeta {
                 label: "Using delayed updates",
                 title: "Disconnected — falling back to polling every 30s",
                 pulse: false,
+                stale: true,
             };
     }
+}
+
+/**
+ * Returns a human-readable relative timestamp like "2m ago" or "just now".
+ */
+function relativeTime(ms: number): string {
+    const seconds = Math.floor((Date.now() - ms) / 1000);
+    if (seconds < 5) return "just now";
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
 }
 
 /**
@@ -56,9 +75,12 @@ function statusMeta(status: WSConnectionStatus): StatusMeta {
  *   - green "Live" when connected
  *   - amber "Reconnecting…" while backing off between attempts
  *   - red "Using delayed updates" once retries are exhausted (polling fallback)
+ *
+ * When not connected, shows the last time data was received so the user
+ * can assess how stale the displayed figures may be.
  */
 export function ConnectionStatusBadge({ className }: { className?: string }) {
-    const { status } = useWebSocketContext();
+    const { status, lastEventTime } = useWebSocketContext();
     const meta = statusMeta(status);
 
     return (
@@ -84,7 +106,12 @@ export function ConnectionStatusBadge({ className }: { className?: string }) {
                 )}
                 <span className={cn("relative inline-flex h-2 w-2 rounded-full", meta.dot)} />
             </span>
-            <span className="hidden sm:inline">{meta.label}</span>
+            <span className="hidden sm:inline">
+                {meta.label}
+                {meta.stale && lastEventTime !== null && (
+                    <span className="ml-1 opacity-70">({relativeTime(lastEventTime)})</span>
+                )}
+            </span>
         </div>
     );
 }

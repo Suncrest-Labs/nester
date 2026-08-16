@@ -42,6 +42,8 @@ interface WebSocketContextValue {
     isConnected: boolean;
     /** The most recent raw event received */
     lastEvent: WSEvent | null;
+    /** Timestamp (ms epoch) of the most recent event received, or null if none yet */
+    lastEventTime: number | null;
     /** Imperatively subscribe to an additional channel */
     subscribe: UseWebSocketReturn["subscribe"];
     /** Imperatively unsubscribe from a channel */
@@ -56,6 +58,7 @@ const WebSocketContext = createContext<WebSocketContextValue>({
     status: "offline",
     isConnected: false,
     lastEvent: null,
+    lastEventTime: null,
     subscribe: () => {},
     unsubscribe: () => {},
     disconnect: () => {},
@@ -289,6 +292,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         isConnected,
         status,
         lastEvent,
+        lastEventTime,
         subscribe,
         unsubscribe,
         disconnect,
@@ -319,12 +323,13 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
             status: WS_URL ? status : "offline",
             isConnected: WS_URL ? isConnected : false,
             lastEvent,
+            lastEventTime,
             subscribe,
             unsubscribe,
             disconnect,
             manualReconnect,
         }),
-        [status, isConnected, lastEvent, subscribe, unsubscribe, disconnect, manualReconnect]
+        [status, isConnected, lastEvent, lastEventTime, subscribe, unsubscribe, disconnect, manualReconnect]
     );
 
     return (

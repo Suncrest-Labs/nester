@@ -35,6 +35,7 @@ export interface UseWebSocketReturn {
     isConnected: boolean;
     status: WSConnectionStatus;
     lastEvent: WSEvent | null;
+    lastEventTime: number | null;
     subscribe: (channel: string) => void;
     unsubscribe: (channel: string) => void;
     disconnect: () => void;
@@ -51,10 +52,27 @@ const HEARTBEAT_TIMEOUT_MS = 10_000;
 export const MAX_BACKOFF_MS = 30_000;
 
 /**
- * Exponential back-off schedule for reconnect attempts.
+ * Returns a random float in [0, max) using crypto.getRandomValues when available.
+ * Falls back to Math.random() for environments where crypto is not exposed.
+ */
+function safeRandom(max: number): number {
+    try {
+        const arr = new Uint32Array(1);
+        crypto.getRandomValues(arr);
+        return (arr[0] / 2 ** 32) * max;
+    } catch {
+        return Math.random() * max;
+    }
+}
+
+/**
+ * Exponential back-off schedule for reconnect attempts, with full jitter.
  *
- * delay = base * 2^attempt, capped at MAX_BACKOFF_MS. With the default base of
- * 1000ms this yields the schedule 1s, 2s, 4s, 8s, 16s, 30s, 30s…
+ * delay = min(base * 2^attempt, MAX_BACKOFF_MS) * random(0.5, 1)
+ *
+ * Jitter prevents thundering-herd reconnects when a server restart causes
+ * every client to reconnect simultaneously. With the default base of 1000ms
+ * this yields an average schedule 1s, 2s, 4s, 8s, 16s, 30s, 30s…
  *
  * Exported so the schedule can be unit-tested independently of the socket.
  */
@@ -63,7 +81,9 @@ export function getReconnectDelay(
     base: number = BASE_RECONNECT_INTERVAL_MS,
 ): number {
     const safeAttempt = Math.max(0, attempt);
-    return Math.min(base * 2 ** safeAttempt, MAX_BACKOFF_MS);
+    const raw = Math.min(base * 2 ** safeAttempt, MAX_BACKOFF_MS);
+    // Full jitter: random between 50% and 100% of the raw delay.
+    return raw * (0.5 + safeRandom(0.5));
 }
 
 export function useWebSocket({
@@ -80,6 +100,7 @@ export function useWebSocket({
 }: UseWebSocketOptions): UseWebSocketReturn {
     const [status, setStatus] = useState<WSConnectionStatus>("offline");
     const [lastEvent, setLastEvent] = useState<WSEvent | null>(null);
+    const [lastEventTime, setLastEventTime] = useState<number | null>(null);
 
     // Keep stable references so interval/event callbacks don't go stale.
     const wsRef = useRef<WebSocket | null>(null);
@@ -212,8 +233,10 @@ export function useWebSocket({
                     return;
                 }
 
-                setLastEvent(data as WSEvent);
-                onEventRef.current(data as WSEvent);
+                const event = data as WSEvent;
+                setLastEvent(event);
+                setLastEventTime(Date.now());
+                onEventRef.current(event);
             } catch {
                 // Ignore malformed frames.
             }
@@ -300,6 +323,7 @@ export function useWebSocket({
         isConnected: status === "connected",
         status,
         lastEvent,
+        lastEventTime,
         subscribe,
         unsubscribe,
         disconnect,
