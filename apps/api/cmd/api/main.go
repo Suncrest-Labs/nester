@@ -30,6 +30,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
+	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
@@ -255,6 +256,23 @@ func run() error {
 		redisClient = redis.NewClient(&redis.Options{Addr: addr})
 	}
 
+	// Metrics are constructed once, here, and threaded to each
+	// instrumentation point. Nothing in the request path registers a
+	// collector: registration takes the registry lock, and doing it per
+	// request would be both a hot-path cost and an unbounded-series risk.
+	//
+	// The registry is populated before any traffic is served so a scrape
+	// that lands during startup returns a consistent set of series rather
+	// than a metric appearing partway through.
+	appMetrics := metrics.New()
+
+	// pgxpool and go-redis both maintain their own counters, so these are
+	// pull collectors read at scrape time rather than gauges on a ticker.
+	if err := appMetrics.RegisterPool(pgPool.Pool); err != nil {
+		return fmt.Errorf("register db pool metrics: %w", err)
+	}
+	appMetrics.InstrumentRedis(redisClient)
+
 	var challengeStore service.ChallengeStore
 	var revocationCache service.RevocationCache
 	if redisClient != nil {
@@ -278,6 +296,16 @@ func run() error {
 	nudgeOutcomeService := service.NewNudgeOutcomeService(nudgeHistoryRepo)
 
 	oracleService := oracle.NewRateService(cfg.Stellar().HorizonURL(), cfg.Stellar().USDCIssuer())
+
+	// Each rate provider is instrumented with the upstream it actually
+	// calls, matched on the provider's own Name() rather than on its
+	// concrete type, so adding a provider does not silently go unmeasured —
+	// it lands in "other" and shows up as an unattributed series.
+	xlmProviders, fiatProvider := oracleService.Providers()
+	for _, provider := range xlmProviders {
+		instrumentRateProvider(appMetrics, provider)
+	}
+	instrumentRateProvider(appMetrics, fiatProvider)
 	rateHandler := handler.NewRateHandler(oracleService)
 
 	// maxWSConnsPerIP bounds simultaneous WebSocket connections from one
@@ -352,6 +380,9 @@ func run() error {
 		cfg.Stellar().NetworkPassphrase(),
 		"",
 	)
+	contractReader.SetHTTPClient(appMetrics.InstrumentClient(
+		&http.Client{Timeout: 30 * time.Second}, metrics.UpstreamSorobanRPC,
+	))
 
 	tracker := performancesvc.NewTracker(
 		performanceRepository,
@@ -559,6 +590,9 @@ func run() error {
 
 	// Yield opportunities (DeFiLlama Stellar pools)
 	yieldSvc := service.NewYieldService("")
+	yieldSvc.SetHTTPClient(appMetrics.InstrumentClient(
+		&http.Client{Timeout: 15 * time.Second}, metrics.UpstreamDeFiLlama,
+	))
 	// Warm the Stellar yield cache in the background so the first user request
 	// doesn't pay the DeFiLlama round-trip (#667). Failure is non-fatal: the
 	// lazy-load path still works.
@@ -659,11 +693,19 @@ func run() error {
 	// Intelligence proxy (forwards to Python service)
 	intelURL := cfg.Intelligence().ServiceURL()
 	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
+	intelProxy.SetHTTPClient(appMetrics.InstrumentClient(
+		&http.Client{Timeout: cfg.Intelligence().Timeout()}, metrics.UpstreamIntelligence,
+	))
 	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
 		BaseURL: intelURL,
 		APIKey:  cfg.Intelligence().ServiceAPIKey(),
 		Timeout: cfg.Intelligence().Timeout(),
 	})
+	// The relay carries the Anthropic-backed intelligence calls, which are
+	// the slowest thing in any request path that touches them.
+	prometheusClient.SetHTTPClient(appMetrics.InstrumentClient(
+		&http.Client{Timeout: cfg.Intelligence().Timeout()}, metrics.UpstreamAnthropic,
+	))
 
 	nudgeCopyGen := service.CompositeCopyGenerator{
 		Template: nudge.TemplateCopyGenerator{},
@@ -1095,18 +1137,31 @@ func run() error {
 		// globalLimiter and authRouteLimiter still carry CORS headers and remain
 		// readable to browser clients. OPTIONS preflights are short-circuited by
 		// cors and never reach the limiters.
+		// The metrics middleware sits directly inside RecoverPanic and
+		// outside every other layer, so that latency and status include time
+		// spent in CORS, rate limiting, and auth. A 429 from the limiter or a
+		// 401 from the authenticator is a real outcome of a real request; a
+		// metrics layer placed further in would report the service as
+		// healthy while the edge rejected everything.
+		//
+		// It resolves the route label from mux, which performs the same match
+		// ServeHTTP will. r.Pattern is not usable here: the mux populates it
+		// only on the request it hands to the matched handler, so at this
+		// depth it is still empty.
 		Handler: middleware.SecurityHeaders(cfg.Environment())(
 			middleware.RecoverPanic(baseLogger)(
-				cors(
-					globalLimiter(
-						authRouteLimiter(
-							writeLimiter(
-								authenticator(
-									idempotencyMiddleware(
-										settlementLimiter(
-											walletLimiter(
-												middleware.LimitRequestBody(1 * 1024 * 1024)(
-													middleware.Logging(baseLogger)(mux),
+				appMetrics.Middleware(mux)(
+					cors(
+						globalLimiter(
+							authRouteLimiter(
+								writeLimiter(
+									authenticator(
+										idempotencyMiddleware(
+											settlementLimiter(
+												walletLimiter(
+													middleware.LimitRequestBody(1 * 1024 * 1024)(
+														middleware.Logging(baseLogger)(mux),
+													),
 												),
 											),
 										),
@@ -1137,6 +1192,20 @@ func run() error {
 
 	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, cfg.Stellar().RPCURL())
 
+	// The metrics endpoint runs on its own listener so it is never reachable
+	// through the public port. It is not registered on mux at any point, so
+	// a request for /metrics on the public interface 404s like any unknown
+	// path — there is no rule to misorder and no auth bypass to get wrong.
+	var metricsServer *metrics.Server
+	if cfg.Metrics().Enabled() {
+		metricsServer = metrics.NewServer(
+			cfg.Metrics().Addr(),
+			appMetrics.Handler(),
+			baseLogger.WithGroup("metrics"),
+		)
+		go metricsServer.Start()
+	}
+
 	serverErr := make(chan error, 1)
 	go func() {
 		err := server.ListenAndServe()
@@ -1164,6 +1233,16 @@ func run() error {
 	if err := server.Shutdown(ctx); err != nil {
 		baseLogger.Error("graceful shutdown timed out", "error", err.Error())
 		return err
+	}
+
+	// Stopped after the public server so that a scrape during the drain
+	// still reports the in-flight requests being drained. A failure to shut
+	// it down cleanly is logged, not returned: the process is exiting and
+	// losing the metrics listener is not worth a non-zero exit code.
+	if metricsServer != nil {
+		if err := metricsServer.Shutdown(ctx); err != nil {
+			baseLogger.Error("metrics listener shutdown failed", "error", err.Error())
+		}
 	}
 
 	if err := <-serverErr; err != nil {
@@ -1230,6 +1309,39 @@ func walletKeyFromContext(r *http.Request) string {
 		return ""
 	}
 	return u.WalletAddress
+}
+
+// httpClientSetter is implemented by the outbound clients that accept an
+// instrumented transport at startup.
+type httpClientSetter interface {
+	SetHTTPClient(*http.Client)
+}
+
+// instrumentRateProvider installs a metrics-instrumented HTTP client on an
+// exchange-rate provider.
+//
+// The upstream label is derived from the provider's own Name(), which returns
+// a fixed string per implementation, so the label set stays bounded by the
+// number of provider types rather than by anything at runtime. An unknown
+// provider is still instrumented, under "other", so a new one is never
+// silently invisible.
+func instrumentRateProvider(m *metrics.Metrics, provider oracle.Provider) {
+	setter, ok := provider.(httpClientSetter)
+	if !ok {
+		return
+	}
+
+	upstream := metrics.UpstreamOther
+	switch provider.Name() {
+	case "horizon":
+		upstream = metrics.UpstreamHorizon
+	case "defillama":
+		upstream = metrics.UpstreamDeFiLlama
+	case "coingecko":
+		upstream = metrics.UpstreamCoinGecko
+	}
+
+	setter.SetHTTPClient(m.InstrumentClient(&http.Client{Timeout: 10 * time.Second}, upstream))
 }
 
 func livenessHandler(ready *atomic.Bool) http.HandlerFunc {

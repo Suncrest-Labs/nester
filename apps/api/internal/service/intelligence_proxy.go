@@ -32,6 +32,15 @@ func NewIntelligenceProxy(baseURL string, timeout time.Duration) *IntelligencePr
 	}
 }
 
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (p *IntelligenceProxy) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		p.httpClient = client
+	}
+}
+
 // Forward proxies the incoming request to upstreamPath (may include query string).
 func (p *IntelligenceProxy) Forward(w http.ResponseWriter, r *http.Request, upstreamPath string) {
 	if p.baseURL == "" {

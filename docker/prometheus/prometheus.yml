@@ -1,0 +1,27 @@
+# Prometheus configuration for the local observability profile.
+#
+# Brought up with:
+#   docker compose --profile observability up
+#
+# The API's metrics endpoint runs on its own listener (METRICS_ADDR), which is
+# deliberately not published to the host in docker-compose.yml. Prometheus
+# reaches it over the compose network as api:9090, so scraping works locally
+# while the endpoint stays off the host's public interface — the same shape as
+# a production deployment where only the scraper can reach it.
+
+global:
+  # 15s matches the resolution the request histograms are designed for: fine
+  # enough to see a deploy-induced latency change, coarse enough that a local
+  # stack is not doing constant work.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local
+
+scrape_configs:
+  - job_name: nester-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:9090"]
+        labels:
+          service: api

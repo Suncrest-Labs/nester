@@ -46,6 +46,15 @@ func NewContractInvoker(rpcURL, horizonURL, networkPassphrase, operatorSecret st
 	}, nil
 }
 
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (c *ContractInvoker) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		c.httpClient = client
+	}
+}
+
 // InvokeVoidFunction calls a contract function with signature (caller: Address).
 func (c *ContractInvoker) InvokeVoidFunction(ctx context.Context, contractAddress, functionName string) error {
 	hash, err := c.InvokeVoidFunctionSubmit(ctx, contractAddress, functionName)

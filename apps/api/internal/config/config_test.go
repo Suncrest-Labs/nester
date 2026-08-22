@@ -27,6 +27,7 @@ func baseEnv(t *testing.T) {
 		"LOG_LEVEL", "LOG_FORMAT",
 		"ALLOWED_ORIGINS",
 		"RUN_MIGRATIONS", "MIGRATIONS_DIR", "STARTUP_DEPENDENCY_TIMEOUT",
+		"METRICS_ENABLED", "METRICS_ADDR",
 	} {
 		t.Setenv(key, "")
 	}

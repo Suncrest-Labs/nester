@@ -47,6 +47,17 @@ type Config struct {
 	harvest               HarvestConfig
 	rebalancer            RebalancerConfig
 	schedulerLeadership   SchedulerLeadershipConfig
+	metrics               MetricsConfig
+}
+
+// MetricsConfig controls the Prometheus exposition endpoint.
+//
+// The endpoint runs on its own listener, never on the public API router, so
+// that scrape traffic and the internal route names it exposes stay off the
+// public interface. See internal/metrics/server.go for the reasoning.
+type MetricsConfig struct {
+	enabled bool
+	addr    string
 }
 
 // AccountCipherConfig holds the versioned key set used to encrypt sensitive
@@ -335,6 +346,15 @@ func Load() (*Config, error) {
 			lockKey:           int64(loader.intDefault("SCHEDULER_LEADER_LOCK_KEY", 846000)),
 			heartbeatInterval: loader.durationDefault("SCHEDULER_LEADER_HEARTBEAT_INTERVAL", 3*time.Second),
 		},
+		metrics: MetricsConfig{
+			enabled: loader.boolDefault("METRICS_ENABLED", true),
+			// Loopback by default: the endpoint exposes internal route names
+			// and traffic volumes, so reaching it from another host must be
+			// an explicit decision. Containers that need a scraper on the
+			// same network override this to 0.0.0.0:9090 and publish no
+			// host port.
+			addr: loader.stringDefault("METRICS_ADDR", "127.0.0.1:9090"),
+		},
 	}
 
 	if cfg.bankAccountCipherKey == "" && environment == "development" {
@@ -358,6 +378,22 @@ func (c Config) Environment() string {
 
 func (c Config) Server() ServerConfig {
 	return c.server
+}
+
+func (c Config) Metrics() MetricsConfig {
+	return c.metrics
+}
+
+// Enabled reports whether the internal metrics listener should be started.
+func (m MetricsConfig) Enabled() bool {
+	return m.enabled
+}
+
+// Addr is the host:port the internal metrics listener binds to. It defaults
+// to loopback so that an operator has to make a deliberate choice before the
+// endpoint is reachable from another host.
+func (m MetricsConfig) Addr() string {
+	return m.addr
 }
 
 func (c Config) Database() DatabaseConfig {
@@ -609,6 +645,17 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.server.port <= 0 || c.server.port > 65535 {
 		loader.addError("SERVER_PORT must be between 1 and 65535")
+	}
+
+	// Caught at boot rather than when the goroutine starts, so a typo fails
+	// the process immediately instead of silently leaving the service
+	// unscrapeable.
+	if c.metrics.enabled {
+		if _, _, err := net.SplitHostPort(c.metrics.addr); err != nil {
+			loader.addError("METRICS_ADDR must be a valid host:port")
+		} else if c.metrics.addr == c.server.Address() {
+			loader.addError("METRICS_ADDR must not equal the public server address")
+		}
 	}
 
 	if c.server.readTimeout <= 0 {

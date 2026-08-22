@@ -36,6 +36,15 @@ func NewContractReader(rpcURL, networkPassphrase, sourceAddress string) *Contrac
 	}
 }
 
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (r *ContractReader) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		r.httpClient = client
+	}
+}
+
 // TotalAssets calls the vault_token total_assets() view and converts the i128
 // return value (7-decimal stroops) to a decimal USDC amount.
 func (r *ContractReader) TotalAssets(ctx context.Context, contractAddress string) (decimal.Decimal, error) {

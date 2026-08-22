@@ -23,6 +23,15 @@ func NewDefiLlamaProvider() *DefiLlamaProvider {
 
 func (p *DefiLlamaProvider) Name() string { return "defillama" }
 
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (p *DefiLlamaProvider) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		p.client = client
+	}
+}
+
 func (p *DefiLlamaProvider) Fetch(ctx context.Context, base, quote string) (float64, error) {
 	if base != "XLM" || quote != "USD" {
 		return 0, ErrUnsupportedPair

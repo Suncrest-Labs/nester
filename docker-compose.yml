@@ -44,6 +44,11 @@ services:
       LOG_FORMAT: text
       RUN_MIGRATIONS: "true"
       ALLOWED_ORIGINS: http://localhost:3001
+      # Bound to all interfaces inside the container so Prometheus can reach
+      # it over the compose network. Deliberately NOT published under `ports`
+      # below: the metrics endpoint stays reachable only from inside the
+      # compose network, never from the host's public interface.
+      METRICS_ADDR: 0.0.0.0:9090
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +110,54 @@ services:
       retries: 5
       start_period: 10s
 
+  # Local observability stack. Started only with:
+  #   docker compose --profile observability up
+  # Services without a profile keep starting as before, so the default
+  # developer workflow is unchanged.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: ["observability"]
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=24h
+      # The local stack is for looking at graphs, not for storing history;
+      # 24h keeps the volume small.
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    profiles: ["observability"]
+    ports:
+      - "3002:3000"
+    environment:
+      # Local-only convenience: anonymous viewer access so a developer does
+      # not have to log in to look at a graph. Never mirror this in a
+      # deployed environment.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   go_mod_cache:
+  prometheus_data:
+  grafana_data:
