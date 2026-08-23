@@ -259,6 +259,15 @@ func (r *Relay) dispatch(ctx context.Context) int {
 
 	dispatched := 0
 	for _, e := range claimed {
+		if e.Attempts > e.MaxAttempts {
+			// Reclaimed past its hand-off budget: the relay died mid-hand-off
+			// on the final attempt. Trying again would restart a loop the
+			// budget exists to end, and leaving it claimed would block this
+			// aggregate forever, so it is poison.
+			r.deadLetter(ctx, e, fmt.Sprintf("exhausted %d hand-off attempts", e.MaxAttempts))
+			continue
+		}
+
 		jobType, ok := r.routes[e.EventType]
 		if !ok {
 			// Unroutable: no handler exists for this event type. Retrying

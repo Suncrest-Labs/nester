@@ -236,6 +236,41 @@ func TestClaimDueReclaimsAbandonedHandoff(t *testing.T) {
 	}
 }
 
+// TestClaimDueStillClaimsAnExhaustedHandoff pins the absence of an attempts
+// cap in the claim. Capping it would leave a row that reached max_attempts
+// stuck in 'dispatching' with no job carrying it, blocking its aggregate
+// forever; it has to come back so the relay can dead-letter it.
+func TestClaimDueStillClaimsAnExhaustedHandoff(t *testing.T) {
+	repo, db := setupOutboxRepo(t)
+	ctx := context.Background()
+
+	e := newOutboxEvent(t, "goal-a", "a-exhausted")
+	e.MaxAttempts = 1
+	insertInTx(t, repo, db, e)
+
+	now := time.Now()
+	claimed, err := repo.ClaimDue(ctx, outbox.ClaimParams{Limit: 10, Lease: time.Minute, Now: now})
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].Attempts != 1 {
+		t.Fatalf("first claim = %+v, want one row at attempts 1", claimed)
+	}
+
+	// The relay died before recording a job; the lease lapses.
+	reclaimed, err := repo.ClaimDue(ctx, outbox.ClaimParams{Limit: 10, Lease: time.Minute, Now: now.Add(2 * time.Minute)})
+	if err != nil {
+		t.Fatalf("ClaimDue after lease: %v", err)
+	}
+	if len(reclaimed) != 1 {
+		t.Fatalf("reclaimed %d rows at the attempts cap, want 1 — otherwise it blocks its aggregate forever", len(reclaimed))
+	}
+	if reclaimed[0].Attempts <= reclaimed[0].MaxAttempts {
+		t.Fatalf("attempts = %d, max = %d; the relay needs attempts > max to recognise it as exhausted",
+			reclaimed[0].Attempts, reclaimed[0].MaxAttempts)
+	}
+}
+
 // TestClaimDueLeavesRowsWithAJobAlone: once a job owns the delivery, lease
 // expiry must NOT reclaim the row — that would enqueue a second job chain
 // for a delivery already in flight.

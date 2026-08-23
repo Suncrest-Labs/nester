@@ -98,8 +98,7 @@ func (r *OutboxRepository) ClaimDue(ctx context.Context, params outbox.ClaimPara
 		    SELECT o.id
 		    FROM outbox o
 		    JOIN heads h ON h.id = o.id
-		    WHERE h.attempts < h.max_attempts
-		      AND (
+		    WHERE (
 		          (h.status = 'pending' AND h.next_attempt_at <= $1)
 		          -- Abandoned mid-hand-off: claimed, but the relay died
 		          -- before it recorded a job. No job owns the delivery, so
@@ -107,6 +106,11 @@ func (r *OutboxRepository) ClaimDue(ctx context.Context, params outbox.ClaimPara
 		          OR (h.status = 'dispatching' AND h.job_id IS NULL
 		              AND h.leased_until IS NOT NULL AND h.leased_until <= $1)
 		      )
+		    -- No attempts cap here on purpose. Capping the claim would leave
+		    -- a row that reached max_attempts stuck in 'dispatching'
+		    -- forever, blocking its aggregate; the relay claims it, sees the
+		    -- exhausted count, and dead-letters it instead — which is what
+		    -- actually unblocks the aggregate.
 		    ORDER BY o.created_at, o.id
 		    FOR UPDATE OF o SKIP LOCKED
 		    LIMIT $3

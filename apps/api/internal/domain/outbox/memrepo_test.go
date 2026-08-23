@@ -92,9 +92,9 @@ func (m *memRepo) ClaimDue(_ context.Context, params ClaimParams) ([]Event, erro
 		if len(claimed) >= params.Limit {
 			break
 		}
-		if e.Attempts >= e.MaxAttempts {
-			continue
-		}
+		// No attempts cap, matching the SQL: a row that reached its budget
+		// must still be claimable so the relay can dead-letter it, or it
+		// blocks its aggregate forever.
 		due := e.Status == StatusPending && !e.NextAttemptAt.After(now)
 		abandoned := e.Status == StatusDispatching && e.JobID == nil &&
 			e.LeasedUntil != nil && !e.LeasedUntil.After(now)

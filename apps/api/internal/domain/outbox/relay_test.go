@@ -365,6 +365,46 @@ func TestEnqueueFailureIsRetriedThenDeadLettered(t *testing.T) {
 	}
 }
 
+// TestHandoffAbandonedOnItsFinalAttemptIsDeadLettered closes the stuck-row
+// case: the relay dies mid-hand-off on the last attempt the budget allows.
+// The row is left claimed with no job carrying it, and if the claim declined
+// to pick it back up it would block its aggregate forever. It must be
+// reclaimed and dead-lettered instead.
+func TestHandoffAbandonedOnItsFinalAttemptIsDeadLettered(t *testing.T) {
+	repo := newMemRepo()
+	e, err := NewEvent("savings_goal", "goal-1", "test.event", "dedupe-final-attempt", nil)
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+	e.MaxAttempts = 1
+	if err := repo.Insert(context.Background(), nil, e); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	behind := publish(t, repo, "goal-1", "dedupe-behind-final", nil)
+
+	now := time.Now()
+	// Claim without recording a job: the relay died mid-hand-off. attempts
+	// is now 1, which is max_attempts.
+	if _, err := repo.ClaimDue(context.Background(), ClaimParams{Limit: 10, Lease: time.Minute, Now: now}); err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+
+	q := newMemQueue()
+	relay, _ := newTestRelay(t, repo, q)
+	relay.SetClock(func() time.Time { return now.Add(2 * time.Minute) })
+	relay.Tick(context.Background())
+
+	if got := repo.byID(e.ID).Status; got != StatusDead {
+		t.Fatalf("status = %q, want %q — an exhausted hand-off must not stay claimed", got, StatusDead)
+	}
+
+	// And the aggregate is unblocked: the event behind it proceeds.
+	relay.Tick(context.Background())
+	if got := repo.byID(behind.ID).Status; got == StatusPending {
+		t.Fatal("the event behind an exhausted hand-off is still pending; the aggregate never unblocked")
+	}
+}
+
 // TestVanishedJobIsHandedOverAgain: if the job row carrying a delivery is
 // gone, nothing is delivering it. Leaving the event in flight would block its
 // aggregate forever, so it goes back to pending.
