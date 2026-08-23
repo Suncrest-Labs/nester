@@ -364,9 +364,20 @@ jobs:
       - name: Test (unit)
         run: go test -race -timeout 120s -count=1 -short ./...
 
-      - name: Test (integration)
-        run: go test -race -timeout 120s -count=1 -run Integration ./...
-        continue-on-error: true
+      # Database-backed tests gate on TEST_DATABASE_DSN (the convention in
+      # internal/db and internal/repository/postgres), not DATABASE_URL, so
+      # without this variable every one of them silently skipped — and the
+      # step was continue-on-error, so it never gated a merge either. Scoped
+      # to this step so the unit run above stays DB-free and parallel.
+      #
+      # -p 1: the tests share one database and each wipes the public schema
+      # before applying the full migration chain, so packages must not run
+      # concurrently. No -run filter: DB-gated tests whose names lack
+      # "Integration" (internal/audit, internal/stellar backfill) must run too.
+      - name: Test (database integration)
+        env:
+          TEST_DATABASE_DSN: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
+        run: go test -race -timeout 900s -count=1 -p 1 ./...
 
 
   contracts:
