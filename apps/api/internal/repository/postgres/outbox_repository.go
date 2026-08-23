@@ -230,8 +230,8 @@ func (r *OutboxRepository) Stats(ctx context.Context, now time.Time) (outbox.Sta
 		now = time.Now()
 	}
 	var (
-		s            outbox.Stats
-		oldestPendng sql.NullTime
+		s             outbox.Stats
+		oldestPending sql.NullTime
 	)
 	row := r.db.QueryRowContext(ctx, `
 		SELECT
@@ -242,11 +242,11 @@ func (r *OutboxRepository) Stats(ctx context.Context, now time.Time) (outbox.Sta
 		FROM outbox`,
 		now,
 	)
-	if err := row.Scan(&s.Pending, &s.Dispatching, &s.Dead, &oldestPendng); err != nil {
+	if err := row.Scan(&s.Pending, &s.Dispatching, &s.Dead, &oldestPending); err != nil {
 		return outbox.Stats{}, err
 	}
-	if oldestPendng.Valid {
-		if age := now.Sub(oldestPendng.Time); age > 0 {
+	if oldestPending.Valid {
+		if age := now.Sub(oldestPending.Time); age > 0 {
 			s.OldestPendingAge = age
 		}
 	}
