@@ -27,6 +27,7 @@ import (
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/outbox"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
@@ -899,19 +900,27 @@ func run() error {
 	// Per-goal notification preferences (mute/digest frequency).
 	goalNotificationRepo := postgres.NewGoalNotificationRepository(db)
 	goalNotificationPrefSvc := service.NewGoalNotificationPreferenceService(goalNotificationRepo, savingsGoalRepo)
+	// The milestone notifier chain. Since #1049 it is driven by the outbox
+	// relay's queue job (registered on jobWorker further down) rather than
+	// called inline, so every member is handed the milestone's dedupe key
+	// and must be idempotent with respect to it — see GoalMilestoneNotifier.
+	goalMilestoneNotifier := service.CompositeGoalMilestoneNotifier{
+		Notifiers: []service.GoalMilestoneNotifier{
+			service.DispatcherGoalMilestoneNotifier{
+				Dispatcher:  notificationDispatcher2,
+				Preferences: goalNotificationRepo,
+			},
+			service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
+			service.WebhookGoalMilestoneNotifier{
+				Svc:    webhookSvc,
+				Logger: baseLogger.WithGroup("webhook-milestone"),
+			},
+		},
+	}
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
 		vaultRepository,
-		service.CompositeGoalMilestoneNotifier{
-			Notifiers: []service.GoalMilestoneNotifier{
-				service.DispatcherGoalMilestoneNotifier{
-					Dispatcher:  notificationDispatcher2,
-					Preferences: goalNotificationRepo,
-				},
-				service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
-				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
-			},
-		},
+		goalMilestoneNotifier,
 	)
 	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
@@ -1056,6 +1065,60 @@ func run() error {
 	// throttling is handled inside the handler via webhookLimiter, so a
 	// wide worker-level concurrency here is safe.
 	jobWorker.Register(service.WebhookDeliveryJobType, webhookDeliveryHandler, 0)
+
+	// Transactional outbox (#1049). The relay hands outbox rows to this same
+	// worker pool; these three handlers are the side effects it can route
+	// to. Registering them here — before Run — is what makes an event type
+	// routable at all: the relay dead-letters anything it has no route for,
+	// on the grounds that retrying cannot conjure a handler.
+	jobWorker.Register(service.GoalMilestoneJobType,
+		service.NewGoalMilestoneJobHandler(goalMilestoneNotifier, baseLogger.WithGroup("goal-milestone-job")), 0)
+	jobWorker.Register(service.WebhookFanoutJobType,
+		service.NewWebhookFanoutJobHandler(webhookSvc, baseLogger.WithGroup("webhook-fanout")), 0)
+	jobWorker.Register(notifications.NotificationSendJobType,
+		notifications.NewNotificationSendJobHandler(notificationDispatcher2), 0)
+
+	outboxRepo := postgres.NewOutboxRepository(db)
+	outboxMetrics := outbox.NewStdMetrics()
+	// Every relay instance runs: ClaimDue takes row locks with SKIP LOCKED,
+	// so instances divide the backlog rather than duplicating it, and a
+	// leader election here would only turn a horizontal scale-out into a
+	// single point of failure for every side effect in the system.
+	outboxRelay := outbox.NewRelay(
+		outboxRepo,
+		jobQueueClient,
+		jobQueueRepo,
+		outbox.Routes{
+			service.OutboxEventGoalMilestone:          service.GoalMilestoneJobType,
+			service.OutboxEventWebhookFanout:          service.WebhookFanoutJobType,
+			notifications.OutboxEventNotificationSend: notifications.NotificationSendJobType,
+		},
+		outbox.RelayConfig{
+			Enabled:       cfg.Outbox().Enabled(),
+			PollInterval:  cfg.Outbox().PollInterval(),
+			BatchSize:     cfg.Outbox().BatchSize(),
+			Lease:         cfg.Outbox().Lease(),
+			Backoff:       cfg.Outbox().Backoff(),
+			StatsInterval: cfg.Outbox().StatsInterval(),
+		},
+		baseLogger.WithGroup("outbox-relay"),
+		outboxMetrics,
+	)
+	outboxCtx, cancelOutbox := context.WithCancel(context.Background())
+	defer cancelOutbox()
+	go func() { _ = outboxRelay.Run(outboxCtx) }()
+
+	// Retention: without it the outbox only ever grows, on the write path of
+	// every domain transaction that inserts into it. Leader-gated because
+	// pruning from every instance is correct but wasteful.
+	outboxRetentionJob := outbox.NewRetentionJob(outboxRepo, outbox.RetentionConfig{
+		DispatchedRetention: cfg.Outbox().DispatchedRetention(),
+		DeadRetention:       cfg.Outbox().DeadRetention(),
+	}, baseLogger.WithGroup("outbox-retention"), outboxMetrics)
+	outboxRetentionJob.SetLeaderChecker(schedulerLeadership)
+	outboxRetentionCtx, cancelOutboxRetention := context.WithCancel(context.Background())
+	defer cancelOutboxRetention()
+	go outboxRetentionJob.Run(outboxRetentionCtx, cfg.Outbox().RetentionInterval())
 
 	harvestEngine := harvest.New(
 		harvest.Config{

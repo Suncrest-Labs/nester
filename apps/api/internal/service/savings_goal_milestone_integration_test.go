@@ -13,6 +13,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
@@ -70,7 +71,7 @@ func seedSavingsGoalIntegrationUser(t *testing.T, db *sql.DB) uuid.UUID {
 func TestSavingsGoalMilestoneIntegration(t *testing.T) {
 	db := openSavingsGoalIntegrationDB(t)
 	applySavingsGoalMilestoneMigrations(t, db)
-	if _, err := db.Exec(`TRUNCATE TABLE savings_goals, allocations, vaults, users, device_tokens RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE savings_goals, allocations, vaults, users, device_tokens, outbox, jobs RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE failed: %v", err)
 	}
 
@@ -129,17 +130,37 @@ func TestSavingsGoalMilestoneIntegration(t *testing.T) {
 		t.Fatalf("progress_pct = %v, want >= 50", enriched.ProgressPct)
 	}
 
-	deadlineWait := time.After(2 * time.Second)
-	for {
-		if push.CallCount() >= 1 && persistence.Count() >= 1 {
-			break
-		}
-		select {
-		case <-deadlineWait:
-			t.Fatalf("timed out waiting for notification; push=%d persisted=%d", push.CallCount(), persistence.Count())
-		default:
-			time.Sleep(20 * time.Millisecond)
-		}
+	// --- the crash window ---
+	//
+	// The milestone is recorded and the intent to notify is durable, but
+	// nothing has been delivered: delivery is the relay's job now. This is
+	// exactly the instant the old code lost notifications, because its
+	// notify-goroutine died with the process. Assert on it directly.
+	if push.CallCount() != 0 {
+		t.Fatalf("push sent %d notifications inline, want 0 — delivery belongs to the relay", push.CallCount())
+	}
+	if n := pendingOutboxCount(t, db); n != 2 {
+		t.Fatalf("undelivered outbox events = %d, want 2 (25%% and 50%%)", n)
+	}
+
+	// --- restart ---
+	//
+	// A fresh relay and worker, as a restarted process would have. The
+	// notification the crash "lost" is delivered from the durable row.
+	harness := newOutboxHarness(t, db, map[string]jobqueue.Handler{
+		GoalMilestoneJobType: NewGoalMilestoneJobHandler(
+			DispatcherGoalMilestoneNotifier{Dispatcher: dispatcher}, nil),
+	})
+	harness.drain(ctx, t, 8)
+
+	if push.CallCount() < 1 || persistence.Count() < 1 {
+		t.Fatalf("after restart: push=%d persisted=%d, want at least 1 of each", push.CallCount(), persistence.Count())
+	}
+	if n := pendingOutboxCount(t, db); n != 0 {
+		t.Fatalf("undelivered outbox events after drain = %d, want 0", n)
+	}
+	if n := dispatchedOutboxCount(t, db); n != 2 {
+		t.Fatalf("dispatched outbox events = %d, want 2", n)
 	}
 
 	stored, err := goalRepo.GetByID(ctx, goal.ID)

@@ -10,6 +10,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
@@ -34,7 +35,7 @@ func applySavingsGoalLifecycleMigrations(t *testing.T, db *sql.DB) {
 func TestSavingsGoalDepositMilestoneCompletionLifecycle_Integration(t *testing.T) {
 	db := openSavingsGoalIntegrationDB(t)
 	applySavingsGoalLifecycleMigrations(t, db)
-	if _, err := db.Exec(`TRUNCATE TABLE savings_goals, allocations, vaults, users, device_tokens RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE savings_goals, allocations, vaults, users, device_tokens, outbox, jobs RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE failed: %v", err)
 	}
 
@@ -95,19 +96,26 @@ func TestSavingsGoalDepositMilestoneCompletionLifecycle_Integration(t *testing.T
 		}
 	}
 
-	// Notifications are dispatched asynchronously (goroutine per milestone);
-	// wait for all four to land rather than racing the assertions.
-	deadlineWait := time.After(3 * time.Second)
-	for {
-		if push.CallCount() >= 4 && persistence.Count() >= 4 {
-			break
-		}
-		select {
-		case <-deadlineWait:
-			t.Fatalf("timed out waiting for milestone notifications; push=%d persisted=%d", push.CallCount(), persistence.Count())
-		default:
-			time.Sleep(20 * time.Millisecond)
-		}
+	// Milestone notifications now go through the transactional outbox
+	// (#1049): the four crossings are durably recorded but undelivered until
+	// the relay runs. Drain it here rather than sleeping — the four events
+	// share an aggregate, so they are handed over strictly in order, one per
+	// round, which is the per-aggregate ordering guarantee being exercised.
+	if n := pendingOutboxCount(t, db); n != 4 {
+		t.Fatalf("undelivered outbox events = %d, want 4 (25/50/75/100%%)", n)
+	}
+	harness := newOutboxHarness(t, db, map[string]jobqueue.Handler{
+		GoalMilestoneJobType: NewGoalMilestoneJobHandler(
+			DispatcherGoalMilestoneNotifier{Dispatcher: dispatcher}, nil),
+	})
+	harness.drain(ctx, t, 12)
+
+	if push.CallCount() < 4 || persistence.Count() < 4 {
+		t.Fatalf("after draining the outbox: push=%d persisted=%d, want at least 4 of each",
+			push.CallCount(), persistence.Count())
+	}
+	if n := pendingOutboxCount(t, db); n != 0 {
+		t.Fatalf("undelivered outbox events after drain = %d, want 0", n)
 	}
 
 	// Completion: reaching the target auto-completes the goal (#716).
