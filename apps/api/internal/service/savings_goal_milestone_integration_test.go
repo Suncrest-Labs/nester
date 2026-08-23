@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,18 +130,18 @@ func TestSavingsGoalMilestoneIntegration(t *testing.T) {
 		t.Fatalf("progress_pct = %v, want >= 50", enriched.ProgressPct)
 	}
 
-	deadlineWait := time.After(2 * time.Second)
-	for {
-		if push.CallCount() >= 1 && persistence.Count() >= 1 {
-			break
-		}
-		select {
-		case <-deadlineWait:
-			t.Fatalf("timed out waiting for notification; push=%d persisted=%d", push.CallCount(), persistence.Count())
-		default:
-			time.Sleep(20 * time.Millisecond)
-		}
-	}
+	// Crossing 0% -> 50% trips two milestones, 25 and 50, and
+	// notifyMilestonesAsync dispatches one detached goroutine per milestone.
+	// They race, so waiting for "at least one notification" can return as soon
+	// as the 25% one lands and leave the 50% assertions below reading state
+	// that has not been written yet. Wait for the specific condition this test
+	// actually asserts on instead of for a count.
+	waitFor(t, 10*time.Second, func() bool {
+		return pushCallForMilestone(push, 50) && persistence.Count() >= 2
+	}, func() string {
+		return fmt.Sprintf("push=%d persisted=%d calls=%+v",
+			push.CallCount(), persistence.Count(), push.SnapshotCalls())
+	})
 
 	stored, err := goalRepo.GetByID(ctx, goal.ID)
 	if err != nil {
@@ -164,4 +165,39 @@ func TestSavingsGoalMilestoneIntegration(t *testing.T) {
 	if !found50 {
 		t.Fatalf("push calls = %+v, want 50%% milestone notification", calls)
 	}
+}
+
+// waitFor polls until done returns true or the timeout elapses.
+//
+// Polling rather than a fixed sleep because the work being waited on is a
+// detached goroutine with no completion signal to synchronise on; describe is
+// only evaluated on failure, so the message reports the state at the moment
+// the wait gave up rather than a stale snapshot.
+func waitFor(t *testing.T, timeout time.Duration, done func() bool, describe func() string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		if done() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for notifications; %s", timeout, describe())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// pushCallForMilestone reports whether a push for the given milestone has been
+// recorded. Matched on the payload rather than the title so the check does not
+// break when copy is reworded.
+func pushCallForMilestone(push *notifications.RecordingPushSender, milestone int) bool {
+	for _, call := range push.SnapshotCalls() {
+		if value, ok := call.Payload["milestone"]; ok {
+			if asInt, ok := value.(int); ok && asInt == milestone {
+				return true
+			}
+		}
+	}
+	return false
 }
