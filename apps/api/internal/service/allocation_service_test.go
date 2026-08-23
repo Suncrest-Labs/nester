@@ -109,8 +109,8 @@ type recordingChainInvoker struct {
 	weights []AllocationWeightEntry
 }
 
-func (r *recordingChainInvoker) PauseVault(context.Context, string) error   { return nil }
-func (r *recordingChainInvoker) UnpauseVault(context.Context, string) error { return nil }
+func (r *recordingChainInvoker) PauseVault(context.Context, string) error    { return nil }
+func (r *recordingChainInvoker) UnpauseVault(context.Context, string) error  { return nil }
 func (r *recordingChainInvoker) RebalanceVault(context.Context, string) (string, error) {
 	return "", nil
 }

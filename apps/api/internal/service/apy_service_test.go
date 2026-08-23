@@ -120,7 +120,7 @@ func TestAPYService_FlagIfAnomalous_PicksMostRecentPrior(t *testing.T) {
 	repo := &fakeAPYSnapshotRepo{
 		snapshots: []apysnapshot.APYSnapshot{
 			{ProtocolSlug: "aave-v3", APY: decimal.RequireFromString("40"), CapturedAt: now.Add(-47 * time.Hour)}, // old outlier
-			{ProtocolSlug: "aave-v3", APY: decimal.RequireFromString("5"), CapturedAt: now.Add(-time.Hour)},       // most recent
+			{ProtocolSlug: "aave-v3", APY: decimal.RequireFromString("5"), CapturedAt: now.Add(-time.Hour)},        // most recent
 		},
 	}
 	svc := NewAPYService(repo)

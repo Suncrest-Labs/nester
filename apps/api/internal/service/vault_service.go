@@ -58,12 +58,12 @@ func (c *sharePriceCache) invalidate(id uuid.UUID) {
 }
 
 type SharePriceResponse struct {
-	VaultID         string `json:"vault_id"`
-	SharesPerUSDC   string `json:"shares_per_usdc"`
-	USDCPerShare    string `json:"usdc_per_share"`
-	TotalShares     string `json:"total_shares"`
+	VaultID       string `json:"vault_id"`
+	SharesPerUSDC string `json:"shares_per_usdc"`
+	USDCPerShare  string `json:"usdc_per_share"`
+	TotalShares   string `json:"total_shares"`
 	TotalAssetsUSDC string `json:"total_assets_usdc"`
-	AsOfLedger      int64  `json:"as_of_ledger"`
+	AsOfLedger    int64  `json:"as_of_ledger"`
 }
 
 type ConvertRequest struct {
@@ -186,17 +186,17 @@ type RecordWithdrawalInput struct {
 }
 
 type RebalancePositionInput struct {
-	VaultID      uuid.UUID
-	UserID       uuid.UUID
+	VaultID     uuid.UUID
+	UserID      uuid.UUID
 	FromProtocol string
 	ToProtocol   string
-	Amount       decimal.Decimal
-	Currency     string
-	TxHash       string
+	Amount      decimal.Decimal
+	Currency    string
+	TxHash      string
 }
 
 type RebalancePositionResult struct {
-	Vault               vault.Vault
+	Vault              vault.Vault
 	FromProtocolBalance decimal.Decimal
 	ToProtocolBalance   decimal.Decimal
 }
@@ -974,12 +974,12 @@ func (s *VaultService) RebalancePosition(ctx context.Context, input RebalancePos
 	}
 
 	err = s.repository.RecordRebalance(ctx, vault.RebalanceRecordInput{
-		VaultID:         input.VaultID,
-		UserID:          input.UserID,
-		FromProtocol:    input.FromProtocol,
-		ToProtocol:      input.ToProtocol,
-		Amount:          input.Amount,
-		TransactionHash: input.TxHash,
+		VaultID:              input.VaultID,
+		UserID:               input.UserID,
+		FromProtocol:         input.FromProtocol,
+		ToProtocol:           input.ToProtocol,
+		Amount:               input.Amount,
+		TransactionHash:      input.TxHash,
 	}, withdrawRecord, depositRecord)
 	if err != nil {
 		return RebalancePositionResult{}, err
@@ -1002,7 +1002,7 @@ func (s *VaultService) RebalancePosition(ctx context.Context, input RebalancePos
 	}
 
 	return RebalancePositionResult{
-		Vault:               updatedVault,
+		Vault:              updatedVault,
 		FromProtocolBalance: fromBalance,
 		ToProtocolBalance:   toBalance,
 	}, nil

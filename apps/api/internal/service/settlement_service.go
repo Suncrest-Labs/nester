@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	renuban    = regexp.MustCompile(`^\d{10}$`)
+	renuban  = regexp.MustCompile(`^\d{10}$`)
 	rebankCode = regexp.MustCompile(`^\d{3,9}$`)
 )
 

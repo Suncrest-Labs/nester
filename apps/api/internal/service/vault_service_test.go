@@ -12,6 +12,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
+
 func TestVaultServiceRecordDepositAndUpdateAllocations(t *testing.T) {
 	userID := uuid.New()
 	repository := newMemoryVaultRepository(userID)

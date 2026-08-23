@@ -19,15 +19,15 @@ var ErrWatchlistDuplicate = errors.New("pool already in watchlist")
 
 // WatchlistItem is a row in the user_watchlist table.
 type WatchlistItem struct {
-	ID          uuid.UUID `json:"id"`
-	UserID      uuid.UUID `json:"user_id"`
-	PoolID      string    `json:"pool_id"`
-	PoolSymbol  string    `json:"pool_symbol"`
-	PoolProject string    `json:"pool_project"`
-	PoolChain   string    `json:"pool_chain"`
-	APYAtSave   float64   `json:"apy_at_save"`
-	TVLUsd      float64   `json:"tvl_usd"`
-	AddedAt     time.Time `json:"added_at"`
+	ID          uuid.UUID  `json:"id"`
+	UserID      uuid.UUID  `json:"user_id"`
+	PoolID      string     `json:"pool_id"`
+	PoolSymbol  string     `json:"pool_symbol"`
+	PoolProject string     `json:"pool_project"`
+	PoolChain   string     `json:"pool_chain"`
+	APYAtSave   float64    `json:"apy_at_save"`
+	TVLUsd      float64    `json:"tvl_usd"`
+	AddedAt     time.Time  `json:"added_at"`
 }
 
 // AddWatchlistItemRequest is the body for POST /api/v1/users/watchlist.

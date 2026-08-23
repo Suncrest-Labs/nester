@@ -31,9 +31,9 @@ type VaultBalanceApplier interface {
 
 type TransactionService struct {
 	repository transaction.Repository
-	horizonURL string
-	client     *http.Client
-	balance    VaultBalanceApplier
+	horizonURL  string
+	client      *http.Client
+	balance     VaultBalanceApplier
 }
 
 type RegisterTransactionInput struct {

@@ -19,14 +19,14 @@ import (
 
 // VaultAnalytics holds risk-adjusted performance metrics for a vault.
 type VaultAnalytics struct {
-	VaultID       uuid.UUID `json:"vault_id"`
-	Period        string    `json:"period"`
-	MeanAPY       float64   `json:"mean_apy"`
-	APYVolatility float64   `json:"apy_volatility"`
-	MaxDrawdown   float64   `json:"max_drawdown"`
-	SharpeRatio   float64   `json:"sharpe_ratio"`
-	SortinoRatio  float64   `json:"sortino_ratio"`
-	WinRate       float64   `json:"win_rate"`
+	VaultID      uuid.UUID `json:"vault_id"`
+	Period       string    `json:"period"`
+	MeanAPY      float64   `json:"mean_apy"`
+	APYVolatility float64  `json:"apy_volatility"`
+	MaxDrawdown  float64   `json:"max_drawdown"`
+	SharpeRatio  float64   `json:"sharpe_ratio"`
+	SortinoRatio float64   `json:"sortino_ratio"`
+	WinRate      float64   `json:"win_rate"`
 }
 
 type analyticsCache struct {
@@ -247,3 +247,4 @@ func winRate(xs []float64) float64 {
 	}
 	return float64(wins) / float64(len(xs))
 }
+

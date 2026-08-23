@@ -24,10 +24,10 @@ type YieldBookmark struct {
 
 // YieldBookmarkWithStats includes live yield data for a bookmarked protocol.
 type YieldBookmarkWithStats struct {
-	ProtocolSlug string    `json:"protocol_slug"`
-	APY          float64   `json:"apy"`
-	TVLUsd       float64   `json:"tvl_usd"`
-	Symbol       string    `json:"symbol,omitempty"`
+	ProtocolSlug string  `json:"protocol_slug"`
+	APY          float64 `json:"apy"`
+	TVLUsd       float64 `json:"tvl_usd"`
+	Symbol       string  `json:"symbol,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 

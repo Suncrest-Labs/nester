@@ -26,7 +26,7 @@ var (
 const rebalanceEstimatedCompletionMS = int64(5000)
 
 const (
-	dashboardCacheTTL     = 2 * time.Minute
+	dashboardCacheTTL   = 2 * time.Minute
 	apyDropAlertThreshold = 0.20
 )
 
@@ -48,7 +48,7 @@ type AllocationWeightEntry struct {
 // integration is configured in-process.
 type NoopVaultChainInvoker struct{}
 
-func (NoopVaultChainInvoker) PauseVault(_ context.Context, _ string) error   { return nil }
+func (NoopVaultChainInvoker) PauseVault(_ context.Context, _ string) error { return nil }
 func (NoopVaultChainInvoker) UnpauseVault(_ context.Context, _ string) error { return nil }
 func (NoopVaultChainInvoker) RebalanceVault(_ context.Context, _ string) (string, error) {
 	return "", ErrChainNotConfigured
