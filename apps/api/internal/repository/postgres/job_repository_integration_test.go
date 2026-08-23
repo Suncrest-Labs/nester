@@ -120,7 +120,7 @@ func TestJobRepository_LeaseExpiryReclaim(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	_, _, err := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "recover"})
+	_, _, err := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "recover", RunAt: now})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
