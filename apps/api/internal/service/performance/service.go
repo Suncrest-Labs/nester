@@ -13,9 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/analytics"
 	perfdom "github.com/suncrestlabs/nester/apps/api/internal/domain/performance"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/analytics"
 )
 
 // VaultLister is the subset of the vault repo we need. Defined locally so
@@ -171,7 +171,6 @@ func (s *Service) GetAPYHistory(
 	}, nil
 }
 
-
 // CalculateRealizedAPY annualizes the return between two snapshots.
 //
 //	APY = ((current_balance / total_deposited) ^ (365 / days_elapsed) - 1) * 100
@@ -226,14 +225,14 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 	}
 
 	if len(userVaults) == 0 {
-	// Return empty response if user has no vaults
-	return &analytics.AnalyticsResponse{
-		DailySnapshots:      []analytics.DailySnapshot{},
-		VaultMonthlyYield:   []analytics.VaultMonthlyYield{},
-		CurrentAllocation:   []analytics.CurrentAllocation{},
-		PerformanceMetrics:  analytics.PerformanceMetrics{},
-		Vaults:              []analytics.VaultInfo{},
-	}, nil
+		// Return empty response if user has no vaults
+		return &analytics.AnalyticsResponse{
+			DailySnapshots:     []analytics.DailySnapshot{},
+			VaultMonthlyYield:  []analytics.VaultMonthlyYield{},
+			CurrentAllocation:  []analytics.CurrentAllocation{},
+			PerformanceMetrics: analytics.PerformanceMetrics{},
+			Vaults:             []analytics.VaultInfo{},
+		}, nil
 	}
 
 	// Get daily snapshots for the user (aggregated across all vaults)
@@ -251,7 +250,7 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 
 		for _, snap := range snapshots {
 			dailySnapshots = append(dailySnapshots, analytics.DailySnapshot{
-				Date:          snap.SnapshotAt.Format("2006-01-02"),
+				Date:            snap.SnapshotAt.Format("2006-01-02"),
 				TotalBalanceUSD: snap.TotalBalance.InexactFloat64(),
 				YieldEarnedUSD:  snap.TotalYieldEarned.InexactFloat64(),
 			})
@@ -355,19 +354,19 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 		lockPeriodDays = 0 // placeholder
 
 		vaultsInfo = append(vaultsInfo, analytics.VaultInfo{
-			ID:            vault.ID.String(),
-			Name:          vault.ContractAddress,
-			BalanceUSD:    vault.CurrentBalance.InexactFloat64(),
-			APY:           0, // placeholder - would calculate from allocations
-			YieldEarned:   vault.YieldEarned.InexactFloat64(),
+			ID:             vault.ID.String(),
+			Name:           vault.ContractAddress,
+			BalanceUSD:     vault.CurrentBalance.InexactFloat64(),
+			APY:            0, // placeholder - would calculate from allocations
+			YieldEarned:    vault.YieldEarned.InexactFloat64(),
 			LockPeriodDays: lockPeriodDays,
 		})
 	}
 
 	return &analytics.AnalyticsResponse{
-		DailySnapshots:      dailySnapshots,
-		VaultMonthlyYield:   vaultMonthlyYield,
-		CurrentAllocation:   currentAllocation,
+		DailySnapshots:    dailySnapshots,
+		VaultMonthlyYield: vaultMonthlyYield,
+		CurrentAllocation: currentAllocation,
 		PerformanceMetrics: analytics.PerformanceMetrics{
 			TotalYieldEarned: totalYieldEarned.InexactFloat64(),
 			YieldChangePCT:   yieldChangePCT,

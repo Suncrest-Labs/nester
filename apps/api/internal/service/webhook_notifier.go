@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -12,6 +13,9 @@ import (
 // WebhookGoalMilestoneNotifier fires webhooks on goal milestones and deadline breaches.
 type WebhookGoalMilestoneNotifier struct {
 	Svc *WebhookService
+	// Logger records fan-out failures. The notifier interface is
+	// void-returning, so without this a failed fan-out is invisible.
+	Logger *slog.Logger
 }
 
 func (n WebhookGoalMilestoneNotifier) SendGoalMilestone(
@@ -19,6 +23,7 @@ func (n WebhookGoalMilestoneNotifier) SendGoalMilestone(
 	userID uuid.UUID,
 	goal savingsgoal.SavingsGoal,
 	milestone int,
+	dedupeKey string,
 ) {
 	if n.Svc == nil {
 		return
@@ -49,7 +54,14 @@ func (n WebhookGoalMilestoneNotifier) SendGoalMilestone(
 	if err != nil {
 		return
 	}
-	n.Svc.FireForUser(ctx, userID, event, payload)
+	// FanOut rather than FireForUser: every delivery id it produces is
+	// derived from dedupeKey, so a redelivery of this milestone reaches the
+	// subscriber with the same delivery id it already saw and can discard,
+	// instead of a fresh one indistinguishable from a new event.
+	if err := n.Svc.FanOut(ctx, userID, event, payload, dedupeKey); err != nil && n.Logger != nil {
+		n.Logger.Error("webhook: goal milestone fan-out failed",
+			"user_id", userID, "goal_id", goal.ID, "milestone", milestone, "error", err)
+	}
 }
 
 // CompositeGoalMilestoneNotifier fans out to multiple GoalMilestoneNotifier implementations.
@@ -62,8 +74,9 @@ func (c CompositeGoalMilestoneNotifier) SendGoalMilestone(
 	userID uuid.UUID,
 	goal savingsgoal.SavingsGoal,
 	milestone int,
+	dedupeKey string,
 ) {
 	for _, n := range c.Notifiers {
-		n.SendGoalMilestone(ctx, userID, goal, milestone)
+		n.SendGoalMilestone(ctx, userID, goal, milestone, dedupeKey)
 	}
 }

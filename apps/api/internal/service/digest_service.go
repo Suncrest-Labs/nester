@@ -108,14 +108,14 @@ func (s *DigestLedgerService) Assemble(ctx context.Context, userID uuid.UUID, pe
 	}
 
 	return digest.LedgerSource{
-		Period:               period,
-		PeriodStart:          start,
-		PeriodEnd:            end,
-		PreviousPeriodStart:  previousStart,
-		Currency:             DigestPrimaryCurrency,
-		DepositedThisPeriod:  thisPeriod,
-		DepositedLastPeriod:  lastPeriod,
-		YieldHarvests:        harvestFacts,
-		Streak:               streakFact,
+		Period:              period,
+		PeriodStart:         start,
+		PeriodEnd:           end,
+		PreviousPeriodStart: previousStart,
+		Currency:            DigestPrimaryCurrency,
+		DepositedThisPeriod: thisPeriod,
+		DepositedLastPeriod: lastPeriod,
+		YieldHarvests:       harvestFacts,
+		Streak:              streakFact,
 	}, nil
 }

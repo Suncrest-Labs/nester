@@ -287,12 +287,13 @@ type recordedGoalMilestone struct {
 	UserID    uuid.UUID
 	GoalID    uuid.UUID
 	Milestone int
+	DedupeKey string
 }
 
-func (r *recordingGoalMilestoneNotifier) SendGoalMilestone(_ context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int) {
+func (r *recordingGoalMilestoneNotifier) SendGoalMilestone(_ context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int, dedupeKey string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, recordedGoalMilestone{UserID: userID, GoalID: goal.ID, Milestone: milestone})
+	r.calls = append(r.calls, recordedGoalMilestone{UserID: userID, GoalID: goal.ID, Milestone: milestone, DedupeKey: dedupeKey})
 }
 
 func (r *recordingGoalMilestoneNotifier) count() int {
