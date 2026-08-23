@@ -1,5 +1,8 @@
-FROM golang:1.25.11-alpine
-RUN go install github.com/air-verse/air@latest
+# Must be >= the `go` directive in go.mod or `go mod download` refuses to run.
+FROM golang:1.25.13-alpine
+# Pinned: air v1.67.2+ requires Go >= 1.26, so an unpinned @latest silently
+# broke this image when upstream released. Bump deliberately with the base image.
+RUN go install github.com/air-verse/air@v1.67.1
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

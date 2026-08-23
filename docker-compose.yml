@@ -92,7 +92,11 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - ./apps/intelligence/.env
+      # Optional: a fresh clone has no .env yet, and a hard requirement here
+      # makes every `docker compose` command fail to parse — even ones that
+      # never start this service.
+      - path: ./apps/intelligence/.env
+        required: false
     environment:
       INTELLIGENCE_REDIS_URL: redis://redis:6379/0
     depends_on:
