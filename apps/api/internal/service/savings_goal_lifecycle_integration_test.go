@@ -3,8 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -23,29 +21,9 @@ import (
 // token, vault linking, auto-compound) so GetByID/List round-trip cleanly.
 func applySavingsGoalLifecycleMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// The base helper now applies the complete migration chain, so the
+	// per-feature additions this function used to layer on are covered.
 	applySavingsGoalIntegrationMigrations(t, db)
-	for _, name := range []string{
-		"026_create_savings_goals.up.sql",
-		"029_create_device_tokens.up.sql",
-		"037_add_savings_goal_category.up.sql",
-		"038_add_savings_goal_notified_milestones.up.sql",
-		"040_savings_goal_velocity_pause_completion.up.sql",
-		"041_add_savings_goal_archived_status.up.sql",
-		"045_add_savings_goal_name_emoji.up.sql",
-		"052_add_savings_goal_share_token.up.sql",
-		"053_add_savings_goal_icon_color.up.sql",
-		"054_add_savings_goal_vault_id.up.sql",
-		"095_add_savings_goal_auto_compound.up.sql",
-	} {
-		path := filepath.Join("..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
 }
 
 // TestSavingsGoalDepositMilestoneCompletionLifecycle_Integration exercises the

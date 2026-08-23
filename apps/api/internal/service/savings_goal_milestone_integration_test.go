@@ -17,48 +17,22 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
 func applySavingsGoalMilestoneMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// The base helper now applies the complete migration chain, so the
+	// per-feature additions this function used to layer on are covered.
 	applySavingsGoalIntegrationMigrations(t, db)
-	for _, name := range []string{
-		"026_create_savings_goals.up.sql",
-		"029_create_device_tokens.up.sql",
-		"037_add_savings_goal_category.up.sql",
-		"038_add_savings_goal_notified_milestones.up.sql",
-		"053_add_savings_goal_vault_id.up.sql",
-	} {
-		path := filepath.Join("..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
 }
 
 func applySavingsGoalIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-
-	for _, name := range []string{
-		"001_create_users_table.up.sql",
-		"004_create_vaults_table.up.sql",
-		"005_create_allocations_table.up.sql",
-		"006_create_settlements_table.up.sql",
-		"007_update_users_table.up.sql",
-	} {
-		path := filepath.Join("..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
+	// The full migration chain in numeric order — see testutil.ApplyAllMigrations
+	// for why no per-test subset is used.
+	testutil.ApplyAllMigrations(t, db, filepath.Join("..", "..", "migrations"))
 }
 
 func openSavingsGoalIntegrationDB(t *testing.T) *sql.DB {
@@ -83,9 +57,9 @@ func seedSavingsGoalIntegrationUser(t *testing.T, db *sql.DB) uuid.UUID {
 
 	userID := uuid.New()
 	if _, err := db.Exec(
-		`INSERT INTO users (id, email, name) VALUES ($1, $2, $3)`,
+		`INSERT INTO users (id, wallet_address, display_name) VALUES ($1, $2, $3)`,
 		userID.String(),
-		userID.String()+"@example.com",
+		"G"+userID.String(), // final schema: wallet_address NOT NULL UNIQUE, email dropped by 010
 		"Integration User",
 	); err != nil {
 		t.Fatalf("seed user failed: %v", err)

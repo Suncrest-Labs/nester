@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,6 +12,8 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/performance"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
 // applyPerformanceMigrations applies the minimal set of migrations needed for
@@ -21,45 +22,9 @@ import (
 // non-idempotent statements (notably 006_create_settlements_table).
 func applyPerformanceMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-	if _, err := db.Exec(`
-		DO $$
-		DECLARE r record;
-		BEGIN
-			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END$$;
-	`); err != nil {
-		t.Fatalf("drop tables: %v", err)
-	}
-	// 033 must run BEFORE 023: 033 renames vault_transactions.tx_hash →
-	// transaction_hash, and 023 creates the UNIQUE INDEX on that column. 035
-	// is a byte-identical duplicate of 033 whose non-idempotent RENAME COLUMN
-	// would fail on re-runs, so it is intentionally skipped. 007 is required
-	// by TestAPYRefresherIntegration_OneTick which queries vaults.deleted_at;
-	// 031_create_vault_tvl_snapshots is required by TestTVLTrackerIntegration_OneTick.
-	for _, name := range []string{
-		"001_create_users_table.up.sql",
-		"002_create_vaults_table.up.sql",
-		"005_create_allocations_table.up.sql",
-		"006_create_settlements_table.up.sql",
-		"007_add_vault_deleted_at.up.sql",
-		"008_add_vault_transactions.up.sql",
-		"014_add_missing_columns.up.sql",
-		"018_create_vault_performance.up.sql",
-		"031_create_vault_tvl_snapshots.up.sql",
-		"033_update_vault_transactions.up.sql",
-		"023_vault_transactions_hash_unique.up.sql",
-	} {
-		path := filepath.Join("..", "..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q: %v", name, err)
-		}
-	}
+	// The full migration chain in numeric order — see testutil.ApplyAllMigrations
+	// for why no per-test subset is used.
+	testutil.ApplyAllMigrations(t, db, filepath.Join("..", "..", "..", "migrations"))
 }
 
 // newTestSnapshot returns a minimal valid snapshot for the given vault.

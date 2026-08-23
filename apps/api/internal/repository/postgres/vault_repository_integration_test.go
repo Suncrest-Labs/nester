@@ -15,6 +15,8 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
 func TestVaultRepositoryIntegrationCRUD(t *testing.T) {
@@ -225,58 +227,9 @@ func openIntegrationDB(t *testing.T) *sql.DB {
 
 func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-
-	// Wipe every table in the public schema before applying. The docker
-	// volume persists across container restarts, so tables created in prior
-	// runs must be dropped to avoid non-idempotent CREATE TABLE statements
-	// (e.g. 006_create_settlements_table) failing on the second run. CASCADE
-	// pulls in dependent objects; schema_migrations and any tables outside
-	// the public schema are untouched.
-	if _, err := db.Exec(`
-		DO $$
-		DECLARE r record;
-		BEGIN
-			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END$$;
-	`); err != nil {
-		t.Fatalf("drop tables: %v", err)
-	}
-
-	// 033 must run BEFORE 023: 033 renames vault_transactions.tx_hash →
-	// transaction_hash, and 023 creates the UNIQUE INDEX on that column. 035
-	// is a byte-identical duplicate of 033 whose non-idempotent RENAME COLUMN
-	// would fail on re-runs, so it is intentionally skipped.
-	// 010 and 020 are deliberately omitted: they DROP users.email and RENAME
-	// users.name → display_name, which would break the seed helpers that
-	// INSERT into users (id, email, name). Apply either via a separate,
-	// opt-in helper if user-profile tests are extended.
-	for _, name := range []string{
-		"001_create_users_table.up.sql",
-		"002_create_vaults_table.up.sql",
-		"005_create_allocations_table.up.sql",
-		"006_create_settlements_table.up.sql",
-		"007_add_vault_deleted_at.up.sql",
-		"008_add_vault_transactions.up.sql",
-		"014_add_missing_columns.up.sql",
-		"027_user_profile_fields.up.sql",
-		"033_update_vault_transactions.up.sql",
-		"023_vault_transactions_hash_unique.up.sql",
-		"036_allow_harvest_transaction_type.up.sql",
-		"042_create_yield_harvests.up.sql",
-		"074_add_vault_name_description_search.up.sql",
-		"075_add_vault_transactions_memo_search.up.sql",
-	} {
-		path := filepath.Join("..", "..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
+	// The full migration chain in numeric order — see testutil.ApplyAllMigrations
+	// for why no per-test subset is used.
+	testutil.ApplyAllMigrations(t, db, filepath.Join("..", "..", "..", "migrations"))
 }
 
 func resetIntegrationTables(t *testing.T, db *sql.DB) {
@@ -292,9 +245,9 @@ func seedIntegrationUser(t *testing.T, db *sql.DB) uuid.UUID {
 
 	userID := uuid.New()
 	if _, err := db.Exec(
-		`INSERT INTO users (id, email, name) VALUES ($1, $2, $3)`,
+		`INSERT INTO users (id, wallet_address, display_name) VALUES ($1, $2, $3)`,
 		userID.String(),
-		userID.String()+"@example.com",
+		"G"+userID.String(), // final schema: wallet_address NOT NULL UNIQUE, email dropped by 010
 		"Integration User",
 	); err != nil {
 		t.Fatalf("seed user failed: %v", err)
