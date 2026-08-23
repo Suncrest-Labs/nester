@@ -54,6 +54,13 @@ type WebhookDeliveryJobPayload struct {
 	DeliveryID uuid.UUID `json:"delivery_id"`
 	EventType  string    `json:"event_type"`
 	Payload    []byte    `json:"payload"`
+	// DedupeKey is the transactional outbox's key for the side effect this
+	// delivery carries (#1049). It is stable across every redelivery of the
+	// same logical event — including across the fan-out job re-running —
+	// and is surfaced to the recipient in both the body and a header so
+	// they can discard repeats. Empty for deliveries that did not originate
+	// in the outbox (manual redelivery, and FireForUser's legacy path).
+	DedupeKey string `json:"dedupe_key,omitempty"`
 }
 
 type WebhookService struct {
