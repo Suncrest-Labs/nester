@@ -103,6 +103,8 @@ impl VaultTokenContract {
     /// Transfer `amount` shares from `from` to `to`.
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
+        sync_vault_user(&env, &from);
+        sync_vault_user(&env, &to);
         spend_balance(&env, &from, amount);
         receive_balance(&env, &to, amount);
         // Recipient gets a fresh deposit timestamp so they cannot inherit an
@@ -125,6 +127,8 @@ impl VaultTokenContract {
     /// Transfer `amount` shares from `from` to `to` using `spender`'s allowance.
     pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
         spender.require_auth();
+        sync_vault_user(&env, &from);
+        sync_vault_user(&env, &to);
         spend_allowance(&env, &from, &spender, amount);
         spend_balance(&env, &from, amount);
         receive_balance(&env, &to, amount);
@@ -195,6 +199,7 @@ impl VaultTokenContract {
     /// Burn using an allowance.
     pub fn burn_from(env: Env, spender: Address, from: Address, amount: i128) {
         spender.require_auth();
+        sync_vault_user(&env, &from);
         spend_allowance(&env, &from, &spender, amount);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
@@ -456,6 +461,17 @@ fn require_vault(env: &Env) {
         .get(&DataKey::Vault)
         .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized));
     vault.require_auth();
+}
+
+fn sync_vault_user(env: &Env, account: &Address) {
+    if let Some(vault) = env.storage().instance().get::<DataKey, Address>(&DataKey::Vault) {
+        use soroban_sdk::IntoVal;
+        let _ = env.try_invoke_contract::<(), soroban_sdk::Error>(
+            &vault,
+            &soroban_sdk::Symbol::new(env, "sync_user"),
+            (account.clone(),).into_val(env),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
