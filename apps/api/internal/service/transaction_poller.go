@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
 )
 
 // TransactionStatusNotifier is invoked once per transaction whose status
@@ -43,7 +44,36 @@ type TransactionPoller struct {
 	service     *TransactionService
 	notify      TransactionStatusNotifier
 	logger      *slog.Logger
+	metrics     PollerMetricsRecorder
 	lastTickEnd atomic.Int64 // unix nanos; observability hook
+}
+
+// PollerMetricsRecorder is the slice of metrics recording this poller needs
+// (nester#1108). Declared here as an interface, matching the event indexer's
+// approach, so the service package does not depend on the metrics package and
+// tests can record calls without a Prometheus registry.
+type PollerMetricsRecorder interface {
+	RecordReconcileRun(outcome metrics.ReconcileOutcome)
+	RecordReconcileDivergence(kind metrics.DivergenceKind)
+	SetPendingSubmissions(count int, oldest time.Duration)
+}
+
+// noopPollerMetrics is used when no recorder is supplied, so Tick never has to
+// nil-check.
+type noopPollerMetrics struct{}
+
+func (noopPollerMetrics) RecordReconcileRun(metrics.ReconcileOutcome)      {}
+func (noopPollerMetrics) RecordReconcileDivergence(metrics.DivergenceKind) {}
+func (noopPollerMetrics) SetPendingSubmissions(int, time.Duration)         {}
+
+// SetMetrics wires metrics recording. Call before Run. A nil recorder leaves
+// the poller unmetered rather than panicking, so a caller that has not built a
+// registry still works.
+func (p *TransactionPoller) SetMetrics(rec PollerMetricsRecorder) {
+	if rec == nil {
+		return
+	}
+	p.metrics = rec
 }
 
 // NewTransactionPoller builds a poller. logger may be nil (a discarding logger
@@ -66,6 +96,7 @@ func NewTransactionPoller(cfg TransactionPollerConfig, svc *TransactionService, 
 		service: svc,
 		notify:  notify,
 		logger:  logger,
+		metrics: noopPollerMetrics{},
 	}
 }
 
@@ -105,8 +136,24 @@ func (p *TransactionPoller) Tick(ctx context.Context) {
 	pending, err := p.service.ListPendingOlderThan(ctx, p.cfg.MinAge)
 	if err != nil {
 		p.logger.Error("transaction poller: list pending failed", "error", err)
+		// Recorded as a failed run rather than left silent (nester#1108): a
+		// pass that could not list its work found no divergences because it
+		// inspected nothing, which must not read as a clean result.
+		p.metrics.RecordReconcileRun(metrics.ReconcileFailed)
 		return
 	}
+
+	// Backlog depth and the age of its oldest entry, published once per pass.
+	// The list is already filtered to transactions older than MinAge, so this
+	// measures exactly the in-flight money the user cannot yet see.
+	now := time.Now()
+	var oldest time.Duration
+	for _, tx := range pending {
+		if age := now.Sub(tx.CreatedAt); age > oldest {
+			oldest = age
+		}
+	}
+	p.metrics.SetPendingSubmissions(len(pending), oldest)
 
 	for _, tx := range pending {
 		updated, changed, err := p.service.ReconcileTransaction(ctx, tx)
@@ -118,6 +165,10 @@ func (p *TransactionPoller) Tick(ctx context.Context) {
 			continue
 		}
 		if !changed {
+			// Still not terminal after being old enough to poll: the chain
+			// has not resolved it and neither have we. That is the "stuck"
+			// discrepancy kind, and it is the shape a lost submission takes.
+			p.metrics.RecordReconcileDivergence(metrics.DivergenceStuck)
 			continue
 		}
 		p.logger.Info("transaction poller: status reconciled",
@@ -128,6 +179,8 @@ func (p *TransactionPoller) Tick(ctx context.Context) {
 		)
 		p.notify(ctx, updated)
 	}
+
+	p.metrics.RecordReconcileRun(metrics.ReconcileCompleted)
 }
 
 // LastTickEnd returns the wall-clock time of the last completed tick, or zero

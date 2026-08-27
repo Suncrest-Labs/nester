@@ -59,6 +59,15 @@ func NewPrometheusClient(cfg PrometheusConfig) *PrometheusClient {
 	}
 }
 
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (c *PrometheusClient) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		c.httpClient = client
+	}
+}
+
 func (c *PrometheusClient) GetVaultRecommendations(ctx context.Context, vaultID string) ([]intelligence.Recommendation, error) {
 	key := fmt.Sprintf("vault:%s", vaultID)
 	if val, ok := c.getFromCache(key); ok {

@@ -3,8 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,22 +16,9 @@ import (
 
 func applySavingsGoalVaultMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// The base helper now applies the complete migration chain, so the
+	// per-feature additions this function used to layer on are covered.
 	applySavingsGoalIntegrationMigrations(t, db)
-	for _, name := range []string{
-		"026_create_savings_goals.up.sql",
-		"037_add_savings_goal_category.up.sql",
-		"038_add_savings_goal_notified_milestones.up.sql",
-		"053_add_savings_goal_vault_id.up.sql",
-	} {
-		path := filepath.Join("..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
 }
 
 // TestSavingsGoalVaultLinking_Integration exercises the full persistence path

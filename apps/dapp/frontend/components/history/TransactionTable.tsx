@@ -3,6 +3,7 @@
 import React from 'react';
 import { Download, FileText, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { SkeletonTable, LoadingRegion } from '@/components/ui/skeleton/skeleton';
 
 export interface Transaction {
   id: string;
@@ -37,17 +38,22 @@ const TransactionTable: React.FC<Props> = ({ transactions, loading, error, onExp
     );
   };
 
+  // The skeleton mirrors the real table so the header and column widths do not
+  // shift once rows arrive.
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12 text-gray-500">
-        <AlertTriangle className="mr-2 h-5 w-5" /> Loading transactions…
-      </div>
+      <LoadingRegion
+        label="Loading your transactions"
+        className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#100F0F] p-4"
+      >
+        <SkeletonTable rows={6} columns={6} />
+      </LoadingRegion>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center py-12 text-red-500">
+      <div role="alert" data-testid="history-error" className="flex items-center justify-center py-12 text-red-500">
         <AlertTriangle className="mr-2 h-5 w-5" /> {error}
       </div>
     );
@@ -55,7 +61,7 @@ const TransactionTable: React.FC<Props> = ({ transactions, loading, error, onExp
 
   if (transactions.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12 text-gray-500">
+      <div data-testid="history-empty-state" className="flex items-center justify-center py-12 text-gray-500">
         No transactions match the selected filters.
       </div>
     );

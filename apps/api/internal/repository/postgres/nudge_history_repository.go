@@ -60,11 +60,11 @@ func (r *NudgeHistoryRepository) GetEffectivenessStats(ctx context.Context, nudg
 		LEFT JOIN nudge_outcomes o ON o.dispatch_id = d.id
 		WHERE d.nudge_type = $1 AND d.segment = $2
 	`, nudgeType, segment).Scan(&sent, &converted)
-	
+
 	if err != nil || sent == 0 {
 		return nudge.EffectivenessStats{ConversionRate: 1.0}, nil // Cold start safe
 	}
-	
+
 	return nudge.EffectivenessStats{ConversionRate: float64(converted) / float64(sent)}, nil
 }
 
@@ -109,7 +109,7 @@ func (r *NudgeHistoryRepository) RecordOutcome(ctx context.Context, userID uuid.
 		WHERE d.user_id = $1 AND o.id IS NULL AND d.sent_at >= $3
 		ORDER BY d.sent_at DESC LIMIT 1
 	`, userID, outcomeType, occurredAt.Add(-72*time.Hour))
-	
+
 	var dispatchID uuid.UUID
 	var sentAt time.Time
 	if err := row.Scan(&dispatchID, &sentAt); err != nil {

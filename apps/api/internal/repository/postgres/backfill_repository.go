@@ -145,9 +145,12 @@ func scanBackfillRun(row backfillRunScanner) (backfill.Run, error) {
 	}
 
 	run := backfill.Run{
-		ID:                     uuid.MustParse(idStr),
-		FromLedger:             uint64(fromLedger),
-		ToLedger:               uint64(toLedger),
+		ID: uuid.MustParse(idStr),
+		// Ledger sequence numbers are non-negative by definition and are
+		// written by this application; the columns are bounded well below
+		// int64 max (nester#1035, G115).
+		FromLedger:             uint64(fromLedger), // #nosec G115 -- ledger sequences are non-negative
+		ToLedger:               uint64(toLedger),   // #nosec G115 -- ledger sequences are non-negative
 		ContractIDs:            []string(contractIDs),
 		Mode:                   backfill.Mode(mode),
 		DryRun:                 dryRun,
@@ -159,7 +162,7 @@ func scanBackfillRun(row backfillRunScanner) (backfill.Run, error) {
 		UpdatedAt:              updatedAt,
 	}
 	if lastLedgerDone.Valid {
-		v := uint64(lastLedgerDone.Int64)
+		v := uint64(lastLedgerDone.Int64) // #nosec G115 -- ledger sequences are non-negative
 		run.LastLedgerDone = &v
 	}
 	if lastError.Valid {

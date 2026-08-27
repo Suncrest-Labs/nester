@@ -2158,9 +2158,9 @@ impl VaultContract {
     /// Steps (issue #518):
     ///  1. Calculate accrued yield since last harvest.
     ///  2. Deduct performance fee — only on net positive yield, never on impairment.
-    ///  3. Send the fee portion to the treasury contract.
-    ///  4. Compound the net yield: mint new vault-token shares at the current price
-    ///     and credit them to `user`, then increase TotalAssets accordingly.
+    ///  3. Burn fee-equivalent shares from `user` and send that value to the
+    ///     treasury, preserving the exchange rate for every other holder.
+    ///  4. Leave the net yield compounded in `user`'s remaining shares.
     ///  5. Update `LastHarvestAt` timestamp for `user`.
     ///
     /// Returns a zero-filled `HarvestResult` with `compounded: false` when the
@@ -2211,8 +2211,23 @@ impl VaultContract {
             .checked_sub(performance_fee)
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
-        // Transfer performance fee to treasury.
+        // Charge the performance fee against the harvesting user only. Yield
+        // is already reflected in TotalAssets and therefore in the value of
+        // the user's existing shares. Minting more shares for that same yield,
+        // or reducing assets without reducing supply, would dilute passive
+        // holders. Burning enough of the user's shares to cover the fee before
+        // transferring it reduces assets and supply together. Rounding the
+        // share charge up assigns any dust to the fee payer, never to holders
+        // who did not harvest.
         if performance_fee > 0 {
+            let fee_shares = conversion::assets_to_shares_up(
+                performance_fee,
+                get_net_total_assets(&env),
+                vault_token_client(&env).total_supply(),
+            )
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+            let _ = vault_token_client(&env).burn_for_withdrawal(&user, &fee_shares);
+
             let token_address = self::VaultContract::get_token(env.clone());
             transfer_tokens(
                 &env,
@@ -2242,20 +2257,6 @@ impl VaultContract {
             // no-op when no referral contract is configured.
             notify_referral_of_fee(&env, &user, performance_fee, principal);
         }
-
-        // Compound net yield: mint new shares for the user at the current price.
-        // The gross yield was already added to TotalAssets by report_yield, so
-        // only the fee reduction above affects TotalAssets here.
-        let new_shares = if net_yield > 0 {
-            let s = vault_token_client(&env).mint_for_deposit(&user, &net_yield);
-            // mint_for_deposit increments vault token's total_assets by net_yield, but
-            // that amount was already tracked by report_yield — sync back to the correct value.
-            sync_vault_token_total_assets(&env);
-            s
-        } else {
-            0
-        };
-        let _ = new_shares; // shares minted internally; user balance updated by vault token
 
         // Reset per-user pending yield to zero and record harvest timestamp.
         set_user_yield(&env, &user, 0);
@@ -2870,7 +2871,10 @@ impl VaultContract {
             // that are owed to queued withdrawal requests.
             let current_reserves = get_vault_liquid_reserves(&env);
             let reserved = get_liquid_reserved(&env);
-            let available = current_reserves.saturating_sub(reserved);
+            // Signed saturating subtraction can still produce a negative value.
+            // Clamp exhausted reserves to zero so fee collection is a no-op
+            // instead of attempting an invalid negative token transfer.
+            let available = current_reserves.saturating_sub(reserved).max(0);
             let collectable = fees.min(available);
 
             if collectable == 0 {

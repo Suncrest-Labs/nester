@@ -5,6 +5,7 @@ import {
   TransactionBuilder,
   BASE_FEE,
   nativeToScVal,
+  scValToNative,
   Address,
 } from "@stellar/stellar-sdk";
 
@@ -12,7 +13,12 @@ import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const getCurrentNetwork = () => {
+/**
+ * Resolve the active network. Exported so every module that builds or signs a
+ * transaction agrees on it: a builder reading a different source than the
+ * signer produces a transaction signed for the wrong passphrase.
+ */
+export const getCurrentNetwork = () => {
   if (typeof window !== "undefined") {
     const savedNetwork = localStorage.getItem("nester_network_id");
     if (savedNetwork && (savedNetwork === "testnet" || savedNetwork === "mainnet")) {
@@ -40,20 +46,20 @@ export interface DepositParams {
   walletAddress: string;
   /** Vault contract ID on Soroban. */
   contractId: string;
-  /** Amount in USDC/XLM (human-readable, e.g. 100.50). Converted to stroops internally. */
-  amount: number;
+  /** Amount in stroops (bigint, 7 decimals = 1 XLM, 6 decimals = 1 USDC). */
+  amount: bigint | number;
 }
 
 export interface WithdrawParams {
   walletAddress: string;
   contractId: string;
-  /** Number of nVault shares to burn. */
-  shares: number;
+  /** Number of nVault shares to burn (as bigint stroops or number). */
+  shares: bigint | number;
   /**
-   * Minimum underlying assets to receive (slippage guard). Defaults to 0.
+   * Minimum underlying assets to receive in stroops (slippage guard). Defaults to 0.
    * Pass a non-zero value to reject withdrawals where the exchange rate slips too far.
    */
-  minAssetsOut?: number;
+  minAssetsOut?: bigint | number;
 }
 
 export interface BuiltTransaction {
@@ -102,6 +108,26 @@ export class TransactionFailedError extends Error {
   constructor(public readonly reason: string) {
     super(`Transaction failed on-chain: ${reason}`);
     this.name = "TransactionFailedError";
+  }
+}
+
+/**
+ * Thrown when the wallet's network does not match the app's configured network.
+ */
+export class NetworkMismatchError extends Error {
+  constructor(walletNetwork: string, appNetwork: string) {
+    super(`Wallet is on ${walletNetwork} but the app is on ${appNetwork}. Please switch your wallet network.`);
+    this.name = "NetworkMismatchError";
+  }
+}
+
+/**
+ * Thrown when the wallet disconnects between building and signing a transaction.
+ */
+export class WalletDisconnectedError extends Error {
+  constructor() {
+    super("Wallet disconnected. Please reconnect your wallet and try again.");
+    this.name = "WalletDisconnectedError";
   }
 }
 
@@ -157,6 +183,55 @@ export async function estimateDepositFee(
 }
 
 /**
+ * Preview expected vault shares for a deposit amount, via the vault
+ * contract's read-only `preview_deposit` (Issue #1129) — simulated against
+ * the live contract instead of assuming a 1:1 amount-to-shares ratio.
+ */
+export async function previewDeposit(params: DepositParams): Promise<{
+  sharesExpected: bigint;
+  available: boolean;
+  error?: string;
+}> {
+  try {
+    const { walletAddress, contractId, amount: rawAmount } = params;
+    const network = getCurrentNetwork();
+    const server = getServer(network.rpcUrl);
+    const account = await server.getAccount(walletAddress);
+
+    const amountStroops = typeof rawAmount === "bigint"
+      ? rawAmount
+      : BigInt(Math.round(rawAmount * 10_000_000));
+
+    const contract = new Contract(contractId);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: network.networkPassphrase,
+    })
+      .addOperation(
+        contract.call("preview_deposit", nativeToScVal(amountStroops, { type: "i128" }))
+      )
+      .setTimeout(30)
+      .build();
+
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim)) {
+      throw new TransactionFailedError(
+        (sim as SorobanRpc.Api.SimulateTransactionErrorResponse).error
+      );
+    }
+    const result = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
+    const sharesExpected: bigint = result ? BigInt(scValToNative(result.retval)) : BigInt(0);
+    return { sharesExpected, available: true };
+  } catch (err) {
+    return {
+      sharesExpected: BigInt(0),
+      available: false,
+      error: err instanceof Error ? err.message : "Deposit preview unavailable",
+    };
+  }
+}
+
+/**
  * Estimate Stellar network fee for a withdrawal via simulateTransaction.
  */
 export async function estimateWithdrawFee(
@@ -182,18 +257,22 @@ export async function estimateWithdrawFee(
  * Build a Soroban `deposit` contract invocation transaction.
  *
  * The vault contract's `deposit(user, amount)` function is called.
- * Amount is converted from human-readable value to stroops (7 decimal places).
+ * Amount can be provided as bigint stroops (recommended) or as a human-readable number
+ * (for backwards compatibility; will be converted to stroops using Math.round).
  */
 export async function buildDepositTransaction(
   params: DepositParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, amount } = params;
+  const { walletAddress, contractId, amount: rawAmount } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
 
-  const amountStroops = BigInt(Math.round(amount * 10_000_000));
+  // Convert amount to stroops if it's a number
+  const amountStroops = typeof rawAmount === "bigint"
+    ? rawAmount
+    : BigInt(Math.round(rawAmount * 10_000_000));
 
   const contract = new Contract(contractId);
 
@@ -229,18 +308,25 @@ export async function buildDepositTransaction(
  * Build a Soroban `withdraw` contract invocation transaction.
  *
  * The vault contract's `withdraw(from, shares)` function is called.
+ * Amounts can be provided as bigint stroops (recommended) or as human-readable numbers.
  */
 export async function buildWithdrawTransaction(
   params: WithdrawParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, shares, minAssetsOut = 0 } = params;
+  const { walletAddress, contractId, shares: rawShares, minAssetsOut: rawMinAssets = 0 } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
 
-  const sharesStroops = BigInt(Math.round(shares * 10_000_000));
-  const minAssetsStroops = BigInt(Math.round(minAssetsOut * 10_000_000));
+  // Convert amounts to stroops if they're numbers
+  const sharesStroops = typeof rawShares === "bigint"
+    ? rawShares
+    : BigInt(Math.round(Number(rawShares) * 10_000_000));
+
+  const minAssetsStroops = typeof rawMinAssets === "bigint"
+    ? rawMinAssets
+    : BigInt(Math.round(Number(rawMinAssets) * 10_000_000));
 
   const contract = new Contract(contractId);
 
@@ -285,12 +371,52 @@ export async function signTransaction(txXdr: string): Promise<string> {
 
   const walletModule = StellarWalletsKit.selectedModule;
   if (!walletModule) {
-    throw new Error(
-      "No Stellar wallet connected. Please connect a wallet and try again."
-    );
+    throw new WalletDisconnectedError();
   }
 
   const network = getCurrentNetwork();
+
+  // Confirm the wallet is still connected (#1099). A locked, closed, or
+  // switched-account wallet surfaces as getAddress() throwing, so a failure
+  // here IS the disconnect case and must not be swallowed.
+  try {
+    const { address: currentAddress } = await walletModule.getAddress();
+    if (!currentAddress) {
+      throw new WalletDisconnectedError();
+    }
+  } catch (err) {
+    if (err instanceof WalletDisconnectedError) throw err;
+    throw new WalletDisconnectedError();
+  }
+
+  // Network mismatch check (#1095). Compare the wallet's actual network
+  // against the one the transaction was built for. Signing a testnet
+  // transaction while the wallet is on mainnet (or the reverse) means the
+  // user approves something other than what they were shown.
+  //
+  // getNetwork() is not implemented by every wallet module; when it is
+  // absent we cannot verify and deliberately proceed rather than blocking
+  // signing on wallets that simply do not expose it.
+  const getNetwork = (
+    walletModule as unknown as {
+      getNetwork?: () => Promise<{ networkPassphrase?: string; network?: string }>;
+    }
+  ).getNetwork;
+
+  if (typeof getNetwork === "function") {
+    let walletPassphrase: string | undefined;
+    try {
+      const net = await getNetwork.call(walletModule);
+      walletPassphrase = net?.networkPassphrase;
+    } catch {
+      // Treat an unreadable network as unverifiable rather than mismatched.
+      walletPassphrase = undefined;
+    }
+
+    if (walletPassphrase && walletPassphrase !== network.networkPassphrase) {
+      throw new NetworkMismatchError(walletPassphrase, network.networkPassphrase);
+    }
+  }
 
   let result: { signedTxXdr: string };
   try {

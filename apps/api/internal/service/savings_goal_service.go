@@ -18,6 +18,11 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
 
+// streakNotifyTimeout bounds the detached streak-milestone notification. It is
+// generous enough for a slow notifier but finite, so a wedged downstream cannot
+// accumulate goroutines.
+const streakNotifyTimeout = 30 * time.Second
+
 // VaultReader exposes the single read the savings goal service needs from the
 // vault store: looking up a vault to validate ownership/currency at link time
 // and to read its live balance when computing goal progress.
@@ -937,8 +942,15 @@ func (s *SavingsGoalService) updateStreak(ctx context.Context, userID uuid.UUID)
 		streak.NotifiedMilestones = append(streak.NotifiedMilestones, milestone)
 		_ = s.streakRepo.Upsert(ctx, streak)
 		uid := userID
-		go func() {
-			s.streakNotifier.SendStreakMilestone(context.Background(), uid, milestone)
+		// Deliberately detached from the request context: the caller's context
+		// is cancelled as soon as the HTTP response is written, and inheriting
+		// it would cancel the notification before it is sent (nester#1035,
+		// G118). It is bounded by its own timeout so a wedged notifier cannot
+		// leak the goroutine indefinitely.
+		go func() { // #nosec G118 -- intentionally detached background work, bounded by its own timeout
+			nctx, cancel := context.WithTimeout(context.Background(), streakNotifyTimeout)
+			defer cancel()
+			s.streakNotifier.SendStreakMilestone(nctx, uid, milestone)
 		}()
 	}
 

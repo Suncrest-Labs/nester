@@ -13,6 +13,8 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/backfill"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
 // openBackfillIntegrationDB and applyBackfillIntegrationMigrations mirror
@@ -39,37 +41,9 @@ func openBackfillIntegrationDB(t *testing.T) *sql.DB {
 
 func applyBackfillIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-	if _, err := db.Exec(`
-		DO $$
-		DECLARE r record;
-		BEGIN
-			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END$$;
-	`); err != nil {
-		t.Fatalf("drop tables: %v", err)
-	}
-	for _, name := range []string{
-		"001_create_users_table.up.sql",
-		"002_create_vaults_table.up.sql",
-		"028_create_processed_events_table.up.sql",
-		"030_create_vault_rebalances.up.sql",
-		"063_create_penalty_events.up.sql",
-		"064_create_vault_rebalance_legs.up.sql",
-		"065_create_vault_rebalance_completions.up.sql",
-		"092_create_backfill_runs.up.sql",
-		"093_add_ledger_sequence_to_derived_events.up.sql",
-	} {
-		path := filepath.Join("..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
+	// The full migration chain in numeric order — see testutil.ApplyAllMigrations
+	// for why no per-test subset is used.
+	testutil.ApplyAllMigrations(t, db, filepath.Join("..", "..", "migrations"))
 }
 
 func countPenaltyEvents(t *testing.T, db *sql.DB, contractID string) int {

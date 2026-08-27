@@ -1,0 +1,711 @@
+# promtool unit tests for the SLO burn-rate alerts (nester#1056).
+#
+# Run:
+#   promtool test rules docker/prometheus/rules/slo_alerts_test.yml
+#
+# These are executed in CI (.github/workflows/ci.yml, "SLO rules" job) against
+# the same rule files Prometheus loads, so a threshold edited without updating
+# its arithmetic fails the build rather than being discovered during an
+# incident.
+#
+# What is being proven, per the issue's acceptance criteria:
+#
+#   * a deliberately induced error burst fires the fast-burn alert;
+#   * a slow degradation fires the slow-burn alert and does NOT page;
+#   * a healthy system fires nothing;
+#   * the thresholds behave correctly immediately below, at, and above the
+#     boundary.
+#
+# The series below are synthetic counters written directly in the test
+# fixture. That is what promtool tests are: the alert expressions and the
+# recording rules under them are the real ones, evaluated by the real
+# Prometheus engine, so what is verified is the actual alerting behaviour and
+# not a re-implementation of it.
+
+rule_files:
+  - slo_recording.yml
+  - slo_alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ===========================================================================
+  # API availability — fast burn
+  # ===========================================================================
+  #
+  # Target 99.9%, budget 0.1%, fast threshold 13.44 * 0.001 = 1.344%.
+  #
+  # 10 req/s total with 1 req/s returning 5xx is a 10% error ratio, about 7.4x
+  # the fast threshold. Held for 90 minutes so the 1h window is fully saturated
+  # and the arithmetic is not being read off a partially-filled range.
+  - interval: 1m
+    name: API availability fast burn pages on an error burst
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+540x120'   # 9/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+60x120'    # 1/s  => 10% error ratio
+    alert_rule_test:
+      # Before the 1h window fills, the ratio is already over threshold on both
+      # windows, so the alert fires once `for: 2m` elapses. Checked at 10m to
+      # confirm it does not wait for the full hour: an alert that needs its
+      # longest window saturated before firing is an hour late to every
+      # incident.
+      - eval_time: 10m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api_availability
+              service: api
+              burn: fast
+            exp_annotations:
+              summary: "API availability burning 28-day error budget 13.4x (10% 5xx over 1h)"
+              description: "5xx ratio is 10% over 1h and 10% over 5m, against a 99.9% target (0.1% budget = 40 minutes per 28 days). At this rate the entire 28-day budget is exhausted in ~50 hours. 4xx and unmatched routes are excluded, so this is server-side failure only."
+              budget_remaining: "-9900%"
+              dashboard: /d/nester-slo-api/api-availability
+              runbook: docs/observability/runbooks/api-availability.md
+
+      # Still firing an hour in.
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api_availability
+              service: api
+              burn: fast
+            exp_annotations:
+              summary: "API availability burning 28-day error budget 13.4x (10% 5xx over 1h)"
+              description: "5xx ratio is 10% over 1h and 10% over 5m, against a 99.9% target (0.1% budget = 40 minutes per 28 days). At this rate the entire 28-day budget is exhausted in ~50 hours. 4xx and unmatched routes are excluded, so this is server-side failure only."
+              budget_remaining: "-9900%"
+              dashboard: /d/nester-slo-api/api-availability
+              runbook: docs/observability/runbooks/api-availability.md
+
+  # ===========================================================================
+  # API availability — a burst that stops must resolve
+  # ===========================================================================
+  #
+  # This is the case the short confirmation window exists for. Errors run for
+  # 10 minutes then stop completely. The 1h window stays elevated afterwards
+  # (it still contains the burst), but the 5m window collapses, so the alert
+  # must clear rather than page for the remainder of the hour.
+  - interval: 1m
+    name: API availability fast burn resolves once the burst stops
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+540x120'
+      # 1/s for 10 minutes, then flat (no further errors).
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+60x10 600+0x110'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api_availability
+              service: api
+              burn: fast
+            exp_annotations:
+              summary: "API availability burning 28-day error budget 13.4x (10% 5xx over 1h)"
+              description: "5xx ratio is 10% over 1h and 10% over 5m, against a 99.9% target (0.1% budget = 40 minutes per 28 days). At this rate the entire 28-day budget is exhausted in ~50 hours. 4xx and unmatched routes are excluded, so this is server-side failure only."
+              budget_remaining: "-9900%"
+              dashboard: /d/nester-slo-api/api-availability
+              runbook: docs/observability/runbooks/api-availability.md
+
+      # 20 minutes after the burst ended the 5m window is clean, so no alert —
+      # even though the 1h window still carries the burst.
+      - eval_time: 30m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+
+  # ===========================================================================
+  # API availability — healthy system fires nothing
+  # ===========================================================================
+  #
+  # 0.05% errors: real but well inside a 0.1% budget (burn rate 0.5x, which
+  # would not exhaust the budget in 28 days).
+  - interval: 1m
+    name: API availability healthy system does not alert
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+59970x120'   # 999.5/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+30x120'      # 0.5/s => 0.05%
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: APIAvailabilitySlowBurn
+        exp_alerts: []
+
+  # ===========================================================================
+  # API availability — 4xx cannot manufacture a breach
+  # ===========================================================================
+  #
+  # The security-relevant test. A client hammering invalid requests produces a
+  # large 4xx volume; if 4xx counted, an attacker (or one broken mobile client)
+  # could page the on-call at will. Here 4xx traffic is 10x the successful
+  # traffic and there are zero 5xx: nothing must fire.
+  - interval: 1m
+    name: 4xx flood does not breach availability SLO
+    input_series:
+      - series: 'nester_http_requests_total{route="POST /api/v1/vaults",method="POST",status_class="2xx"}'
+        values: '0+60x120'      # 1/s
+      - series: 'nester_http_requests_total{route="POST /api/v1/vaults",method="POST",status_class="4xx"}'
+        values: '0+600x120'     # 10/s of client errors
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: APIAvailabilitySlowBurn
+        exp_alerts: []
+
+  # ===========================================================================
+  # API availability — unmatched routes are excluded
+  # ===========================================================================
+  #
+  # Scanner traffic hitting nonexistent paths lands on route="other". Even if
+  # it somehow produces 5xx, it must not burn the budget: those requests are
+  # not a service anyone is promised.
+  - interval: 1m
+    name: unmatched route errors do not breach availability SLO
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+600x120'
+      - series: 'nester_http_requests_total{route="other",method="GET",status_class="5xx"}'
+        values: '0+600x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+
+  # ===========================================================================
+  # API availability — slow burn tickets, and does not page
+  # ===========================================================================
+  #
+  # 0.8% errors: above the slow threshold (0.56%) but below the fast one
+  # (1.344%). This is the degradation that a naive single-threshold alert
+  # either misses entirely or pages for. It must produce exactly one ticket and
+  # zero pages.
+  #
+  # Evaluated at 7h so the 6h window is fully populated.
+  - interval: 1m
+    name: API availability errors inside budget do not alert
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+59952x460'   # 999.2/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+48x460'      # 0.8/s => 0.08% ... see note below
+    alert_rule_test:
+      # 0.8/s of 1000/s is 0.08%, which is BELOW the 0.56% slow threshold, so
+      # nothing fires. This is the "degradation inside budget" case: real
+      # errors, correctly ignored.
+      - eval_time: 7h
+        alertname: APIAvailabilitySlowBurn
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+
+  - interval: 1m
+    name: API availability slow burn fires between the two thresholds
+    input_series:
+      # 0.8% error ratio: over slow (0.56%), under fast (1.344%).
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+59520x460'   # 992/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+480x460'     # 8/s => 0.8%
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: APIAvailabilitySlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: api_availability
+              service: api
+              burn: slow
+            exp_annotations:
+              summary: "API availability burning 28-day error budget 5.6x (0.8% 5xx over 6h)"
+              description: "Sustained elevated 5xx ratio against a 99.9% target. At this rate the 28-day budget is exhausted in ~5 days. Not paging: there is time to fix this in business hours, but it will not resolve itself."
+              budget_remaining: "-700%"
+              dashboard: /d/nester-slo-api/api-availability
+              runbook: docs/observability/runbooks/api-availability.md
+      # The critical half of the assertion: the pager stays silent.
+      - eval_time: 7h
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+
+  # ===========================================================================
+  # Boundary conditions — API availability fast burn
+  # ===========================================================================
+  #
+  # Threshold is 1.344%, compared with `>`, so at exactly the threshold the
+  # alert must NOT fire.
+
+  - interval: 1m
+    name: boundary just below fast threshold does not fire
+    input_series:
+      # 1.3% error ratio, just under 1.344%.
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+59220x120'   # 987/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+780x120'     # 13/s => 1.3%
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+
+  - interval: 1m
+    name: boundary exactly at fast threshold does not fire
+    input_series:
+      # Exactly 1.344%: 13.44/s bad of 1000/s total.
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+59193.6x120'   # 986.56/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+806.4x120'     # 13.44/s => exactly 1.344%
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+
+  - interval: 1m
+    name: boundary just above fast threshold fires
+    input_series:
+      # 1.4% error ratio, just over 1.344%.
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+59160x120'   # 986/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+840x120'     # 14/s => 1.4%
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api_availability
+              service: api
+              burn: fast
+            exp_annotations:
+              summary: "API availability burning 28-day error budget 13.4x (1.4% 5xx over 1h)"
+              description: "5xx ratio is 1.4% over 1h and 1.4% over 5m, against a 99.9% target (0.1% budget = 40 minutes per 28 days). At this rate the entire 28-day budget is exhausted in ~50 hours. 4xx and unmatched routes are excluded, so this is server-side failure only."
+              budget_remaining: "-1300%"
+              dashboard: /d/nester-slo-api/api-availability
+              runbook: docs/observability/runbooks/api-availability.md
+
+  # ===========================================================================
+  # Regression: the SLI must exist even when a status class has no series
+  # ===========================================================================
+  #
+  # These two cases cover a bug this test file caught during development.
+  #
+  # `sum(all) - sum(4xx)` is a binary operation, and in PromQL a binary
+  # operation against an empty vector yields an empty vector. A service that
+  # had served no 4xx at all therefore produced *no* eligible series, so the
+  # error ratio did not exist, so the alerts could never fire — the monitoring
+  # went silent precisely because the service was behaving well, and would have
+  # stayed silent through a subsequent 5xx outage. `or vector(0)` in
+  # slo_recording.yml fixes it; these tests keep it fixed.
+  - interval: 1m
+    name: availability SLI still fires when the service has served no 4xx
+    input_series:
+      # Deliberately no 4xx series at all.
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+540x120'   # 9/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx"}'
+        values: '0+60x120'    # 1/s => 10%
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api_availability
+              service: api
+              burn: fast
+            exp_annotations:
+              summary: "API availability burning 28-day error budget 13.4x (10% 5xx over 1h)"
+              description: "5xx ratio is 10% over 1h and 10% over 5m, against a 99.9% target (0.1% budget = 40 minutes per 28 days). At this rate the entire 28-day budget is exhausted in ~50 hours. 4xx and unmatched routes are excluded, so this is server-side failure only."
+              budget_remaining: "-9900%"
+              dashboard: /d/nester-slo-api/api-availability
+              runbook: docs/observability/runbooks/api-availability.md
+
+  # The mirror case: a perfectly healthy service with no 5xx series at all must
+  # still produce a ratio (of 0) rather than nothing, so that the series exists
+  # for dashboards and so the alert is genuinely evaluating rather than absent.
+  - interval: 1m
+    name: availability SLI exists and is quiet when the service has no 5xx
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+540x120'
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="4xx"}'
+        values: '0+60x120'
+    promql_expr_test:
+      # The assertion that matters: a value, not an empty result.
+      - expr: api:availability:error_ratio_rate1h
+        eval_time: 90m
+        exp_samples:
+          - labels: 'api:availability:error_ratio_rate1h'
+            value: 0
+      - expr: api:availability:eligible_rate1h
+        eval_time: 90m
+        exp_samples:
+          - labels: 'api:availability:eligible_rate1h'
+            value: 9
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+
+  # ===========================================================================
+  # Deposit success — fast burn, and the exclusions
+  # ===========================================================================
+  #
+  # Threshold 6.72%. 20% of eligible attempts failing on-chain is a clear
+  # breach and must page: users' money is not moving.
+  - interval: 1m
+    name: deposit failures page on fast burn
+    input_series:
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="succeeded"}'
+        values: '0+48x120'          # 0.8/s
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="failed_chain"}'
+        values: '0+12x120'          # 0.2/s => 20% of eligible
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: FlowSuccessFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: flow_success
+              service: api
+              burn: fast
+              flow: deposit
+            exp_annotations:
+              summary: "deposit failure rate burning error budget 13.4x (20% over 1h)"
+              description: "deposit attempts are failing at 20% against a 99.5% target. User cancellations and rejected (invalid) requests are excluded, so these are real chain or internal failures. Users' money is not moving. At this rate the 28-day budget is gone in ~50 hours."
+              budget_remaining: "-3900%"
+              dashboard: /d/nester-slo-flow/deposits-withdrawals
+              runbook: docs/observability/runbooks/flow-success.md
+
+  # ---------------------------------------------------------------------------
+  # The exclusions, proven rather than asserted.
+  # ---------------------------------------------------------------------------
+  #
+  # Cancellations and rejections vastly outnumber successes here — 10x each.
+  # If either were counted in the denominator or the numerator, this would
+  # breach immediately. Nothing may fire.
+  - interval: 1m
+    name: user cancellations and rejections do not burn the deposit budget
+    input_series:
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="succeeded"}'
+        values: '0+60x120'          # 1/s
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="cancelled"}'
+        values: '0+600x120'         # 10/s of wallet declines
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="rejected"}'
+        values: '0+600x120'         # 10/s of invalid requests
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: FlowSuccessFastBurn
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: FlowSuccessSlowBurn
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # An internal failure burns the budget exactly like a chain failure.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: internal failures burn the withdrawal budget
+    input_series:
+      - series: 'nester_flow_attempts_total{flow="withdrawal",outcome="succeeded"}'
+        values: '0+54x120'          # 0.9/s
+      - series: 'nester_flow_attempts_total{flow="withdrawal",outcome="failed_internal"}'
+        values: '0+6x120'           # 0.1/s => 10%
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: FlowSuccessFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: flow_success
+              service: api
+              burn: fast
+              flow: withdrawal
+            exp_annotations:
+              summary: "withdrawal failure rate burning error budget 13.4x (10% over 1h)"
+              description: "withdrawal attempts are failing at 10% against a 99.5% target. User cancellations and rejected (invalid) requests are excluded, so these are real chain or internal failures. Users' money is not moving. At this rate the 28-day budget is gone in ~50 hours."
+              budget_remaining: "-1900%"
+              dashboard: /d/nester-slo-flow/deposits-withdrawals
+              runbook: docs/observability/runbooks/flow-success.md
+
+  # ---------------------------------------------------------------------------
+  # Deposits and withdrawals have independent budgets.
+  # ---------------------------------------------------------------------------
+  #
+  # Withdrawals are failing badly while deposits are perfectly healthy and
+  # carry 10x the volume. Because the ratio is computed `by (flow)`, the
+  # withdrawal alert must fire on its own; a summed SLI would let healthy
+  # deposit volume bury it, which is the failure this test exists to prevent.
+  - interval: 1m
+    name: a withdrawal outage is not hidden by healthy deposit volume
+    input_series:
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="succeeded"}'
+        values: '0+6000x120'        # 100/s, flawless
+      - series: 'nester_flow_attempts_total{flow="withdrawal",outcome="succeeded"}'
+        values: '0+30x120'          # 0.5/s
+      - series: 'nester_flow_attempts_total{flow="withdrawal",outcome="failed_chain"}'
+        values: '0+30x120'          # 0.5/s => 50% of withdrawals failing
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: FlowSuccessFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: flow_success
+              service: api
+              burn: fast
+              flow: withdrawal
+            exp_annotations:
+              summary: "withdrawal failure rate burning error budget 13.4x (50% over 1h)"
+              description: "withdrawal attempts are failing at 50% against a 99.5% target. User cancellations and rejected (invalid) requests are excluded, so these are real chain or internal failures. Users' money is not moving. At this rate the 28-day budget is gone in ~50 hours."
+              budget_remaining: "-9900%"
+              dashboard: /d/nester-slo-flow/deposits-withdrawals
+              runbook: docs/observability/runbooks/flow-success.md
+
+  # ===========================================================================
+  # Deposit success — slow burn tickets without paging
+  # ===========================================================================
+  #
+  # 4% failures: over the slow threshold (2.8%), under the fast one (6.72%).
+  - interval: 1m
+    name: sustained deposit degradation tickets without paging
+    input_series:
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="succeeded"}'
+        values: '0+5760x460'        # 96/s
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="failed_chain"}'
+        values: '0+240x460'         # 4/s => 4%
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: FlowSuccessSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: flow_success
+              service: api
+              burn: slow
+              flow: deposit
+            exp_annotations:
+              summary: "deposit failure rate burning error budget 5.6x (4% over 6h)"
+              description: "Sustained deposit failures against a 99.5% target. 28-day budget exhausted in ~5 days at this rate. Check whether the failures are concentrated in failed_chain (upstream/network) or failed_internal (ours) — the runbook splits on exactly that."
+              budget_remaining: "-700%"
+              dashboard: /d/nester-slo-flow/deposits-withdrawals
+              runbook: docs/observability/runbooks/flow-success.md
+      - eval_time: 7h
+        alertname: FlowSuccessFastBurn
+        exp_alerts: []
+
+  # ===========================================================================
+  # Balance freshness
+  # ===========================================================================
+  - interval: 1m
+    name: healthy indexer lag does not alert
+    input_series:
+      - series: 'nester_indexer_lag_ledgers'
+        values: '2x30'
+      - series: 'nester_indexer_lag_last_sample_age_seconds'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: IndexerLagHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: IndexerLagStale
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: IndexerMetricsAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: indexer falling behind pages
+    input_series:
+      # Flat rather than a ramp. The behaviour under test is "lag above 60
+      # pages after for: 5m"; a climbing series would additionally make the
+      # asserted annotation depend on which sample is current at eval time,
+      # which tests promtool's sample alignment rather than the alert.
+      - series: 'nester_indexer_lag_ledgers'
+        values: '150x30'
+      - series: 'nester_indexer_lag_last_sample_age_seconds'
+        values: '0x30'
+    alert_rule_test:
+      # Over threshold from t=0, but `for: 5m` holds it pending until 5m.
+      - eval_time: 4m
+        alertname: IndexerLagHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: IndexerLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: balance_freshness
+              service: api
+            exp_annotations:
+              summary: "Event indexer 150 ledgers behind the network tip"
+              description: "Indexed ledger is 150 behind the chain tip (~5 minutes at a 5s close interval). Users are seeing stale balances: a deposit that has settled on-chain will not appear in the app until this recovers. Paging because the displayed balance of a savings product being wrong is a trust failure, not a cosmetic one."
+              dashboard: /d/nester-slo-balance/balance-freshness
+              runbook: docs/observability/runbooks/balance-freshness.md
+
+  # Exactly at the threshold must not fire: the expression uses `>`, not `>=`.
+  - interval: 1m
+    name: indexer lag exactly at threshold does not page
+    input_series:
+      - series: 'nester_indexer_lag_ledgers'
+        values: '60x30'
+      - series: 'nester_indexer_lag_last_sample_age_seconds'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: IndexerLagHigh
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # The frozen-gauge case. This is the test that matters most for this SLI.
+  # ---------------------------------------------------------------------------
+  #
+  # Lag reads a perfectly healthy 3 ledgers and never changes — because the
+  # sampler died. IndexerLagHigh cannot detect this and must not: the value it
+  # sees is genuinely low. The staleness gauge is what catches it.
+  - interval: 1m
+    name: a frozen lag gauge is caught by staleness, not by the lag value
+    input_series:
+      - series: 'nester_indexer_lag_ledgers'
+        values: '3x30'                # looks perfect, forever
+      # Flat at 20 minutes old: unambiguously past the 300s threshold, and the
+      # asserted annotation does not depend on sample alignment.
+      - series: 'nester_indexer_lag_last_sample_age_seconds'
+        values: '1200x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: IndexerLagHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: IndexerLagStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: balance_freshness
+              service: api
+            exp_annotations:
+              summary: "Event indexer has not reported lag for 20m 0s"
+              description: "The lag gauge has not been updated in over 5 minutes, so the freshness signal itself is stale. The indexer polls every 6s, so this means it is wedged, erroring, or dead. Critically, the lag gauge may still read healthy — do not trust it. Check nester_indexer_lag_sample_errors_total and the indexer logs."
+              dashboard: /d/nester-slo-balance/balance-freshness
+              runbook: docs/observability/runbooks/balance-freshness.md
+
+  # ---------------------------------------------------------------------------
+  # Missing telemetry must fail visibly.
+  # ---------------------------------------------------------------------------
+  #
+  # No indexer series at all. Deleting the metric must not buy silence.
+  - interval: 1m
+    name: absent indexer metrics alert rather than reporting health
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: IndexerMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: balance_freshness
+              service: api
+            exp_annotations:
+              summary: Indexer freshness metrics are absent entirely
+              description: "The indexer freshness series has disappeared. Either the API is down, the scrape is failing, or the indexer never started (check STELLAR_RPC_URL — an empty value disables it silently at boot). This alert exists so that deleting or breaking the metric cannot silence IndexerLagHigh and IndexerLagStale."
+              dashboard: /d/nester-slo-balance/balance-freshness
+              runbook: docs/observability/runbooks/balance-freshness.md
+
+  # ===========================================================================
+  # Intelligence
+  # ===========================================================================
+  #
+  # Refusals must not burn the availability budget. Here 40% of requests are
+  # refused and none error: availability is perfect and nothing may fire.
+  - interval: 1m
+    name: refusals do not burn the intelligence availability budget
+    input_series:
+      - series: 'nester_intelligence_requests_total{outcome="answered"}'
+        values: '0+36x120'          # 0.6/s
+      - series: 'nester_intelligence_requests_total{outcome="refused"}'
+        values: '0+24x120'          # 0.4/s => 40% refusals
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IntelligenceAvailabilityFastBurn
+        exp_alerts: []
+
+  # A refusal *wave* is caught by its own alert. 60% refusals over 6h+.
+  - interval: 1m
+    name: a refusal wave opens a ticket
+    input_series:
+      - series: 'nester_intelligence_requests_total{outcome="answered"}'
+        values: '0+24x460'          # 0.4/s
+      - series: 'nester_intelligence_requests_total{outcome="refused"}'
+        values: '0+36x460'          # 0.6/s => 60%
+      - series: 'nester_intelligence_refusals_total{reason="guardrail"}'
+        values: '0+36x460'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: IntelligenceRefusalRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: intelligence_refusal
+              service: intelligence
+            exp_annotations:
+              summary: "Intelligence refusing 60% of answerable requests"
+              description: "Refusal rate is well above the expected baseline, which usually means a guardrail regression or grounding losing its data source rather than a change in what users are asking. Errors are excluded from the denominator, so this is not availability. Split by reason: guardrail=0.600/s "
+              dashboard: /d/nester-slo-intel/intelligence
+              runbook: docs/observability/runbooks/intelligence-refusal.md
+      # A refusal wave is never an availability page.
+      - eval_time: 7h
+        alertname: IntelligenceAvailabilityFastBurn
+        exp_alerts: []
+
+  # Client disconnects are excluded from the availability denominator.
+  - interval: 1m
+    name: client disconnects do not burn the intelligence budget
+    input_series:
+      - series: 'nester_intelligence_requests_total{outcome="answered"}'
+        values: '0+60x120'          # 1/s
+      - series: 'nester_intelligence_requests_total{outcome="cancelled"}'
+        values: '0+600x120'         # 10/s of disconnects
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IntelligenceAvailabilityFastBurn
+        exp_alerts: []
+
+  # Genuine errors do burn it. 20% > 13.44% fast threshold.
+  - interval: 1m
+    name: intelligence errors burn the availability budget
+    input_series:
+      - series: 'nester_intelligence_requests_total{outcome="answered"}'
+        values: '0+48x120'          # 0.8/s
+      - series: 'nester_intelligence_requests_total{outcome="error"}'
+        values: '0+12x120'          # 0.2/s => 20%
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: IntelligenceAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: intelligence_availability
+              service: intelligence
+              burn: fast
+            exp_annotations:
+              summary: "Intelligence error rate burning error budget 13.4x (20% over 1h)"
+              description: "Intelligence requests are erroring at 20% against a 99% target. Refusals are NOT counted here — this is genuine failure (upstream error, timeout, unhandled exception). Client disconnects are excluded. Check nester_outbound_*{upstream=\"anthropic_relay\"} to separate a provider outage from a fault on our side."
+              budget_remaining: "-1900%"
+              dashboard: /d/nester-slo-intel/intelligence
+              runbook: docs/observability/runbooks/intelligence-availability.md
