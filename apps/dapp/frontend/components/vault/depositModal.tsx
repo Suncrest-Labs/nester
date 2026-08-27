@@ -236,14 +236,18 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
 
   const handleDeposit = async () => {
     if (!vault || !address || !canSubmit || submittingRef.current) return;
-    submittingRef.current = true;
 
     setErrorMsg("");
 
+    // Validate before claiming the submit flag. Setting it first and then
+    // returning here latches it for the lifetime of the modal, so every
+    // later deposit attempt is silently dropped by the guard above.
     if (!vault.contractAddress || !/^C[A-Z0-9]{55}$/.test(vault.contractAddress)) {
       setErrorMsg("This vault is not yet deployed on testnet. Check back soon.");
       return;
     }
+
+    submittingRef.current = true;
 
     try {
       setState("building");

@@ -326,9 +326,9 @@ export async function signTransaction(txXdr: string): Promise<string> {
 
   const network = getCurrentNetwork();
 
-  // Network mismatch check (#1095): verify the wallet is on the same network
-  // before attempting to sign. This prevents signing a transaction intended
-  // for testnet when the wallet is on mainnet (or vice versa).
+  // Confirm the wallet is still connected (#1099). A locked, closed, or
+  // switched-account wallet surfaces as getAddress() throwing, so a failure
+  // here IS the disconnect case and must not be swallowed.
   try {
     const { address: currentAddress } = await walletModule.getAddress();
     if (!currentAddress) {
@@ -336,8 +336,36 @@ export async function signTransaction(txXdr: string): Promise<string> {
     }
   } catch (err) {
     if (err instanceof WalletDisconnectedError) throw err;
-    // If getAddress fails for other reasons, the wallet may be locked or
-    // disconnected — let signTransaction attempt and fail with a clear error.
+    throw new WalletDisconnectedError();
+  }
+
+  // Network mismatch check (#1095). Compare the wallet's actual network
+  // against the one the transaction was built for. Signing a testnet
+  // transaction while the wallet is on mainnet (or the reverse) means the
+  // user approves something other than what they were shown.
+  //
+  // getNetwork() is not implemented by every wallet module; when it is
+  // absent we cannot verify and deliberately proceed rather than blocking
+  // signing on wallets that simply do not expose it.
+  const getNetwork = (
+    walletModule as unknown as {
+      getNetwork?: () => Promise<{ networkPassphrase?: string; network?: string }>;
+    }
+  ).getNetwork;
+
+  if (typeof getNetwork === "function") {
+    let walletPassphrase: string | undefined;
+    try {
+      const net = await getNetwork.call(walletModule);
+      walletPassphrase = net?.networkPassphrase;
+    } catch {
+      // Treat an unreadable network as unverifiable rather than mismatched.
+      walletPassphrase = undefined;
+    }
+
+    if (walletPassphrase && walletPassphrase !== network.networkPassphrase) {
+      throw new NetworkMismatchError(walletPassphrase, network.networkPassphrase);
+    }
   }
 
   let result: { signedTxXdr: string };

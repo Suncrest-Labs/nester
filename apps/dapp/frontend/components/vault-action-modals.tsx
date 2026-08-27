@@ -676,6 +676,11 @@ export function WithdrawModal({
         open && state === "input" && amount > 0
     );
 
+    // Guards double submission. A ref rather than render state: a fast second
+    // click or an Enter keypress fires before React has re-rendered with the
+    // disabled button, so state alone does not prevent a duplicate send.
+    const submittingRef = useRef(false);
+
     const canSubmit =
         !!position &&
         !!address &&
@@ -1046,6 +1051,10 @@ export function TransferModal({
     }, [watch("amount"), position]);
 
     const finalAmount = amountStroops ? Number(formatStroopsToDisplay(amountStroops, 6)) : 0;
+
+    // See the note in DepositModal: guards against a duplicate submit that
+    // render state cannot catch.
+    const submittingRef = useRef(false);
     const canSubmit =
         !isNaN(finalAmount) &&
         finalAmount > 0 &&
@@ -1304,7 +1313,7 @@ export function TransferModal({
                                             <ExternalLink className="h-3.5 w-3.5" />
                                         </Link>
                                         <span className="inline-flex items-center rounded-full border border-emerald-200 bg-white dark:bg-[#100F0F] px-3 py-2 text-xs text-emerald-700">
-                                            {receipt.walletPopupUsed ? "Wallet signature captured" : "Mock signature used"}
+                                            {"Wallet signature captured"}
                                         </span>
                                     </div>
                                 </div>
