@@ -129,16 +129,28 @@ function ModalShell({
 // intermediate stages, so "signing" and "submitting" are never assigned. Keep
 // the steps mapped to states that actually occur; listing unreachable ones
 // leaves the indicator permanently stuck on the first step.
-const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
+const TX_STEPS: {
+  label: string;
+  /** States in which this step counts as already done. */
+  activeStates: ActionState[];
+  /** The single state in which this step is the one currently running. */
+  currentState: ActionState;
+}[] = [
   {
     label: "Build and sign",
     activeStates: ["building", "pending", "success"],
+    currentState: "building",
   },
   {
     label: "Submit to network",
     activeStates: ["pending", "success"],
+    currentState: "pending",
   },
-  { label: "Confirmed on-chain", activeStates: ["success"] },
+  {
+    label: "Confirmed on-chain",
+    activeStates: ["success"],
+    currentState: "success",
+  },
 ];
 
 // ── DepositModal ──────────────────────────────────────────────────────────────
@@ -488,12 +500,12 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                 Transaction Flow
               </p>
               <div className="mt-4 space-y-3">
-                {TX_STEPS.map(({ label, activeStates }) => {
+                {TX_STEPS.map(({ label, activeStates, currentState }) => {
                   const done = activeStates.includes(state);
-                  const active =
-                    (label === "Build contract call" && state === "building") ||
-                    (label === "Sign with wallet" && state === "signing") ||
-                    (label === "Submit and confirm" && state === "submitting");
+                  // Match on the state, not the label. Comparing against
+                  // label strings silently breaks the moment a label is
+                  // reworded.
+                  const active = state === currentState;
                   return (
                     <div
                       key={label}
