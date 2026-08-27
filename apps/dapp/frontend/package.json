@@ -8,6 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "test:a11y": "playwright test tests/accessibility.spec.ts",
+    "test:smoke": "SMOKE_TEST=1 playwright test tests/smoke.spec.ts --run",
+    "test:smoke:watch": "SMOKE_TEST=1 playwright test tests/smoke.spec.ts",
+    "test:smoke:debug": "SMOKE_TEST=1 PWDEBUG=1 playwright test tests/smoke.spec.ts --headed",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
