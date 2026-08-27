@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
+	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
 // RecoverPanic catches any panic that escapes a handler, logs the stack trace,
@@ -26,7 +26,7 @@ func RecoverPanic(logger *slog.Logger) func(http.Handler) http.Handler {
 						"panic", rec,
 						"stack", stack,
 					)
-					
+
 					requestID := logpkg.RequestIDFromContext(r.Context())
 					resp := response.ErrWithRequestID(http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error", requestID)
 					response.WriteJSON(w, http.StatusInternalServerError, resp)

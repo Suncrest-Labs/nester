@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 15626eeed61bd56199c773df92b778dfa3af73e78d750cc9d32087d47fd96df8 # shrinks to ops = [ReportYield { amount: 200000 }, Deposit { user_idx: 0, amount: 1 }, Deposit { user_idx: 0, amount: 1000000000 }, Withdraw { user_idx: 0, shares: 1000000000 }, Deposit { user_idx: 0, amount: 10000000 }]
+cc ffacbb6f42e28bf386628567abd63c8e1564c372cbfa3ab5c1cb10aa9886aea2 # shrinks to ops = [Deposit { user_idx: 1, amount: 10000000 }, ReportYield { yield_bps: 457 }, Withdraw { user_idx: 1, share_bps: 8953 }, Withdraw { user_idx: 1, share_bps: 7158 }, CollectFees]

@@ -71,11 +71,11 @@
 - [x] Health endpoints (`/health`, `/readyz`, `/health/detailed`)
 - [x] CORS, request logging, auth middleware
 - [x] `bootstrap-admin` CLI tool
-- [x] Event indexer (first pass — **blocked, do not ship**)
-- [ ] **[BLOCKING]** Event indexer: persist last indexed ledger to DB (cursor resets on restart → doubles balances) *(OSS_CLEANUP PR #276)*
-- [ ] **[BLOCKING]** Event indexer: seed `startLedger` from current tip, not 0 (RPC error on first boot) *(OSS_CLEANUP PR #276)*
-- [ ] **[BLOCKING]** Event indexer: make all balance updates idempotent (processed_events table or absolute SET) *(OSS_CLEANUP PR #276)*
-- [ ] Event indexer: move logic into `internal/stellar/EventPoller.PollEvents` (not in main.go) *(OSS_CLEANUP PR #276)*
+- [x] Event indexer (first pass — unblocked by the deterministic replay harness, issue #1051; see `docs/event-indexer-replay.md`)
+- [x] **[B-01]** Event indexer: persist last indexed ledger to DB — cursor is persisted in `system_state` and advanced in the SAME transaction as the balance mutation. Evidence: `TestIntegrationReplay_RestartMidStream`, `TestIntegrationCursorAndBalanceCommitAtomically` *(issue #1051)*
+- [x] **[B-02]** Event indexer: seed `startLedger` from current tip, not 0 — cold start derives `tip - offset`, treating both an absent cursor and migration 025's seeded `'0'` as never-indexed. Evidence: `TestColdStart_DerivesValidLedgerFromTip`, `TestColdStart_NeverRequestsLedgerZero` *(issue #1051)*
+- [x] **[B-03 / indexer idempotency]** Event indexer: balance updates are idempotent — `processed_events.event_id` PRIMARY KEY claimed via `ON CONFLICT DO NOTHING` inside the mutation transaction. Evidence: `TestIntegrationReplay_DuplicateDelivery`, `TestIntegrationReplay_RepeatedFullReplay` *(issue #1051)*
+- [x] Event indexer: logic lives in `internal/stellar/EventPoller.PollEvents`; `startEventIndexer` retains only scheduling and telemetry *(issue #1051)*
 - [ ] Event indexer: remove `float64` case in `extractEventAmount` (precision loss on large integers) *(OSS_CLEANUP PR #276)*
 - [ ] Event indexer: unit tests for `applyIndexedEvent` and `extractEventAmount` *(OSS_CLEANUP PR #276)*
 - [ ] **[SECURITY]** `initiateSettlement` — extract `user_id` from JWT, not request body (BOLA) *(OSS_CLEANUP PR #271)*
@@ -332,8 +332,31 @@ pgx v5 handles `uuid.UUID` natively; passing `.String()` forces implicit server-
 **File:** `packages/contracts/contracts/vault/src/lib.rs`
 Returns `amount_for_shares(shares)` before management, early-withdrawal, and performance fees. Any DApp passing this directly as `min_assets_out` will hit `SlippageExceeded` on every fee-bearing withdrawal. Fix: either add `preview_withdraw_net` that applies fee estimates on-chain, or document explicitly and have the DApp subtract fees.
 
-### B-11 — `float64` precision loss in `extractEventAmount`
-**File:** `apps/api/cmd/api/main.go`
+### B-11 — `float64` precision loss in `extractEventAmount` — RESOLVED
+**File:** `apps/api/internal/stellar/indexer.go`
+
+Resolved in two parts, by two separate changes:
+
+**Parsing (pre-dates issue #1051).** Amounts decode via `UseNumber()` into
+`decimal.Decimal`, so they arrive as `json.Number` and never pass through
+`float64`. The `case float64` branch is a bounds check, not a pure guard: it
+*rejects* values that are non-integral or exceed 2^53 (where precision is
+already lost), and *converts* smaller values via `int64(v)`, which is exact in
+that range. This branch only sees stray `float64` inputs, since the RPC path
+yields `json.Number`.
+
+**Persistence (issue #1051).** Migration `103` widens the vault balance columns
+from `NUMERIC(20,8)` to `NUMERIC(48,8)`. This is the part that was still
+broken: the old type allowed only 12 integer digits, so a 1e18 stroop deposit
+raised `numeric field overflow` and the event was rejected outright. Parsing
+had been correct; storage was not.
+
+Evidence: `TestIntegrationLargeAmountRoundTripsExactly` (end-to-end round-trip
+through the real schema), `TestExtractEventAmount_RejectsUnsafeFloat64`, and
+`TestAmountPathHasNoFloat64` (source-level guard against reintroducing a
+`float64` conversion).
+
+Original finding:
 A `float64` case is handled for Soroban event amounts. `float64` loses precision above 2^53 — Soroban amounts come as strings and can exceed this range. Fix: treat any non-string amount type as unparseable; only accept `string`.
 
 ### B-12 — No migration runner in API startup (new migrations silently skipped in dev)

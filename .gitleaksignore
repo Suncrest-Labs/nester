@@ -1,2 +1,14 @@
 # Add known false positives here, one fingerprint per line.
 # Keep this file minimal and documented in PRs when entries are added.
+
+# apps/api/internal/config/redact_test.go asserts that config redaction hides
+# secrets from logs. To do that it must contain values that LOOK like secrets:
+# every one is prefixed SENTINEL- precisely so a human reading a leak report
+# can tell at a glance it is a fixture, and the test fails if any of them ever
+# reaches a log line. They are not credentials and grant access to nothing.
+#
+# Pinned by fingerprint rather than by path so a genuine secret added to that
+# file later is still caught.
+21375a8f698129cdb27366bb37b6b48630cdcb65:apps/api/internal/config/redact_test.go:generic-api-key:23
+21375a8f698129cdb27366bb37b6b48630cdcb65:apps/api/internal/config/redact_test.go:generic-api-key:29
+21375a8f698129cdb27366bb37b6b48630cdcb65:apps/api/internal/config/redact_test.go:generic-api-key:30

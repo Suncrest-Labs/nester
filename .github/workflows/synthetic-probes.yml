@@ -1,0 +1,128 @@
+name: Synthetic probes (staging)
+
+# Synthetic probes for nester#1056.
+#
+# Real-traffic SLIs cannot see a flow that is broken while nobody is using it.
+# These probes exercise deposit, withdrawal, balance read, and an intelligence
+# query on a schedule so a broken path is found by us rather than by the first
+# user who tries it.
+#
+# Every 15 minutes rather than every 5: the mutating probes create real
+# testnet transactions, and a tighter cadence multiplies that cost for very
+# little detection benefit. The SyntheticProbeStale alert allows 30 minutes,
+# which tolerates one missed run before complaining.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      allow_mutations:
+        description: >-
+          Run the deposit and withdrawal probes, which create real staging
+          transactions. Leave false for a read-only run.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never overlap runs. Two concurrent deposit probes against the same vault
+  # would interleave and produce failures that describe the probes rather than
+  # the service.
+  group: synthetic-probes
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe staging
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # A missing secret must never let a probe fall back to localhost or to
+      # production. probe.py refuses to guess a target on its own; this guard
+      # keeps the run from being reported as a failure when it is simply not
+      # configured yet. Same pattern as the load-soak workflow.
+      - name: Check staging target is configured
+        id: guard
+        env:
+          API_BASE_URL: ${{ secrets.STAGING_PROBE_API_BASE_URL }}
+        run: |
+          if [ -z "$API_BASE_URL" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::STAGING_PROBE_API_BASE_URL is not set — skipping the probe run."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run synthetic probes
+        id: probes
+        if: steps.guard.outputs.configured == 'true'
+        continue-on-error: true
+        env:
+          PROBE_API_BASE_URL: ${{ secrets.STAGING_PROBE_API_BASE_URL }}
+          PROBE_INTELLIGENCE_BASE_URL: ${{ secrets.STAGING_PROBE_INTELLIGENCE_BASE_URL }}
+          PROBE_AUTH_TOKEN: ${{ secrets.STAGING_PROBE_AUTH_TOKEN }}
+          PROBE_INTELLIGENCE_TOKEN: ${{ secrets.STAGING_PROBE_INTELLIGENCE_TOKEN }}
+          PROBE_VAULT_ID: ${{ secrets.STAGING_PROBE_VAULT_ID }}
+          PROBE_ENVIRONMENT: staging
+          PROBE_AMOUNT: ${{ vars.STAGING_PROBE_AMOUNT || '0.01' }}
+          # Mutating probes are opt-in. The scheduled run is read-only unless
+          # STAGING_PROBE_ALLOW_MUTATIONS is set for this environment, so
+          # enabling money movement is a deliberate configuration act rather
+          # than a side effect of merging this workflow.
+          PROBE_ALLOW_MUTATIONS: >-
+            ${{ inputs.allow_mutations && 'true'
+                || vars.STAGING_PROBE_ALLOW_MUTATIONS || 'false' }}
+        run: |
+          mkdir -p results
+          python tests/probes/probe.py --output results/probes.prom
+
+      # Pushed separately from the probe run, and only when a gateway is
+      # configured. The probe's own exit code is not the signal here: a failed
+      # probe still has results worth publishing, which is why the run step
+      # uses continue-on-error and the alerting is driven by the metrics.
+      - name: Push probe results
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          PUSHGATEWAY_URL: ${{ secrets.STAGING_PUSHGATEWAY_URL }}
+          PUSHGATEWAY_AUTH: ${{ secrets.STAGING_PUSHGATEWAY_AUTH }}
+        run: |
+          set -euo pipefail
+          # Checked here rather than in the step's `if`: a step's own `env`
+          # block is not available to its condition, so the expression would
+          # silently evaluate to empty and skip the push every time.
+          if [ -z "${PUSHGATEWAY_URL:-}" ]; then
+            echo "::notice::STAGING_PUSHGATEWAY_URL is not set — probe results not pushed."
+            exit 0
+          fi
+          auth_args=()
+          if [ -n "${PUSHGATEWAY_AUTH:-}" ]; then
+            auth_args=(--header "Authorization: Bearer ${PUSHGATEWAY_AUTH}")
+          fi
+          curl -sSf --max-time 30 "${auth_args[@]}" \
+            --data-binary @results/probes.prom \
+            "${PUSHGATEWAY_URL%/}/metrics/job/nester_synthetic_probes/environment/staging"
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.guard.outputs.configured == 'true'
+        with:
+          name: probe-results-${{ github.run_id }}
+          path: results/probes.prom
+          if-no-files-found: warn
+
+      # The workflow fails after publishing, so a failed probe is visible in
+      # the Actions UI as well as through alerting. Publishing first means a
+      # failure never costs us the metrics that explain it.
+      - name: Report probe failure
+        if: steps.guard.outputs.configured == 'true' && steps.probes.outcome == 'failure'
+        run: |
+          echo "::error::One or more synthetic probes failed. See the run log and results/probes.prom."
+          exit 1

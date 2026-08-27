@@ -1,0 +1,23 @@
+# Isolated transaction signer.
+#
+# This image holds STELLAR_OPERATOR_SECRET at runtime. It is built and deployed
+# separately from the API so that compromising the API does not yield the
+# signing key. See docs/security/signing-isolation.md.
+FROM golang:1.25.14-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /signer ./cmd/signer
+
+# distroless/static:nonroot — no shell, no package manager, no interpreter.
+# The attack surface of the process holding the signing key should be as close
+# to the binary itself as possible: a shell in this image would give anyone who
+# achieves execution here a far easier path to the key.
+FROM gcr.io/distroless/static:nonroot
+COPY --from=builder /signer /signer
+
+# The signer listens on a Unix socket by default and exposes no network port.
+# Add EXPOSE only when deploying the mutual-TLS transport instead.
+
+ENTRYPOINT ["/signer"]

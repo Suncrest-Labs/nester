@@ -25,6 +25,7 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       contracts: ${{ steps.filter.outputs.contracts }}
       shared: ${{ steps.filter.outputs.shared }}
+      slo: ${{ steps.filter.outputs.slo }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +52,12 @@ jobs:
               - 'apps/dapp/**'
             api:
               - 'apps/api/**'
+            slo:
+              - 'docker/prometheus/**'
+              - 'docker/alertmanager/**'
+              - 'docker/grafana/**'
+              - 'scripts/build_slo_dashboards.py'
+              - 'tests/probes/**'
             contracts:
               - 'packages/contracts/**'
               - 'scripts/contract-audit.sh'
@@ -152,6 +159,69 @@ jobs:
       - name: Report non-blocking JS advisories (dapp)
         run: pnpm audit --audit-level=moderate || true
 
+  # SLO rules (nester#1056). Validates the recording and alerting rules and
+  # runs the burn-rate unit tests against the same files Prometheus loads, so
+  # a threshold edited without updating its arithmetic fails the build rather
+  # than being discovered during an incident.
+  slo:
+    name: SLO rules
+    needs: changes
+    if: needs.changes.outputs.slo == 'true' || needs.changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install promtool and amtool
+        run: |
+          set -euo pipefail
+          PROM_VERSION=3.1.0
+          AM_VERSION=0.28.0
+          curl -sSfL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"             | tar xz --strip-components=1 -C /usr/local/bin "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+          curl -sSfL "https://github.com/prometheus/alertmanager/releases/download/v${AM_VERSION}/alertmanager-${AM_VERSION}.linux-amd64.tar.gz"             | tar xz --strip-components=1 -C /usr/local/bin "alertmanager-${AM_VERSION}.linux-amd64/amtool"
+          promtool --version
+          amtool --version
+
+      - name: Check Prometheus config and rules
+        run: promtool check config docker/prometheus/prometheus.yml
+
+      - name: Check Alertmanager config
+        run: amtool check-config docker/alertmanager/alertmanager.yml
+
+      # The substance: proves the fast-burn alert fires on an induced burst,
+      # the slow-burn alert tickets without paging, a healthy system stays
+      # quiet, and the thresholds behave at the boundary.
+      - name: Run burn-rate alert tests
+        working-directory: docker/prometheus/rules
+        run: promtool test rules slo_alerts_test.yml slo_probe_alerts_test.yml slo_money_path_alerts_test.yml
+
+      # The dashboards are generated from scripts/build_slo_dashboards.py so
+      # the panels and thresholds stay consistent across four files. Committing
+      # the output means Grafana loads exactly what is reviewed; this step
+      # stops the two drifting apart.
+      # The probes create real staging transactions, so their safety guards
+      # (no default target, production-name and production-URL refusal,
+      # mutations opt-in) are the part that must never regress.
+      - name: Run synthetic probe tests
+        working-directory: tests/probes
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest -q
+
+      - name: Check SLO dashboards are up to date
+        run: |
+          set -euo pipefail
+          python3 scripts/build_slo_dashboards.py
+          if ! git diff --quiet -- docker/grafana/dashboards; then
+            echo "::error::Generated dashboards differ from the committed ones."
+            echo "Run: python scripts/build_slo_dashboards.py, then commit the result."
+            git diff --stat -- docker/grafana/dashboards
+            exit 1
+          fi
+
   security:
     name: Security Scanning
     needs: changes
@@ -221,18 +291,16 @@ jobs:
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
-      # TODO(#1035): drop continue-on-error once the gosec backlog is cleared.
-      # Enforcing this gate surfaced 27 pre-existing findings across 8 rule
-      # classes, including two G704 SSRF (HIGH confidence and severity) in
-      # intelligence_proxy.go, two G202 SQL concatenations, and twelve G115
-      # integer-overflow conversions on chain-facing paths. Those need real
-      # review rather than a blanket suppression; #1035 closes by removing
-      # this line.
+      # Enforcing gate (#1035). The backlog this previously tolerated is
+      # cleared: gosec -severity medium reports zero issues. Findings that were
+      # genuine defects are fixed; the remainder are annotated per-rule at the
+      # single line each applies to, with the reasoning stated in place. No rule
+      # is globally disabled and no suppression is unscoped, so a new finding
+      # fails the build rather than accumulating.
       - name: Run gosec
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
         run: gosec -severity medium ./...
         working-directory: apps/api
-        continue-on-error: true
 
       - uses: pnpm/action-setup@v4
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
@@ -364,9 +432,20 @@ jobs:
       - name: Test (unit)
         run: go test -race -timeout 120s -count=1 -short ./...
 
-      - name: Test (integration)
-        run: go test -race -timeout 120s -count=1 -run Integration ./...
-        continue-on-error: true
+      # Database-backed tests gate on TEST_DATABASE_DSN (the convention in
+      # internal/db and internal/repository/postgres), not DATABASE_URL, so
+      # without this variable every one of them silently skipped — and the
+      # step was continue-on-error, so it never gated a merge either. Scoped
+      # to this step so the unit run above stays DB-free and parallel.
+      #
+      # -p 1: the tests share one database and each wipes the public schema
+      # before applying the full migration chain, so packages must not run
+      # concurrently. No -run filter: DB-gated tests whose names lack
+      # "Integration" (internal/audit, internal/stellar backfill) must run too.
+      - name: Test (database integration)
+        env:
+          TEST_DATABASE_DSN: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
+        run: go test -race -timeout 900s -count=1 -p 1 ./...
 
 
   contracts:
@@ -404,7 +483,15 @@ jobs:
         run: test -f target/wasm32-unknown-unknown/release/vault_token.wasm
 
       - name: Test contracts
+        env:
+          PROPTEST_RNG_SEED: "29062026"
         run: cargo test --lib
+
+      - name: Run deterministic share-accounting properties
+        env:
+          PROPTEST_CASES: "32"
+          PROPTEST_RNG_SEED: "29062026"
+        run: cargo test -p nester-integration-tests property_tests
 
       # The vault contract's integration tests link against the pre-compiled
       # vault_token.wasm artifact built above. Run them explicitly and fail the

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertCircle,
@@ -34,6 +34,7 @@ type ActionState =
   | "building"
   | "signing"
   | "submitting"
+  | "pending"
   | "success"
   | "error";
 
@@ -124,16 +125,32 @@ function ModalShell({
 
 // ── Transaction steps ─────────────────────────────────────────────────────────
 
-const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
+// executeVaultDeposit builds, signs and submits in one call without exposing
+// intermediate stages, so "signing" and "submitting" are never assigned. Keep
+// the steps mapped to states that actually occur; listing unreachable ones
+// leaves the indicator permanently stuck on the first step.
+const TX_STEPS: {
+  label: string;
+  /** States in which this step counts as already done. */
+  activeStates: ActionState[];
+  /** The single state in which this step is the one currently running. */
+  currentState: ActionState;
+}[] = [
   {
-    label: "Build contract call",
-    activeStates: ["building", "signing", "submitting", "success"],
+    label: "Build and sign",
+    activeStates: ["building", "pending", "success"],
+    currentState: "building",
   },
   {
-    label: "Sign with wallet",
-    activeStates: ["signing", "submitting", "success"],
+    label: "Submit to network",
+    activeStates: ["pending", "success"],
+    currentState: "pending",
   },
-  { label: "Submit and confirm", activeStates: ["success"] },
+  {
+    label: "Confirmed on-chain",
+    activeStates: ["success"],
+    currentState: "success",
+  },
 ];
 
 // ── DepositModal ──────────────────────────────────────────────────────────────
@@ -174,7 +191,7 @@ function getVaultMeta(vault: VaultDefinition) {
  */
 export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const { address } = useWallet();
-  const { getAvailableBalance, recordDeposit, refreshBalances } = usePortfolio();
+  const { getAvailableBalance, recordPendingDeposit, confirmPendingDeposit, failPendingDeposit, refreshBalances } = usePortfolio();
   const { isOffline } = useOfflineStatus();
 
   const [amountInput, setAmountInput] = useState("");
@@ -185,6 +202,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const [selectedStrategy, setSelectedStrategy] = useState<MarketStrategy | null>(
     vault?.strategies?.[0] ?? null
   );
+  const submittingRef = useRef(false);
 
   const supportedAssets = (vault?.supportedAssets ?? ["USDC"]) as ("USDC" | "XLM")[];
   const strategies = vault?.strategies ?? [];
@@ -234,17 +252,39 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   };
 
   const handleDeposit = async () => {
-    if (!vault || !address || !canSubmit) return;
+    if (!vault || !address || !canSubmit || submittingRef.current) return;
 
     setErrorMsg("");
 
+    // Validate before claiming the submit flag. Setting it first and then
+    // returning here latches it for the lifetime of the modal, so every
+    // later deposit attempt is silently dropped by the guard above.
     if (!vault.contractAddress || !/^C[A-Z0-9]{55}$/.test(vault.contractAddress)) {
       setErrorMsg("This vault is not yet deployed on testnet. Check back soon.");
       return;
     }
 
+    submittingRef.current = true;
+
+    // Record the pending row and enter the pending state BEFORE awaiting.
+    // Setting them after the await batches them with setState("success") in a
+    // single render, so the "waiting for confirmation" state never paints —
+    // which is the whole point of this change.
+    const pendingTxId = recordPendingDeposit({
+      vault: {
+        id: vault.id,
+        name: vault.name,
+        asset: selectedAsset,
+        apy: meta?.apy || 0,
+        lockDays: meta?.lockDays || 0,
+        earlyWithdrawalPenaltyPct: 0.1,
+      },
+      amount,
+      isOnChain: true,
+    });
+
     try {
-      setState("building");
+      setState("pending");
       const txReceipt = await executeVaultDeposit({
         walletAddress: address,
         vaultId: vault.id,
@@ -253,35 +293,29 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         amount,
       });
 
-      // Record in portfolio state
-      recordDeposit({
-        vault: {
-          id: vault.id,
-          name: vault.name,
-          asset: selectedAsset,
-          apy: meta?.apy || 0,
-          lockDays: meta?.lockDays || 0,
-          earlyWithdrawalPenaltyPct: 0.1,
-        },
-        amount,
-        txHash: txReceipt.txHash,
-        isOnChain: true,
-      });
-
       setReceipt(txReceipt);
+
+      // Confirmation creates the position and deducts the balance. Until the
+      // chain confirms, the user holds no shares and their balance is intact.
+      confirmPendingDeposit(pendingTxId, txReceipt.txHash);
+
       setState("success");
-      // Re-fetch true on-chain balance so UI reflects what actually happened
       refreshBalances();
     } catch (err) {
+      // Without this the pending row is orphaned and persists to
+      // localStorage as "Pending" forever.
+      failPendingDeposit(pendingTxId);
       setErrorMsg(humanizeError(err));
       setState("error");
+    } finally {
+      submittingRef.current = false;
     }
   };
 
   return (
     <ModalShell
       open={open && !!vault}
-      onClose={state === "signing" || state === "submitting" ? () => {} : reset}
+      onClose={state === "signing" || state === "submitting" || state === "pending" ? () => {} : reset}
       title={`Deposit into ${vault?.name ?? "Vault"}`}
       subtitle={`Build and sign a Soroban transaction to deposit ${selectedAsset} into this vault.`}
     >
@@ -466,12 +500,12 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                 Transaction Flow
               </p>
               <div className="mt-4 space-y-3">
-                {TX_STEPS.map(({ label, activeStates }) => {
+                {TX_STEPS.map(({ label, activeStates, currentState }) => {
                   const done = activeStates.includes(state);
-                  const active =
-                    (label === "Build contract call" && state === "building") ||
-                    (label === "Sign with wallet" && state === "signing") ||
-                    (label === "Submit and confirm" && state === "submitting");
+                  // Match on the state, not the label. Comparing against
+                  // label strings silently breaks the moment a label is
+                  // reworded.
+                  const active = state === currentState;
                   return (
                     <div
                       key={label}
@@ -564,7 +598,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
           <div className="flex gap-3">
             <button
               onClick={reset}
-              disabled={state === "signing" || state === "submitting"}
+              disabled={state === "signing" || state === "submitting" || state === "pending"}
               className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
             >
               {state === "success" ? "Close" : "Cancel"}
@@ -581,6 +615,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   state === "building" ||
                   state === "signing" ||
                   state === "submitting" ||
+                  state === "pending" ||
                   (state === "input" && !canSubmit)
                 }
                 className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
@@ -601,6 +636,12 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   <span className="inline-flex items-center justify-center gap-2">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Submitting
+                  </span>
+                )}
+                {state === "pending" && (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Waiting for confirmation
                   </span>
                 )}
                 {state === "error" && "Try Again"}

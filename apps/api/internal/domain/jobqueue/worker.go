@@ -96,7 +96,8 @@ func NewWorker(repo Repository, cfg Config, logger *slog.Logger, metrics Metrics
 		logger:  logger,
 		metrics: metrics,
 		regs:    map[string]*registration{},
-		rng:     rand.New(rand.NewSource(time.Now().UnixNano())), //nolint:gosec // jitter only
+		// Seeds the per-worker jitter source only; see backoff.go.
+		rng: rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404 -- retry backoff jitter, not security-sensitive
 	}
 }
 
@@ -195,7 +196,10 @@ func (w *Worker) tick(ctx context.Context) int {
 		for _, job := range jobs {
 			reg.sem <- struct{}{} // guaranteed non-blocking: free was computed above
 			w.wg.Add(1)
-			go w.process(reg, job)
+			// process derives its own context from the worker lifetime rather
+			// than the dispatch loop's: a job must not be cancelled because the
+			// loop that scheduled it moved on (nester#1035, G118).
+			go w.process(reg, job) // #nosec G118 -- job execution is scoped to the worker lifetime, not the dispatch call
 			dispatched++
 		}
 	}
@@ -289,7 +293,10 @@ func (w *Worker) startHeartbeat(ctx context.Context, cancel context.CancelFunc, 
 	var once sync.Once
 	stopFn := func() { once.Do(func() { close(done) }) }
 
-	go func() {
+	// The heartbeat outlives the call that started it by design: it renews the
+	// job lease for as long as the job runs, and is stopped explicitly via the
+	// returned stop function (nester#1035, G118).
+	go func() { // #nosec G118 -- heartbeat lifetime is managed by the returned stop function
 		ticker := time.NewTicker(w.cfg.HeartbeatInterval)
 		defer ticker.Stop()
 		for {

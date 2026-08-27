@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,6 +10,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/deterioration"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
 // applyDeteriorationIntegrationMigrations wipes and applies only the
@@ -20,33 +21,9 @@ import (
 // themselves.
 func applyDeteriorationIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-	if _, err := db.Exec(`
-		DO $$
-		DECLARE r record;
-		BEGIN
-			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END$$;
-	`); err != nil {
-		t.Fatalf("drop tables: %v", err)
-	}
-	for _, name := range []string{
-		"001_create_users_table.up.sql",
-		"002_create_vaults_table.up.sql",
-		"030_create_vault_rebalances.up.sql",
-		"051_create_protocol_tvl_snapshots.up.sql",
-		"094_create_deterioration_actions.up.sql",
-	} {
-		path := filepath.Join("..", "..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
+	// The full migration chain in numeric order — see testutil.ApplyAllMigrations
+	// for why no per-test subset is used.
+	testutil.ApplyAllMigrations(t, db, filepath.Join("..", "..", "..", "migrations"))
 }
 
 func TestProtocolTVLRepository_ListSince_Integration(t *testing.T) {

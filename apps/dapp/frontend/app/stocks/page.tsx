@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/app-shell";
+import { LoadingRegion } from "@/components/ui/skeleton/skeleton";
 import { useWallet } from "@/components/wallet-provider";
 import { getAccessToken } from "@/lib/auth/token-store";
 import { apiRequest } from "@/lib/api/client";
@@ -485,7 +486,9 @@ export default function StocksPage() {
 
                 <div className="space-y-2">
                     {loadingPools ? (
-                        Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
+                        <LoadingRegion label="Loading yield opportunities" className="space-y-2">
+                            {Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)}
+                        </LoadingRegion>
                     ) : errorPools ? (
                         <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
                             <AlertTriangle className="h-6 w-6 text-black/25 dark:text-white/25" />

@@ -27,6 +27,7 @@ func baseEnv(t *testing.T) {
 		"LOG_LEVEL", "LOG_FORMAT",
 		"ALLOWED_ORIGINS",
 		"RUN_MIGRATIONS", "MIGRATIONS_DIR", "STARTUP_DEPENDENCY_TIMEOUT",
+		"METRICS_ENABLED", "METRICS_ADDR",
 	} {
 		t.Setenv(key, "")
 	}
@@ -1031,6 +1032,46 @@ func TestLoadAllowsDefaultJWTSecretInDevelopment(t *testing.T) {
 
 	if _, err := Load(); err != nil {
 		t.Fatalf("expected Load() to succeed in development with the dev default secret, got %v", err)
+	}
+}
+
+// TestLoadRejectsLowEntropyJWTSecret verifies that a secret long enough to
+// pass the length check but composed of too few distinct characters is rejected
+// (nester#1106).
+func TestLoadRejectsLowEntropyJWTSecret(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	// 32 'a's: passes length, fails entropy.
+	t.Setenv("AUTH_JWT_SECRET", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	chdir(t, t.TempDir())
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load() to fail when AUTH_JWT_SECRET has insufficient entropy")
+	}
+	if !strings.Contains(err.Error(), "entropy") {
+		t.Fatalf("expected entropy error message, got %q", err.Error())
+	}
+}
+
+// TestJWTSecretHasAdequateEntropy covers the helper directly.
+func TestJWTSecretHasAdequateEntropy(t *testing.T) {
+	cases := []struct {
+		secret string
+		want   bool
+	}{
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},           // single distinct byte
+		{"abababababababababababababababab", false},             // only 2 distinct bytes
+		{"abcdefg" + strings.Repeat("a", 25), false},          // 7 distinct bytes
+		{"abcdefgh" + strings.Repeat("a", 24), true},          // exactly 8 distinct bytes
+		{"this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes", true},
+	}
+	for _, tc := range cases {
+		if got := jwtSecretHasAdequateEntropy(tc.secret); got != tc.want {
+			t.Errorf("jwtSecretHasAdequateEntropy(%q) = %v, want %v", tc.secret, got, tc.want)
+		}
 	}
 }
 

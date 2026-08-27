@@ -152,14 +152,20 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 		FROM savings_goals
 		WHERE user_id = $1 AND deleted_at IS NULL
 	`
+	// The filters below append to the statement, but what is appended is a
+	// placeholder index derived from len(args) -- an integer produced by this
+	// function -- never caller data. category and search travel as bound
+	// parameters through QueryContext, so the database receives them separately
+	// from the statement text and never parses them as SQL.
+	// Proven by savings_goal_sqli_test.go (nester#1035).
 	args := []any{userID}
 	if category != "" {
 		args = append(args, category)
-		query += fmt.Sprintf(` AND category = $%d`, len(args))
+		query += fmt.Sprintf(` AND category = $%d`, len(args)) // #nosec G202 -- only the integer placeholder index is interpolated; the value is bound
 	}
 	if search != "" {
 		args = append(args, search)
-		query += fmt.Sprintf(` AND search_vector @@ plainto_tsquery('english', $%d)`, len(args))
+		query += fmt.Sprintf(` AND search_vector @@ plainto_tsquery('english', $%d)`, len(args)) // #nosec G202 -- only the integer placeholder index is interpolated; the value is bound
 	}
 	query += ` ORDER BY created_at DESC`
 
@@ -530,7 +536,9 @@ func (r *SavingsGoalRepository) ListContributions(ctx context.Context, goalID, u
 		query += ` AND (vt.created_at < $3 OR (vt.created_at = $3 AND vt.id < $4))`
 		args = append(args, createdAt.UTC(), cursorID)
 	}
-	query += fmt.Sprintf(` ORDER BY vt.created_at DESC, vt.id DESC LIMIT $%d`, len(args)+1)
+	// As above: the appended value is the placeholder index, not caller input.
+	// The page size is bound as a parameter.
+	query += fmt.Sprintf(` ORDER BY vt.created_at DESC, vt.id DESC LIMIT $%d`, len(args)+1) // #nosec G202 -- only the integer placeholder index is interpolated; the value is bound
 	args = append(args, pageParams.PerPage+1)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)

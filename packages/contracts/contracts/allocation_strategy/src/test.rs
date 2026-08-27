@@ -567,6 +567,16 @@ fn privileged_strategy_calls_require_signatures() {
     assert!(client
         .try_set_allocations(&operator, &1_000_i128, &apys)
         .is_err());
+
+    // Issue #1132: these two entrypoints delegate their signature check to
+    // nester_common::Upgrade, which calls require_auth() itself, rather than
+    // calling it directly like the entrypoints above. That indirection is easy
+    // to break by refactoring, so assert it here: with no auths mocked, both
+    // must still be rejected.
+    assert!(client
+        .try_propose_upgrade(&admin, &soroban_sdk::BytesN::from_array(&env, &[0u8; 32]), &0u64)
+        .is_err());
+    assert!(client.try_cancel_upgrade(&admin).is_err());
 }
 
 #[test]
