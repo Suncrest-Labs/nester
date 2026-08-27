@@ -21,14 +21,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_vaults_contract_address_live
     ON vaults (contract_address)
     WHERE deleted_at IS NULL;
 
--- 2. A transaction hash may be recorded at most once.
+-- 2. Transaction-hash uniqueness is already enforced.
 --
--- This is what makes replay rejection an invariant rather than a race: two
--- concurrent requests carrying the same verified hash cannot both credit a
--- balance, regardless of application-level checks.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_vault_transactions_tx_hash
-    ON vault_transactions (tx_hash)
-    WHERE tx_hash IS NOT NULL AND tx_hash <> '';
+-- Migration 023 creates idx_vault_transactions_transaction_hash_unique, and
+-- 033 renames the column to transaction_hash with the index following it.
+-- NULL hashes stay distinct there, which is the behaviour server-submitted
+-- rows depend on. Re-adding it here would duplicate the index and, worse,
+-- reference the pre-rename column name.
 
 -- 3. Share accounting cannot go negative.
 --

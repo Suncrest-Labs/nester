@@ -84,7 +84,7 @@ func TestIntegrationMoneyPathConstraintsRejectViolations(t *testing.T) {
 		hash := "TXHASH" + uuid.NewString()
 		insertTx := func() error {
 			_, err := db.Exec(
-				`INSERT INTO vault_transactions (vault_id, type, amount, tx_hash)
+				`INSERT INTO vault_transactions (vault_id, type, amount, transaction_hash)
 				 VALUES ($1, 'deposit', 10, $2)`,
 				vaultID, hash,
 			)
@@ -93,19 +93,21 @@ func TestIntegrationMoneyPathConstraintsRejectViolations(t *testing.T) {
 		if err := insertTx(); err != nil {
 			t.Fatalf("first insert: %v", err)
 		}
-		// This is what makes replay rejection an invariant rather than a
-		// race between two concurrent requests.
+		// Enforced by migration 023's unique index. Asserted here because it
+		// is what makes replay rejection an invariant rather than a race
+		// between two concurrent requests.
 		if err := insertTx(); err == nil {
 			t.Fatal("the same transaction hash was recorded twice")
 		}
 	})
 
 	t.Run("null transaction hashes do not collide", func(t *testing.T) {
-		// Server-submitted rows may legitimately have no hash yet; the
-		// partial index must not treat them as duplicates of each other.
+		// Server-submitted rows may legitimately have no hash yet. Postgres
+		// treats NULLs as distinct in a unique index, which is the behaviour
+		// those rows depend on.
 		for i := 0; i < 2; i++ {
 			if _, err := db.Exec(
-				`INSERT INTO vault_transactions (vault_id, type, amount, tx_hash)
+				`INSERT INTO vault_transactions (vault_id, type, amount, transaction_hash)
 				 VALUES ($1, 'deposit', 5, NULL)`,
 				vaultID,
 			); err != nil {
