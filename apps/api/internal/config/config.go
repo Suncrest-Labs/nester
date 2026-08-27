@@ -818,6 +818,10 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("AUTH_JWT_SECRET must not use the development default in production or staging")
 	}
 
+	if !jwtSecretHasAdequateEntropy(c.auth.secret) {
+		loader.addError("AUTH_JWT_SECRET has insufficient entropy: use at least 8 distinct characters")
+	}
+
 	if c.auth.accessTokenExpiry <= 0 {
 		loader.addError("AUTH_ACCESS_TOKEN_EXPIRY must be greater than 0")
 	}
@@ -1376,6 +1380,20 @@ func defaultLogFormat(environment string) string {
 func isOneOf(value string, options ...string) bool {
 	for _, option := range options {
 		if value == option {
+			return true
+		}
+	}
+	return false
+}
+
+// jwtSecretHasAdequateEntropy returns false when the secret is composed of
+// fewer than 8 distinct bytes, catching low-entropy values such as repeated
+// characters or trivially predictable sequences.
+func jwtSecretHasAdequateEntropy(secret string) bool {
+	seen := make(map[byte]struct{}, 8)
+	for i := 0; i < len(secret); i++ {
+		seen[secret[i]] = struct{}{}
+		if len(seen) >= 8 {
 			return true
 		}
 	}
