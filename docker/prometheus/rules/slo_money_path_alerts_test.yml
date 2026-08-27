@@ -115,9 +115,14 @@ tests:
   - interval: 1m
     name: a stalled reconciler pages even though divergences read zero
     input_series:
-      # Age climbing: no pass has completed since minute 0.
+      # A constant well past the 600s threshold rather than a climbing ramp.
+      # The summary humanizes this value, and with a ramp the rendered figure
+      # depends on which sample the evaluation lands on at the boundary — the
+      # assertion would then be about scrape alignment rather than about the
+      # alert. The behaviour under test is "age over threshold pages", which a
+      # constant exercises exactly.
       - series: 'nester_reconcile_last_run_age_seconds'
-        values: '0+60x60'
+        values: '1200x60'
       - series: 'nester_reconcile_runs_total{outcome="completed"}'
         values: '10x60'
       - series: 'nester_reconcile_runs_total{outcome="failed"}'
@@ -229,9 +234,14 @@ tests:
         values: '0+0x60'
       - series: 'nester_submission_pending_count'
         values: '2x60'
-      # Age climbing past the 1800s threshold.
+      # Constant past the 1800s threshold rather than a ramp, for the same
+      # reason as the stalled-reconciler case above: the summary humanizes
+      # this value, and a ramp makes the rendered figure depend on scrape
+      # alignment at the evaluation boundary. Depth stays flat at 2 while the
+      # age sits high, which is the shape this alert exists to catch — the
+      # same few transactions, stuck.
       - series: 'nester_submission_pending_oldest_age_seconds'
-        values: '1500+60x60'
+        values: '2700x60'
     alert_rule_test:
       - eval_time: 20m
         alertname: PendingSubmissionsBacklogged
@@ -242,7 +252,7 @@ tests:
               service: api
             exp_annotations:
               summary: >-
-                Oldest pending submission is 44m 0s old
+                Oldest pending submission is 45m 0s old
               description: >-
                 A transaction submitted to the chain has been awaiting a terminal status for over 30 minutes. Current queue depth:  2. This is a user whose deposit or withdrawal is in limbo — the funds have left their visible balance and have not arrived anywhere they can act on. Check Horizon ingestion and the submission pipeline before assuming the chain is at fault.
               dashboard: /d/nester-slo-money-path/money-path-integrity
