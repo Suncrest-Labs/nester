@@ -603,3 +603,46 @@ groups:
 
       - record: indexer:freshness:sample_error_rate5m
         expr: sum(rate(nester_indexer_lag_sample_errors_total[5m]))
+
+  # Money-path integrity (nester#1108). The SLIs above answer "are deposits and
+  # withdrawals succeeding, and is the indexer keeping up". These answer the
+  # question those cannot: does our record of the money still agree with the
+  # chain, and is anything stuck in flight.
+  #
+  # Recorded here rather than queried ad hoc in each alert so the dashboard and
+  # the pager read the same series, per the note at the top of this file.
+  - name: slo_money_path_integrity
+    interval: 30s
+    rules:
+      # Divergence rate by kind. A mismatch means a balance is wrong, which is
+      # categorically worse than a record merely missing or stuck, so the kind
+      # label is preserved rather than summed away.
+      - record: reconcile:divergence:rate5m
+        expr: sum by (kind) (rate(nester_reconcile_divergences_total[5m]))
+
+      - record: reconcile:divergence:rate30m
+        expr: sum by (kind) (rate(nester_reconcile_divergences_total[30m]))
+
+      # Total divergences seen in the last hour, for the "any divergence at
+      # all" alert. #1108 asks to alert on any reconciliation divergence, so
+      # this is an increase over a window rather than a rate threshold.
+      - record: reconcile:divergence:increase1h
+        expr: sum(increase(nester_reconcile_divergences_total[1h]))
+
+      # Reconciler liveness. A divergence count of zero means nothing if the
+      # reconciler is not running, so the age of the last completed pass is
+      # recorded alongside the findings.
+      - record: reconcile:health:last_run_age_seconds
+        expr: max(nester_reconcile_last_run_age_seconds)
+
+      - record: reconcile:health:failed_run_rate5m
+        expr: sum(rate(nester_reconcile_runs_total{outcome="failed"}[5m]))
+
+      # Pending submissions. Depth alone is ambiguous — a large queue that
+      # drains is healthy — so the age of the oldest entry is the series the
+      # alert is written against.
+      - record: submission:pending:count
+        expr: max(nester_submission_pending_count)
+
+      - record: submission:pending:oldest_age_seconds
+        expr: max(nester_submission_pending_oldest_age_seconds)

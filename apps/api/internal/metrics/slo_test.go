@@ -20,6 +20,12 @@ func TestNilMetricsIsSafeOnEveryPath(t *testing.T) {
 	m.SetIndexerLag(42)
 	m.SetIndexerLagSampleAge(time.Minute)
 	m.RecordIndexerLagSampleError()
+	m.RecordReconcileRun(ReconcileCompleted)
+	m.RecordReconcileRun(ReconcileFailed)
+	m.RecordReconcileDivergence(DivergenceMismatch)
+	m.SetReconcileLastRunAge(time.Minute)
+	m.SetPendingSubmissions(3, time.Hour)
+	m.SetPendingSubmissions(0, 0)
 }
 
 func TestFlowAttemptRecordsCounterAndHistogram(t *testing.T) {
@@ -176,5 +182,97 @@ func TestIndexerLagSampleErrorsAreCounted(t *testing.T) {
 
 	if got := counterValue(t, m.Registry(), "nester_indexer_lag_sample_errors_total", nil); got != 2 {
 		t.Fatalf("sample errors = %v, want 2", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation and pending submissions (nester#1108)
+// ---------------------------------------------------------------------------
+
+// A pass that could not list its work must be counted separately from one that
+// ran and found nothing. Collapsing them would let a permanently broken
+// reconciler report a clean divergence count indefinitely, which is the one
+// reading an operator must never get wrong.
+func TestReconcileRunOutcomesAreCountedSeparately(t *testing.T) {
+	m := New()
+
+	m.RecordReconcileRun(ReconcileCompleted)
+	m.RecordReconcileRun(ReconcileCompleted)
+	m.RecordReconcileRun(ReconcileFailed)
+
+	completed := counterValue(t, m.Registry(), "nester_reconcile_runs_total", map[string]string{"outcome": "completed"})
+	if completed != 2 {
+		t.Fatalf("completed runs = %v, want 2", completed)
+	}
+	failed := counterValue(t, m.Registry(), "nester_reconcile_runs_total", map[string]string{"outcome": "failed"})
+	if failed != 1 {
+		t.Fatalf("failed runs = %v, want 1", failed)
+	}
+}
+
+// Divergences are counted per finding and per kind, so an alert can treat a
+// mismatch (a wrong balance) differently from a stuck submission.
+func TestReconcileDivergencesAreCountedByKind(t *testing.T) {
+	m := New()
+
+	m.RecordReconcileDivergence(DivergenceMismatch)
+	m.RecordReconcileDivergence(DivergenceStuck)
+	m.RecordReconcileDivergence(DivergenceStuck)
+
+	if got := counterValue(t, m.Registry(), "nester_reconcile_divergences_total", map[string]string{"kind": "mismatch"}); got != 1 {
+		t.Fatalf("mismatch divergences = %v, want 1", got)
+	}
+	if got := counterValue(t, m.Registry(), "nester_reconcile_divergences_total", map[string]string{"kind": "stuck"}); got != 2 {
+		t.Fatalf("stuck divergences = %v, want 2", got)
+	}
+}
+
+// A completed pass resets the age gauge, so the "reconciler is alive" signal
+// cannot be satisfied by a pass that never finished.
+func TestReconcileRunResetsLastRunAge(t *testing.T) {
+	m := New()
+
+	m.SetReconcileLastRunAge(900 * time.Second)
+	if got := gaugeValue(t, m.Registry(), "nester_reconcile_last_run_age_seconds"); got != 900 {
+		t.Fatalf("pre-run age = %v, want 900", got)
+	}
+
+	m.RecordReconcileRun(ReconcileCompleted)
+
+	if got := gaugeValue(t, m.Registry(), "nester_reconcile_last_run_age_seconds"); got != 0 {
+		t.Fatalf("post-run age = %v, want 0", got)
+	}
+}
+
+// Depth and oldest-age are published together because depth alone is
+// ambiguous: a large queue that drains is healthy, a small one that never
+// drains is not.
+func TestPendingSubmissionsPublishesDepthAndOldestAge(t *testing.T) {
+	m := New()
+
+	m.SetPendingSubmissions(4, 90*time.Second)
+
+	if got := gaugeValue(t, m.Registry(), "nester_submission_pending_count"); got != 4 {
+		t.Fatalf("pending count = %v, want 4", got)
+	}
+	if got := gaugeValue(t, m.Registry(), "nester_submission_pending_oldest_age_seconds"); got != 90 {
+		t.Fatalf("oldest age = %v, want 90", got)
+	}
+}
+
+// An empty queue must report zero age, not the last non-empty reading. A
+// carried-over age would keep the pending-submission alert firing after the
+// backlog had actually drained.
+func TestEmptyPendingQueueZeroesOldestAge(t *testing.T) {
+	m := New()
+
+	m.SetPendingSubmissions(4, 90*time.Second)
+	m.SetPendingSubmissions(0, 0)
+
+	if got := gaugeValue(t, m.Registry(), "nester_submission_pending_count"); got != 0 {
+		t.Fatalf("pending count = %v, want 0", got)
+	}
+	if got := gaugeValue(t, m.Registry(), "nester_submission_pending_oldest_age_seconds"); got != 0 {
+		t.Fatalf("oldest age = %v, want 0 for a drained queue", got)
 	}
 }

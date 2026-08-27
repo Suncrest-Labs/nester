@@ -1,0 +1,292 @@
+# promtool unit tests for the money-path integrity alerts (nester#1108).
+#
+# Run:
+#   promtool test rules docker/prometheus/rules/slo_money_path_alerts_test.yml
+#
+# Executed in CI (.github/workflows/ci.yml, "SLO rules" job) against the same
+# rule files Prometheus loads.
+#
+# What is being proven:
+#
+#   1. A healthy money path — reconciler ticking, no divergences, queue
+#      draining — pages nobody.
+#   2. Any divergence at all pages, since there is no acceptable steady-state
+#      rate of our ledger disagreeing with the chain (#1108 asks to alert on
+#      "any reconciliation divergence").
+#   3. The liveness alerts fire when the reconciler stops or its passes abort.
+#      These are the tests that matter most: without them a dead reconciler
+#      reports zero divergences forever and the whole group reads healthy
+#      while nothing is being checked.
+#   4. Pending-submission alerting keys on the AGE of the oldest entry, not on
+#      queue depth — a deep queue that drains is healthy, a shallow one that
+#      never drains is not.
+#   5. Absent metrics page rather than silently disabling the group.
+
+rule_files:
+  - slo_recording.yml
+  - slo_alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------
+  # 1. Healthy steady state
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a healthy money path alerts on nothing
+    input_series:
+      # Reconciler completing passes: age resets, so it stays low.
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '0+4x60'
+      - series: 'nester_reconcile_runs_total{outcome="failed"}'
+        values: '0x60'
+      # No divergences at all.
+      - series: 'nester_reconcile_divergences_total{kind="mismatch"}'
+        values: '0x60'
+      # A queue that exists but drains: depth varies, age stays low.
+      - series: 'nester_submission_pending_count'
+        values: '3 5 2 4 1 3 2 5 3 1 4 2 3 1 2 4 3 2 1 3 2 4 1 3 2 5 3 1 2 4 3 2 1 3 2 4 1 3 2 5 3 1 2 4 3 2 1 3 2 4 1 3 2 5 3 1 2 4 3 2 1'
+      - series: 'nester_submission_pending_oldest_age_seconds'
+        values: '45x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ReconciliationDivergence
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ReconciliationStalled
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ReconciliationFailing
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: PendingSubmissionsBacklogged
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: MoneyPathMetricsAbsent
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # 2. Any divergence pages
+  # ---------------------------------------------------------------------
+  # A single mismatch is enough. This is deliberately not a rate threshold:
+  # one wrong balance is a bug, and the only open question is blast radius.
+  - interval: 1m
+    name: a single divergence pages
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '0+4x60'
+      - series: 'nester_reconcile_runs_total{outcome="failed"}'
+        values: '0x60'
+      # One divergence appears at minute 10 and the counter stays there.
+      - series: 'nester_reconcile_divergences_total{kind="mismatch"}'
+        values: '0x10 1x50'
+      - series: 'nester_submission_pending_count'
+        values: '0x60'
+      - series: 'nester_submission_pending_oldest_age_seconds'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ReconciliationDivergence
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: money_path_integrity
+              service: api
+            exp_annotations:
+              summary: >-
+                Reconciliation found 1 divergence(s) between our records and the chain in the last hour
+              description: >-
+                The reconciler compared our transaction records against the chain and they disagree. Breakdown by kind:  mismatch=0.0006/s  A "mismatch" is the most serious — both sides have the record and the values differ, which means a displayed balance is wrong. "missing" and "extra" mean a record exists on one side only. "stuck" means a submission has not reached a terminal state. Paging rather than ticketing because a savings product whose balance disagrees with the chain cannot be allowed to keep taking deposits while someone reads a ticket queue.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/money-path-integrity.md
+
+  # ---------------------------------------------------------------------
+  # 3. Liveness — the false-clean cases
+  # ---------------------------------------------------------------------
+  # The most important test in this file. The reconciler stops, so the
+  # divergence counter is frozen and reports zero. ReconciliationDivergence
+  # correctly stays silent — there is genuinely no new divergence data — and
+  # ReconciliationStalled is what tells the operator that silence is
+  # meaningless rather than reassuring.
+  - interval: 1m
+    name: a stalled reconciler pages even though divergences read zero
+    input_series:
+      # Age climbing: no pass has completed since minute 0.
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+60x60'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '10x60'
+      - series: 'nester_reconcile_runs_total{outcome="failed"}'
+        values: '0x60'
+      - series: 'nester_reconcile_divergences_total{kind="mismatch"}'
+        values: '0x60'
+      - series: 'nester_submission_pending_count'
+        values: '0x60'
+      - series: 'nester_submission_pending_oldest_age_seconds'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReconciliationStalled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: money_path_integrity
+              service: api
+            exp_annotations:
+              summary: >-
+                Reconciliation has not completed a pass for 20m 0s
+              description: >-
+                The transaction poller has not finished a reconciliation pass in over 10 minutes, against a 15s interval. While this is firing the ReconciliationDivergence alert above is meaningless: it reports zero because nothing is being checked, not because everything agrees. Treat divergence silence as unknown, not clean, until this clears. Check the poller goroutine and nester_reconcile_runs_total{outcome="failed"}.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/money-path-integrity.md
+      # The divergence alert stays quiet, which is exactly why the stall alert
+      # has to exist.
+      - eval_time: 20m
+        alertname: ReconciliationDivergence
+        exp_alerts: []
+
+  # A brief stall must not page. Restarts and slow ticks are routine; the
+  # 600s threshold plus for:5m absorbs them.
+  - interval: 1m
+    name: a brief reconciler gap is tolerated
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+60x8 0+0x50'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '0+4x60'
+      - series: 'nester_reconcile_runs_total{outcome="failed"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ReconciliationStalled
+        exp_alerts: []
+
+  # The loop is alive and ticking, but every pass aborts before inspecting
+  # anything. Divergences again read zero for the wrong reason.
+  - interval: 1m
+    name: passes that abort before inspecting anything open a ticket
+    input_series:
+      # Age resets, so the loop is running — ReconciliationStalled will not fire.
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '10x60'
+      - series: 'nester_reconcile_runs_total{outcome="failed"}'
+        values: '0+4x60'
+      - series: 'nester_reconcile_divergences_total{kind="mismatch"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ReconciliationFailing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: money_path_integrity
+              service: api
+            exp_annotations:
+              summary: >-
+                Reconciliation passes are failing before inspecting anything
+              description: >-
+                The poller is running but its passes abort while listing pending transactions, so nothing is being reconciled and the divergence count is falsely clean. Usually a database error on the list-pending query. Ticketing rather than paging because ReconciliationStalled pages if the loop stops entirely; this is the narrower case where it keeps ticking without doing work.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/money-path-integrity.md
+      # A ticking loop is not a stalled one.
+      - eval_time: 30m
+        alertname: ReconciliationStalled
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # 4. Pending submissions — age, not depth
+  # ---------------------------------------------------------------------
+  # A deep queue that keeps draining is healthy. If this alert keyed on depth
+  # it would page here, which would be wrong and would train people to ignore
+  # it during exactly the traffic spikes when the money path matters most.
+  - interval: 1m
+    name: a deep but draining queue does not alert
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_submission_pending_count'
+        values: '250x60'
+      # Entries turn over quickly: the oldest is always young.
+      - series: 'nester_submission_pending_oldest_age_seconds'
+        values: '90x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: PendingSubmissionsBacklogged
+        exp_alerts: []
+
+  # A shallow queue that never moves is the real failure: the same few
+  # transactions, stuck, with someone's money in limbo.
+  - interval: 1m
+    name: a shallow queue that never drains pages
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_submission_pending_count'
+        values: '2x60'
+      # Age climbing past the 1800s threshold.
+      - series: 'nester_submission_pending_oldest_age_seconds'
+        values: '1500+60x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PendingSubmissionsBacklogged
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: money_path_integrity
+              service: api
+            exp_annotations:
+              summary: >-
+                Oldest pending submission is 44m 0s old
+              description: >-
+                A transaction submitted to the chain has been awaiting a terminal status for over 30 minutes. Current queue depth:  2. This is a user whose deposit or withdrawal is in limbo — the funds have left their visible balance and have not arrived anywhere they can act on. Check Horizon ingestion and the submission pipeline before assuming the chain is at fault.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/money-path-integrity.md
+
+  # Boundary: just under the threshold stays quiet.
+  - interval: 1m
+    name: a pending submission just under the threshold does not page
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_submission_pending_count'
+        values: '1x60'
+      - series: 'nester_submission_pending_oldest_age_seconds'
+        values: '1700x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: PendingSubmissionsBacklogged
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # 5. Absent metrics
+  # ---------------------------------------------------------------------
+  # Every alert in this group evaluates against the reconcile age series. If
+  # it disappears, the group silently stops evaluating and the money path
+  # becomes unmonitored — so its absence has to be an alert of its own.
+  - interval: 1m
+    name: absent money-path metrics page
+    input_series:
+      # Deliberately unrelated: the reconcile series is simply not present.
+      - series: 'nester_flow_attempts_total{flow="deposit",outcome="succeeded"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MoneyPathMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: money_path_integrity
+              service: api
+            exp_annotations:
+              summary: >-
+                Money-path integrity metrics are absent
+              description: >-
+                nester_reconcile_last_run_age_seconds has not been reported for 10 minutes. Every alert in this group evaluates against it, so reconciliation and pending-submission monitoring are both dark. Either the API is down (in which case other alerts are firing) or the transaction poller was never started — TX_POLLER_ENABLED unset disables it silently at boot.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/money-path-integrity.md

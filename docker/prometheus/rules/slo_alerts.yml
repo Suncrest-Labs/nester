@@ -523,6 +523,140 @@ groups:
   # An SLO stack that cannot tell you it has stopped working is worse than no
   # SLO stack, because it produces confident silence. These alerts cover the
   # failure mode where every dashboard is green because no data is arriving.
+  # Money-path integrity (nester#1108). The flow and freshness alerts above
+  # catch deposits failing and balances going stale. These catch the two
+  # conditions those miss entirely: our record disagreeing with the chain, and
+  # money stuck in flight.
+  - name: slo_alerts_money_path_integrity
+    rules:
+      - alert: ReconciliationDivergence
+        # Any divergence, not a rate over a threshold. #1108 asks to alert on
+        # "any reconciliation divergence" because there is no acceptable
+        # steady-state rate of our ledger disagreeing with the chain — one is
+        # a bug, and the question is only how many users it touched.
+        expr: reconcile:divergence:increase1h > 0
+        for: 5m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Reconciliation found {{ $value | printf "%.0f" }} divergence(s)
+            between our records and the chain in the last hour
+          description: >-
+            The reconciler compared our transaction records against the chain
+            and they disagree. Breakdown by kind:
+            {{ with query "reconcile:divergence:rate30m" }}
+            {{ range . }}{{ .Labels.kind }}={{ .Value | printf "%.4f" }}/s
+            {{ end }}{{ end }}
+            A "mismatch" is the most serious — both sides have the record and
+            the values differ, which means a displayed balance is wrong.
+            "missing" and "extra" mean a record exists on one side only.
+            "stuck" means a submission has not reached a terminal state.
+            Paging rather than ticketing because a savings product whose
+            balance disagrees with the chain cannot be allowed to keep taking
+            deposits while someone reads a ticket queue.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: ReconciliationStalled
+        # The counterpart to the alert above. Zero divergences is only good
+        # news if the reconciler actually ran; a dead reconciler reports zero
+        # forever. Threshold is well above the 15s poll interval so a slow
+        # tick or a restart does not page.
+        expr: reconcile:health:last_run_age_seconds > 600
+        for: 5m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Reconciliation has not completed a pass for
+            {{ $value | humanizeDuration }}
+          description: >-
+            The transaction poller has not finished a reconciliation pass in
+            over 10 minutes, against a 15s interval. While this is firing the
+            ReconciliationDivergence alert above is meaningless: it reports
+            zero because nothing is being checked, not because everything
+            agrees. Treat divergence silence as unknown, not clean, until this
+            clears. Check the poller goroutine and
+            nester_reconcile_runs_total{outcome="failed"}.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: ReconciliationFailing
+        # A pass that cannot list its work. Distinct from the stall above: the
+        # loop is alive and ticking, but every pass aborts before inspecting
+        # anything, which also produces a false-clean divergence count.
+        expr: reconcile:health:failed_run_rate5m > 0
+        for: 15m
+        labels:
+          severity: ticket
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Reconciliation passes are failing before inspecting anything
+          description: >-
+            The poller is running but its passes abort while listing pending
+            transactions, so nothing is being reconciled and the divergence
+            count is falsely clean. Usually a database error on the
+            list-pending query. Ticketing rather than paging because
+            ReconciliationStalled pages if the loop stops entirely; this is
+            the narrower case where it keeps ticking without doing work.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: PendingSubmissionsBacklogged
+        # Age, not depth. A queue of 200 that drains in seconds is healthy; a
+        # queue of 3 that has not moved in 30 minutes is money the user cannot
+        # see and cannot get back.
+        expr: submission:pending:oldest_age_seconds > 1800
+        for: 10m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Oldest pending submission is {{ $value | humanizeDuration }} old
+          description: >-
+            A transaction submitted to the chain has been awaiting a terminal
+            status for over 30 minutes. Current queue depth:
+            {{ with query "submission:pending:count" }}
+            {{ . | first | value | printf "%.0f" }}{{ end }}.
+            This is a user whose deposit or withdrawal is in limbo — the funds
+            have left their visible balance and have not arrived anywhere they
+            can act on. Check Horizon ingestion and the submission pipeline
+            before assuming the chain is at fault.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: MoneyPathMetricsAbsent
+        # The same protection the indexer has: if these series vanish, every
+        # alert in this group silently stops evaluating and the money path
+        # becomes unmonitored without anything firing.
+        expr: absent(nester_reconcile_last_run_age_seconds)
+        for: 10m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Money-path integrity metrics are absent
+          description: >-
+            nester_reconcile_last_run_age_seconds has not been reported for 10
+            minutes. Every alert in this group evaluates against it, so
+            reconciliation and pending-submission monitoring are both dark.
+            Either the API is down (in which case other alerts are firing) or
+            the transaction poller was never started — TX_POLLER_ENABLED unset
+            disables it silently at boot.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
   - name: slo_alerts_meta
     rules:
       - alert: SLOTargetDown

@@ -103,7 +103,52 @@ type sloCollectors struct {
 	indexerLagLedgers      prometheus.Gauge
 	indexerLagStaleness    prometheus.Gauge
 	indexerLagScrapeErrors prometheus.Counter
+
+	reconcileRunsTotal      *prometheus.CounterVec
+	reconcileDivergences    *prometheus.CounterVec
+	reconcileLastRunAge     prometheus.Gauge
+	pendingSubmissions      prometheus.Gauge
+	pendingSubmissionOldest prometheus.Gauge
 }
+
+// ReconcileOutcome is the terminal classification of one reconciliation pass.
+//
+// A pass that could not even list its work (succeeded == false, the
+// list-pending query failed) is a different operational event from one that
+// ran and found nothing wrong, and folding them together would let a
+// permanently broken reconciler report a clean divergence count forever.
+type ReconcileOutcome string
+
+const (
+	// ReconcileCompleted means the pass ran to completion. It says nothing
+	// about whether divergences were found — that is the divergence counter.
+	ReconcileCompleted ReconcileOutcome = "completed"
+	// ReconcileFailed means the pass could not enumerate its work and did
+	// not inspect anything.
+	ReconcileFailed ReconcileOutcome = "failed"
+)
+
+// DivergenceKind classifies a single reconciliation finding.
+//
+// The values mirror reconciliation.DiscrepancyType rather than inventing a
+// parallel vocabulary, so an operator reading an alert and an engineer reading
+// the reconciliation engine are using the same words. It is a closed set, so
+// cardinality is fixed at compile time in line with the package policy.
+type DivergenceKind string
+
+const (
+	// DivergenceMissing is a record the chain has and we do not.
+	DivergenceMissing DivergenceKind = "missing"
+	// DivergenceExtra is a record we have and the chain does not.
+	DivergenceExtra DivergenceKind = "extra"
+	// DivergenceMismatch is a record both sides have with differing values —
+	// the most serious kind, since it means a balance is wrong rather than
+	// absent.
+	DivergenceMismatch DivergenceKind = "mismatch"
+	// DivergenceStuck is a record that has not reached a terminal state
+	// within its expected window.
+	DivergenceStuck DivergenceKind = "stuck"
+)
 
 func newSLOCollectors() *sloCollectors {
 	return &sloCollectors{
@@ -167,6 +212,66 @@ func newSLOCollectors() *sloCollectors {
 			Name:      "lag_sample_errors_total",
 			Help:      "Failed attempts to sample indexer lag.",
 		}),
+
+		// Reconciliation (nester#1108). The reconciler compares our record of
+		// the money path against the chain. Until now it reported only to the
+		// log, which means a divergence — the single most serious signal this
+		// system can produce, since it says a balance is wrong — was visible
+		// only to whoever happened to read the logs.
+		//
+		// Runs are counted by outcome so an alert can tell "reconciled, all
+		// clean" from "could not reconcile at all". The latter is the
+		// dangerous silence: no divergences are reported precisely because
+		// nothing was checked.
+		reconcileRunsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: Namespace,
+			Subsystem: "reconcile",
+			Name:      "runs_total",
+			Help:      "Reconciliation passes by outcome.",
+		}, []string{"outcome"}),
+
+		// Divergences are counted, never gauged. A gauge would report the
+		// current pass's count and silently erase a divergence that was
+		// found and then resolved by a correction, losing exactly the
+		// history an incident review needs. The kind label carries the
+		// reconciliation engine's own discrepancy vocabulary.
+		reconcileDivergences: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: Namespace,
+			Subsystem: "reconcile",
+			Name:      "divergences_total",
+			Help:      "Reconciliation findings where our record and the chain disagree, by kind.",
+		}, []string{"kind"}),
+
+		// As with indexer lag, a divergence counter alone cannot distinguish
+		// "no divergences" from "the reconciler stopped running an hour ago".
+		// This gauge is the age of the last completed pass, so an alert can
+		// require the checker itself to be alive.
+		reconcileLastRunAge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "reconcile",
+			Name:      "last_run_age_seconds",
+			Help:      "Seconds since the last reconciliation pass completed.",
+		}),
+
+		// Pending submissions (nester#1108). A submission that never reaches
+		// a terminal state is money in flight that the user cannot see and
+		// the protocol has not settled. Depth alone is ambiguous — a large
+		// queue that drains is healthy, a small one that never drains is not
+		// — so the age of the oldest entry is published alongside it and is
+		// the value worth alerting on.
+		pendingSubmissions: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "submission",
+			Name:      "pending_count",
+			Help:      "Transactions submitted to the chain still awaiting a terminal status.",
+		}),
+
+		pendingSubmissionOldest: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "submission",
+			Name:      "pending_oldest_age_seconds",
+			Help:      "Age of the oldest transaction still awaiting a terminal status.",
+		}),
 	}
 }
 
@@ -177,6 +282,11 @@ func (c *sloCollectors) collectors() []prometheus.Collector {
 		c.indexerLagLedgers,
 		c.indexerLagStaleness,
 		c.indexerLagScrapeErrors,
+		c.reconcileRunsTotal,
+		c.reconcileDivergences,
+		c.reconcileLastRunAge,
+		c.pendingSubmissions,
+		c.pendingSubmissionOldest,
 	}
 }
 
@@ -230,4 +340,60 @@ func (m *Metrics) RecordIndexerLagSampleError() {
 	}
 
 	m.slo.indexerLagScrapeErrors.Inc()
+}
+
+// RecordReconcileRun records one completed reconciliation pass and resets the
+// last-run age, so an alert can distinguish a clean pass from a reconciler
+// that has stopped running.
+//
+// Call this on every return path of a pass, including the early return when
+// the work could not be listed — a pass that failed to enumerate is exactly
+// the case an operator must not mistake for a clean result.
+func (m *Metrics) RecordReconcileRun(outcome ReconcileOutcome) {
+	if m == nil {
+		return
+	}
+
+	m.slo.reconcileRunsTotal.WithLabelValues(string(outcome)).Inc()
+	m.slo.reconcileLastRunAge.Set(0)
+}
+
+// RecordReconcileDivergence counts one finding where our record and the chain
+// disagree. Call it once per finding, not once per pass, so the counter
+// reflects how much disagreement exists rather than how often any was seen.
+func (m *Metrics) RecordReconcileDivergence(kind DivergenceKind) {
+	if m == nil {
+		return
+	}
+
+	m.slo.reconcileDivergences.WithLabelValues(string(kind)).Inc()
+}
+
+// SetReconcileLastRunAge publishes how long ago the last pass completed. The
+// reconciler's own ticker ages this between passes.
+func (m *Metrics) SetReconcileLastRunAge(age time.Duration) {
+	if m == nil {
+		return
+	}
+
+	m.slo.reconcileLastRunAge.Set(age.Seconds())
+}
+
+// SetPendingSubmissions publishes the current in-flight submission backlog:
+// how many transactions await a terminal status, and how old the oldest is.
+//
+// oldest is zero when the queue is empty, which reads correctly on a graph —
+// an empty queue has no waiting time — and keeps the alert on this gauge from
+// firing on a drained queue.
+func (m *Metrics) SetPendingSubmissions(count int, oldest time.Duration) {
+	if m == nil {
+		return
+	}
+
+	m.slo.pendingSubmissions.Set(float64(count))
+	if count == 0 {
+		m.slo.pendingSubmissionOldest.Set(0)
+		return
+	}
+	m.slo.pendingSubmissionOldest.Set(oldest.Seconds())
 }

@@ -830,11 +830,162 @@ def build_probe_dashboard() -> dict[str, Any]:
     )
 
 
+def build_money_path_dashboard() -> dict[str, Any]:
+    panels = [
+        _text(
+            "Money path integrity — reconciliation and in-flight submissions",
+            (
+                "The deposit/withdrawal SLO answers *are transactions "
+                "succeeding*. Balance freshness answers *is the indexer "
+                "keeping up*. This board answers what neither can: **does our "
+                "record of the money still agree with the chain, and is "
+                "anything stuck in flight** (nester#1108).\n\n"
+                "**Read the liveness panels first.** A divergence count of "
+                "zero means one of two opposite things — *we checked and "
+                "everything agrees*, or *we did not check*. The reconciler "
+                "age and failed-pass panels are what tell those apart. If the "
+                "reconciler is stalled, treat divergence silence as unknown, "
+                "not clean.\n\n"
+                "**Runbook** `docs/observability/runbooks/money-path-integrity.md`"
+            ),
+            {"h": 6, "w": 24, "x": 0, "y": 0},
+        ),
+        # Liveness first, deliberately: these gate the interpretation of every
+        # panel below them.
+        _stat(
+            "Reconciler last run",
+            "reconcile:health:last_run_age_seconds",
+            "s",
+            {"h": 5, "w": 6, "x": 0, "y": 6},
+            description=(
+                "Seconds since a pass completed, against a 15s interval. Pages "
+                "above 600. If this is climbing, the divergence panels below "
+                "are meaningless."
+            ),
+            decimals=0,
+            thresholds=[
+                {"color": "green", "value": None},
+                {"color": "orange", "value": 120},
+                {"color": "red", "value": 600},
+            ],
+        ),
+        _stat(
+            "Failed passes",
+            "reconcile:health:failed_run_rate5m",
+            "none",
+            {"h": 5, "w": 6, "x": 6, "y": 6},
+            description=(
+                "Passes per second that aborted before inspecting anything. "
+                "Non-zero means the divergence count is falsely clean."
+            ),
+            thresholds=[
+                {"color": "green", "value": None},
+                {"color": "red", "value": 0.001},
+            ],
+        ),
+        _stat(
+            "Divergences (1h)",
+            "reconcile:divergence:increase1h",
+            "none",
+            {"h": 5, "w": 6, "x": 12, "y": 6},
+            description=(
+                "Findings where our record and the chain disagree. Pages above "
+                "zero — there is no acceptable steady-state rate."
+            ),
+            decimals=0,
+            thresholds=[
+                {"color": "green", "value": None},
+                {"color": "red", "value": 1},
+            ],
+        ),
+        _stat(
+            "Oldest pending submission",
+            "submission:pending:oldest_age_seconds",
+            "s",
+            {"h": 5, "w": 6, "x": 18, "y": 6},
+            description=(
+                "Age of the oldest transaction awaiting a terminal status. "
+                "Pages above 1800. This is money the user cannot see or reach."
+            ),
+            decimals=0,
+            thresholds=[
+                {"color": "green", "value": None},
+                {"color": "orange", "value": 600},
+                {"color": "red", "value": 1800},
+            ],
+        ),
+        _timeseries(
+            "Divergences by kind",
+            [("reconcile:divergence:rate5m", "{{kind}}")],
+            "none",
+            {"h": 9, "w": 12, "x": 0, "y": 11},
+            description=(
+                "Split by kind because they are not equally serious. mismatch "
+                "means both sides have the record and the values differ — a "
+                "displayed balance is wrong, and re-indexing will not fix it. "
+                "missing/extra mean a record exists on one side only. stuck "
+                "means a submission has not reached a terminal state; a low "
+                "steady rate is expected, a growing one is not."
+            ),
+        ),
+        _timeseries(
+            "Reconciliation passes by outcome",
+            [("sum by (outcome) (rate(nester_reconcile_runs_total[5m]))", "{{outcome}}")],
+            "none",
+            {"h": 9, "w": 12, "x": 12, "y": 11},
+            description=(
+                "completed vs failed. A healthy reconciler shows a flat "
+                "completed line and no failed line. failed means passes are "
+                "running but inspecting nothing — usually a database error on "
+                "the list-pending query."
+            ),
+        ),
+        _timeseries(
+            "Pending submission backlog",
+            [
+                ("submission:pending:count", "queue depth"),
+                ("submission:pending:oldest_age_seconds", "oldest age (s)"),
+            ],
+            "none",
+            {"h": 9, "w": 12, "x": 0, "y": 20},
+            description=(
+                "Depth alone is ambiguous — a large queue that drains is "
+                "healthy, a small one that never drains is not. Watch whether "
+                "the oldest-age line resets or climbs monotonically; a climb "
+                "with steady depth means the same transactions are stuck."
+            ),
+        ),
+        _timeseries(
+            "Reconciler age over time",
+            [("reconcile:health:last_run_age_seconds", "last run age")],
+            "s",
+            {"h": 9, "w": 12, "x": 12, "y": 20},
+            description=(
+                "Should sawtooth near zero, resetting every pass. A monotonic "
+                "climb means the poller stopped, and every integrity signal on "
+                "this board froze with it."
+            ),
+            thresholds=[
+                {"color": "green", "value": None},
+                {"color": "red", "value": 600},
+            ],
+        ),
+    ]
+
+    return _dashboard(
+        "nester-slo-money-path",
+        "SLO — Money path integrity",
+        "Reconciliation divergences and in-flight submission backlog (nester#1108).",
+        panels,
+    )
+
+
 DASHBOARDS = {
     "slo-api-availability.json": build_api_dashboard,
     "slo-deposits-withdrawals.json": build_flow_dashboard,
     "slo-intelligence.json": build_intelligence_dashboard,
     "slo-balance-freshness.json": build_balance_dashboard,
+    "slo-money-path-integrity.json": build_money_path_dashboard,
     "slo-synthetic-probes.json": build_probe_dashboard,
 }
 

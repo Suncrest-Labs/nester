@@ -196,7 +196,7 @@ jobs:
       # quiet, and the thresholds behave at the boundary.
       - name: Run burn-rate alert tests
         working-directory: docker/prometheus/rules
-        run: promtool test rules slo_alerts_test.yml slo_probe_alerts_test.yml
+        run: promtool test rules slo_alerts_test.yml slo_probe_alerts_test.yml slo_money_path_alerts_test.yml
 
       # The dashboards are generated from scripts/build_slo_dashboards.py so
       # the panels and thresholds stay consistent across four files. Committing
