@@ -41,7 +41,7 @@ func TestRPCChainEventVerifier_RejectsFailedTx(t *testing.T) {
 }
 
 func TestRPCChainEventVerifier_ReadsWithdrawAmountFromMeta(t *testing.T) {
-	contract := "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	contract := "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
 	raw, err := strkey.Decode(strkey.VersionByteContract, contract)
 	if err != nil {
 		t.Fatalf("decode contract: %v", err)
@@ -52,29 +52,35 @@ func TestRPCChainEventVerifier_ReadsWithdrawAmountFromMeta(t *testing.T) {
 	amountSym := xdr.ScSymbol("amount")
 	withdrawSym := xdr.ScSymbol("WITHDRAW")
 	stroops := xdr.Int128Parts{Hi: 0, Lo: xdr.Uint64(250_000_000)} // 25.0000000 USDC
+	amountMap := xdr.ScMap{
+		{
+			Key: xdr.ScVal{Type: xdr.ScValTypeScvSymbol, Sym: &amountSym},
+			Val: xdr.ScVal{Type: xdr.ScValTypeScvI128, I128: &stroops},
+		},
+	}
+	amountMapPtr := &amountMap
 	body := xdr.ContractEventBody{
 		V: 0,
 		V0: &xdr.ContractEventV0{
 			Topics: []xdr.ScVal{{Type: xdr.ScValTypeScvSymbol, Sym: &withdrawSym}},
 			Data: xdr.ScVal{
 				Type: xdr.ScValTypeScvMap,
-				Map: &xdr.ScMap{
-					{
-						Key: xdr.ScVal{Type: xdr.ScValTypeScvSymbol, Sym: &amountSym},
-						Val: xdr.ScVal{Type: xdr.ScValTypeScvI128, I128: &stroops},
-					},
-				},
+				Map:  &amountMapPtr,
 			},
 		},
 	}
 	ce := xdr.ContractEvent{
 		ContractId: &contractID,
+		Type:       xdr.ContractEventTypeContract,
 		Body:       body,
 	}
 	meta := xdr.TransactionMeta{
 		V: 3,
 		V3: &xdr.TransactionMetaV3{
-			SorobanMeta: &xdr.SorobanTransactionMeta{Events: []xdr.ContractEvent{ce}},
+			SorobanMeta: &xdr.SorobanTransactionMeta{
+				Events:      []xdr.ContractEvent{ce},
+				ReturnValue: xdr.ScVal{Type: xdr.ScValTypeScvVoid},
+			},
 		},
 	}
 	metaB64, err := xdr.MarshalBase64(meta)

@@ -158,8 +158,10 @@ func collectContractEvents(meta xdr.TransactionMeta) []xdr.ContractEvent {
 	if v3 := meta.V3; v3 != nil && v3.SorobanMeta != nil {
 		events = append(events, v3.SorobanMeta.Events...)
 	}
-	if v4, err := meta.V4(); err == nil && v4 != nil && v4.SorobanMeta != nil {
-		events = append(events, v4.SorobanMeta.Events...)
+	if v4 := meta.V4; v4 != nil {
+		for _, te := range v4.Events {
+			events = append(events, te.Event)
+		}
 	}
 	return events
 }

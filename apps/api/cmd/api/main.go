@@ -331,7 +331,7 @@ func run() error {
 	}
 
 	if cfg.Stellar().RPCURL() != "" {
-		vaultService.SetChainEventVerifier(stellarpkg.NewRPCChainEventVerifier(cfg.Stellar().RPCURL()))
+		vaultService.SetChainEventVerifier(service.NewStellarChainEventVerifier(cfg.Stellar().RPCURL()))
 	}
 
 	adminService := service.NewAdminService(
