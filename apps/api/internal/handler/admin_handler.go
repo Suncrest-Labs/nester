@@ -210,7 +210,15 @@ func (h *AdminHandler) SetLeadership(l LeadershipStatus) {
 	h.leadership = l
 }
 
-func (h *AdminHandler) Register(mux *http.ServeMux) {
+// routeMux is the subset of *http.ServeMux that Register needs. Taking an
+// interface rather than the concrete type lets the authorization tests in
+// admin_route_authz_test.go enumerate what Register actually mounts (#1105),
+// instead of hand-maintaining a route list that goes stale silently.
+type routeMux interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
+func (h *AdminHandler) Register(mux routeMux) {
 	mux.HandleFunc("GET /api/v1/admin/dashboard", h.getDashboard)
 	mux.HandleFunc("GET /api/v1/admin/vaults", h.listVaults)
 	mux.HandleFunc("GET /api/v1/admin/vaults/{id}", h.getVaultDetail)
