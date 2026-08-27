@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
@@ -149,6 +149,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const [state, setState] = useState<ActionState>("input");
   const [errorMsg, setErrorMsg] = useState("");
   const [receipt, setReceipt] = useState<(TransactionReceipt & { penaltyAmount: number; netAmount: number }) | null>(null);
+  const submittingRef = useRef(false);
 
   const amount = Number(amountInput) || 0;
 
@@ -184,7 +185,8 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   };
 
   const handleWithdraw = async () => {
-    if (!position || !address || !quote) return;
+    if (!position || !address || !quote || submittingRef.current) return;
+    submittingRef.current = true;
 
     setErrorMsg("");
 
@@ -219,6 +221,8 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     } catch (err) {
       setErrorMsg(humanizeError(err));
       setState("error");
+    } finally {
+      submittingRef.current = false;
     }
   };
 

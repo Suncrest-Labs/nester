@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertCircle,
@@ -185,6 +185,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const [selectedStrategy, setSelectedStrategy] = useState<MarketStrategy | null>(
     vault?.strategies?.[0] ?? null
   );
+  const submittingRef = useRef(false);
 
   const supportedAssets = (vault?.supportedAssets ?? ["USDC"]) as ("USDC" | "XLM")[];
   const strategies = vault?.strategies ?? [];
@@ -234,7 +235,8 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   };
 
   const handleDeposit = async () => {
-    if (!vault || !address || !canSubmit) return;
+    if (!vault || !address || !canSubmit || submittingRef.current) return;
+    submittingRef.current = true;
 
     setErrorMsg("");
 
@@ -275,6 +277,8 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
     } catch (err) {
       setErrorMsg(humanizeError(err));
       setState("error");
+    } finally {
+      submittingRef.current = false;
     }
   };
 
