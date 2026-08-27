@@ -217,7 +217,11 @@ export function DepositModal({
             const { xdr } = await buildDepositTransaction({
                 walletAddress: address,
                 contractId,
-                amount,
+                // Pass the exact stroop value. Routing through the display
+                // float and letting the builder do Math.round(x * 1e7)
+                // reintroduces the precision loss this parsing work exists
+                // to remove.
+                amount: amountStroops ?? BigInt(0),
             });
             const signedXdr = await signTransaction(xdr);
 

@@ -48,7 +48,7 @@ export async function performDeposit(
 
   // Step 1: Navigate to dashboard if not already there
   if (!page.url().includes("/dashboard")) {
-    await page.goto("http://localhost:3001/dashboard", { waitUntil: "networkidle" });
+    await page.goto("/dashboard", { waitUntil: "networkidle" });
   }
 
   // Step 2: Find and click the deposit button
@@ -106,22 +106,34 @@ export async function performDeposit(
     // Extract hex string from text (could be "Hash: abc123..." or just "abc123...")
     txHash = hashText?.match(/[a-fA-F0-9]{64}/)?.[0];
   } catch {
-    // Hash not visible in UI, use a simulated hash for demo
-    console.log("Transaction hash not visible in UI, using simulated hash for demo");
-    txHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    // Deliberately no fallback. A smoke test that invents a transaction hash
+    // reports PASS for a completely broken deposit path and promotes the
+    // deploy, which is worse than having no gate at all.
+    throw new Error(
+      "Deposit did not surface a transaction hash in the UI. The deposit flow " +
+        "did not complete; failing rather than substituting a placeholder."
+    );
   }
 
   if (!txHash) {
     throw new Error("Could not extract transaction hash from deposit response");
   }
 
-  // Step 8: For demo purposes, skip Horizon polling and just use the simulated hash
+  // Confirm the transaction actually landed on-chain. Reading a hash out of
+  // the DOM only proves the UI rendered something.
+  const confirmation = await waitForTransactionConfirmation(txHash);
+  if (!confirmation.successful) {
+    throw new Error(
+      `Deposit transaction ${txHash} did not succeed on-chain: ${confirmation.resultCode}`
+    );
+  }
+
   const explorerUrl = `https://stellar.expert/explorer/testnet/tx/${txHash}`;
 
   const durationMs = Date.now() - startTime;
 
   console.log(
-    `✓ Deposit completed: ${amount} ${asset} (tx: ${txHash.slice(0, 8)}..., ${durationMs}ms)`
+    `✓ Deposit confirmed: ${amount} ${asset} (tx: ${txHash.slice(0, 8)}..., ledger ${confirmation.ledger}, ${durationMs}ms)`
   );
 
   return {
@@ -129,7 +141,7 @@ export async function performDeposit(
     amount,
     asset,
     explorerUrl,
-    ledger: 0,
+    ledger: confirmation.ledger,
     durationMs,
   };
 }
@@ -150,7 +162,7 @@ export async function waitForDepositInTransactionList(
   while (Date.now() - startTime < timeoutMs) {
     // Navigate to transactions page if needed
     if (!page.url().includes("/transactions")) {
-      await page.goto("http://localhost:3001/transactions", { waitUntil: "networkidle" });
+      await page.goto("/transactions", { waitUntil: "networkidle" });
     }
 
     // Look for transaction in list

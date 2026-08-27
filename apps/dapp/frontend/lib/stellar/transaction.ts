@@ -12,7 +12,12 @@ import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const getCurrentNetwork = () => {
+/**
+ * Resolve the active network. Exported so every module that builds or signs a
+ * transaction agrees on it: a builder reading a different source than the
+ * signer produces a transaction signed for the wrong passphrase.
+ */
+export const getCurrentNetwork = () => {
   if (typeof window !== "undefined") {
     const savedNetwork = localStorage.getItem("nester_network_id");
     if (savedNetwork && (savedNetwork === "testnet" || savedNetwork === "mainnet")) {

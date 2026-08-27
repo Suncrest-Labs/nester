@@ -90,32 +90,42 @@ async function injectMockWalletModule(page: Page): Promise<void> {
  */
 export async function connectTestWallet(page: Page, context: BrowserContext): Promise<WalletInfo> {
   // Navigate to dApp if not already there
-  if (!page.url().includes("localhost:3001")) {
-    await page.goto("http://localhost:3001");
+  // Relative navigation so Playwright's configured baseURL (STAGING_URL in
+  // CI) is honoured. Hardcoding localhost meant the gate never exercised
+  // staging at all.
+  if (page.url() === "about:blank") {
+    await page.goto("/");
   }
 
   // Wait for dApp to load
   await page.waitForLoadState("networkidle");
 
+  // Inject the mock wallet module before the app boots so the dApp can
+  // actually connect. Without this the helper only asserted that buttons
+  // exist and then returned a fabricated address.
+  await injectMockWalletModule(page);
+
   // Verify wallet connection UI is visible (buttons present)
   const walletButtons = page.locator('button:has-text("Freighter"), button:has-text("LOBSTR"), button:has-text("xBull")');
   await walletButtons.first().waitFor({ state: "visible", timeout: 10_000 });
 
-  // For smoke test purposes, simulate a connected wallet address
-  // In CI with real wallet extension, actual connection would happen here
-  const simulatedAddress = "GBRPYHIL2CI2XZRX7F7J7XVJBK2T5VIQ3PHZBZBZ3Z7Z2J7Z5Z2Z2Z2Z";
+  // Use the real test keypair rather than a literal. The previous hardcoded
+  // string was not a valid strkey and belonged to no account, so nothing the
+  // smoke test asserted about the "connected" wallet meant anything.
+  const simulatedAddress = getTestKeypair().publicKey();
 
   // Store wallet info in context for potential re-use
+  const baseURL = process.env.STAGING_URL ?? "http://localhost:3001";
   await context.addCookies([
     {
       name: "nester_wallet_addr",
       value: simulatedAddress,
-      url: "http://localhost:3001",
+      url: baseURL,
     },
     {
       name: "nester_wallet_id",
       value: "freighter",
-      url: "http://localhost:3001",
+      url: baseURL,
     },
   ]);
 

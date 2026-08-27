@@ -59,7 +59,7 @@ export async function createTestAccount(
   const testPassword = password || generateTestPassword();
 
   // Navigate to signup page
-  await page.goto("http://localhost:3001/signup", { waitUntil: "networkidle" });
+  await page.goto("/signup", { waitUntil: "networkidle" });
 
   // Wait for form to load
   const emailInput = page.locator('input[type="email"], input[name*="email"]').first();
@@ -118,7 +118,7 @@ export async function loginTestAccount(
   password: string
 ): Promise<void> {
   // Navigate to login page
-  await page.goto("http://localhost:3001/login", { waitUntil: "networkidle" });
+  await page.goto("/login", { waitUntil: "networkidle" });
 
   // Wait for form
   const emailInput = page.locator('input[type="email"], input[name*="email"]').first();

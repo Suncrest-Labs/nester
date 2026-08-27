@@ -232,6 +232,7 @@ jobs:
         env:
           # Staging environment configuration
           STAGING_URL: ${{ needs.deploy.outputs.staging_url || 'https://staging.nester.dev' }}
+          SMOKE_TEST: "1"
           SMOKE_TEST_WALLET_SECRET: ${{ secrets.SMOKE_TEST_WALLET_SECRET }}
           
           # Optional: Testnet overrides if staging uses different network
@@ -241,15 +242,18 @@ jobs:
         run: |
           cd apps/dapp/frontend
           
-          # Run smoke tests with strict exit code
+          # `--run` is a Vitest flag; Playwright rejects it with "unknown
+          # option" before running a single test. The JSON reporter also
+          # needs an explicit output path or nothing is written to disk.
+          set +e
+          PLAYWRIGHT_JSON_OUTPUT_NAME=smoke-result.json \
           npx playwright test tests/smoke.spec.ts \
-            --run \
-            --reporter=html \
-            --reporter=json \
-            --reporter=list
-          
-          # Capture exit code
+            --reporter=html,json,list
           TEST_EXIT_CODE=$?
+          set -e
+
+          # Capture immediately after the command; any intervening
+          # statement overwrites $? and would mask a real failure.
           echo "test_exit_code=$TEST_EXIT_CODE" >> $GITHUB_OUTPUT
           exit $TEST_EXIT_CODE
 
@@ -260,9 +264,9 @@ jobs:
           # Parse smoke-result.json if available
           if [ -f "apps/dapp/frontend/smoke-result.json" ]; then
             RESULT=$(cat apps/dapp/frontend/smoke-result.json)
-            PASSED=$(echo "$RESULT" | jq '.summary.passed // 0')
-            FAILED=$(echo "$RESULT" | jq '.summary.failed // 0')
-            DURATION=$(echo "$RESULT" | jq '.summary.durationMs // 0')
+            PASSED=$(echo "$RESULT" | jq '[.suites[]?.specs[]?.tests[]?.results[]? | select(.status=="passed")] | length')
+            FAILED=$(echo "$RESULT" | jq '[.suites[]?.specs[]?.tests[]?.results[]? | select(.status!="passed" and .status!="skipped")] | length')
+            DURATION=$(echo "$RESULT" | jq '[.suites[]?.specs[]?.tests[]?.results[]?.duration // 0] | add // 0')
             DURATION_SEC=$(($DURATION / 1000))
             
             if [ "$FAILED" -eq 0 ]; then
@@ -270,7 +274,7 @@ jobs:
               SUMMARY="✓ All smoke tests passed ($PASSED steps, ${DURATION_SEC}s)"
             else
               STATUS="FAIL"
-              FAILED_STEP=$(echo "$RESULT" | jq -r '.steps[] | select(.status=="FAIL") | .name' | head -1)
+              FAILED_STEP=$(echo "$RESULT" | jq -r '[.suites[]?.specs[]? | select(.ok==false) | .title][0] // "unknown"')
               SUMMARY="✗ Smoke tests failed at '$FAILED_STEP' ($PASSED/$((PASSED+FAILED)) steps, ${DURATION_SEC}s)"
             fi
             
@@ -320,7 +324,7 @@ jobs:
             });
 
       - name: Notify Slack on failure
-        if: failure()
+        if: failure() || needs.smoke-test.result != 'success'
         uses: slackapi/slack-github-action@v1
         with:
           payload: |
@@ -340,7 +344,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOYMENT_WEBHOOK }}
 
       - name: Enforce smoke test gating
-        if: failure() && github.event.inputs.skip_smoke_tests != 'true'
+        if: (failure() || needs.smoke-test.result != 'success') && github.event.inputs.skip_smoke_tests != 'true'
         run: |
           echo "❌ Smoke tests failed. Deployment is gated."
           echo ""

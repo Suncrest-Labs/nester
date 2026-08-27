@@ -8,17 +8,13 @@ import {
   Transaction,
 } from "@stellar/stellar-sdk";
 
-import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
+import { getCurrentNetwork } from "@/lib/stellar/transaction";
 
-const getCurrentNetwork = () => {
-  if (typeof window !== "undefined") {
-    const savedNetwork = process.env.NEXT_PUBLIC_NETWORK;
-    if (savedNetwork && (savedNetwork === "testnet" || savedNetwork === "mainnet")) {
-      return NETWORKS[savedNetwork];
-    }
-  }
-  return DEFAULT_NETWORK;
-};
+// Deliberately re-use the signer's resolver rather than reading
+// NEXT_PUBLIC_NETWORK here. The wallet signs against
+// localStorage["nester_network_id"]; resolving the network differently on the
+// build side means switching networks in the UI signs a transaction built for
+// a different passphrase, which fails deployment outright.
 
 export interface CreateVaultParams {
   name: string;

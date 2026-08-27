@@ -240,8 +240,12 @@ export function isValidAmountInput(
   // Convert balance to stroops for comparison
   const balanceDecimal = new Decimal(balance.toString());
   const balanceFactor = new Decimal(10).pow(decimals);
-  const balanceStroops = balanceDecimal.times(balanceFactor);
-  const balanceStroopsBigInt = BigInt(balanceStroops.toString());
+  // Floor before BigInt: balances are floats (an accruing position value is
+  // never a whole number of stroops), and BigInt() throws SyntaxError on any
+  // fractional string. Flooring is also the correct direction — it can only
+  // understate spendable balance, never overstate it.
+  const balanceStroops = balanceDecimal.times(balanceFactor).floor();
+  const balanceStroopsBigInt = BigInt(balanceStroops.toFixed(0));
 
   if (parseResult.stroops! > balanceStroopsBigInt) {
     return {

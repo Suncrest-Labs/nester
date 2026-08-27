@@ -88,7 +88,10 @@ export const validateAmount = (options?: {
     // Check: respect balance
     .refine(
       (val: string) => {
-        if (balance === undefined || balance <= 0) return true;
+        if (balance === undefined) return true;
+        // A zero balance must fail every non-zero amount, not bypass the
+        // check. Short-circuiting on `balance <= 0` let a user with nothing
+        // pass validation for any amount at all.
         const validation = isValidAmountInput(val, maxDecimals, balance);
         return validation.valid;
       },

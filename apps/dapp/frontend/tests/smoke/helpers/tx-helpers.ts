@@ -103,36 +103,42 @@ export async function pollTransactionConfirmation(
         };
       }
 
-      // Transaction found in ledger
+      // Transaction found in ledger. Reset the failure budget: maxRetries is
+      // meant to bound consecutive failures, not the lifetime of the poll.
+      retryCount = 0;
       const txData = (await response.json()) as Record<string, unknown>;
 
-      if (txData.result_code && typeof txData.result_code === "string") {
-        const resultCode = txData.result_code;
+      // Horizon reports outcome in `successful` (boolean). Deriving it from
+      // `result_code` prefixes is wrong: every code starts with "tx_",
+      // including tx_failed. Grepping base64 result_xdr for the literal
+      // "Failure" is likewise meaningless.
+      const ledger =
+        typeof txData.ledger === "number" ? txData.ledger : undefined;
 
-        // Result codes starting with "tx_" indicate success or specific failures
-        if (resultCode === "tx_success" || resultCode.startsWith("tx_")) {
-          // Check Soroban result for failures
-          const resultXdr = txData.result_xdr;
-          const isFailed =
-            resultCode !== "tx_success" ||
-            (typeof resultXdr === "string" && resultXdr.includes("Failure"));
-
-          return {
-            txHash,
-            status: isFailed ? "failed" : "success",
-            ledger: typeof txData.ledger_attr === "number" ? txData.ledger_attr : undefined,
-            errorReason: isFailed ? resultCode : undefined,
-            durationMs: Date.now() - startTime,
-            pollCount,
-          };
-        }
+      if (typeof txData.successful !== "boolean") {
+        // Without an explicit outcome we cannot claim success. Treat it as
+        // unresolved and let the caller fail rather than defaulting to pass.
+        return {
+          txHash,
+          status: "failed",
+          ledger,
+          errorReason:
+            "Horizon response did not include a `successful` field; outcome unknown",
+          durationMs: Date.now() - startTime,
+          pollCount,
+        };
       }
 
-      // Default: assume success if we got a response with tx data
+      const resultCode =
+        typeof txData.result_code === "string" ? txData.result_code : undefined;
+
       return {
         txHash,
-        status: "success",
-        ledger: typeof txData.ledger_attr === "number" ? txData.ledger_attr : undefined,
+        status: txData.successful ? "success" : "failed",
+        ledger,
+        errorReason: txData.successful
+          ? undefined
+          : (resultCode ?? "transaction failed on-chain"),
         durationMs: Date.now() - startTime,
         pollCount,
       };
