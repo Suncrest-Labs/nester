@@ -568,11 +568,11 @@ fn privileged_strategy_calls_require_signatures() {
         .try_set_allocations(&operator, &1_000_i128, &apys)
         .is_err());
 
-    // Issue #1132: propose_upgrade/cancel_upgrade previously called
-    // AccessControl::require_role without a preceding admin.require_auth(),
-    // so a caller with no mocked auth at all could still reach the role
-    // check. With no auths mocked here, both must fail before the role
-    // check even runs.
+    // Issue #1132: these two entrypoints delegate their signature check to
+    // nester_common::Upgrade, which calls require_auth() itself, rather than
+    // calling it directly like the entrypoints above. That indirection is easy
+    // to break by refactoring, so assert it here: with no auths mocked, both
+    // must still be rejected.
     assert!(client
         .try_propose_upgrade(&admin, &soroban_sdk::BytesN::from_array(&env, &[0u8; 32]), &0u64)
         .is_err());

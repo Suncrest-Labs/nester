@@ -36,7 +36,21 @@ export function assertApyHistoryResponseShape(data: unknown): void {
   const result = apyHistoryResponseSchema.safeParse(data);
   if (!result.success) {
     throw new Error(
-      `APYHistoryResponse shape mismatch: ${result.error.issues.map((i) => i.message).join(", ")}`
+      `APYHistoryResponse shape mismatch: ${formatIssues(result.error.issues)}`
     );
   }
+}
+
+/**
+ * Render each issue as `path: message`. The path is the useful half when a
+ * backend response drifts — "expected string, received undefined" alone does
+ * not say which field went missing.
+ */
+function formatIssues(issues: z.core.$ZodIssue[]): string {
+  return issues
+    .map((issue) => {
+      const path = issue.path.join(".");
+      return path ? `${path}: ${issue.message}` : issue.message;
+    })
+    .join(", ");
 }
