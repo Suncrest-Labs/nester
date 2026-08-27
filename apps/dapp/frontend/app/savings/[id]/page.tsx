@@ -20,6 +20,7 @@ import {
   ArrowDownLeft,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { SavingsDetailSkeleton } from "@/components/skeletons/page-skeletons";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast/toast-provider";
@@ -304,7 +305,7 @@ export default function SavingsGoalDetailPage() {
       </motion.nav>
 
       {isLoading ? (
-        <div className="p-12 text-center text-sm text-black/50 dark:text-white/50">Loading goal…</div>
+        <SavingsDetailSkeleton />
       ) : isError || !goal ? (
         <div className="rounded-3xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-12 text-center">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5">

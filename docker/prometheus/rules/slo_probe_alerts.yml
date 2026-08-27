@@ -1,0 +1,107 @@
+# Synthetic probe alerts (nester#1056).
+#
+# These alerts cover the gap the real-traffic SLIs structurally cannot: a flow
+# that is broken while nobody is using it. The burn-rate alerts in
+# slo_alerts.yml are ratios over observed traffic, so an idle service produces
+# no bad events and no alert — correctly, because "nobody is using it" is not
+# an SLO breach. But "the withdrawal path has been broken since Friday and the
+# first person to find out is a user on Monday" is exactly the failure worth
+# preventing, and only a probe can catch it.
+#
+# The probes run on a schedule against staging and push their results. Alerts
+# here are absolute rather than burn-rate: a probe is a single scheduled
+# event, not a ratio over traffic, so there is no budget to burn.
+#
+# Severity is ticket, not page, for every probe alert. These run against
+# staging, so a failure means "a code path is broken before it reaches
+# production" — urgent to fix, but nobody's money is at risk right now. A
+# staging probe that pages at 3am trains the on-call to ignore the pager.
+
+groups:
+  - name: slo_probe_alerts
+    rules:
+      # A probe that fails twice in a row. `for: 10m` against a 5-minute
+      # schedule means one transient failure is tolerated and a second
+      # consecutive one alerts — enough to suppress a flaky network blip
+      # without waiting through a third cycle.
+      - alert: SyntheticProbeFailing
+        expr: nester_probe_success == 0
+        for: 10m
+        labels:
+          severity: ticket
+          slo: synthetic_probe
+        annotations:
+          summary: >-
+            Synthetic {{ $labels.probe }} probe failing on
+            {{ $labels.environment }}
+          description: >-
+            The {{ $labels.probe }} probe has failed for over 10 minutes on
+            {{ $labels.environment }}. This path is broken regardless of
+            whether real traffic is currently exercising it — which is the
+            entire point of the probe. Reason:
+            {{ with printf "nester_probe_last_reason{probe=\"%s\"} == 1" $labels.probe | query }}{{ range . }}{{ .Labels.reason }}{{ end }}{{ end }}.
+          dashboard: /d/nester-slo-probes/synthetic-probes
+          runbook: docs/observability/runbooks/synthetic-probes.md
+
+      # The probe runner itself stopped. Without this, a crashed scheduler
+      # produces silence that is indistinguishable from every probe passing —
+      # the same frozen-gauge failure the indexer staleness alert exists for.
+      - alert: SyntheticProbeStale
+        expr: time() - nester_probe_last_run_timestamp_seconds > 1800
+        for: 10m
+        labels:
+          severity: ticket
+          slo: synthetic_probe
+        annotations:
+          summary: >-
+            Synthetic {{ $labels.probe }} probe has not run for
+            {{ $value | humanizeDuration }}
+          description: >-
+            The {{ $labels.probe }} probe last reported over 30 minutes ago
+            against a schedule that should run it far more often. The probe
+            runner is failing, not the service under test — check the workflow
+            run rather than the API. Until this clears, the probe's success
+            gauge is stale and must not be read as healthy.
+          dashboard: /d/nester-slo-probes/synthetic-probes
+          runbook: docs/observability/runbooks/synthetic-probes.md
+
+      # No probe series at all. Covers the case where the push target is
+      # misconfigured or the metrics were never delivered, which would
+      # otherwise silence both alerts above.
+      - alert: SyntheticProbeMetricsAbsent
+        expr: absent(nester_probe_success)
+        for: 30m
+        labels:
+          severity: ticket
+          slo: synthetic_probe
+        annotations:
+          summary: Synthetic probe metrics are absent entirely
+          description: >-
+            No nester_probe_success series exists. Either the probes have never
+            run, or their results are not reaching Prometheus. Synthetic
+            coverage is currently zero: the flows these probes exercise have no
+            monitoring while real traffic is absent.
+          dashboard: /d/nester-slo-probes/synthetic-probes
+          runbook: docs/observability/runbooks/synthetic-probes.md
+
+      # Latency degradation caught by the probes. Threshold 60s: the probes
+      # exercise a full settlement path, so this is deliberately looser than
+      # the 30s flow-latency SLI and is meant to catch a path that still works
+      # but has become unusable, not ordinary variance.
+      - alert: SyntheticProbeSlow
+        expr: nester_probe_duration_seconds > 60
+        for: 15m
+        labels:
+          severity: ticket
+          slo: synthetic_probe
+        annotations:
+          summary: >-
+            Synthetic {{ $labels.probe }} probe taking
+            {{ $value | humanizeDuration }}
+          description: >-
+            The {{ $labels.probe }} probe is completing but far slower than a
+            healthy path should. Succeeding slowly is how a path degrades
+            before it breaks outright, so this is worth a ticket before it
+            becomes a failure.
+          dashboard: /d/nester-slo-probes/synthetic-probes
+          runbook: docs/observability/runbooks/synthetic-probes.md

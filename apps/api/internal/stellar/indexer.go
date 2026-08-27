@@ -20,60 +20,112 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/systemstate"
 )
 
+// LagRecorder receives balance-freshness samples from the event indexer
+// (nester#1056). Implemented by *metrics.Metrics; declared as an interface
+// here so the stellar package does not depend on the metrics package and a
+// nil recorder disables sampling without a branch at every call site.
+type LagRecorder interface {
+	SetIndexerLag(lagLedgers uint64)
+	SetIndexerLagSampleAge(age time.Duration)
+	RecordIndexerLagSampleError()
+}
+
+// StartEventIndexerWithMetrics is StartEventIndexer with balance-freshness
+// instrumentation. recorder may be nil, in which case no samples are taken
+// and the indexer behaves exactly as before: telemetry must never be able to
+// stop the indexer from indexing.
+func StartEventIndexerWithMetrics(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, rpcURL string, recorder LagRecorder) {
+	startEventIndexer(ctx, logger, db, sysRepo, rpcURL, recorder)
+}
+
 func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, rpcURL string) {
+	startEventIndexer(ctx, logger, db, sysRepo, rpcURL, nil)
+}
+
+func startEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, rpcURL string, recorder LagRecorder) {
 	if strings.TrimSpace(rpcURL) == "" {
 		logger.Warn("event indexer disabled: STELLAR_RPC_URL is empty")
 		return
 	}
 
+	// The long-running loop owns scheduling and telemetry only. All indexing
+	// behaviour — cursor resolution, cold start, ordering, idempotency, and
+	// the atomic cursor/balance commit — lives in EventPoller, which is the
+	// unit the deterministic replay harness exercises (issue #1051).
+	poller := &EventPoller{
+		DB:      db,
+		SysRepo: sysRepo,
+		Fetcher: NewRPCEventFetcher(&http.Client{Timeout: 8 * time.Second}, rpcURL),
+		Logger:  logger,
+	}
+
 	go func() {
-		client := &http.Client{Timeout: 8 * time.Second}
 		ticker := time.NewTicker(6 * time.Second)
 		defer ticker.Stop()
+
+		// Age of the last successful lag sample. Published on every tick so
+		// that a stalled or erroring indexer makes the freshness signal
+		// visibly stale instead of leaving the lag gauge frozen at a healthy
+		// value, which is the one failure mode a balance-freshness SLI must
+		// not have.
+		lastLagSampleAt := time.Now()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				startLedger, err := getLastIndexedLedger(ctx, sysRepo)
-				if err != nil {
-					logger.Error("event indexer failed to load cursor", "error", err)
+				// Sampled before polling so a slow or failing pass shows up as
+				// staleness rather than being hidden behind a frozen gauge.
+				lag, lagErr := indexerLagLedgers(ctx, sysRepo, poller.Fetcher)
+
+				if _, err := poller.PollEvents(ctx); err != nil {
+					logger.Error("event indexer poll failed", "error", err)
+					recordLagSampleError(recorder, lastLagSampleAt)
 					continue
 				}
 
-				contractIDs, err := loadVaultContractIDs(ctx, db)
-				if err != nil {
-					logger.Error("event indexer failed to load vault contracts", "error", err)
-					continue
-				}
-				if len(contractIDs) == 0 {
-					continue
-				}
-
-				events, latestLedger, err := fetchSorobanEvents(ctx, client, rpcURL, contractIDs, startLedger)
-				if err != nil {
-					logger.Error("event indexer fetch failed", "error", err)
-					continue
-				}
-
-				for _, event := range events {
-					processed, err := applyIndexedEvent(ctx, db, event)
-					if err != nil {
-						logger.Error("event indexer failed to apply event", "event_id", event.ID, "contract_id", event.ContractID, "event_type", event.EventType, "error", err)
+				// A zero cursor means the indexer has never persisted a
+				// ledger, so there is no meaningful lag to report yet;
+				// publishing tip-minus-zero would report the entire ledger
+				// history as lag and page instantly on a fresh deploy.
+				if recorder != nil {
+					if lagErr != nil {
+						recordLagSampleError(recorder, lastLagSampleAt)
 						continue
 					}
-					if !processed {
-						logger.Debug("event indexer skipped duplicate event", "event_id", event.ID)
-					}
-				}
-
-				if err := setLastIndexedLedger(ctx, sysRepo, latestLedger); err != nil {
-					logger.Error("event indexer failed to persist cursor", "ledger", latestLedger, "error", err)
+					recorder.SetIndexerLag(lag)
+					recorder.SetIndexerLagSampleAge(0)
+					lastLagSampleAt = time.Now()
 				}
 			}
 		}
 	}()
+}
+
+// indexerLagLedgers reports how many ledgers behind the network tip the
+// persisted cursor currently is.
+//
+// It returns an error when the cursor has never been set, because "lag" is
+// undefined before the first successful index and reporting zero there would
+// masquerade as a healthy indexer.
+func indexerLagLedgers(ctx context.Context, sysRepo systemstate.Repository, fetcher EventFetcher) (uint64, error) {
+	cursor, err := getLastIndexedLedger(ctx, sysRepo)
+	if err != nil {
+		return 0, err
+	}
+	if cursor == 0 {
+		return 0, fmt.Errorf("indexer cursor not yet initialised")
+	}
+
+	tip, err := fetcher.LatestLedger(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if tip <= cursor {
+		return 0, nil
+	}
+	return tip - cursor, nil
 }
 
 func loadVaultContractIDs(ctx context.Context, db *sql.DB) ([]string, error) {
@@ -108,6 +160,13 @@ type indexedEvent struct {
 	Data       map[string]any
 }
 
+// applyIndexedEvent applies one event in its own transaction, without
+// touching the indexer cursor.
+//
+// It remains the entry point for callers that manage cursor advancement
+// separately (the admin one-shot sync). The long-running poller uses
+// applyIndexedEventWithCursor instead, which commits the cursor alongside the
+// mutation; see poller.go for why that distinction matters.
 func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (bool, error) {
 	if strings.TrimSpace(event.ID) == "" {
 		return false, fmt.Errorf("event id is required")
@@ -127,6 +186,21 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 		return false, tx.Commit()
 	}
 
+	if err := applyEventMutation(ctx, tx, event); err != nil {
+		return false, err
+	}
+
+	return true, tx.Commit()
+}
+
+// applyEventMutation performs the state change for a single event inside the
+// caller's transaction.
+//
+// Split out of applyIndexedEvent so that the cursor-advancing poller path and
+// the admin sync path apply events through the exact same code. Duplicating
+// this switch would let the two paths drift, and the replay harness would then
+// be proving the wrong one correct.
+func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
 	switch strings.ToLower(strings.TrimSpace(event.EventType)) {
 	case "pause":
 		_, err := tx.ExecContext(
@@ -135,7 +209,7 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 			event.ContractID,
 		)
 		if err != nil {
-			return false, err
+			return err
 		}
 	case "unpause":
 		_, err := tx.ExecContext(
@@ -144,12 +218,12 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 			event.ContractID,
 		)
 		if err != nil {
-			return false, err
+			return err
 		}
 	case "deposit":
 		amount, ok := extractEventAmount(event)
 		if !ok {
-			return false, fmt.Errorf("deposit event missing parseable amount")
+			return fmt.Errorf("deposit event missing parseable amount")
 		}
 		_, err := tx.ExecContext(
 			ctx,
@@ -162,12 +236,12 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 			event.ContractID,
 		)
 		if err != nil {
-			return false, err
+			return err
 		}
 	case "withdraw", "withdrawal":
 		amount, ok := extractEventAmount(event)
 		if !ok {
-			return false, fmt.Errorf("withdraw event missing parseable amount")
+			return fmt.Errorf("withdraw event missing parseable amount")
 		}
 		_, err := tx.ExecContext(
 			ctx,
@@ -179,48 +253,71 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 			event.ContractID,
 		)
 		if err != nil {
-			return false, err
+			return err
+		}
+
+	// Yield harvest (issue #1051). A harvest credits yield to the vault
+	// without changing total_deposited: the principal the user paid in is
+	// unchanged, only the earned yield and the spendable balance grow.
+	case "harvest", "harvested", "yield_harvest":
+		amount, ok := extractEventAmount(event)
+		if !ok {
+			return fmt.Errorf("harvest event missing parseable amount")
+		}
+		_, err := tx.ExecContext(
+			ctx,
+			`UPDATE vaults
+			 SET yield_earned      = yield_earned + $1::numeric,
+			     current_balance   = current_balance + $1::numeric,
+			     last_harvested_at = NOW(),
+			     updated_at        = NOW()
+			 WHERE contract_address = $2 AND deleted_at IS NULL`,
+			amount.String(),
+			event.ContractID,
+		)
+		if err != nil {
+			return err
 		}
 
 	// Fair-ordering emergency withdrawal queue (issue #814).
 	case "emrg_reqd":
 		if err := applyEmergencyQueueRequested(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 	case "emrg_fill":
 		if err := applyEmergencyQueueFilled(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 	case "emrg_canc":
 		if err := applyEmergencyQueueCancelled(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 
 	// Early-exit penalty escrow (issue #805).
 	case "pnlty_chg":
 		if err := applyPenaltyCharged(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 	case "pnlty_dst":
 		if err := applyPenaltyDistributed(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 
 	// Slippage-safe multi-hop rebalance (issue #810).
 	case "rebal_leg":
 		if err := applyRebalanceLegExecuted(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 	case "rebal_cmp":
 		if err := applyRebalanceCompleted(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 
 	default:
 		// Keep cursor continuity even for unsupported events.
 	}
 
-	return true, tx.Commit()
+	return nil
 }
 
 func extractEventAmount(event indexedEvent) (decimal.Decimal, bool) {
@@ -531,6 +628,11 @@ VALUES ($1, $2, $3, $4, $5)`,
 	return err
 }
 
+// sorobanEventPageLimit is the getEvents pagination limit. It is also the
+// signal for a truncated batch: a full page means more events may exist beyond
+// the last one returned, so the cursor must not jump past them to the tip.
+const sorobanEventPageLimit = 200
+
 func fetchSorobanEvents(
 	ctx context.Context,
 	client *http.Client,
@@ -550,7 +652,7 @@ func fetchSorobanEvents(
 					"contractIds": contractIDs,
 				},
 			},
-			"pagination": map[string]any{"limit": 200},
+			"pagination": map[string]any{"limit": sorobanEventPageLimit},
 		},
 	})
 	if err != nil {
@@ -717,4 +819,16 @@ func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
 	}
 
 	return processed, nil
+}
+
+// recordLagSampleError counts a failed freshness sample and publishes how
+// stale the last good reading now is. Split out so every error path in the
+// indexer loop reports staleness identically.
+func recordLagSampleError(recorder LagRecorder, lastSampleAt time.Time) {
+	if recorder == nil {
+		return
+	}
+
+	recorder.RecordIndexerLagSampleError()
+	recorder.SetIndexerLagSampleAge(time.Since(lastSampleAt))
 }

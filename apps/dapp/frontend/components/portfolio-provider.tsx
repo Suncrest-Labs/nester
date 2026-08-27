@@ -5,6 +5,7 @@ import {
     useContext,
     useEffect,
     useMemo,
+    useRef,
     useState,
     type ReactNode,
 } from "react";
@@ -30,6 +31,25 @@ export interface PortfolioTransaction {
     status: PortfolioTransactionStatus;
     txHash: string;
     isOnChain?: boolean;
+}
+
+export interface PendingTransactionRecord {
+    /** The portfolio transaction id to update after on-chain confirmation. */
+    transactionId: string;
+    /** The vault id this deposit is for. */
+    vaultId: string;
+    /** Human-readable vault name. */
+    vaultName: string;
+    /** Asset deposited. */
+    asset: SupportedAsset;
+    /** Amount deposited. */
+    amount: number;
+    /** APY of the vault. */
+    apy: number;
+    /** Lock period in days. */
+    lockDays: number;
+    /** Early withdrawal penalty percentage. */
+    earlyWithdrawalPenaltyPct: number;
 }
 
 interface StoredPosition {
@@ -65,6 +85,11 @@ interface DepositInput {
     txHash: string;
     isOnChain?: boolean;
 }
+
+/** Input for a deposit that has not been submitted yet. Deliberately omits
+ *  txHash: a pending deposit has no transaction hash until the chain accepts
+ *  it, and requiring one forces callers to invent a placeholder. */
+type PendingDepositInput = Omit<DepositInput, "txHash">;
 
 interface TransferInput {
     fromPositionId: string;
@@ -106,6 +131,12 @@ interface PortfolioState {
     recordDeposit: (input: DepositInput) => void;
     recordTransfer: (input: TransferInput) => void;
     recordWithdrawal: (input: WithdrawalInput) => WithdrawalQuote | null;
+    /** Record a pending deposit before on-chain confirmation. Returns the transaction id. */
+    recordPendingDeposit: (input: PendingDepositInput) => string;
+    /** Mark a pending deposit as confirmed after on-chain success. */
+    confirmPendingDeposit: (transactionId: string, txHash: string) => void;
+    /** Mark a pending deposit as failed after on-chain failure. */
+    failPendingDeposit: (transactionId: string) => void;
     /** Push a live balance update from WebSocket events */
     applyBalanceUpdate: (asset: string, newBalance: number) => void;
     /** Push a live yield accrual delta from WebSocket events */
@@ -212,6 +243,11 @@ function PortfolioStore({
     const [transactions, setTransactions] = useState<PortfolioTransaction[]>(
         initialState.transactions
     );
+
+    // Holds the details of deposits awaiting on-chain confirmation. A ref
+    // rather than state: confirmPendingDeposit runs in the same tick the
+    // pending row is inserted, so any state read would still be stale.
+    const pendingDepositsRef = useRef<Map<string, PendingTransactionRecord>>(new Map());
 
     useEffect(() => {
         if (!address || typeof window === "undefined") return;
@@ -381,6 +417,90 @@ function PortfolioStore({
         ]);
     };
 
+    /** Record a deposit as Pending before on-chain confirmation. Returns the
+     *  transaction id so the modal can update it later without touching the
+     *  wallet balance until the tx is confirmed. */
+    const recordPendingDeposit = ({ vault, amount }: PendingDepositInput): string => {
+        const txId = crypto.randomUUID();
+        // Stash everything the confirm step needs. Recovering it later by
+        // reading `transactions` fails: the confirm call happens in the same
+        // tick as this insert, so the render closure has not seen it yet, and
+        // parsing the amount back out of a display string is lossy.
+        pendingDepositsRef.current.set(txId, {
+            transactionId: txId,
+            vaultId: vault.id,
+            vaultName: vault.name,
+            asset: vault.asset,
+            amount,
+            apy: vault.apy,
+            lockDays: vault.lockDays ?? 0,
+            earlyWithdrawalPenaltyPct: vault.earlyWithdrawalPenaltyPct,
+        });
+        setTransactions((current) => [
+            {
+                id: txId,
+                type: "Deposit",
+                amount: `+${amount.toFixed(2)}`,
+                asset: vault.asset,
+                vaultName: vault.name,
+                timestamp: new Date().toISOString(),
+                status: "Pending",
+                txHash: "",
+                isOnChain: true,
+            },
+            ...current,
+        ]);
+        return txId;
+    };
+
+    /** Confirm a pending deposit: create the position, deduct balance, update tx status. */
+    const confirmPendingDeposit = (transactionId: string, txHash: string) => {
+        const pending = pendingDepositsRef.current.get(transactionId);
+        if (!pending) return;
+        pendingDepositsRef.current.delete(transactionId);
+
+        const now = new Date();
+        const maturityAt = new Date(now);
+        maturityAt.setDate(maturityAt.getDate() + pending.lockDays);
+
+        // Create the position on confirmation, not on submission. Until the
+        // chain confirms, the user holds no shares; creating it earlier would
+        // show a position for a deposit that may still fail.
+        const position: StoredPosition = {
+            id: crypto.randomUUID(),
+            vaultId: pending.vaultId,
+            vaultName: pending.vaultName,
+            asset: pending.asset,
+            principal: pending.amount,
+            shares: pending.amount,
+            apy: pending.apy,
+            depositedAt: now.toISOString(),
+            maturityAt: maturityAt.toISOString(),
+            earlyWithdrawalPenaltyPct: pending.earlyWithdrawalPenaltyPct,
+        };
+
+        setStoredPositions((current) => [position, ...current]);
+        setBalances((current) => ({
+            ...current,
+            [pending.asset]: Math.max(0, (current[pending.asset] ?? 0) - pending.amount),
+        }));
+        setTransactions((current) =>
+            current.map((t) =>
+                t.id === transactionId ? { ...t, status: "Confirmed" as const, txHash } : t
+            )
+        );
+    };
+
+    /** Mark a pending deposit as failed and remove the pending transaction record. */
+    const failPendingDeposit = (transactionId: string) => {
+        pendingDepositsRef.current.delete(transactionId);
+        setTransactions((current) =>
+            current.map((t) =>
+                t.id === transactionId ? { ...t, status: "Failed" as const } : t
+            )
+        );
+    };
+
     const recordWithdrawal = ({ positionId, grossAmount, txHash, isOnChain }: WithdrawalInput) => {
         const quote = getWithdrawalQuote(positionId, grossAmount);
         if (!quote) return null;
@@ -497,6 +617,9 @@ function PortfolioStore({
                 recordDeposit,
                 recordTransfer,
                 recordWithdrawal,
+                recordPendingDeposit,
+                confirmPendingDeposit,
+                failPendingDeposit,
                 applyBalanceUpdate,
                 applyYieldAccrual,
                 refreshBalances,

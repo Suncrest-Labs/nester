@@ -66,6 +66,13 @@ func (s *RateService) Health() *HealthTracker { return s.health }
 // Cache returns the underlying cache so tests can pre-fill or inspect entries.
 func (s *RateService) Cache() *RateCache { return s.cache }
 
+// Providers returns the XLM fetchers and the fiat fetcher. Startup uses this
+// to install a metrics-instrumented HTTP client on each provider, labelled
+// with the upstream that provider actually calls.
+func (s *RateService) Providers() ([]Provider, Provider) {
+	return s.xlmFetchers, s.fiatFetcher
+}
+
 // GetRate returns the exchange rate for base→quote. It serves a cached value
 // when fresh, fetches a new one otherwise, and falls back to stale cache data
 // (marked with Stale: true) when all live sources fail.

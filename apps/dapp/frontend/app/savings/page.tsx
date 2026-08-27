@@ -301,7 +301,13 @@ function SavingsVaultCard({
                 <div className="flex items-start gap-2 shrink-0">
                     <div className="text-right">
                         {isApyLoading ? (
-                            <div className="ml-auto h-8 w-16 animate-pulse rounded bg-black/10 dark:bg-white/10" aria-label="Loading APY" />
+                            <div role="status" aria-busy="true" className="ml-auto">
+                                <span className="sr-only">Loading APY</span>
+                                <div
+                                    aria-hidden="true"
+                                    className="ml-auto h-8 w-16 animate-pulse motion-reduce:animate-none rounded bg-black/10 dark:bg-white/10"
+                                />
+                            </div>
                         ) : (
                             <div className="flex items-center justify-end gap-1.5">
                                 <p className="font-mono text-2xl text-black dark:text-white leading-none">{vault.apyLabel}</p>

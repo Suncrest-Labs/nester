@@ -944,16 +944,16 @@ func scanVault(row scanner) (vault.Vault, error) {
 
 func scanVaultTransaction(row scanner) (vault.VaultTransaction, error) {
 	var (
-		id        string
-		vaultID   string
-		userID    sql.NullString
-		txType    string
-		amount    string
-		txHash    string
-		shares    sql.NullString
+		id         string
+		vaultID    string
+		userID     sql.NullString
+		txType     string
+		amount     string
+		txHash     string
+		shares     sql.NullString
 		sharePrice sql.NullString
-		fee       sql.NullString
-		createdAt time.Time
+		fee        sql.NullString
+		createdAt  time.Time
 	)
 
 	if err := row.Scan(&id, &vaultID, &userID, &txType, &amount, &txHash, &shares, &sharePrice, &fee, &createdAt); err != nil {

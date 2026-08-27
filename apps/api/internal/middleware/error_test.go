@@ -69,11 +69,11 @@ func TestErrorHandler(t *testing.T) {
 			handler.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.expectedStatus, w.Code)
-			
+
 			var body response.Response
 			err := json.NewDecoder(w.Body).Decode(&body)
 			assert.NoError(t, err)
-			
+
 			assert.False(t, body.Success)
 			assert.NotNil(t, body.Error)
 			assert.Equal(t, tc.expectedCode, body.Error.Code)

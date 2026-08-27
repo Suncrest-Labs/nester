@@ -18,9 +18,9 @@ import (
 )
 
 type UserHandler struct {
-	service        *service.UserService
-	userVaultsSvc  *service.UserVaultsService
-	validator      *validator.Validate
+	service       *service.UserService
+	userVaultsSvc *service.UserVaultsService
+	validator     *validator.Validate
 }
 
 func NewUserHandler(service *service.UserService) *UserHandler {
@@ -206,6 +206,16 @@ func (h *UserHandler) getUserByWallet(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, http.StatusOK, response.OK(model))
 }
 
+const (
+	// maxKYCUploadBytes caps the entire KYC submission body. Identity documents
+	// are photographs; 12 MB accommodates a high-resolution scan with form
+	// fields alongside it.
+	maxKYCUploadBytes = 12 << 20
+	// kycInMemoryBytes is how much of the multipart form is buffered in memory
+	// before the remainder spills to temporary files.
+	kycInMemoryBytes = 10 << 20
+)
+
 func (h *UserHandler) submitKYC(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	userID, err := uuid.Parse(idStr)
@@ -214,14 +224,20 @@ func (h *UserHandler) submitKYC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(10 << 20); err != nil { // 10 MB limit
+	// ParseMultipartForm's argument bounds only how much is held in memory:
+	// anything beyond it spills to temporary files, so on its own it does not
+	// bound the request at all and a large upload can exhaust disk
+	// (nester#1035, G120). MaxBytesReader caps the request body itself, which
+	// is the actual limit.
+	r.Body = http.MaxBytesReader(w, r.Body, maxKYCUploadBytes)
+	if err := r.ParseMultipartForm(kycInMemoryBytes); err != nil { // #nosec G120 -- the request body is bounded by MaxBytesReader on the line above
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("could not parse multipart form"))
 		return
 	}
 
 	fullName := r.FormValue("full_name")
 	dateOfBirth := r.FormValue("date_of_birth") // ignored for now
-	country := r.FormValue("country") // ignored for now
+	country := r.FormValue("country")           // ignored for now
 	idType := r.FormValue("id_type")
 	idNumber := r.FormValue("id_number")
 

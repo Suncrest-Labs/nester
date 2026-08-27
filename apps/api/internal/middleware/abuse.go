@@ -165,7 +165,7 @@ func ChallengeMiddleware(decide func(*http.Request) AbuseAction) func(http.Handl
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"success": false,
 					"error": map[string]string{
-						"code": "STEP_UP_REQUIRED",
+						"code":    "STEP_UP_REQUIRED",
 						"message": "Complete verification to continue.",
 					},
 				})

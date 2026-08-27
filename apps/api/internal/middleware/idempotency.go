@@ -123,11 +123,14 @@ func IdempotencyMiddleware(store IdempotencyStore, routes []RouteMatch) func(htt
 				return
 			}
 
-			key := r.Header.Get(idempotencyHeader)
-			if key == "" {
+			clientKey := r.Header.Get(idempotencyHeader)
+			if clientKey == "" {
 				http.Error(w, "Idempotency-Key header is required for this endpoint", http.StatusBadRequest)
 				return
 			}
+			// Uniqueness is (user, key, endpoint). The same client key used
+			// on a different method+path is a different operation — nester#1077.
+			key := scopedIdempotencyKey(r.Method, r.URL.Path, clientKey)
 
 			// Read one byte past the limit so an oversized body can be told
 			// apart from one that lands exactly at maxIdempotencyBodyBytes —
@@ -253,6 +256,24 @@ func writeStoredResponse(w http.ResponseWriter, rec IdempotencyRecord) {
 	}
 	w.WriteHeader(status)
 	_, _ = w.Write(rec.ResponseBody)
+}
+
+// scopedIdempotencyKey binds a client-supplied key to one HTTP endpoint so
+// the stored row is (user, key, endpoint) as required by nester#1077.
+func scopedIdempotencyKey(method, path, clientKey string) string {
+	return method + " " + path + "\x1f" + clientKey
+}
+
+// VaultMoneyPathIdempotencyRoutes is the nester#1077 set: every
+// state-changing vault money path requires an Idempotency-Key.
+func VaultMoneyPathIdempotencyRoutes() []RouteMatch {
+	return []RouteMatch{
+		{Method: http.MethodPost, Path: "/api/v1/vaults/{id}/deposit"},
+		{Method: http.MethodPost, Path: "/api/v1/vaults/{id}/withdraw"},
+		{Method: http.MethodPost, Path: "/api/v1/vaults/{id}/harvest"},
+		{Method: http.MethodPost, Path: "/api/v1/vaults/{id}/rebalance"},
+		{Method: http.MethodPost, Path: "/api/v1/vault/rebalance"},
+	}
 }
 
 // fingerprintRequest hashes method+path+body so a key reused with a

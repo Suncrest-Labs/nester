@@ -1,0 +1,690 @@
+# Multi-window multi-burn-rate SLO alerts for nester#1056.
+#
+# ============================================================================
+# The arithmetic
+# ============================================================================
+#
+# The error budget is the share of events an SLO permits to fail:
+#
+#     error_budget = 1 - SLO_target
+#
+# A 28-day window contains 28 * 24 = 672 hours. "Burn rate" is how fast the
+# budget is being consumed relative to the rate that would exhaust it exactly
+# at the end of the window:
+#
+#     burn_rate = observed_error_ratio / error_budget
+#
+# A burn rate of 1 exhausts the budget in exactly 28 days. A burn rate of 13.44
+# exhausts it in 28/13.44 days ~= 50 hours.
+#
+# The two policies required by the issue convert to burn rates like this:
+#
+#   FAST BURN — 2% of the 28-day budget in 1 hour:
+#       burn_rate = 0.02 * (672 h / 1 h) = 13.44
+#       At this rate the full budget is gone in 1/0.02 = 50 hours.
+#
+#   SLOW BURN — 5% of the 28-day budget in 6 hours:
+#       burn_rate = 0.05 * (672 h / 6 h) = 5.6
+#       At this rate the full budget is gone in 6/0.05 = 120 hours = 5 days.
+#
+# These multipliers are SLO-independent: 13.44 and 5.6 apply to every target.
+# What changes per SLO is the absolute error ratio each multiplier represents:
+#
+#     SLO      budget    minutes/28d   fast (13.44x)   slow (5.6x)
+#     99.9%    0.100%          40.3        1.344%        0.560%
+#     99.5%    0.500%         201.6        6.720%        2.800%
+#     99.0%    1.000%         403.2       13.440%        5.600%
+#     95.0%    5.000%        2016.0       67.200%       28.000%
+#
+# ============================================================================
+# Why two windows per alert
+# ============================================================================
+#
+# Each alert requires the long window AND a short confirmation window to be
+# over threshold simultaneously.
+#
+# The long window (1h fast, 6h slow) is what defines the burn policy. On its
+# own it has a tail problem: a 5-minute outage keeps a 1-hour window elevated
+# for a full hour after recovery, so the page persists long after the incident
+# ends and the on-call engineer learns to ignore it.
+#
+# The short window (5m fast, 30m slow) is a *recovery detector*, not a second
+# opinion. Once the incident stops, the short window falls below threshold
+# within minutes and the alert resolves, while the long window still carries
+# the history that justified firing. It also suppresses single-scrape spikes,
+# since one bad scrape cannot hold a 5-minute rate above 13.44x.
+#
+# The conventional Google SRE workbook ratios (1h/5m, 6h/30m) are used
+# unchanged because the 12:1 window ratio is what makes the recovery detector
+# responsive without being twitchy — not because they are conventional.
+#
+# `for:` is deliberately short (2m fast, 15m slow). The multi-window condition
+# already provides the debouncing that `for:` usually supplies; a long `for:`
+# on top of it would delay a genuine page by that much again.
+#
+# ============================================================================
+# Severity
+# ============================================================================
+#
+#   severity: page   — wake someone. Reserved for burn rates that exhaust the
+#                      budget within ~2 days, on user-visible money paths.
+#   severity: ticket — file work for business hours. Real degradation, but
+#                      5 days of budget remain; waking someone buys nothing.
+#
+# ============================================================================
+# Missing data
+# ============================================================================
+#
+# A recorded ratio evaluates to 0, not NaN, when there is no traffic (see the
+# clamp_min note in slo_recording.yml). That means these alerts do not fire on
+# an idle service — which is correct, because "nobody is using it" is not an
+# SLO breach. The case that genuinely matters, "the service is broken and
+# nobody has noticed because there is no traffic", is caught by the synthetic
+# probe alerts in slo_probe_alerts.yml. That division of labour is deliberate:
+# a real-traffic SLI should never be asked to detect the absence of traffic.
+
+groups:
+  # ---------------------------------------------------------------------------
+  # API availability — target 99.9%
+  # ---------------------------------------------------------------------------
+  # budget 0.1% => fast 13.44 * 0.001 = 0.01344 (1.344%)
+  #                slow  5.60 * 0.001 = 0.00560 (0.560%)
+  - name: slo_alerts_api_availability
+    rules:
+      - alert: APIAvailabilityFastBurn
+        expr: |
+          api:availability:error_ratio_rate1h > 0.01344
+          and
+          api:availability:error_ratio_rate5m > 0.01344
+        for: 2m
+        labels:
+          severity: page
+          slo: api_availability
+          service: api
+          burn: fast
+        annotations:
+          summary: >-
+            API availability burning 28-day error budget 13.4x
+            ({{ $value | humanizePercentage }} 5xx over 1h)
+          description: >-
+            5xx ratio is {{ with query "api:availability:error_ratio_rate1h" }}{{ . | first | value | humanizePercentage }}{{ end }}
+            over 1h and {{ with query "api:availability:error_ratio_rate5m" }}{{ . | first | value | humanizePercentage }}{{ end }}
+            over 5m, against a 99.9% target (0.1% budget = 40 minutes per 28
+            days). At this rate the entire 28-day budget is exhausted in ~50
+            hours. 4xx and unmatched routes are excluded, so this is server-side
+            failure only.
+          budget_remaining: >-
+            {{ with query "1 - (api:availability:error_ratio_rate28d / 0.001)" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          dashboard: /d/nester-slo-api/api-availability
+          runbook: docs/observability/runbooks/api-availability.md
+
+      - alert: APIAvailabilitySlowBurn
+        expr: |
+          api:availability:error_ratio_rate6h > 0.0056
+          and
+          api:availability:error_ratio_rate30m > 0.0056
+        for: 15m
+        labels:
+          severity: ticket
+          slo: api_availability
+          service: api
+          burn: slow
+        annotations:
+          summary: >-
+            API availability burning 28-day error budget 5.6x
+            ({{ $value | humanizePercentage }} 5xx over 6h)
+          description: >-
+            Sustained elevated 5xx ratio against a 99.9% target. At this rate
+            the 28-day budget is exhausted in ~5 days. Not paging: there is
+            time to fix this in business hours, but it will not resolve itself.
+          budget_remaining: >-
+            {{ with query "1 - (api:availability:error_ratio_rate28d / 0.001)" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          dashboard: /d/nester-slo-api/api-availability
+          runbook: docs/observability/runbooks/api-availability.md
+
+  # ---------------------------------------------------------------------------
+  # Deposit / withdrawal success — target 99.5%
+  # ---------------------------------------------------------------------------
+  # budget 0.5% => fast 13.44 * 0.005 = 0.0672 (6.72%)
+  #                slow  5.60 * 0.005 = 0.0280 (2.80%)
+  #
+  # Looser than API availability at 99.9%, and the reason is not timidity: this
+  # SLI includes on-chain settlement, where Soroban RPC and the network itself
+  # are outside our control and outside our ability to fix during an incident.
+  # A target that treats an unavoidable chain hiccup as a budget emergency
+  # trains the on-call to ignore the alert, which costs more than the looser
+  # number does. 0.5% over 28 days is ~1 failed attempt in 200 — visible to
+  # users but survivable, and the alert still fires long before it accumulates.
+  - name: slo_alerts_flow_success
+    rules:
+      - alert: FlowSuccessFastBurn
+        expr: |
+          flow:success:error_ratio_rate1h > 0.0672
+          and
+          flow:success:error_ratio_rate5m > 0.0672
+        for: 2m
+        labels:
+          severity: page
+          slo: flow_success
+          service: api
+          burn: fast
+        annotations:
+          summary: >-
+            {{ $labels.flow }} failure rate burning error budget 13.4x
+            ({{ $value | humanizePercentage }} over 1h)
+          description: >-
+            {{ $labels.flow }} attempts are failing at
+            {{ $value | humanizePercentage }} against a 99.5% target. User
+            cancellations and rejected (invalid) requests are excluded, so
+            these are real chain or internal failures. Users' money is not
+            moving. At this rate the 28-day budget is gone in ~50 hours.
+          budget_remaining: >-
+            {{ with query "1 - (flow:success:error_ratio_rate28d / 0.005)" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          dashboard: /d/nester-slo-flow/deposits-withdrawals
+          runbook: docs/observability/runbooks/flow-success.md
+
+      - alert: FlowSuccessSlowBurn
+        expr: |
+          flow:success:error_ratio_rate6h > 0.028
+          and
+          flow:success:error_ratio_rate30m > 0.028
+        for: 15m
+        labels:
+          severity: ticket
+          slo: flow_success
+          service: api
+          burn: slow
+        annotations:
+          summary: >-
+            {{ $labels.flow }} failure rate burning error budget 5.6x
+            ({{ $value | humanizePercentage }} over 6h)
+          description: >-
+            Sustained {{ $labels.flow }} failures against a 99.5% target.
+            28-day budget exhausted in ~5 days at this rate. Check whether the
+            failures are concentrated in failed_chain (upstream/network) or
+            failed_internal (ours) — the runbook splits on exactly that.
+          budget_remaining: >-
+            {{ with query "1 - (flow:success:error_ratio_rate28d / 0.005)" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          dashboard: /d/nester-slo-flow/deposits-withdrawals
+          runbook: docs/observability/runbooks/flow-success.md
+
+  # ---------------------------------------------------------------------------
+  # Deposit / withdrawal latency — target 99% under 30s
+  # ---------------------------------------------------------------------------
+  # budget 1% => fast 13.44 * 0.01 = 0.1344 (13.44%)
+  #              slow  5.60 * 0.01 = 0.0560 (5.60%)
+  #
+  # 99% rather than 99.5%: the tail here is dominated by ledger close timing,
+  # which is genuinely variable and not ours. Slow is also strictly better than
+  # failed — the money still arrives — so this warrants a ticket, never a page.
+  # A fast-burn variant exists so a total settlement stall is still caught
+  # quickly, but it too is ticket severity: if settlement has stopped entirely,
+  # FlowSuccessFastBurn is already paging.
+  - name: slo_alerts_flow_latency
+    rules:
+      - alert: FlowLatencyFastBurn
+        expr: |
+          flow:latency:error_ratio_rate1h > 0.1344
+          and
+          flow:latency:error_ratio_rate5m > 0.1344
+        for: 2m
+        labels:
+          severity: ticket
+          slo: flow_latency
+          service: api
+          burn: fast
+        annotations:
+          summary: >-
+            {{ $labels.flow }} settlement slower than 30s for
+            {{ $value | humanizePercentage }} of successes (1h)
+          description: >-
+            Confirmations are completing but exceeding the 30s threshold
+            (~6 ledgers) against a 99% target. Money is still arriving, so this
+            is a ticket rather than a page. If confirmations have stopped
+            entirely, FlowSuccessFastBurn covers that separately.
+          dashboard: /d/nester-slo-flow/deposits-withdrawals
+          runbook: docs/observability/runbooks/flow-latency.md
+
+      - alert: FlowLatencySlowBurn
+        expr: |
+          flow:latency:error_ratio_rate6h > 0.056
+          and
+          flow:latency:error_ratio_rate30m > 0.056
+        for: 15m
+        labels:
+          severity: ticket
+          slo: flow_latency
+          service: api
+          burn: slow
+        annotations:
+          summary: >-
+            {{ $labels.flow }} settlement latency degraded for 6h
+            ({{ $value | humanizePercentage }} over 30s)
+          description: >-
+            Sustained settlement latency degradation against a 99% target.
+            Commonly an RPC endpoint degrading rather than a code change; the
+            runbook distinguishes them.
+          dashboard: /d/nester-slo-flow/deposits-withdrawals
+          runbook: docs/observability/runbooks/flow-latency.md
+
+  # ---------------------------------------------------------------------------
+  # Intelligence availability — target 99%
+  # ---------------------------------------------------------------------------
+  # budget 1% => fast 13.44 * 0.01 = 0.1344 (13.44%)
+  #              slow  5.60 * 0.01 = 0.0560 (5.60%)
+  #
+  # 99%, not 99.9%: this path depends on a third-party model API whose
+  # availability we neither control nor can repair. The feature is also
+  # advisory — a user who cannot get coaching still has full access to their
+  # money — so the user impact of a failure is materially lower than for the
+  # API or the money paths. Ticket severity for the same reason: nobody's funds
+  # are at risk, and there is no 3am action that fixes an upstream provider.
+  - name: slo_alerts_intelligence_availability
+    rules:
+      - alert: IntelligenceAvailabilityFastBurn
+        expr: |
+          intelligence:availability:error_ratio_rate1h > 0.1344
+          and
+          intelligence:availability:error_ratio_rate5m > 0.1344
+        for: 2m
+        labels:
+          severity: ticket
+          slo: intelligence_availability
+          service: intelligence
+          burn: fast
+        annotations:
+          summary: >-
+            Intelligence error rate burning error budget 13.4x
+            ({{ $value | humanizePercentage }} over 1h)
+          description: >-
+            Intelligence requests are erroring at
+            {{ $value | humanizePercentage }} against a 99% target. Refusals are
+            NOT counted here — this is genuine failure (upstream error, timeout,
+            unhandled exception). Client disconnects are excluded. Check
+            nester_outbound_*{upstream="anthropic_relay"} to separate a provider
+            outage from a fault on our side.
+          budget_remaining: >-
+            {{ with query "1 - (intelligence:availability:error_ratio_rate28d / 0.01)" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          dashboard: /d/nester-slo-intel/intelligence
+          runbook: docs/observability/runbooks/intelligence-availability.md
+
+      - alert: IntelligenceAvailabilitySlowBurn
+        expr: |
+          intelligence:availability:error_ratio_rate6h > 0.056
+          and
+          intelligence:availability:error_ratio_rate30m > 0.056
+        for: 15m
+        labels:
+          severity: ticket
+          slo: intelligence_availability
+          service: intelligence
+          burn: slow
+        annotations:
+          summary: >-
+            Intelligence error rate burning error budget 5.6x
+            ({{ $value | humanizePercentage }} over 6h)
+          description: >-
+            Sustained intelligence errors against a 99% target. 28-day budget
+            exhausted in ~5 days at this rate.
+          budget_remaining: >-
+            {{ with query "1 - (intelligence:availability:error_ratio_rate28d / 0.01)" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          dashboard: /d/nester-slo-intel/intelligence
+          runbook: docs/observability/runbooks/intelligence-availability.md
+
+  # ---------------------------------------------------------------------------
+  # Intelligence time to first token — target 95% under 3s
+  # ---------------------------------------------------------------------------
+  # budget 5% => fast 13.44 * 0.05 = 0.672 (67.2%)
+  #              slow  5.60 * 0.05 = 0.280 (28.0%)
+  #
+  # 95% is deliberately the loosest target in this file. TTFT depends on model
+  # provider queueing that we cannot influence, and the consequence of a slow
+  # first token is impatience, not lost money. A tighter target would generate
+  # tickets nobody can action. Note the fast threshold works out to 67.2% of
+  # requests exceeding 3s — that is not a subtle degradation, it is the stream
+  # being effectively broken, which is the correct bar for this indicator.
+  - name: slo_alerts_intelligence_ttft
+    rules:
+      - alert: IntelligenceTTFTFastBurn
+        expr: |
+          intelligence:ttft:error_ratio_rate1h > 0.672
+          and
+          intelligence:ttft:error_ratio_rate5m > 0.672
+        for: 2m
+        labels:
+          severity: ticket
+          slo: intelligence_ttft
+          service: intelligence
+          burn: fast
+        annotations:
+          summary: >-
+            Intelligence time-to-first-token degraded:
+            {{ $value | humanizePercentage }} of streams exceed 3s
+          description: >-
+            The majority of streamed answers are taking over 3s to produce a
+            first token against a 95% target. At this level the chat feels
+            broken even when answers eventually complete. p95 TTFT is
+            {{ with query "intelligence:ttft:p95_5m" }}{{ . | first | value | humanizeDuration }}{{ end }}.
+          dashboard: /d/nester-slo-intel/intelligence
+          runbook: docs/observability/runbooks/intelligence-latency.md
+
+      - alert: IntelligenceTTFTSlowBurn
+        expr: |
+          intelligence:ttft:error_ratio_rate6h > 0.28
+          and
+          intelligence:ttft:error_ratio_rate30m > 0.28
+        for: 15m
+        labels:
+          severity: ticket
+          slo: intelligence_ttft
+          service: intelligence
+          burn: slow
+        annotations:
+          summary: >-
+            Intelligence time-to-first-token sustained degradation
+            ({{ $value | humanizePercentage }} over 3s)
+          description: >-
+            Sustained TTFT degradation against a 95% target. Usually provider
+            queueing; the runbook distinguishes that from our own tool-round
+            overhead before the first token.
+          dashboard: /d/nester-slo-intel/intelligence
+          runbook: docs/observability/runbooks/intelligence-latency.md
+
+  # ---------------------------------------------------------------------------
+  # Intelligence refusal rate — product-quality guardrail
+  # ---------------------------------------------------------------------------
+  #
+  # No burn-rate treatment, and that is a considered decision rather than an
+  # omission. A refusal is not an error: some baseline is correct and healthy,
+  # because users do ask off-topic questions and grounding *should* decline
+  # when account data is missing. There is no principled "budget" of correct
+  # behaviour to burn.
+  #
+  # What matters is a departure from baseline, which means a guardrail is
+  # misfiring or grounding has lost its data source. So this alerts on an
+  # absolute threshold over a long window, and never pages.
+  #
+  # 30% over 6h: high enough that ordinary off-topic traffic and legitimate
+  # data-missing refusals never reach it, low enough that a guardrail regression
+  # refusing a large share of valid questions is caught the same day. This
+  # number is a starting estimate, not a measurement — the first SLO review
+  # should retune it against observed baseline, and docs/observability/slo.md
+  # records that as an open item rather than pretending it is calibrated.
+  - name: slo_alerts_intelligence_refusal
+    rules:
+      - alert: IntelligenceRefusalRateHigh
+        expr: |
+          intelligence:refusal:error_ratio_rate6h > 0.30
+          and
+          intelligence:refusal:error_ratio_rate30m > 0.30
+        for: 30m
+        labels:
+          severity: ticket
+          slo: intelligence_refusal
+          service: intelligence
+        annotations:
+          summary: >-
+            Intelligence refusing {{ $value | humanizePercentage }} of answerable
+            requests
+          description: >-
+            Refusal rate is well above the expected baseline, which usually
+            means a guardrail regression or grounding losing its data source
+            rather than a change in what users are asking. Errors are excluded
+            from the denominator, so this is not availability. Split by reason:
+            {{ with query "intelligence:refusal:by_reason_rate30m" }}{{ range . }}{{ .Labels.reason }}={{ .Value | printf "%.3f" }}/s {{ end }}{{ end }}
+          dashboard: /d/nester-slo-intel/intelligence
+          runbook: docs/observability/runbooks/intelligence-refusal.md
+
+  # ---------------------------------------------------------------------------
+  # Balance freshness
+  # ---------------------------------------------------------------------------
+  #
+  # Alerted directly on the gauge rather than via burn rate: this is a
+  # continuous quantity, not a ratio of events, and forcing it into burn-rate
+  # shape would produce a number with no meaning.
+  #
+  # Three distinct alerts, because three distinct things go wrong and they need
+  # different responses:
+  #
+  #   IndexerLagHigh    — the indexer is running but falling behind.
+  #   IndexerLagStale   — the indexer stopped updating the gauge at all. This
+  #                       is the dangerous one: without it a crashed sampler
+  #                       leaves a frozen healthy value and the SLI reports
+  #                       perfect freshness forever.
+  #   IndexerMetricsAbsent — the series vanished entirely (process gone, scrape
+  #                       failing). Without this, deleting the metric would
+  #                       silence every alert above it.
+  #
+  # Together these ensure missing telemetry fails visibly rather than silently,
+  # which is the requirement that matters most for a freshness signal.
+  - name: slo_alerts_balance_freshness
+    rules:
+      - alert: IndexerLagHigh
+        expr: indexer:freshness:lag_ledgers > 60
+        for: 5m
+        labels:
+          severity: page
+          slo: balance_freshness
+          service: api
+        annotations:
+          summary: >-
+            Event indexer {{ $value }} ledgers behind the network tip
+          description: >-
+            Indexed ledger is {{ $value }} behind the chain tip (~5 minutes at a
+            5s close interval). Users are seeing stale balances: a deposit that
+            has settled on-chain will not appear in the app until this recovers.
+            Paging because the displayed balance of a savings product being
+            wrong is a trust failure, not a cosmetic one.
+          dashboard: /d/nester-slo-balance/balance-freshness
+          runbook: docs/observability/runbooks/balance-freshness.md
+
+      - alert: IndexerLagStale
+        expr: indexer:freshness:sample_age_seconds > 300
+        for: 5m
+        labels:
+          severity: page
+          slo: balance_freshness
+          service: api
+        annotations:
+          summary: >-
+            Event indexer has not reported lag for
+            {{ $value | humanizeDuration }}
+          description: >-
+            The lag gauge has not been updated in over 5 minutes, so the
+            freshness signal itself is stale. The indexer polls every 6s, so
+            this means it is wedged, erroring, or dead. Critically, the lag
+            gauge may still read healthy — do not trust it. Check
+            nester_indexer_lag_sample_errors_total and the indexer logs.
+          dashboard: /d/nester-slo-balance/balance-freshness
+          runbook: docs/observability/runbooks/balance-freshness.md
+
+      - alert: IndexerMetricsAbsent
+        expr: absent(nester_indexer_lag_last_sample_age_seconds)
+        for: 10m
+        labels:
+          severity: page
+          slo: balance_freshness
+          service: api
+        annotations:
+          summary: Indexer freshness metrics are absent entirely
+          description: >-
+            The indexer freshness series has disappeared. Either the API is
+            down, the scrape is failing, or the indexer never started (check
+            STELLAR_RPC_URL — an empty value disables it silently at boot).
+            This alert exists so that deleting or breaking the metric cannot
+            silence IndexerLagHigh and IndexerLagStale.
+          dashboard: /d/nester-slo-balance/balance-freshness
+          runbook: docs/observability/runbooks/balance-freshness.md
+
+  # ---------------------------------------------------------------------------
+  # Meta: the monitoring itself
+  # ---------------------------------------------------------------------------
+  #
+  # An SLO stack that cannot tell you it has stopped working is worse than no
+  # SLO stack, because it produces confident silence. These alerts cover the
+  # failure mode where every dashboard is green because no data is arriving.
+  # Money-path integrity (nester#1108). The flow and freshness alerts above
+  # catch deposits failing and balances going stale. These catch the two
+  # conditions those miss entirely: our record disagreeing with the chain, and
+  # money stuck in flight.
+  - name: slo_alerts_money_path_integrity
+    rules:
+      - alert: ReconciliationDivergence
+        # Any divergence, not a rate over a threshold. #1108 asks to alert on
+        # "any reconciliation divergence" because there is no acceptable
+        # steady-state rate of our ledger disagreeing with the chain — one is
+        # a bug, and the question is only how many users it touched.
+        expr: reconcile:divergence:increase1h > 0
+        for: 5m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Reconciliation found {{ $value | printf "%.0f" }} divergence(s)
+            between our records and the chain in the last hour
+          description: >-
+            The reconciler compared our transaction records against the chain
+            and they disagree. Breakdown by kind:
+            {{ with query "reconcile:divergence:rate30m" }}
+            {{ range . }}{{ .Labels.kind }}={{ .Value | printf "%.4f" }}/s
+            {{ end }}{{ end }}
+            A "mismatch" is the most serious — both sides have the record and
+            the values differ, which means a displayed balance is wrong.
+            "missing" and "extra" mean a record exists on one side only.
+            "stuck" means a submission has not reached a terminal state.
+            Paging rather than ticketing because a savings product whose
+            balance disagrees with the chain cannot be allowed to keep taking
+            deposits while someone reads a ticket queue.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: ReconciliationStalled
+        # The counterpart to the alert above. Zero divergences is only good
+        # news if the reconciler actually ran; a dead reconciler reports zero
+        # forever. Threshold is well above the 15s poll interval so a slow
+        # tick or a restart does not page.
+        expr: reconcile:health:last_run_age_seconds > 600
+        for: 5m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Reconciliation has not completed a pass for
+            {{ $value | humanizeDuration }}
+          description: >-
+            The transaction poller has not finished a reconciliation pass in
+            over 10 minutes, against a 15s interval. While this is firing the
+            ReconciliationDivergence alert above is meaningless: it reports
+            zero because nothing is being checked, not because everything
+            agrees. Treat divergence silence as unknown, not clean, until this
+            clears. Check the poller goroutine and
+            nester_reconcile_runs_total{outcome="failed"}.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: ReconciliationFailing
+        # A pass that cannot list its work. Distinct from the stall above: the
+        # loop is alive and ticking, but every pass aborts before inspecting
+        # anything, which also produces a false-clean divergence count.
+        expr: reconcile:health:failed_run_rate5m > 0
+        for: 15m
+        labels:
+          severity: ticket
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Reconciliation passes are failing before inspecting anything
+          description: >-
+            The poller is running but its passes abort while listing pending
+            transactions, so nothing is being reconciled and the divergence
+            count is falsely clean. Usually a database error on the
+            list-pending query. Ticketing rather than paging because
+            ReconciliationStalled pages if the loop stops entirely; this is
+            the narrower case where it keeps ticking without doing work.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: PendingSubmissionsBacklogged
+        # Age, not depth. A queue of 200 that drains in seconds is healthy; a
+        # queue of 3 that has not moved in 30 minutes is money the user cannot
+        # see and cannot get back.
+        expr: submission:pending:oldest_age_seconds > 1800
+        for: 10m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Oldest pending submission is {{ $value | humanizeDuration }} old
+          description: >-
+            A transaction submitted to the chain has been awaiting a terminal
+            status for over 30 minutes. Current queue depth:
+            {{ with query "submission:pending:count" }}
+            {{ . | first | value | printf "%.0f" }}{{ end }}.
+            This is a user whose deposit or withdrawal is in limbo — the funds
+            have left their visible balance and have not arrived anywhere they
+            can act on. Check Horizon ingestion and the submission pipeline
+            before assuming the chain is at fault.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: MoneyPathMetricsAbsent
+        # The same protection the indexer has: if these series vanish, every
+        # alert in this group silently stops evaluating and the money path
+        # becomes unmonitored without anything firing.
+        expr: absent(nester_reconcile_last_run_age_seconds)
+        for: 10m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Money-path integrity metrics are absent
+          description: >-
+            nester_reconcile_last_run_age_seconds has not been reported for 10
+            minutes. Every alert in this group evaluates against it, so
+            reconciliation and pending-submission monitoring are both dark.
+            Either the API is down (in which case other alerts are firing) or
+            the transaction poller was never started — TX_POLLER_ENABLED unset
+            disables it silently at boot.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+  - name: slo_alerts_meta
+    rules:
+      - alert: SLOTargetDown
+        expr: up{job=~"nester-.*"} == 0
+        for: 5m
+        labels:
+          severity: page
+          service: '{{ $labels.service }}'
+        annotations:
+          summary: Prometheus cannot scrape {{ $labels.job }}
+          description: >-
+            The scrape target has been down for 5 minutes. Every SLO computed
+            from this target is now blind: its recorded ratios go stale and its
+            burn-rate alerts cannot fire. Treat a silent SLO as unknown, not as
+            healthy.
+          runbook: docs/observability/runbooks/monitoring-down.md
+
+      - alert: SLOMetricsAbsent
+        expr: absent(nester_http_requests_total)
+        for: 10m
+        labels:
+          severity: page
+          service: api
+        annotations:
+          summary: Core API request metrics are absent
+          description: >-
+            nester_http_requests_total has no series. Either the API is not
+            running, the metrics listener is disabled (METRICS_ENABLED), or the
+            scrape config points somewhere wrong. Availability, latency and
+            every derived budget are unmeasurable until this is fixed.
+          runbook: docs/observability/runbooks/monitoring-down.md

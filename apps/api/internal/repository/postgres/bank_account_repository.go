@@ -119,13 +119,13 @@ func (r *BankAccountRepository) ListByUser(ctx context.Context, userID uuid.UUID
 
 func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bankaccount.BankAccount, []byte, string, error) {
 	var (
-		uid, bankName, bankCode string
-		encrypted               []byte
+		uid, bankName, bankCode        string
+		encrypted                      []byte
 		accountName, currency, country string
-		isDefault               bool
-		verifiedAt              sql.NullTime
-		createdAt               time.Time
-		keyVersion              string
+		isDefault                      bool
+		verifiedAt                     sql.NullTime
+		createdAt                      time.Time
+		keyVersion                     string
 	)
 	err := r.db.QueryRowContext(ctx, `
 		SELECT user_id, bank_name, COALESCE(bank_code, ''), account_number_encrypted,
@@ -144,16 +144,16 @@ func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bank
 		verified = &verifiedAt.Time
 	}
 	return bankaccount.BankAccount{
-		ID:            id,
-		UserID:        parsedUser,
-		BankName:      bankName,
-		BankCode:      bankCode,
-		AccountName:   accountName,
-		Currency:      currency,
-		Country:       country,
-		IsDefault:     isDefault,
-		VerifiedAt:    verified,
-		CreatedAt:     createdAt,
+		ID:          id,
+		UserID:      parsedUser,
+		BankName:    bankName,
+		BankCode:    bankCode,
+		AccountName: accountName,
+		Currency:    currency,
+		Country:     country,
+		IsDefault:   isDefault,
+		VerifiedAt:  verified,
+		CreatedAt:   createdAt,
 	}, encrypted, keyVersion, nil
 }
 

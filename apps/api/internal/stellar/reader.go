@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"time"
 
@@ -33,6 +34,15 @@ func NewContractReader(rpcURL, networkPassphrase, sourceAddress string) *Contrac
 		networkPassphrase: networkPassphrase,
 		sourceAddress:     sourceAddress,
 		httpClient:        &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (r *ContractReader) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		r.httpClient = client
 	}
 }
 
@@ -103,10 +113,21 @@ func (r *ContractReader) simulateI128(ctx context.Context, contractAddress, func
 	// The i128 value is expected to fit in int64 (e.g. stroops).
 	// hi==0: positive value in lo; hi==-1: negative value, lo holds two's complement.
 	if hi == 0 {
+		// hi==0 means the value is positive, but lo may still exceed int64
+		// max; converting without this check would wrap it negative
+		// (nester#1035, G115).
+		if lo > math.MaxInt64 {
+			return 0, fmt.Errorf("i128 value from %s overflows int64", functionName)
+		}
 		return int64(lo), nil
 	}
 	if hi == -1 {
-		return int64(lo), nil
+		// Two's complement negative: lo must be at or above the representable
+		// minimum for the result to fit.
+		if lo < uint64(1<<63) {
+			return 0, fmt.Errorf("i128 value from %s underflows int64", functionName)
+		}
+		return int64(lo), nil // #nosec G115 -- bounded above: lo >= 2^63 makes this a valid negative int64
 	}
 	return 0, fmt.Errorf("i128 value from %s overflows int64 (hi=%d)", functionName, hi)
 }

@@ -125,15 +125,15 @@ func (r *AdminRepository) GetVaultHealthDashboard(ctx context.Context) (admindom
 	vaultRows := make([]admindomain.VaultHealthRow, 0)
 	for rows.Next() {
 		var (
-			id              string
-			name            string
-			tvlStr          string
-			status          string
-			depositors      int64
-			pendingTx       int64
-			lastRebalance   sql.NullTime
-			apyCurrentStr   sql.NullString
-			apy24hStr       sql.NullString
+			id            string
+			name          string
+			tvlStr        string
+			status        string
+			depositors    int64
+			pendingTx     int64
+			lastRebalance sql.NullTime
+			apyCurrentStr sql.NullString
+			apy24hStr     sql.NullString
 		)
 
 		if err := rows.Scan(

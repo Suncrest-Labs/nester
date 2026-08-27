@@ -89,15 +89,9 @@ func (d *directGoalProgressChecker) IsGoalPausedOrArchived(ctx context.Context, 
 
 func applySavingsScheduleMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// The base helper now applies the complete migration chain, so the
+	// per-feature additions this function used to layer on are covered.
 	applyIntegrationMigrations(t, db)
-	for _, name := range []string{
-		"026_create_savings_goals.up.sql",
-		"037_add_savings_goal_category.up.sql",
-		"039_create_savings_schedules.up.sql",
-		"053_add_savings_goal_vault_id.up.sql",
-	} {
-		applyMigrationFile(t, db, name)
-	}
 }
 
 func applyMigrationFile(t *testing.T, db *sql.DB, name string) {
@@ -148,7 +142,10 @@ func TestRecurringDepositJobIntegration(t *testing.T) {
 	vaultRepo := NewVaultRepository(db)
 	goalRepo := NewSavingsGoalRepository(db)
 
-	past := time.Now().UTC().Add(-2 * time.Hour)
+	// Truncated to microseconds: timestamptz stores microsecond precision,
+	// so a nanosecond-precision Go value would not round-trip and the exact
+	// comparison against the computed next run below would fail.
+	past := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	schedule := &savingsschedule.SavingsSchedule{
 		ID:        uuid.New(),
 		UserID:    userID,
@@ -244,7 +241,7 @@ func TestRecurringDepositJobIntegration_SecondOccurrenceSucceeds(t *testing.T) {
 	vaultRepo := NewVaultRepository(db)
 	goalRepo := NewSavingsGoalRepository(db)
 
-	occurrence1 := time.Now().UTC().Add(-8 * 24 * time.Hour) // due a week+ago
+	occurrence1 := time.Now().UTC().Add(-8 * 24 * time.Hour).Truncate(time.Microsecond) // due a week+ago; µs for timestamptz round-trip
 	schedule := &savingsschedule.SavingsSchedule{
 		ID:        uuid.New(),
 		UserID:    userID,
