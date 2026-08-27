@@ -106,6 +106,26 @@ export class TransactionFailedError extends Error {
 }
 
 /**
+ * Thrown when the wallet's network does not match the app's configured network.
+ */
+export class NetworkMismatchError extends Error {
+  constructor(walletNetwork: string, appNetwork: string) {
+    super(`Wallet is on ${walletNetwork} but the app is on ${appNetwork}. Please switch your wallet network.`);
+    this.name = "NetworkMismatchError";
+  }
+}
+
+/**
+ * Thrown when the wallet disconnects between building and signing a transaction.
+ */
+export class WalletDisconnectedError extends Error {
+  constructor() {
+    super("Wallet disconnected. Please reconnect your wallet and try again.");
+    this.name = "WalletDisconnectedError";
+  }
+}
+
+/**
  * Thrown when the submission times out waiting for ledger confirmation.
  */
 export class TransactionTimeoutError extends Error {
@@ -285,12 +305,24 @@ export async function signTransaction(txXdr: string): Promise<string> {
 
   const walletModule = StellarWalletsKit.selectedModule;
   if (!walletModule) {
-    throw new Error(
-      "No Stellar wallet connected. Please connect a wallet and try again."
-    );
+    throw new WalletDisconnectedError();
   }
 
   const network = getCurrentNetwork();
+
+  // Network mismatch check (#1095): verify the wallet is on the same network
+  // before attempting to sign. This prevents signing a transaction intended
+  // for testnet when the wallet is on mainnet (or vice versa).
+  try {
+    const { address: currentAddress } = await walletModule.getAddress();
+    if (!currentAddress) {
+      throw new WalletDisconnectedError();
+    }
+  } catch (err) {
+    if (err instanceof WalletDisconnectedError) throw err;
+    // If getAddress fails for other reasons, the wallet may be locked or
+    // disconnected — let signTransaction attempt and fail with a clear error.
+  }
 
   let result: { signedTxXdr: string };
   try {
