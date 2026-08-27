@@ -330,6 +330,10 @@ func run() error {
 		baseLogger.Info("no signing configured: chain write operations are unavailable")
 	}
 
+	if cfg.Stellar().RPCURL() != "" {
+		vaultService.SetChainEventVerifier(service.NewStellarChainEventVerifier(cfg.Stellar().RPCURL()))
+	}
+
 	adminService := service.NewAdminService(
 		adminRepository,
 		vaultRepository,
@@ -1237,10 +1241,12 @@ func run() error {
 	// posted as a transaction, and creating a savings goal). Requires auth
 	// context, so it must sit after authenticator.
 	idempotencyStore := postgres.NewIdempotencyRepository(db)
-	idempotencyMiddleware := middleware.IdempotencyMiddleware(idempotencyStore, []middleware.RouteMatch{
+	idempotencyRoutes := []middleware.RouteMatch{
 		{Method: http.MethodPost, Path: "/api/v1/transactions"},
 		{Method: http.MethodPost, Path: "/api/v1/users/savings-goals"},
-	})
+	}
+	idempotencyRoutes = append(idempotencyRoutes, middleware.VaultMoneyPathIdempotencyRoutes()...)
+	idempotencyMiddleware := middleware.IdempotencyMiddleware(idempotencyStore, idempotencyRoutes)
 	idempotencyPurgeCtx, cancelIdempotencyPurge := context.WithCancel(context.Background())
 	defer cancelIdempotencyPurge()
 	go runIdempotencyPurge(idempotencyPurgeCtx, idempotencyStore, baseLogger.WithGroup("idempotency-purge"))

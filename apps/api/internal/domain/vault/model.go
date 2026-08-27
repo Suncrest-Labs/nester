@@ -29,6 +29,16 @@ var (
 	ErrVaultClosed          = errors.New("vault is closed")
 	ErrVaultNotActive       = errors.New("vault is not active")
 	ErrInsufficientBalance  = errors.New("vault balance must be zero before closing")
+	// ErrWithdrawalExceedsPosition is returned when a withdraw would take the
+	// caller's vault position below zero. Checked before any on-chain submit
+	// (nester#1076).
+	ErrWithdrawalExceedsPosition = errors.New("withdrawal would take the position below zero")
+	// ErrTxHashRequired is returned when a withdrawal is recorded without a
+	// verified on-chain transaction hash (nester#1076).
+	ErrTxHashRequired = errors.New("transaction hash is required")
+	// ErrUnverifiedChainTx is returned when the supplied hash cannot be
+	// reconciled against a matching vault contract event.
+	ErrUnverifiedChainTx = errors.New("on-chain transaction could not be verified")
 	ErrVaultForbidden       = errors.New("vault does not belong to caller")
 	ErrAllocationNotFound   = errors.New("allocation not found")
 	ErrAllocationHasBalance = errors.New("allocation has non-zero balance; set force=true to remove")

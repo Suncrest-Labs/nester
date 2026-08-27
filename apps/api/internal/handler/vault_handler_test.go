@@ -332,6 +332,13 @@ func (r *handlerRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, re
 	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
 	}
+	if record.TransactionHash != "" {
+		for _, txn := range r.transactions {
+			if txn.TransactionHash == record.TransactionHash {
+				return vault.ErrDuplicateTransaction
+			}
+		}
+	}
 
 	model.CurrentBalance = model.CurrentBalance.Sub(record.Amount)
 	model.UpdatedAt = time.Now().UTC()

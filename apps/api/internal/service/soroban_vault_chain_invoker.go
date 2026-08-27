@@ -93,7 +93,8 @@ func (s *SorobanVaultChainInvoker) SetAllocationWeights(
 // operator as both caller and depositing user, passing amount and zero
 // as the minimum-shares-out slippage guard.
 func (s *SorobanVaultChainInvoker) DepositToVault(ctx context.Context, contractAddress string, amountStroops int64) error {
-	return s.invoker.InvokeWithI128Pair(ctx, contractAddress, "deposit", amountStroops, 0)
+	_, err := s.invoker.InvokeWithI128Pair(ctx, contractAddress, "deposit", amountStroops, 0)
+	return err
 }
 
 // WithdrawFromVault invokes the vault contract's withdraw function with a
@@ -103,15 +104,15 @@ func (s *SorobanVaultChainInvoker) WithdrawFromVault(
 	contractAddress string,
 	sharesStroops int64,
 	slippageBps int,
-) error {
+) (string, error) {
 	bps, err := stellar.ResolveSlippageBps(slippageBps, s.defaultSlippageBps)
 	if err != nil {
-		return fmt.Errorf("invalid slippage: %w", err)
+		return "", fmt.Errorf("invalid slippage: %w", err)
 	}
 
 	previewNet, err := s.invoker.PreviewWithdrawNet(ctx, contractAddress, sharesStroops)
 	if err != nil {
-		return fmt.Errorf("preview withdrawal: %w", err)
+		return "", fmt.Errorf("preview withdrawal: %w", err)
 	}
 
 	minAssetsOut := stellar.ComputeMinAssetsOut(previewNet, bps)

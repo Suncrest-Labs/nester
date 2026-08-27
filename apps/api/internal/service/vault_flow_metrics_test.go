@@ -33,6 +33,9 @@ func TestClassifyRejectedErrors(t *testing.T) {
 		{"vault closed", vault.ErrVaultClosed},
 		{"vault not active", vault.ErrVaultNotActive},
 		{"insufficient balance", vault.ErrInsufficientBalance},
+		{"withdrawal exceeds position", vault.ErrWithdrawalExceedsPosition},
+		{"tx hash required", vault.ErrTxHashRequired},
+		{"unverified chain tx", vault.ErrUnverifiedChainTx},
 		{"capacity exceeded", vault.ErrCapacityExceeded},
 		{"duplicate transaction", vault.ErrDuplicateTransaction},
 		// The contract refused a sub-minimum deposit. Classified as rejected

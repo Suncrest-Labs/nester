@@ -82,7 +82,7 @@ type ConvertResponse struct {
 // no operator secret is configured.
 type VaultDepositInvoker interface {
 	DepositToVault(ctx context.Context, contractAddress string, amountStroops int64) error
-	WithdrawFromVault(ctx context.Context, contractAddress string, sharesStroops int64, slippageBps int) error
+	WithdrawFromVault(ctx context.Context, contractAddress string, sharesStroops int64, slippageBps int) (txHash string, err error)
 	PreviewDeposit(ctx context.Context, contractAddress string, amountStroops int64) (int64, error)
 	PreviewWithdraw(ctx context.Context, contractAddress string, sharesStroops int64) (int64, error)
 	HarvestVault(ctx context.Context, contractAddress, userAddress string, compound bool) (string, error)
@@ -96,8 +96,8 @@ type VaultDepositInvoker interface {
 type NoopVaultDepositInvoker struct{}
 
 func (NoopVaultDepositInvoker) DepositToVault(_ context.Context, _ string, _ int64) error { return nil }
-func (NoopVaultDepositInvoker) WithdrawFromVault(_ context.Context, _ string, _ int64, _ int) error {
-	return nil
+func (NoopVaultDepositInvoker) WithdrawFromVault(_ context.Context, _ string, _ int64, _ int) (string, error) {
+	return "", nil
 }
 func (NoopVaultDepositInvoker) PreviewDeposit(_ context.Context, _ string, _ int64) (int64, error) {
 	return 0, nil
@@ -126,6 +126,7 @@ type HarvestResult struct {
 type VaultService struct {
 	repository             vault.Repository
 	depositInvoker         VaultDepositInvoker
+	chainVerifier          ChainEventVerifier
 	defaultHarvestCompound bool
 	yieldRecorder          YieldHarvestRecorder
 	goalYieldRouter        GoalYieldRouter
@@ -220,6 +221,27 @@ func NewVaultService(repository vault.Repository) *VaultService {
 // Call this after NewVaultService when an operator key is available.
 func (s *VaultService) SetDepositInvoker(invoker VaultDepositInvoker) {
 	s.depositInvoker = invoker
+}
+
+// ChainEventVerifier looks up a transaction hash and returns the matching
+// vault contract event. Implemented by stellar.RPCChainEventVerifier; tests
+// inject a fake. Shared by deposit and withdrawal recording (nester#1076).
+type ChainEventVerifier interface {
+	VerifyVaultEvent(ctx context.Context, txHash, contractID, eventType string) (VerifiedVaultEvent, error)
+}
+
+// VerifiedVaultEvent is the amount taken from a confirmed on-chain vault event.
+type VerifiedVaultEvent struct {
+	TxHash     string
+	EventType  string
+	Amount     decimal.Decimal
+	ContractID string
+}
+
+// SetChainEventVerifier wires on-chain event verification used to record
+// withdrawals from a confirmed transaction hash rather than the request body.
+func (s *VaultService) SetChainEventVerifier(verifier ChainEventVerifier) {
+	s.chainVerifier = verifier
 }
 
 // SetMetrics wires the SLI recorder for the deposit and withdrawal service
@@ -580,8 +602,12 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 	if existing.Status == vault.StatusClosed {
 		return vault.Vault{}, vault.ErrVaultClosed
 	}
-	if existing.CurrentBalance.LessThan(input.Amount) {
-		return vault.Vault{}, vault.ErrInsufficientBalance
+	// Reject before any on-chain submit: a withdrawal that would take the
+	// position below zero must not be sent to the contract (nester#1076).
+	// When a tx hash is already supplied the withdraw landed on-chain; the
+	// event amount is checked after verification instead of this hint.
+	if strings.TrimSpace(input.TxHash) == "" && existing.CurrentBalance.LessThan(input.Amount) {
+		return vault.Vault{}, vault.ErrWithdrawalExceedsPosition
 	}
 
 	userID := input.UserID
@@ -589,20 +615,44 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 		userID = existing.UserID
 	}
 
-	sharePrice := vault.ComputeSharePrice(existing)
-	shares := input.Amount.Div(sharePrice).Round(6)
-
-	if s.depositInvoker != nil {
+	txHash := strings.TrimSpace(input.TxHash)
+	// A client-supplied hash means the withdraw already landed on-chain
+	// (wallet-signed). Do not submit again.
+	if txHash == "" && s.depositInvoker != nil {
 		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
-		if err := s.depositInvoker.WithdrawFromVault(ctx, existing.ContractAddress, stroops, input.SlippageBps); err != nil {
+		submitted, err := s.depositInvoker.WithdrawFromVault(ctx, existing.ContractAddress, stroops, input.SlippageBps)
+		if err != nil {
 			return vault.Vault{}, fmt.Errorf("on-chain withdrawal failed: %w", err)
+		}
+		txHash = strings.TrimSpace(submitted)
+	}
+
+	amount := input.Amount
+	if s.chainVerifier != nil {
+		if txHash == "" {
+			return vault.Vault{}, vault.ErrTxHashRequired
+		}
+		event, err := s.chainVerifier.VerifyVaultEvent(ctx, txHash, existing.ContractAddress, "withdraw")
+		if err != nil {
+			return vault.Vault{}, err
+		}
+		// Record the contract-event amount, never the request body.
+		amount = event.Amount
+		if amount.Cmp(decimal.Zero) <= 0 {
+			return vault.Vault{}, vault.ErrInvalidAmount
+		}
+		if existing.CurrentBalance.LessThan(amount) {
+			return vault.Vault{}, vault.ErrWithdrawalExceedsPosition
 		}
 	}
 
+	sharePrice := vault.ComputeSharePrice(existing)
+	shares := amount.Div(sharePrice).Round(6)
+
 	record := vault.TransactionRecord{
 		UserID:               userID,
-		Amount:               input.Amount,
-		TransactionHash:      input.TxHash,
+		Amount:               amount,
+		TransactionHash:      txHash,
 		SharesMintedOrBurned: shares,
 		SharePriceAtTime:     sharePrice,
 		FeeCharged:           input.Fee,

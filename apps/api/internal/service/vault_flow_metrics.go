@@ -43,6 +43,9 @@ func classifyFlowError(err error) metrics.FlowOutcome {
 		errors.Is(err, vault.ErrVaultClosed),
 		errors.Is(err, vault.ErrVaultNotActive),
 		errors.Is(err, vault.ErrInsufficientBalance),
+		errors.Is(err, vault.ErrWithdrawalExceedsPosition),
+		errors.Is(err, vault.ErrTxHashRequired),
+		errors.Is(err, vault.ErrUnverifiedChainTx),
 		errors.Is(err, vault.ErrCapacityExceeded),
 		errors.Is(err, vault.ErrDuplicateTransaction),
 		// The contract refused a sub-minimum deposit. Classified as rejected
