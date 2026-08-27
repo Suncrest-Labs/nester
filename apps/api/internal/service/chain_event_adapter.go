@@ -29,5 +29,6 @@ func (a rpcChainEventAdapter) VerifyVaultEvent(ctx context.Context, txHash, cont
 		EventType:  ev.EventType,
 		Amount:     ev.Amount,
 		ContractID: ev.ContractID,
+		Account:    ev.Account,
 	}, nil
 }

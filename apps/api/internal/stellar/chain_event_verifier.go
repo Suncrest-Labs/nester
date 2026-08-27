@@ -28,6 +28,11 @@ type VerifiedVaultEvent struct {
 	EventType  string
 	Amount     decimal.Decimal
 	ContractID string
+	// Account is the address the event was emitted for, read from the event
+	// topics. Empty when the contract does not include one. Callers use it to
+	// confirm the event belongs to the requesting user rather than to anyone
+	// who happens to share the contract (nester#1076).
+	Account string
 }
 
 // ChainEventVerifier looks up a transaction hash and returns the matching
@@ -175,6 +180,13 @@ func verifiedEventFromXDR(ce xdr.ContractEvent) (VerifiedVaultEvent, bool) {
 		return VerifiedVaultEvent{}, false
 	}
 
+	// collectContractEvents appends the whole event stream, which carries
+	// system and diagnostic events too. Only a genuine contract event is
+	// authoritative for a balance change.
+	if ce.Type != xdr.ContractEventTypeContract {
+		return VerifiedVaultEvent{}, false
+	}
+
 	body, ok := ce.Body.GetV0()
 	if !ok {
 		return VerifiedVaultEvent{}, false
@@ -192,11 +204,35 @@ func verifiedEventFromXDR(ce xdr.ContractEvent) (VerifiedVaultEvent, bool) {
 		return VerifiedVaultEvent{}, false
 	}
 
+	// The vault contracts emit (event_name, account) as topics. Scan for the
+	// first topic that decodes as an address.
+	account := ""
+	for _, topic := range body.Topics {
+		if addr, ok := scValAddress(topic); ok {
+			account = addr
+			break
+		}
+	}
+
 	return VerifiedVaultEvent{
 		EventType:  eventType,
 		Amount:     stroopsToDisplay(amount),
 		ContractID: encoded,
+		Account:    account,
 	}, true
+}
+
+// scValAddress renders an ScVal address as a strkey, when it is one.
+func scValAddress(val xdr.ScVal) (string, bool) {
+	addr, ok := val.GetAddress()
+	if !ok {
+		return "", false
+	}
+	encoded, err := addr.String()
+	if err != nil {
+		return "", false
+	}
+	return encoded, true
 }
 
 func scValSymbol(val xdr.ScVal) string {
@@ -245,11 +281,18 @@ func scValAmount(val xdr.ScVal) (decimal.Decimal, bool) {
 	return decimal.Zero, false
 }
 
+// i128PartsToDecimal reconstructs the full signed 128-bit value.
+//
+// Rejecting everything with a non-zero Hi word dropped every negative value
+// AND every amount at or above 2^63 stroops, so a genuinely successful
+// transaction was reported unverifiable: funds left the contract and the
+// balance was never debited.
 func i128PartsToDecimal(parts xdr.Int128Parts) (decimal.Decimal, bool) {
-	if parts.Hi != 0 {
-		return decimal.Zero, false
-	}
-	return decimal.NewFromUint64(uint64(parts.Lo)), true
+	hi := decimal.NewFromInt(int64(parts.Hi))
+	lo := decimal.NewFromUint64(uint64(parts.Lo))
+	// value = hi * 2^64 + lo
+	shift := decimal.NewFromInt(2).Pow(decimal.NewFromInt(64))
+	return hi.Mul(shift).Add(lo), true
 }
 
 func stroopsToDisplay(stroops decimal.Decimal) decimal.Decimal {

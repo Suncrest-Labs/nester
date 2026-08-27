@@ -215,7 +215,11 @@ func TestRecordWithdrawal_RequiresHashWhenVerifierWired(t *testing.T) {
 	userID := uuid.New()
 	repo := newMemoryVaultRepository(userID)
 	svc := NewVaultService(repo)
-	svc.SetChainEventVerifier(&fakeChainVerifier{events: map[string]VerifiedVaultEvent{}})
+	// Deposits are verified too now (nester#1075), so the seed needs a hash
+	// the verifier recognises.
+	svc.SetChainEventVerifier(&fakeChainVerifier{events: map[string]VerifiedVaultEvent{
+		"seed-deposit": {EventType: "deposit", Amount: decimal.RequireFromString("50")},
+	}})
 
 	created, err := svc.CreateVault(context.Background(), CreateVaultInput{
 		UserID: userID, ContractAddress: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Currency: "USDC",
@@ -224,7 +228,7 @@ func TestRecordWithdrawal_RequiresHashWhenVerifierWired(t *testing.T) {
 		t.Fatalf("CreateVault: %v", err)
 	}
 	if _, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
-		VaultID: created.ID, Amount: decimal.RequireFromString("50"),
+		VaultID: created.ID, Amount: decimal.RequireFromString("50"), TxHash: "seed-deposit",
 	}); err != nil {
 		t.Fatalf("RecordDeposit: %v", err)
 	}

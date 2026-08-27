@@ -19,10 +19,16 @@ import (
 )
 
 type handlerChainVerifier struct {
-	amount decimal.Decimal
+	amount        decimal.Decimal
+	depositAmount decimal.Decimal
 }
 
-func (h handlerChainVerifier) VerifyVaultEvent(_ context.Context, txHash, _, _ string) (service.VerifiedVaultEvent, error) {
+func (h handlerChainVerifier) VerifyVaultEvent(_ context.Context, txHash, _, eventType string) (service.VerifiedVaultEvent, error) {
+	// Deposits are verified too now (nester#1075). Echo the seeded deposit at
+	// its own amount so the withdrawal assertion still isolates h.amount.
+	if eventType == "deposit" {
+		return service.VerifiedVaultEvent{TxHash: txHash, EventType: "deposit", Amount: h.depositAmount}, nil
+	}
 	return service.VerifiedVaultEvent{TxHash: txHash, EventType: "withdraw", Amount: h.amount}, nil
 }
 
@@ -30,7 +36,7 @@ func TestVaultHandlerWithdrawForgedAmountRecordsEventAmount(t *testing.T) {
 	userID := uuid.New()
 	repository := newHandlerRepository(userID)
 	vaultService := service.NewVaultService(repository)
-	vaultService.SetChainEventVerifier(handlerChainVerifier{amount: decimal.RequireFromString("40")})
+	vaultService.SetChainEventVerifier(handlerChainVerifier{amount: decimal.RequireFromString("40"), depositAmount: decimal.RequireFromString("100")})
 	h := NewVaultHandler(vaultService)
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -44,7 +50,7 @@ func TestVaultHandlerWithdrawForgedAmountRecordsEventAmount(t *testing.T) {
 		t.Fatalf("CreateVault: %v", err)
 	}
 	if _, err := vaultService.RecordDeposit(context.Background(), service.RecordDepositInput{
-		VaultID: created.ID, Amount: decimal.RequireFromString("100"),
+		VaultID: created.ID, Amount: decimal.RequireFromString("100"), TxHash: "seed-deposit",
 	}); err != nil {
 		t.Fatalf("RecordDeposit: %v", err)
 	}

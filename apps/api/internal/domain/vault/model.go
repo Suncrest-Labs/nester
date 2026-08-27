@@ -39,6 +39,16 @@ var (
 	// ErrUnverifiedChainTx is returned when the supplied hash cannot be
 	// reconciled against a matching vault contract event.
 	ErrUnverifiedChainTx = errors.New("on-chain transaction could not be verified")
+	// ErrChainVerificationUnavailable is returned when a caller supplies a
+	// transaction hash but no chain verifier is configured. Accepting the
+	// hash unverified would let a forged one move a balance, so the request
+	// is refused rather than trusted (nester#1075, nester#1076).
+	ErrChainVerificationUnavailable = errors.New("on-chain verification is not configured; transaction hash cannot be accepted")
+	// ErrChainEventCallerMismatch is returned when a verified contract event
+	// was emitted for a different account than the caller's wallet. Without
+	// this check one user can record another user's real withdrawal against
+	// their own vault (nester#1076).
+	ErrChainEventCallerMismatch = errors.New("on-chain event belongs to a different account")
 	ErrVaultForbidden       = errors.New("vault does not belong to caller")
 	ErrAllocationNotFound   = errors.New("allocation not found")
 	ErrAllocationHasBalance = errors.New("allocation has non-zero balance; set force=true to remove")

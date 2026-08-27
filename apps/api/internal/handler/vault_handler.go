@@ -38,6 +38,10 @@ type createVaultRequest struct {
 type depositRequest struct {
 	Amount string `json:"amount"`
 	Asset  string `json:"asset"`
+	// TxHash is the on-chain transaction the client already submitted. When
+	// verification is configured it is required, and the credited amount is
+	// read from the contract event rather than Amount (nester#1075).
+	TxHash string `json:"tx_hash,omitempty"`
 }
 
 type withdrawRequest struct {
@@ -655,7 +659,9 @@ func (h *VaultHandler) depositToVault(w http.ResponseWriter, r *http.Request) {
 	updatedVault, err := h.service.RecordDeposit(r.Context(), service.RecordDepositInput{
 		VaultID: vaultID,
 		Amount:  amount,
-		TxHash:  "",
+		TxHash:  strings.TrimSpace(request.TxHash),
+		// Confirms the verified event was emitted for this caller.
+		WalletAddress: user.WalletAddress,
 	})
 	if err != nil {
 		h.writeDomainError(w, r, err)
@@ -720,6 +726,9 @@ func (h *VaultHandler) withdrawFromVault(w http.ResponseWriter, r *http.Request)
 		VaultID: vaultID,
 		Amount:  amount,
 		TxHash:  strings.TrimSpace(request.TxHash),
+		// Carried so chain verification can confirm the event was emitted
+		// for this caller and not for another holder of the same contract.
+		WalletAddress: user.WalletAddress,
 	})
 	if err != nil {
 		h.writeDomainError(w, r, err)

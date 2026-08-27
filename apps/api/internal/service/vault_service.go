@@ -165,6 +165,9 @@ type RecordDepositInput struct {
 	Amount  decimal.Decimal
 	TxHash  string
 	Fee     decimal.Decimal
+	// WalletAddress is the caller's Stellar address, used to confirm a
+	// verified deposit event was emitted for this account (nester#1075).
+	WalletAddress string
 }
 
 type UpdateAllocationsInput struct {
@@ -184,12 +187,17 @@ type CloseVaultInput struct {
 }
 
 type RecordWithdrawalInput struct {
-	VaultID     uuid.UUID
-	UserID      uuid.UUID
-	Amount      decimal.Decimal
-	TxHash      string
-	Fee         decimal.Decimal
-	SlippageBps int // optional; 0 uses configured default
+	VaultID uuid.UUID
+	UserID  uuid.UUID
+	Amount  decimal.Decimal
+	TxHash  string
+	Fee     decimal.Decimal
+	// WalletAddress is the caller's Stellar address. When set, a verified
+	// chain event must have been emitted for this account; otherwise one user
+	// could record another user's real withdrawal against their own vault,
+	// since vaults.contract_address is not unique (nester#1076).
+	WalletAddress string
+	SlippageBps   int // optional; 0 uses configured default
 }
 
 type RebalancePositionInput struct {
@@ -236,6 +244,9 @@ type VerifiedVaultEvent struct {
 	EventType  string
 	Amount     decimal.Decimal
 	ContractID string
+	// Account is the address the event was emitted for. Empty when the
+	// contract does not include one in its topics.
+	Account string
 }
 
 // SetChainEventVerifier wires on-chain event verification used to record
@@ -364,10 +375,15 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 		userID = existing.UserID
 	}
 
-	sharePrice := vault.ComputeSharePrice(existing)
-	shares := input.Amount.Div(sharePrice).Round(6)
+	// A caller-supplied hash asserts the deposit already landed on-chain.
+	// Refuse it when nothing can verify that assertion, rather than
+	// crediting a balance on the client's word (nester#1075).
+	txHash := strings.TrimSpace(input.TxHash)
+	if txHash != "" && s.chainVerifier == nil {
+		return vault.Vault{}, vault.ErrChainVerificationUnavailable
+	}
 
-	if s.depositInvoker != nil {
+	if txHash == "" && s.depositInvoker != nil {
 		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
 		if err := s.depositInvoker.DepositToVault(ctx, existing.ContractAddress, stroops); err != nil {
 			if strings.Contains(err.Error(), "#21") {
@@ -377,10 +393,35 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 		}
 	}
 
+	// Credit the amount the contract actually emitted, never the request
+	// body. Without this any authenticated user can inflate their own
+	// balance by POSTing an arbitrary figure (nester#1075).
+	amount := input.Amount
+	if s.chainVerifier != nil {
+		if txHash == "" {
+			return vault.Vault{}, vault.ErrTxHashRequired
+		}
+		event, err := s.chainVerifier.VerifyVaultEvent(ctx, txHash, existing.ContractAddress, "deposit")
+		if err != nil {
+			return vault.Vault{}, err
+		}
+		caller := strings.TrimSpace(input.WalletAddress)
+		if caller != "" && event.Account != "" && !strings.EqualFold(caller, event.Account) {
+			return vault.Vault{}, vault.ErrChainEventCallerMismatch
+		}
+		amount = event.Amount
+		if amount.Cmp(decimal.Zero) <= 0 {
+			return vault.Vault{}, vault.ErrInvalidAmount
+		}
+	}
+
+	sharePrice := vault.ComputeSharePrice(existing)
+	shares := amount.Div(sharePrice).Round(6)
+
 	record := vault.TransactionRecord{
 		UserID:               userID,
-		Amount:               input.Amount,
-		TransactionHash:      input.TxHash,
+		Amount:               amount,
+		TransactionHash:      txHash,
 		SharesMintedOrBurned: shares,
 		SharePriceAtTime:     sharePrice,
 		FeeCharged:           input.Fee,
@@ -604,10 +645,20 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 	}
 	// Reject before any on-chain submit: a withdrawal that would take the
 	// position below zero must not be sent to the contract (nester#1076).
-	// When a tx hash is already supplied the withdraw landed on-chain; the
-	// event amount is checked after verification instead of this hint.
-	if strings.TrimSpace(input.TxHash) == "" && existing.CurrentBalance.LessThan(input.Amount) {
+	//
+	// This runs unconditionally. Skipping it when the caller supplies a hash
+	// made the guard opt-out: any request carrying tx_hash bypassed it, and
+	// when no verifier is configured nothing re-checks afterwards, so a
+	// forged hash drove current_balance negative.
+	if existing.CurrentBalance.LessThan(input.Amount) {
 		return vault.Vault{}, vault.ErrWithdrawalExceedsPosition
+	}
+
+	// A caller-supplied hash asserts the withdrawal already landed on-chain.
+	// That assertion is only meaningful if something verifies it, so refuse
+	// it outright when no verifier is wired rather than trusting the client.
+	if strings.TrimSpace(input.TxHash) != "" && s.chainVerifier == nil {
+		return vault.Vault{}, vault.ErrChainVerificationUnavailable
 	}
 
 	userID := input.UserID
@@ -635,6 +686,11 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 		event, err := s.chainVerifier.VerifyVaultEvent(ctx, txHash, existing.ContractAddress, "withdraw")
 		if err != nil {
 			return vault.Vault{}, err
+		}
+		// Confirm the event belongs to the caller before trusting it.
+		caller := strings.TrimSpace(input.WalletAddress)
+		if caller != "" && event.Account != "" && !strings.EqualFold(caller, event.Account) {
+			return vault.Vault{}, vault.ErrChainEventCallerMismatch
 		}
 		// Record the contract-event amount, never the request body.
 		amount = event.Amount
