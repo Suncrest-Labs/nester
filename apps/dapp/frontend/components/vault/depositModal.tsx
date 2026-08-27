@@ -125,16 +125,20 @@ function ModalShell({
 
 // ── Transaction steps ─────────────────────────────────────────────────────────
 
+// executeVaultDeposit builds, signs and submits in one call without exposing
+// intermediate stages, so "signing" and "submitting" are never assigned. Keep
+// the steps mapped to states that actually occur; listing unreachable ones
+// leaves the indicator permanently stuck on the first step.
 const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
   {
-    label: "Build contract call",
-    activeStates: ["building", "signing", "submitting", "pending", "success"],
+    label: "Build and sign",
+    activeStates: ["building", "pending", "success"],
   },
   {
-    label: "Sign with wallet",
-    activeStates: ["signing", "submitting", "pending", "success"],
+    label: "Submit to network",
+    activeStates: ["pending", "success"],
   },
-  { label: "Submit and confirm", activeStates: ["submitting", "pending", "success"] },
+  { label: "Confirmed on-chain", activeStates: ["success"] },
 ];
 
 // ── DepositModal ──────────────────────────────────────────────────────────────
@@ -250,8 +254,25 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
 
     submittingRef.current = true;
 
+    // Record the pending row and enter the pending state BEFORE awaiting.
+    // Setting them after the await batches them with setState("success") in a
+    // single render, so the "waiting for confirmation" state never paints —
+    // which is the whole point of this change.
+    const pendingTxId = recordPendingDeposit({
+      vault: {
+        id: vault.id,
+        name: vault.name,
+        asset: selectedAsset,
+        apy: meta?.apy || 0,
+        lockDays: meta?.lockDays || 0,
+        earlyWithdrawalPenaltyPct: 0.1,
+      },
+      amount,
+      isOnChain: true,
+    });
+
     try {
-      setState("building");
+      setState("pending");
       const txReceipt = await executeVaultDeposit({
         walletAddress: address,
         vaultId: vault.id,
@@ -260,30 +281,18 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         amount,
       });
 
-      // Record as pending — wallet balance is NOT yet deducted
-      const pendingTxId = recordPendingDeposit({
-        vault: {
-          id: vault.id,
-          name: vault.name,
-          asset: selectedAsset,
-          apy: meta?.apy || 0,
-          lockDays: meta?.lockDays || 0,
-          earlyWithdrawalPenaltyPct: 0.1,
-        },
-        amount,
-        txHash: txReceipt.txHash,
-        isOnChain: true,
-      });
-
-      setState("pending");
       setReceipt(txReceipt);
 
-      // Now confirm: create the position, deduct balance, update tx status
+      // Confirmation creates the position and deducts the balance. Until the
+      // chain confirms, the user holds no shares and their balance is intact.
       confirmPendingDeposit(pendingTxId, txReceipt.txHash);
 
       setState("success");
       refreshBalances();
     } catch (err) {
+      // Without this the pending row is orphaned and persists to
+      // localStorage as "Pending" forever.
+      failPendingDeposit(pendingTxId);
       setErrorMsg(humanizeError(err));
       setState("error");
     } finally {

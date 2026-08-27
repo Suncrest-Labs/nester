@@ -5,6 +5,7 @@ import {
     useContext,
     useEffect,
     useMemo,
+    useRef,
     useState,
     type ReactNode,
 } from "react";
@@ -85,6 +86,11 @@ interface DepositInput {
     isOnChain?: boolean;
 }
 
+/** Input for a deposit that has not been submitted yet. Deliberately omits
+ *  txHash: a pending deposit has no transaction hash until the chain accepts
+ *  it, and requiring one forces callers to invent a placeholder. */
+type PendingDepositInput = Omit<DepositInput, "txHash">;
+
 interface TransferInput {
     fromPositionId: string;
     toVault: {
@@ -126,7 +132,7 @@ interface PortfolioState {
     recordTransfer: (input: TransferInput) => void;
     recordWithdrawal: (input: WithdrawalInput) => WithdrawalQuote | null;
     /** Record a pending deposit before on-chain confirmation. Returns the transaction id. */
-    recordPendingDeposit: (input: DepositInput) => string;
+    recordPendingDeposit: (input: PendingDepositInput) => string;
     /** Mark a pending deposit as confirmed after on-chain success. */
     confirmPendingDeposit: (transactionId: string, txHash: string) => void;
     /** Mark a pending deposit as failed after on-chain failure. */
@@ -237,6 +243,11 @@ function PortfolioStore({
     const [transactions, setTransactions] = useState<PortfolioTransaction[]>(
         initialState.transactions
     );
+
+    // Holds the details of deposits awaiting on-chain confirmation. A ref
+    // rather than state: confirmPendingDeposit runs in the same tick the
+    // pending row is inserted, so any state read would still be stale.
+    const pendingDepositsRef = useRef<Map<string, PendingTransactionRecord>>(new Map());
 
     useEffect(() => {
         if (!address || typeof window === "undefined") return;
@@ -409,8 +420,22 @@ function PortfolioStore({
     /** Record a deposit as Pending before on-chain confirmation. Returns the
      *  transaction id so the modal can update it later without touching the
      *  wallet balance until the tx is confirmed. */
-    const recordPendingDeposit = ({ vault, amount }: DepositInput): string => {
+    const recordPendingDeposit = ({ vault, amount }: PendingDepositInput): string => {
         const txId = crypto.randomUUID();
+        // Stash everything the confirm step needs. Recovering it later by
+        // reading `transactions` fails: the confirm call happens in the same
+        // tick as this insert, so the render closure has not seen it yet, and
+        // parsing the amount back out of a display string is lossy.
+        pendingDepositsRef.current.set(txId, {
+            transactionId: txId,
+            vaultId: vault.id,
+            vaultName: vault.name,
+            asset: vault.asset,
+            amount,
+            apy: vault.apy,
+            lockDays: vault.lockDays ?? 0,
+            earlyWithdrawalPenaltyPct: vault.earlyWithdrawalPenaltyPct,
+        });
         setTransactions((current) => [
             {
                 id: txId,
@@ -430,19 +455,35 @@ function PortfolioStore({
 
     /** Confirm a pending deposit: create the position, deduct balance, update tx status. */
     const confirmPendingDeposit = (transactionId: string, txHash: string) => {
-        // Find the pending transaction to extract vault/amount info
-        const tx = transactions.find((t) => t.id === transactionId);
-        if (!tx) return;
+        const pending = pendingDepositsRef.current.get(transactionId);
+        if (!pending) return;
+        pendingDepositsRef.current.delete(transactionId);
 
-        const amount = parseFloat(tx.amount.replace("+", ""));
-        const vaultId = tx.vaultName; // we use vaultName as a proxy; caller should store vaultId
-        // Look up vault details from the pending transaction context
-        const storedTx = transactions.find((t) => t.id === transactionId);
-        if (!storedTx || isNaN(amount)) return;
+        const now = new Date();
+        const maturityAt = new Date(now);
+        maturityAt.setDate(maturityAt.getDate() + pending.lockDays);
 
-        // Find matching position — the position was NOT yet created by recordPendingDeposit,
-        // so we need the caller to pass enough info. Simplified: we update only the tx status
-        // and rely on refreshBalances to sync wallet balances after confirmation.
+        // Create the position on confirmation, not on submission. Until the
+        // chain confirms, the user holds no shares; creating it earlier would
+        // show a position for a deposit that may still fail.
+        const position: StoredPosition = {
+            id: crypto.randomUUID(),
+            vaultId: pending.vaultId,
+            vaultName: pending.vaultName,
+            asset: pending.asset,
+            principal: pending.amount,
+            shares: pending.amount,
+            apy: pending.apy,
+            depositedAt: now.toISOString(),
+            maturityAt: maturityAt.toISOString(),
+            earlyWithdrawalPenaltyPct: pending.earlyWithdrawalPenaltyPct,
+        };
+
+        setStoredPositions((current) => [position, ...current]);
+        setBalances((current) => ({
+            ...current,
+            [pending.asset]: Math.max(0, (current[pending.asset] ?? 0) - pending.amount),
+        }));
         setTransactions((current) =>
             current.map((t) =>
                 t.id === transactionId ? { ...t, status: "Confirmed" as const, txHash } : t
@@ -452,6 +493,7 @@ function PortfolioStore({
 
     /** Mark a pending deposit as failed and remove the pending transaction record. */
     const failPendingDeposit = (transactionId: string) => {
+        pendingDepositsRef.current.delete(transactionId);
         setTransactions((current) =>
             current.map((t) =>
                 t.id === transactionId ? { ...t, status: "Failed" as const } : t

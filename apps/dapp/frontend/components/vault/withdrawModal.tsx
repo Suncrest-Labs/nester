@@ -191,8 +191,11 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     setErrorMsg("");
 
     try {
-      setState("building");
       const vaultDef = getVaultById(position.vaultId);
+      // Enter the pending state before awaiting. Setting it afterwards
+      // batches it with setState("success") into one render, so the user
+      // never sees "waiting for confirmation".
+      setState("pending");
       const txReceipt = await executeVaultWithdraw({
         walletAddress: address,
         vaultId: position.vaultId,
@@ -201,8 +204,6 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
         shares: quote.sharesBurned,
         minAssetsOut: quote.netAmount,
       });
-
-      setState("pending");
 
       const result = recordWithdrawal({
         positionId: position.id,
