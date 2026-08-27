@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { useStellarFeeEstimate } from "@/hooks/useStellarFeeEstimate";
 import { useDepositPreview } from "@/hooks/useDepositPreview";
+import { ReportProblemButton } from "@/components/report-problem-button";
 import { NetworkFeeDisplay } from "@/components/stellar/NetworkFeeEstimate";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { motion, AnimatePresence } from "framer-motion";
@@ -550,6 +551,12 @@ export function DepositModal({
                                     <div className="flex items-start gap-2">
                                         <AlertCircle className="mt-0.5 h-4 w-4" />
                                         <span>{error}</span>
+                                    </div>
+                                    <div className="mt-2">
+                                        <ReportProblemButton
+                                            lastError={error}
+                                            lastTransactionHash={receipt?.txHash}
+                                        />
                                     </div>
                                 </div>
                             )}

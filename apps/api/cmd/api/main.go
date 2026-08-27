@@ -406,6 +406,9 @@ func run() error {
 	auditLogger := postgres.NewPostgresAuditLogger(db)
 	anomalyDetector := service.NoopAnomalyDetector{}
 
+	// Issue #1141: support tooling to inspect a user's money-path state.
+	adminHandler.SetMoneyPathServices(portfolioService, transactionService, auditLogger)
+
 	activityEventRepo := postgres.NewActivityEventRepository(db)
 	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)
 	nudgeOutcomeService := service.NewNudgeOutcomeService(nudgeHistoryRepo)

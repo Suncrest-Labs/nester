@@ -135,13 +135,29 @@ type AdminHandler struct {
 	backfillTrigger    BackfillTrigger
 	backfillRuns       BackfillRunLister
 	auditChainVerifier AuditChainVerifier
+	portfolioService   *service.PortfolioService
+	transactionService *service.TransactionService
+	moneyPathAudit     service.AuditLogger
 }
 
 func NewAdminHandler(svc adminService, userSvc *service.UserService) *AdminHandler {
 	return &AdminHandler{
 		service: svc, userService: userSvc, eventSyncer: noopEventSyncer{}, leadership: noopLeadershipStatus{},
 		backfillTrigger: noopBackfillTrigger{}, backfillRuns: noopBackfillRunLister{},
-		auditChainVerifier: noopAuditChainVerifier{},
+		auditChainVerifier: noopAuditChainVerifier{}, moneyPathAudit: service.NoopAuditLogger{},
+	}
+}
+
+// SetMoneyPathServices wires the read-only support-tooling lookup at
+// GET /api/v1/admin/users/{id}/money-path (#1141): a support engineer's
+// first stop for "where is my deposit" instead of a database console.
+// Every lookup is written to the audit log via auditLogger, since it's a
+// support engineer reading another user's financial activity.
+func (h *AdminHandler) SetMoneyPathServices(portfolioSvc *service.PortfolioService, txSvc *service.TransactionService, auditLogger service.AuditLogger) {
+	h.portfolioService = portfolioSvc
+	h.transactionService = txSvc
+	if auditLogger != nil {
+		h.moneyPathAudit = auditLogger
 	}
 }
 
@@ -225,6 +241,86 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/backfill/{id}/resume", h.resumeBackfill)
 	mux.HandleFunc("GET /api/v1/admin/backfill", h.listBackfillRuns)
 	mux.HandleFunc("GET /api/v1/admin/backfill/{id}", h.getBackfillRun)
+
+	// Support tooling (#1141): a user's money-path state in one read-only view.
+	mux.HandleFunc("GET /api/v1/admin/users/{id}/money-path", h.getUserMoneyPath)
+}
+
+// getUserMoneyPath handles GET /api/v1/admin/users/{id}/money-path (#1141):
+// a read-only view of a user's positions, recent transactions, pending
+// submissions, and recent errors, so support can answer "where is my
+// deposit" without a database console. Mounted alongside the other
+// /api/v1/admin/* routes, so it inherits whatever role-restriction those
+// routes are already gated behind. Every call is audit-logged since it
+// reads another user's financial activity. Returns no secrets or tokens —
+// only the same transaction/position fields already exposed to the user
+// themselves via the non-admin equivalents of these endpoints.
+func (h *AdminHandler) getUserMoneyPath(w http.ResponseWriter, r *http.Request) {
+	if h.portfolioService == nil || h.transactionService == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Response{
+			Success: false,
+			Error: &response.ErrorBody{
+				Code:    "MONEY_PATH_NOT_CONFIGURED",
+				Message: "money-path support tooling is not configured on this instance",
+			},
+		})
+		return
+	}
+
+	userID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("user id must be a valid UUID"))
+		return
+	}
+
+	ctx := r.Context()
+
+	positions, err := h.portfolioService.GetUserPortfolioSummary(ctx, userID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+
+	const recentLimit = 20
+	recent, _, err := h.transactionService.ListUserTransactions(ctx, service.ListUserTransactionsInput{
+		UserID: userID, Limit: recentLimit,
+	})
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	pending, _, err := h.transactionService.ListUserTransactions(ctx, service.ListUserTransactionsInput{
+		UserID: userID, Status: "pending", Limit: recentLimit,
+	})
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	recentErrors, _, err := h.transactionService.ListUserTransactions(ctx, service.ListUserTransactionsInput{
+		UserID: userID, Status: "failed", Limit: recentLimit,
+	})
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+
+	if actorUser, ok := auth.GetUserFromContext(ctx); ok {
+		if actorID, parseErr := uuid.Parse(actorUser.ID); parseErr == nil {
+			_ = h.moneyPathAudit.Log(ctx, service.AuditEntry{
+				UserID:     &actorID,
+				Action:     "admin.user_money_path_viewed",
+				EntityType: "user",
+				EntityID:   userID,
+			})
+		}
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(map[string]any{
+		"positions":           positions,
+		"recent_transactions": recent,
+		"pending_submissions": pending,
+		"recent_errors":       recentErrors,
+	}))
 }
 
 // getSchedulerLeadership handles GET /api/v1/admin/scheduler/leadership
