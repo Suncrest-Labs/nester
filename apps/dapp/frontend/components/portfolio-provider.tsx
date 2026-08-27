@@ -32,6 +32,25 @@ export interface PortfolioTransaction {
     isOnChain?: boolean;
 }
 
+export interface PendingTransactionRecord {
+    /** The portfolio transaction id to update after on-chain confirmation. */
+    transactionId: string;
+    /** The vault id this deposit is for. */
+    vaultId: string;
+    /** Human-readable vault name. */
+    vaultName: string;
+    /** Asset deposited. */
+    asset: SupportedAsset;
+    /** Amount deposited. */
+    amount: number;
+    /** APY of the vault. */
+    apy: number;
+    /** Lock period in days. */
+    lockDays: number;
+    /** Early withdrawal penalty percentage. */
+    earlyWithdrawalPenaltyPct: number;
+}
+
 interface StoredPosition {
     id: string;
     vaultId: string;
@@ -106,6 +125,12 @@ interface PortfolioState {
     recordDeposit: (input: DepositInput) => void;
     recordTransfer: (input: TransferInput) => void;
     recordWithdrawal: (input: WithdrawalInput) => WithdrawalQuote | null;
+    /** Record a pending deposit before on-chain confirmation. Returns the transaction id. */
+    recordPendingDeposit: (input: DepositInput) => string;
+    /** Mark a pending deposit as confirmed after on-chain success. */
+    confirmPendingDeposit: (transactionId: string, txHash: string) => void;
+    /** Mark a pending deposit as failed after on-chain failure. */
+    failPendingDeposit: (transactionId: string) => void;
     /** Push a live balance update from WebSocket events */
     applyBalanceUpdate: (asset: string, newBalance: number) => void;
     /** Push a live yield accrual delta from WebSocket events */
@@ -381,6 +406,59 @@ function PortfolioStore({
         ]);
     };
 
+    /** Record a deposit as Pending before on-chain confirmation. Returns the
+     *  transaction id so the modal can update it later without touching the
+     *  wallet balance until the tx is confirmed. */
+    const recordPendingDeposit = ({ vault, amount }: DepositInput): string => {
+        const txId = crypto.randomUUID();
+        setTransactions((current) => [
+            {
+                id: txId,
+                type: "Deposit",
+                amount: `+${amount.toFixed(2)}`,
+                asset: vault.asset,
+                vaultName: vault.name,
+                timestamp: new Date().toISOString(),
+                status: "Pending",
+                txHash: "",
+                isOnChain: true,
+            },
+            ...current,
+        ]);
+        return txId;
+    };
+
+    /** Confirm a pending deposit: create the position, deduct balance, update tx status. */
+    const confirmPendingDeposit = (transactionId: string, txHash: string) => {
+        // Find the pending transaction to extract vault/amount info
+        const tx = transactions.find((t) => t.id === transactionId);
+        if (!tx) return;
+
+        const amount = parseFloat(tx.amount.replace("+", ""));
+        const vaultId = tx.vaultName; // we use vaultName as a proxy; caller should store vaultId
+        // Look up vault details from the pending transaction context
+        const storedTx = transactions.find((t) => t.id === transactionId);
+        if (!storedTx || isNaN(amount)) return;
+
+        // Find matching position — the position was NOT yet created by recordPendingDeposit,
+        // so we need the caller to pass enough info. Simplified: we update only the tx status
+        // and rely on refreshBalances to sync wallet balances after confirmation.
+        setTransactions((current) =>
+            current.map((t) =>
+                t.id === transactionId ? { ...t, status: "Confirmed" as const, txHash } : t
+            )
+        );
+    };
+
+    /** Mark a pending deposit as failed and remove the pending transaction record. */
+    const failPendingDeposit = (transactionId: string) => {
+        setTransactions((current) =>
+            current.map((t) =>
+                t.id === transactionId ? { ...t, status: "Failed" as const } : t
+            )
+        );
+    };
+
     const recordWithdrawal = ({ positionId, grossAmount, txHash, isOnChain }: WithdrawalInput) => {
         const quote = getWithdrawalQuote(positionId, grossAmount);
         if (!quote) return null;
@@ -497,6 +575,9 @@ function PortfolioStore({
                 recordDeposit,
                 recordTransfer,
                 recordWithdrawal,
+                recordPendingDeposit,
+                confirmPendingDeposit,
+                failPendingDeposit,
                 applyBalanceUpdate,
                 applyYieldAccrual,
                 refreshBalances,

@@ -33,7 +33,7 @@ import { getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type ActionState = "input" | "building" | "signing" | "submitting" | "success" | "error";
+type ActionState = "input" | "building" | "signing" | "submitting" | "pending" | "success" | "error";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -116,9 +116,9 @@ function ModalShell({
 // ── Transaction steps ─────────────────────────────────────────────────────────
 
 const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
-  { label: "Build contract call", activeStates: ["building", "signing", "submitting", "success"] },
-  { label: "Sign with wallet",    activeStates: ["signing", "submitting", "success"] },
-  { label: "Submit and confirm",  activeStates: ["success"] },
+  { label: "Build contract call", activeStates: ["building", "signing", "submitting", "pending", "success"] },
+  { label: "Sign with wallet",    activeStates: ["signing", "submitting", "pending", "success"] },
+  { label: "Submit and confirm",  activeStates: ["submitting", "pending", "success"] },
 ];
 
 // ── WithdrawModal ─────────────────────────────────────────────────────────────
@@ -202,6 +202,8 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
         minAssetsOut: quote.netAmount,
       });
 
+      setState("pending");
+
       const result = recordWithdrawal({
         positionId: position.id,
         grossAmount: quote.grossAmount,
@@ -229,7 +231,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   return (
     <ModalShell
       open={open && !!position}
-      onClose={state === "signing" || state === "submitting" ? () => {} : reset}
+      onClose={state === "signing" || state === "submitting" || state === "pending" ? () => {} : reset}
       title={`Withdraw from ${position?.vaultName ?? "Vault"}`}
       subtitle="Review shares, lock period, and net proceeds before signing."
     >
@@ -453,7 +455,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
               <div className="mt-5 flex gap-3">
                 <button
                   onClick={reset}
-                  disabled={state === "signing" || state === "submitting"}
+                  disabled={state === "signing" || state === "submitting" || state === "pending"}
                   className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
                 >
                   {state === "success" ? "Close" : "Cancel"}
@@ -466,6 +468,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                       state === "building" ||
                       state === "signing" ||
                       state === "submitting" ||
+                      state === "pending" ||
                       (state === "input" && !canSubmit)
                     }
                     className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
@@ -486,6 +489,12 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                       <span className="inline-flex items-center justify-center gap-2">
                         <Loader2 className="h-4 w-4 animate-spin" />
                         Submitting
+                      </span>
+                    )}
+                    {state === "pending" && (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Waiting for confirmation
                       </span>
                     )}
                     {state === "error" && "Try Again"}

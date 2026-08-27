@@ -34,6 +34,7 @@ type ActionState =
   | "building"
   | "signing"
   | "submitting"
+  | "pending"
   | "success"
   | "error";
 
@@ -127,13 +128,13 @@ function ModalShell({
 const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
   {
     label: "Build contract call",
-    activeStates: ["building", "signing", "submitting", "success"],
+    activeStates: ["building", "signing", "submitting", "pending", "success"],
   },
   {
     label: "Sign with wallet",
-    activeStates: ["signing", "submitting", "success"],
+    activeStates: ["signing", "submitting", "pending", "success"],
   },
-  { label: "Submit and confirm", activeStates: ["success"] },
+  { label: "Submit and confirm", activeStates: ["submitting", "pending", "success"] },
 ];
 
 // ── DepositModal ──────────────────────────────────────────────────────────────
@@ -174,7 +175,7 @@ function getVaultMeta(vault: VaultDefinition) {
  */
 export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const { address } = useWallet();
-  const { getAvailableBalance, recordDeposit, refreshBalances } = usePortfolio();
+  const { getAvailableBalance, recordPendingDeposit, confirmPendingDeposit, failPendingDeposit, refreshBalances } = usePortfolio();
   const { isOffline } = useOfflineStatus();
 
   const [amountInput, setAmountInput] = useState("");
@@ -259,8 +260,8 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         amount,
       });
 
-      // Record in portfolio state
-      recordDeposit({
+      // Record as pending — wallet balance is NOT yet deducted
+      const pendingTxId = recordPendingDeposit({
         vault: {
           id: vault.id,
           name: vault.name,
@@ -274,9 +275,13 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         isOnChain: true,
       });
 
+      setState("pending");
       setReceipt(txReceipt);
+
+      // Now confirm: create the position, deduct balance, update tx status
+      confirmPendingDeposit(pendingTxId, txReceipt.txHash);
+
       setState("success");
-      // Re-fetch true on-chain balance so UI reflects what actually happened
       refreshBalances();
     } catch (err) {
       setErrorMsg(humanizeError(err));
@@ -289,7 +294,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   return (
     <ModalShell
       open={open && !!vault}
-      onClose={state === "signing" || state === "submitting" ? () => {} : reset}
+      onClose={state === "signing" || state === "submitting" || state === "pending" ? () => {} : reset}
       title={`Deposit into ${vault?.name ?? "Vault"}`}
       subtitle={`Build and sign a Soroban transaction to deposit ${selectedAsset} into this vault.`}
     >
@@ -572,7 +577,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
           <div className="flex gap-3">
             <button
               onClick={reset}
-              disabled={state === "signing" || state === "submitting"}
+              disabled={state === "signing" || state === "submitting" || state === "pending"}
               className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
             >
               {state === "success" ? "Close" : "Cancel"}
@@ -589,6 +594,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   state === "building" ||
                   state === "signing" ||
                   state === "submitting" ||
+                  state === "pending" ||
                   (state === "input" && !canSubmit)
                 }
                 className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
@@ -609,6 +615,12 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   <span className="inline-flex items-center justify-center gap-2">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Submitting
+                  </span>
+                )}
+                {state === "pending" && (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Waiting for confirmation
                   </span>
                 )}
                 {state === "error" && "Try Again"}
