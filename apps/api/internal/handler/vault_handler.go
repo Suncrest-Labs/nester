@@ -43,6 +43,7 @@ type depositRequest struct {
 type withdrawRequest struct {
 	Amount string `json:"amount"`
 	Asset  string `json:"asset"`
+	TxHash string `json:"tx_hash,omitempty"`
 }
 
 type rebalanceRequest struct {
@@ -718,7 +719,7 @@ func (h *VaultHandler) withdrawFromVault(w http.ResponseWriter, r *http.Request)
 	updatedVault, err := h.service.RecordWithdrawal(r.Context(), service.RecordWithdrawalInput{
 		VaultID: vaultID,
 		Amount:  amount,
-		TxHash:  "", // TxHash would be set by the on-chain invoker or blockchain confirmation listener
+		TxHash:  strings.TrimSpace(request.TxHash),
 	})
 	if err != nil {
 		h.writeDomainError(w, r, err)
@@ -738,7 +739,11 @@ func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("user"))
 	case errors.Is(err, vault.ErrInvalidVault), errors.Is(err, vault.ErrInvalidAmount), errors.Is(err, vault.ErrInvalidAllocation), errors.Is(err, vault.ErrInvalidHarvestFrequency):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
-	case errors.Is(err, vault.ErrBelowMinDeposit):
+	case errors.Is(err, vault.ErrBelowMinDeposit), errors.Is(err, vault.ErrWithdrawalExceedsPosition), errors.Is(err, vault.ErrTxHashRequired), errors.Is(err, vault.ErrUnverifiedChainTx):
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	case errors.Is(err, vault.ErrDuplicateTransaction):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "DUPLICATE_TRANSACTION", err.Error()))
+	case errors.Is(err, vault.ErrInsufficientBalance), errors.Is(err, vault.ErrVaultClosed), errors.Is(err, vault.ErrVaultNotActive):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:
 		logpkg.FromContext(r.Context()).Error("vault handler failed", "error", err.Error())
