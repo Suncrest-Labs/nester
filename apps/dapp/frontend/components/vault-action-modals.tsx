@@ -10,6 +10,7 @@ import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { validateAmount } from "@/lib/validation";
+import { parseAmountToStroops, formatStroopsToDisplay } from "@/lib/decimal";
 import {
     AlertCircle,
     CheckCircle2,
@@ -163,7 +164,13 @@ export function DepositModal({
     });
 
     const amountInput = watch("amount");
-    const amount = Number(amountInput) || 0;
+    const amountStroops = useMemo(() => {
+        if (!amountInput || !vault) return null;
+        const result = parseAmountToStroops(amountInput, 6); // USDC has 6 decimals
+        return result.valid ? result.stroops : null;
+    }, [amountInput, vault]);
+
+    const amount = amountStroops ? Number(formatStroopsToDisplay(amountStroops, 6)) : 0;
     const [showLargeWarning, setShowLargeWarning] = useState(false);
     const { prices: tokenPrices } = useTokenPrices();
 
@@ -615,7 +622,13 @@ export function WithdrawModal({
     });
 
     const amountInput = watch("amount");
-    const amount = Number(amountInput) || 0;
+    const amountStroops = useMemo(() => {
+        if (!amountInput || !position) return null;
+        const result = parseAmountToStroops(amountInput, 6); // USDC has 6 decimals
+        return result.valid ? result.stroops : null;
+    }, [amountInput, position]);
+
+    const amount = amountStroops ? Number(formatStroopsToDisplay(amountStroops, 6)) : 0;
     const [showLargeWarning, setShowLargeWarning] = useState(false);
     const [state, setState] = useState<ActionState>("input");
     const [error, setError] = useState("");
@@ -1009,12 +1022,20 @@ export function TransferModal({
     });
 
     const amount = parseFloat(watch("amount") || "0");
+    const amountStroops = useMemo(() => {
+        const amountStr = watch("amount") || "0";
+        if (!amountStr || parseFloat(amountStr) <= 0 || !position) return null;
+        const result = parseAmountToStroops(amountStr, 6); // USDC has 6 decimals
+        return result.valid ? result.stroops : null;
+    }, [watch("amount"), position]);
+
+    const finalAmount = amountStroops ? Number(formatStroopsToDisplay(amountStroops, 6)) : 0;
     const canSubmit =
-        !isNaN(amount) &&
-        amount > 0 &&
+        !isNaN(finalAmount) &&
+        finalAmount > 0 &&
         selectedVault !== null &&
         position !== null &&
-        amount <= position.currentValue;
+        finalAmount <= position.currentValue;
 
     function reset() {
         resetForm();

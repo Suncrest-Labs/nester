@@ -40,20 +40,20 @@ export interface DepositParams {
   walletAddress: string;
   /** Vault contract ID on Soroban. */
   contractId: string;
-  /** Amount in USDC/XLM (human-readable, e.g. 100.50). Converted to stroops internally. */
-  amount: number;
+  /** Amount in stroops (bigint, 7 decimals = 1 XLM, 6 decimals = 1 USDC). */
+  amount: bigint | number;
 }
 
 export interface WithdrawParams {
   walletAddress: string;
   contractId: string;
-  /** Number of nVault shares to burn. */
-  shares: number;
+  /** Number of nVault shares to burn (as bigint stroops or number). */
+  shares: bigint | number;
   /**
-   * Minimum underlying assets to receive (slippage guard). Defaults to 0.
+   * Minimum underlying assets to receive in stroops (slippage guard). Defaults to 0.
    * Pass a non-zero value to reject withdrawals where the exchange rate slips too far.
    */
-  minAssetsOut?: number;
+  minAssetsOut?: bigint | number;
 }
 
 export interface BuiltTransaction {
@@ -182,18 +182,22 @@ export async function estimateWithdrawFee(
  * Build a Soroban `deposit` contract invocation transaction.
  *
  * The vault contract's `deposit(user, amount)` function is called.
- * Amount is converted from human-readable value to stroops (7 decimal places).
+ * Amount can be provided as bigint stroops (recommended) or as a human-readable number
+ * (for backwards compatibility; will be converted to stroops using Math.round).
  */
 export async function buildDepositTransaction(
   params: DepositParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, amount } = params;
+  const { walletAddress, contractId, amount: rawAmount } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
 
-  const amountStroops = BigInt(Math.round(amount * 10_000_000));
+  // Convert amount to stroops if it's a number
+  const amountStroops = typeof rawAmount === "bigint"
+    ? rawAmount
+    : BigInt(Math.round(rawAmount * 10_000_000));
 
   const contract = new Contract(contractId);
 
@@ -229,18 +233,25 @@ export async function buildDepositTransaction(
  * Build a Soroban `withdraw` contract invocation transaction.
  *
  * The vault contract's `withdraw(from, shares)` function is called.
+ * Amounts can be provided as bigint stroops (recommended) or as human-readable numbers.
  */
 export async function buildWithdrawTransaction(
   params: WithdrawParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, shares, minAssetsOut = 0 } = params;
+  const { walletAddress, contractId, shares: rawShares, minAssetsOut: rawMinAssets = 0 } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
 
-  const sharesStroops = BigInt(Math.round(shares * 10_000_000));
-  const minAssetsStroops = BigInt(Math.round(minAssetsOut * 10_000_000));
+  // Convert amounts to stroops if they're numbers
+  const sharesStroops = typeof rawShares === "bigint"
+    ? rawShares
+    : BigInt(Math.round(Number(rawShares) * 10_000_000));
+
+  const minAssetsStroops = typeof rawMinAssets === "bigint"
+    ? rawMinAssets
+    : BigInt(Math.round(Number(rawMinAssets) * 10_000_000));
 
   const contract = new Contract(contractId);
 

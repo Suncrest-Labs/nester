@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { parseAmountToStroops, isValidAmountInput } from "@/lib/decimal";
 
 // Helper for validating USDC precision (max 6 decimals)
 export const validateUSDCPrecision = (val: string | number) => {
@@ -17,7 +18,19 @@ export const validateBankAccount = () => {
     .regex(/^\d+$/, { message: "Account number must contain only numbers" });
 };
 
-// Reusable amount validator
+/**
+ * Reusable amount validator using precise decimal parsing.
+ *
+ * Uses parseAmountToStroops internally for exact decimal arithmetic,
+ * avoiding floating-point precision loss. Validates:
+ * - Format is valid (not scientific notation, not empty, etc.)
+ * - Amount is positive (> 0)
+ * - Decimal places don't exceed asset precision
+ * - Amount doesn't exceed user's balance
+ *
+ * @param options Configuration for validation rules
+ * @returns A Zod schema validator
+ */
 export const validateAmount = (options?: {
   min?: number;
   max?: number;
@@ -34,36 +47,53 @@ export const validateAmount = (options?: {
     balance,
     minMessage = `Minimum amount is ${min}`,
     maxMessage,
-    balanceMessage,
+    balanceMessage = `Amount exceeds your balance`,
   } = options || {};
 
   return z
     .string({ message: "Amount is required" })
     .min(1, { message: "Amount is required" })
-    // Edge case: empty or invalid number format
-    .refine((val) => !isNaN(Number(val)) && val.trim() !== "", { message: "Invalid number format" })
-    // Edge case: leading zeros (e.g., "007.5") - reject them
-    .refine((val) => {
-      if (val.length > 1 && val.startsWith("0") && !val.startsWith("0.")) {
-        return false;
+    // Use precise decimal parsing instead of Number()
+    .refine(
+      (val: string) => {
+        const result = parseAmountToStroops(val, maxDecimals);
+        return result.valid;
+      },
+      {
+        message: "Invalid amount",
       }
-      return true;
-    }, { message: "Invalid leading zero" })
-    .refine((val) => Number(val) > min, { message: minMessage })
-    .refine((val) => {
-      if (max === undefined) return true;
-      return Number(val) <= max;
-    }, { message: maxMessage || `Maximum amount is ${max}` })
-    .refine((val) => {
-      if (balance === undefined) return true;
-      return Number(val) <= balance;
-    }, { message: balanceMessage || `Amount exceeds your balance of ${balance?.toLocaleString()}` })
-    .refine((val) => {
-      const numStr = String(val);
-      if (!numStr.includes(".")) return true;
-      const decimals = numStr.split(".")[1];
-      return decimals.length <= maxDecimals;
-    }, { message: `Maximum ${maxDecimals} decimal places allowed` });
+    )
+    // Additional check: respect minimum amount (after decimal parsing validates format)
+    .refine(
+      (val: string) => {
+        if (min <= 0) return true;
+        const result = parseAmountToStroops(val, maxDecimals);
+        if (!result.valid) return true; // Let the previous check handle this
+        const minStroops = parseAmountToStroops(min.toString(), maxDecimals);
+        return result.stroops! >= minStroops.stroops!;
+      },
+      { message: minMessage }
+    )
+    // Check: respect maximum amount
+    .refine(
+      (val: string) => {
+        if (max === undefined) return true;
+        const result = parseAmountToStroops(val, maxDecimals);
+        if (!result.valid) return true;
+        const maxStroops = parseAmountToStroops(max.toString(), maxDecimals);
+        return result.stroops! <= maxStroops.stroops!;
+      },
+      { message: maxMessage || `Maximum amount is ${max}` }
+    )
+    // Check: respect balance
+    .refine(
+      (val: string) => {
+        if (balance === undefined || balance <= 0) return true;
+        const validation = isValidAmountInput(val, maxDecimals, balance);
+        return validation.valid;
+      },
+      { message: balanceMessage || `Amount exceeds your balance of ${balance?.toLocaleString()}` }
+    );
 };
 
 // Specific helper for validating balance
