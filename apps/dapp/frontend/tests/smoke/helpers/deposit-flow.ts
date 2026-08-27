@@ -12,7 +12,7 @@
  */
 
 import { type Page } from "@playwright/test";
-import { waitForTransactionConfirmation } from "./tx-helpers";
+import { pollTransactionConfirmation } from "./tx-helpers";
 
 export interface DepositResult {
   txHash: string;
@@ -121,10 +121,11 @@ export async function performDeposit(
 
   // Confirm the transaction actually landed on-chain. Reading a hash out of
   // the DOM only proves the UI rendered something.
-  const confirmation = await waitForTransactionConfirmation(txHash);
-  if (!confirmation.successful) {
+  const confirmation = await pollTransactionConfirmation(txHash);
+  if (confirmation.status !== "success") {
     throw new Error(
-      `Deposit transaction ${txHash} did not succeed on-chain: ${confirmation.resultCode}`
+      `Deposit transaction ${txHash} did not succeed on-chain: ` +
+        `${confirmation.errorReason ?? confirmation.status}`
     );
   }
 
@@ -133,7 +134,7 @@ export async function performDeposit(
   const durationMs = Date.now() - startTime;
 
   console.log(
-    `✓ Deposit confirmed: ${amount} ${asset} (tx: ${txHash.slice(0, 8)}..., ledger ${confirmation.ledger}, ${durationMs}ms)`
+    `✓ Deposit confirmed: ${amount} ${asset} (tx: ${txHash.slice(0, 8)}..., ledger ${confirmation.ledger ?? "unknown"}, ${durationMs}ms)`
   );
 
   return {
@@ -141,7 +142,7 @@ export async function performDeposit(
     amount,
     asset,
     explorerUrl,
-    ledger: confirmation.ledger,
+    ledger: confirmation.ledger ?? 0,
     durationMs,
   };
 }
