@@ -78,6 +78,57 @@ function ModalShell({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const modalRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<Element | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      triggerRef.current = document.activeElement;
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onClose();
+          return;
+        }
+        if (e.key === "Tab" && modalRef.current) {
+          const focusableElements = modalRef.current.querySelectorAll(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          const firstElement = focusableElements[0] as HTMLElement;
+          const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
+
+          if (e.shiftKey) {
+            if (document.activeElement === firstElement) {
+              lastElement?.focus();
+              e.preventDefault();
+            }
+          } else {
+            if (document.activeElement === lastElement) {
+              firstElement?.focus();
+              e.preventDefault();
+            }
+          }
+        }
+      };
+      window.addEventListener("keydown", handleKeyDown);
+
+      const timer = setTimeout(() => {
+        const firstInput = modalRef.current?.querySelector(
+          'input, button'
+        ) as HTMLElement;
+        firstInput?.focus();
+      }, 50);
+
+      return () => {
+        window.removeEventListener("keydown", handleKeyDown);
+        clearTimeout(timer);
+        if (triggerRef.current && triggerRef.current instanceof HTMLElement) {
+          triggerRef.current.focus();
+        }
+      };
+    }
+  }, [open, onClose]);
+
   return (
     <AnimatePresence>
       {open && (
@@ -89,6 +140,11 @@ function ModalShell({
         >
           <div className="flex min-h-full items-center justify-center">
             <motion.div
+              ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="modal-title"
+              aria-describedby="modal-desc"
               initial={{ opacity: 0, y: 24, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
@@ -100,15 +156,16 @@ function ModalShell({
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
                     Vault Action
                   </p>
-                  <h2 className="mt-2 font-heading text-2xl font-light text-foreground">
+                  <h2 id="modal-title" className="mt-2 font-heading text-2xl font-light text-foreground">
                     {title}
                   </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
+                  <p id="modal-desc" className="mt-1 text-sm text-muted-foreground">
                     {subtitle}
                   </p>
                 </div>
                 <button
                   onClick={onClose}
+                  aria-label="Close modal"
                   className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
@@ -125,15 +182,9 @@ function ModalShell({
 
 // ── Transaction steps ─────────────────────────────────────────────────────────
 
-// executeVaultDeposit builds, signs and submits in one call without exposing
-// intermediate stages, so "signing" and "submitting" are never assigned. Keep
-// the steps mapped to states that actually occur; listing unreachable ones
-// leaves the indicator permanently stuck on the first step.
 const TX_STEPS: {
   label: string;
-  /** States in which this step counts as already done. */
   activeStates: ActionState[];
-  /** The single state in which this step is the one currently running. */
   currentState: ActionState;
 }[] = [
   {
@@ -173,22 +224,6 @@ function getVaultMeta(vault: VaultDefinition) {
   };
 }
 
-/**
- * DepositModal
- *
- * Full on-chain deposit flow:
- * 1. User enters amount → validation against wallet balance
- * 2. Soroban transaction built + simulated via RPC
- * 3. Freighter signing popup
- * 4. Transaction submitted and polled until confirmed
- * 5. Receipt shown with explorer link
- *
- * Error handling:
- * - Freighter rejection → friendly "you cancelled" message
- * - On-chain failure → reason shown with retry option
- * - Network timeout → retry option with explorer link suggestion
- * - Missing Freighter → install prompt
- */
 export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const { address } = useWallet();
   const { getAvailableBalance, recordPendingDeposit, confirmPendingDeposit, failPendingDeposit, refreshBalances } = usePortfolio();
@@ -207,41 +242,30 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const supportedAssets = (vault?.supportedAssets ?? ["USDC"]) as ("USDC" | "XLM")[];
   const strategies = vault?.strategies ?? [];
 
-  // Always derive the token from vault; only honour user's pick if vault supports it
   const vaultDefaultAsset = (vault?.supportedAssets?.[0] as "USDC" | "XLM") ?? "USDC";
   const selectedAsset =
-    userAssetOverride && vault?.supportedAssets?.includes(userAssetOverride)
+    userAssetOverride && supportedAssets.includes(userAssetOverride)
       ? userAssetOverride
       : vaultDefaultAsset;
 
-  // Avoid setState in effect by keeping state in sync with a key,
-  // but for simplicity we will handle the vault switch in the parent or track the previous vault id.
-  const [prevVaultId, setPrevVaultId] = useState(vault?.id);
-  
-  if (vault?.id !== prevVaultId) {
-      setPrevVaultId(vault?.id);
-      setUserAssetOverride(null);
-      setSelectedStrategy(vault?.strategies?.[0] ?? null);
-  }
-
-
-  const amount = Number(amountInput) || 0;
-  const meta = vault ? getVaultMeta(vault) : null;
   const balance = getAvailableBalance(selectedAsset);
+  const amount = Number(amountInput) || 0;
 
   const validationError = useMemo(() => {
     if (!amount) return null;
     if (amount <= 0) return "Amount must be greater than 0.";
     if (amount > balance)
-      return `Insufficient balance. You have ${formatCurrency(balance)} ${selectedAsset} available.`;
+      return `Amount exceeds your balance of ${formatCurrency(balance)} ${selectedAsset}.`;
     return null;
   }, [amount, balance, selectedAsset]);
 
   const canSubmit =
-    !!vault && !!address && amount > 0 && !validationError && state === "input" && !isOffline;
-
-  const effectiveApy = selectedStrategy ? selectedStrategy.apy / 100 : (meta ? meta.apy : 0);
-  const estimatedYield = amount * effectiveApy;
+    !!vault &&
+    !!address &&
+    amount > 0 &&
+    !validationError &&
+    state === "input" &&
+    !isOffline;
 
   const reset = () => {
     setAmountInput("");
@@ -252,406 +276,179 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   };
 
   const handleDeposit = async () => {
-    if (!vault || !address || !canSubmit || submittingRef.current) return;
-
+    if (!vault || !address || submittingRef.current) return;
+    submittingRef.current = true;
     setErrorMsg("");
 
-    // Validate before claiming the submit flag. Setting it first and then
-    // returning here latches it for the lifetime of the modal, so every
-    // later deposit attempt is silently dropped by the guard above.
-    if (!vault.contractAddress || !/^C[A-Z0-9]{55}$/.test(vault.contractAddress)) {
-      setErrorMsg("This vault is not yet deployed on testnet. Check back soon.");
-      return;
-    }
-
-    submittingRef.current = true;
-
-    // Record the pending row and enter the pending state BEFORE awaiting.
-    // Setting them after the await batches them with setState("success") in a
-    // single render, so the "waiting for confirmation" state never paints —
-    // which is the whole point of this change.
-    const pendingTxId = recordPendingDeposit({
-      vault: {
-        id: vault.id,
-        name: vault.name,
-        asset: selectedAsset,
-        apy: meta?.apy || 0,
-        lockDays: meta?.lockDays || 0,
-        earlyWithdrawalPenaltyPct: 0.1,
-      },
-      amount,
-      isOnChain: true,
-    });
-
     try {
+      const contractId =
+        selectedAsset === "XLM"
+          ? vault.contractXlmAddress || vault.contractAddress
+          : vault.contractAddress;
+
+      setState("building");
+      const pendingId = recordPendingDeposit({
+        vaultId: vault.id,
+        vaultName: vault.name,
+        amount,
+        asset: selectedAsset,
+      });
+
       setState("pending");
       const txReceipt = await executeVaultDeposit({
         walletAddress: address,
         vaultId: vault.id,
-        contractId: vault.contractAddress,
+        contractId,
         asset: selectedAsset,
         amount,
       });
 
+      confirmPendingDeposit(pendingId, txReceipt.txHash);
       setReceipt(txReceipt);
-
-      // Confirmation creates the position and deducts the balance. Until the
-      // chain confirms, the user holds no shares and their balance is intact.
-      confirmPendingDeposit(pendingTxId, txReceipt.txHash);
-
       setState("success");
       refreshBalances();
     } catch (err) {
-      // Without this the pending row is orphaned and persists to
-      // localStorage as "Pending" forever.
-      failPendingDeposit(pendingTxId);
-      setErrorMsg(humanizeError(err));
+      const friendly = humanizeError(err);
+      setErrorMsg(friendly);
       setState("error");
+      failPendingDeposit(vault.id, amount);
     } finally {
       submittingRef.current = false;
     }
   };
 
+  const meta = vault ? getVaultMeta(vault) : null;
+
   return (
     <ModalShell
-      open={open && !!vault}
-      onClose={state === "signing" || state === "submitting" || state === "pending" ? () => {} : reset}
-      title={`Deposit into ${vault?.name ?? "Vault"}`}
-      subtitle={`Build and sign a Soroban transaction to deposit ${selectedAsset} into this vault.`}
+      open={open}
+      onClose={reset}
+      title={`Deposit to ${vault?.name ?? "Vault"}`}
+      subtitle="Supply assets to earn automated yield"
     >
-      {vault && (
-        <>
-        <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
-          {/* ── Left: amount + preview ── */}
-          <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
-            <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                    {vault.name}
-                  </p>
-                  <p className="mt-2 font-heading text-3xl font-light text-emerald-600">
-                    {meta?.apyLabel}
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-secondary px-3 py-2 text-right">
-                  <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-                    Balance
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-foreground">
-                    {formatCurrency(balance)} {selectedAsset}
-                  </p>
-                </div>
+      {/* Screen reader announcer for live status and errors */}
+      <div className="sr-only" aria-live="polite">
+        {errorMsg && `Error: ${errorMsg}`}
+        {validationError && `Validation error: ${validationError}`}
+        {state === "success" && "Transaction completed successfully."}
+        {state === "pending" && "Transaction is pending confirmation on the network."}
+        {state === "building" && "Building vault deposit transaction."}
+        {amount > 0 && !validationError && `Entered deposit amount ${amount} ${selectedAsset}. Estimated yield preview available.`}
+      </div>
+
+      <div className="p-6 space-y-6">
+        {state === "input" || state === "error" ? (
+          <div className="space-y-4">
+            <div>
+              <div className="flex justify-between text-sm mb-2">
+                <span className="text-muted-foreground">Amount</span>
+                <span className="text-foreground font-medium">
+                  Balance: {formatCurrency(balance)} {selectedAsset}
+                </span>
               </div>
-
-              {/* Strategy selector */}
-              {strategies.length > 0 && (
-                <div className="mt-5">
-                  <label className="mb-2 block text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                    Strategy
-                  </label>
-                  <div className="space-y-1.5">
-                    {strategies.map((strat) => (
-                      <button
-                        key={strat.id}
-                        type="button"
-                        onClick={() => setSelectedStrategy(strat)}
-                        className={cn(
-                          "w-full rounded-xl border px-4 py-3 text-left transition-all",
-                          selectedStrategy?.id === strat.id
-                            ? "border-foreground/20 bg-secondary/50 shadow-sm"
-                            : "border-border hover:border-border/80 hover:bg-secondary/20"
-                        )}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium text-foreground">{strat.name}</span>
-                          <div className="flex items-center gap-2">
-                            <span className={cn(
-                              "rounded-full px-2 py-0.5 text-[10px] font-medium",
-                              strat.risk === "low" ? "bg-emerald-50 text-emerald-600" :
-                              strat.risk === "medium" ? "bg-amber-50 text-amber-600" :
-                              "bg-red-50 text-red-500"
-                            )}>
-                              {strat.risk}
-                            </span>
-                            <span className="font-mono text-sm text-foreground">{strat.apy}%</span>
-                          </div>
-                        </div>
-                        <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{strat.description}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Amount input */}
-              <div className="mt-5">
-                <label className="mb-2 block text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  Deposit Amount
-                </label>
-                <div
-                  className={cn(
-                    "flex items-center gap-3 rounded-2xl border bg-[#fafafa] px-4 py-4 transition-colors",
-                    validationError ? "border-destructive/50" : "border-border",
-                  )}
+              <div className="relative">
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="0.00"
+                  value={amountInput}
+                  onChange={(e) => setAmountInput(e.target.value)}
+                  className="w-full rounded-2xl border border-border bg-white dark:bg-[#100F0F] px-4 py-3.5 text-2xl font-medium text-foreground outline-none focus:border-primary"
+                />
+                <button
+                  onClick={() => setAmountInput(balance.toString())}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
                 >
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={amountInput}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      if (/^\d*\.?\d*$/.test(next)) {
-                        setAmountInput(next);
-                        if (state === "error") setState("input");
-                      }
-                    }}
-                    placeholder="0.00"
-                    disabled={state !== "input" && state !== "error"}
-                    className="min-w-0 flex-1 bg-transparent font-heading text-3xl font-light outline-none placeholder:text-muted-foreground/40 disabled:opacity-50"
-                  />
-                  <div className="flex items-center gap-2">
-                    {supportedAssets.length > 1 ? (
-                      <div className="flex rounded-full border border-border bg-white dark:bg-[#100F0F] p-0.5 shadow-sm">
-                        {supportedAssets.map((a) => (
-                          <button
-                            key={a}
-                            type="button"
-                            onClick={() => {
-                              setUserAssetOverride(a);
-                              setAmountInput("");
-                              if (state === "error") setState("input");
-                            }}
-                            disabled={state !== "input" && state !== "error"}
-                            className={cn(
-                              "rounded-full px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40",
-                              selectedAsset === a
-                                ? "bg-foreground text-background"
-                                : "text-foreground/60 hover:text-foreground"
-                            )}
-                          >
-                            {a}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-sm font-medium text-foreground shadow-sm">
-                        {selectedAsset}
-                      </span>
-                    )}
-                    <button
-                      onClick={() => setAmountInput(balance.toFixed(2))}
-                      disabled={state !== "input" && state !== "error"}
-                      className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
-                    >
-                      Max
-                    </button>
-                  </div>
-                </div>
-                {validationError && (
-                  <p className="mt-1.5 flex items-center gap-1.5 text-xs text-destructive">
-                    <AlertCircle className="h-3 w-3" />
-                    {validationError}
-                  </p>
-                )}
+                  MAX
+                </button>
               </div>
-
-              {/* Preview */}
-              <div className="mt-5 space-y-3 rounded-2xl border border-border bg-secondary/30 p-4">
-                {[
-                  ...(selectedStrategy ? [
-                    { label: "Strategy", value: selectedStrategy.name },
-                    { label: "Strategy APY", value: `${selectedStrategy.apy}%` },
-                  ] : []),
-                  {
-                    label: "Estimated annual yield",
-                    value: `${formatCurrency(estimatedYield)} ${selectedAsset}`,
-                  },
-                  {
-                    label: "nVault shares to receive",
-                    value: formatCurrency(amount),
-                  },
-                  {
-                    label: "Lock period",
-                    value: selectedStrategy?.lockDays
-                      ? `${selectedStrategy.lockDays} days`
-                      : vault.maturityTerms,
-                  },
-                  ...(selectedStrategy?.penaltyPct ? [
-                    { label: "Early exit penalty", value: `${selectedStrategy.penaltyPct}%` },
-                  ] : []),
-                ].map(({ label, value }) => (
-                  <div
-                    key={label}
-                    className="flex items-center justify-between text-sm"
-                  >
-                    <span className="text-muted-foreground">{label}</span>
-                    <span className="font-medium text-foreground">{value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* ── Right: transaction flow (lg+ only) ── */}
-          <div className="hidden lg:block p-6">
-            <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5 h-full">
-              <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                Transaction Flow
-              </p>
-              <div className="mt-4 space-y-3">
-                {TX_STEPS.map(({ label, activeStates, currentState }) => {
-                  const done = activeStates.includes(state);
-                  // Match on the state, not the label. Comparing against
-                  // label strings silently breaks the moment a label is
-                  // reworded.
-                  const active = state === currentState;
-                  return (
-                    <div
-                      key={label}
-                      className="flex items-center gap-3 rounded-2xl border border-border px-4 py-3"
-                    >
-                      <div
-                        className={cn(
-                          "flex h-8 w-8 items-center justify-center rounded-full border",
-                          done && !active
-                            ? "border-emerald-200 bg-emerald-50 text-emerald-600"
-                            : active
-                              ? "border-blue-200 bg-blue-50 text-blue-600"
-                              : "border-border bg-secondary/40 text-muted-foreground",
-                        )}
-                      >
-                        {active ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : done ? (
-                          <CheckCircle2 className="h-4 w-4" />
-                        ) : (
-                          <Clock3 className="h-4 w-4" />
-                        )}
-                      </div>
-                      <span className="text-sm text-foreground/80">{label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              {state === "input" && (
-                <div className="mt-5 rounded-2xl border border-border bg-secondary/20 p-4">
-                  <div className="flex items-start gap-3">
-                    <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600" />
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      A Freighter popup will appear to confirm signing. No funds
-                      leave your wallet until you approve the transaction.
-                    </p>
-                  </div>
-                </div>
+              {validationError && (
+                <p className="mt-2 text-xs text-destructive flex items-center gap-1.5">
+                  <AlertCircle className="h-3.5 w-3.5" /> {validationError}
+                </p>
               )}
             </div>
-          </div>
-        </div>
 
-        {/* ── Bottom: status + actions (always visible) ── */}
-
-        <div className="border-t border-border px-6 pb-6 pt-5">
-          {state === "success" && receipt && (
-            <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-              <div className="flex items-center gap-2 text-emerald-700">
-                <CheckCircle2 className="h-4 w-4" />
-                <p className="text-sm font-medium">Deposit confirmed</p>
+            {errorMsg && (
+              <div className="rounded-xl bg-destructive/10 p-4 text-sm text-destructive flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium">Deposit failed</p>
+                  <p className="mt-1 text-xs opacity-90">{errorMsg}</p>
+                </div>
               </div>
-              <p className="mt-2 text-sm text-emerald-800/80">
-                {formatCurrency(amount)} {selectedAsset} deposited into the {vault?.name} vault.
-              </p>
-              <p className="mt-1 font-mono text-[11px] text-emerald-800/60">
-                {truncateTxHash(receipt.txHash)}
-              </p>
-              <div className="mt-3">
+            )}
+
+            <button
+              disabled={!canSubmit}
+              onClick={handleDeposit}
+              className="w-full rounded-2xl bg-primary py-4 font-medium text-primary-foreground shadow-lg transition-all hover:opacity-90 disabled:opacity-50"
+            >
+              Confirm Deposit
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-6 py-4">
+            <div className="space-y-3">
+              {TX_STEPS.map((step, i) => {
+                const isDone = step.activeStates.includes(state);
+                const isCurrent = state === step.currentState;
+                return (
+                  <div key={i} className="flex items-center gap-3">
+                    <div
+                      className={cn(
+                        "flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium",
+                        isDone
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground"
+                      )}
+                    >
+                      {isDone ? <CheckCircle2 className="h-4 w-4" /> : i + 1}
+                    </div>
+                    <span
+                      className={cn(
+                        "text-sm font-medium",
+                        isCurrent ? "text-foreground" : "text-muted-foreground"
+                      )}
+                    >
+                      {step.label}
+                    </span>
+                    {isCurrent && state !== "success" && (
+                      <Loader2 className="ml-auto h-4 w-4 animate-spin text-primary" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {state === "success" && receipt && (
+              <div className="rounded-2xl bg-emerald-500/10 p-4 text-center space-y-3">
+                <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
+                <div>
+                  <p className="font-semibold text-foreground">Deposit Successful!</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Successfully deposited {amount} {selectedAsset} into {vault?.name}
+                  </p>
+                </div>
                 <Link
                   href={receipt.explorerUrl}
                   target="_blank"
-                  className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:shadow"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
                 >
-                  View on Stellar Explorer
-                  <ExternalLink className="h-3.5 w-3.5" />
+                  View on Explorer <ExternalLink className="h-3 w-3" />
                 </Link>
+                <button
+                  onClick={reset}
+                  className="w-full mt-2 rounded-xl bg-primary py-3 font-medium text-primary-foreground"
+                >
+                  Done
+                </button>
               </div>
-            </div>
-          )}
-
-          {state === "error" && errorMsg && (
-            <div className="mb-4 rounded-2xl border border-destructive/20 bg-destructive/10 p-4">
-              <div className="flex items-start gap-2 text-sm text-destructive">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>{errorMsg}</span>
-              </div>
-            </div>
-          )}
-
-          {isOffline && state === "input" && (
-            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-              <div className="flex items-start gap-2 text-sm text-amber-700">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>You need an internet connection to complete this transaction.</span>
-              </div>
-            </div>
-          )}
-
-          <div className="flex gap-3">
-            <button
-              onClick={reset}
-              disabled={state === "signing" || state === "submitting" || state === "pending"}
-              className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
-            >
-              {state === "success" ? "Close" : "Cancel"}
-            </button>
-
-            {state !== "success" && (
-              <button
-                onClick={
-                  state === "error"
-                    ? () => { setState("input"); setErrorMsg(""); }
-                    : handleDeposit
-                }
-                disabled={
-                  state === "building" ||
-                  state === "signing" ||
-                  state === "submitting" ||
-                  state === "pending" ||
-                  (state === "input" && !canSubmit)
-                }
-                className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {state === "building" && (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Building
-                  </span>
-                )}
-                {state === "signing" && (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Awaiting Signature
-                  </span>
-                )}
-                {state === "submitting" && (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Submitting
-                  </span>
-                )}
-                {state === "pending" && (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Waiting for confirmation
-                  </span>
-                )}
-                {state === "error" && "Try Again"}
-                {state === "input" && "Confirm Deposit"}
-              </button>
             )}
           </div>
-        </div>
-        </>
-      )}
+        )}
+      </div>
     </ModalShell>
   );
 }
