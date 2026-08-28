@@ -9,6 +9,7 @@ import { useWallet } from "@/components/wallet-provider";
 import { KYCSection, type KYCStatus } from "@/components/kyc/KYCSection";
 import { BankAccountsSection } from "@/components/settings/bank-accounts-section";
 import { SessionsSection } from "@/components/settings/sessions-section";
+import { SkeletonLine } from "@/components/ui/skeletons";
 import { cn } from "@/lib/utils";
 import { useLocale, useTranslations } from "@/context/locale-context";
 import {
@@ -182,19 +183,23 @@ interface KYCStatusResponse {
 }
 
 // No userId parameter: every call inside goes to /api/v1/users/me/kyc,
-// which resolves the user from the session. The parameter was declared
-// and never read, and the call site passed nothing, so the build failed
-// with "Expected 1 arguments, but got 0".
+// which resolves the user from the session rather than trusting a
+// client-supplied id (nester#1148-1152 — session-scoped identity avoids the
+// impersonation surface a passed-in userId would otherwise open).
 function useKYCState() {
   const [status, setStatus] = useState<KYCStatus>("unverified");
   const [submittedAt, setSubmittedAt] = useState<string | null>(null);
   const [reviewedAt, setReviewedAt] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Fetch KYC status from server (authenticated endpoint that uses session user ID)
-  const fetchStatus = useCallback(async () => {
+  const refresh = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
     try {
       const resp = await fetch(`/api/v1/users/me/kyc`);
       if (!resp.ok) {
@@ -206,22 +211,25 @@ function useKYCState() {
       setSubmittedAt(kyc.submitted_at || null);
       setReviewedAt(kyc.reviewed_at || null);
       setRejectionReason(kyc.rejection_reason || null);
-      setError(null);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load KYC status",
+      setLoadError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load verification status",
       );
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
   // Load status on mount
   useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
+    refresh();
+  }, [refresh]);
 
   const submitKYC = async (formData: FormData) => {
     setIsSubmitting(true);
-    setError(null);
+    setSubmitError(null);
     try {
       const resp = await fetch(`/api/v1/users/me/kyc`, {
         method: "POST",
@@ -234,12 +242,12 @@ function useKYCState() {
         );
       }
       // Refresh status after successful submission
-      await fetchStatus();
+      await refresh();
     } catch (err) {
-      const errorMsg =
-        err instanceof Error ? err.message : "Failed to submit KYC";
-      setError(errorMsg);
-      setStatus("rejected"); // Show failed state
+      setSubmitError(
+        err instanceof Error ? err.message : "Failed to submit verification",
+      );
+      throw err;
     } finally {
       setIsSubmitting(false);
     }
@@ -250,9 +258,12 @@ function useKYCState() {
     submittedAt,
     reviewedAt,
     rejectionReason,
+    isLoading,
+    loadError,
     isSubmitting,
     submitKYC,
-    error,
+    submitError,
+    refresh,
   };
 }
 
@@ -364,14 +375,40 @@ export default function SettingsPage() {
                 <h2 className="mb-5 text-sm font-medium text-black dark:text-white">
                   Identity Verification
                 </h2>
-                <KYCSection
-                  status={kyc.status}
-                  submittedAt={kyc.submittedAt}
-                  reviewedAt={kyc.reviewedAt}
-                  rejectionReason={kyc.rejectionReason}
-                  onSubmit={kyc.submitKYC}
-                  isSubmitting={kyc.isSubmitting}
-                />
+                {kyc.isLoading ? (
+                  <div className="space-y-3">
+                    <SkeletonLine className="h-5 w-40" />
+                    <SkeletonLine className="h-4 w-64" />
+                  </div>
+                ) : kyc.loadError ? (
+                  <div className="flex flex-col items-start gap-2">
+                    <p className="text-sm text-red-500">
+                      Couldn&apos;t load verification status: {kyc.loadError}
+                    </p>
+                    <button
+                      onClick={() => kyc.refresh()}
+                      className="text-xs text-black/60 dark:text-white/60 underline hover:text-black dark:hover:text-white"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <KYCSection
+                      status={kyc.status}
+                      submittedAt={kyc.submittedAt}
+                      reviewedAt={kyc.reviewedAt}
+                      rejectionReason={kyc.rejectionReason}
+                      onSubmit={kyc.submitKYC}
+                      isSubmitting={kyc.isSubmitting}
+                    />
+                    {kyc.submitError && (
+                      <p className="mt-3 text-sm text-red-500">
+                        {kyc.submitError}
+                      </p>
+                    )}
+                  </>
+                )}
               </motion.div>
             )}
 

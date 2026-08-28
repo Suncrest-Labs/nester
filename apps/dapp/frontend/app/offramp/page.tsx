@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useWallet } from "@/components/wallet-provider";
+import { useAuth } from "@/components/auth-provider";
 import { useNotifications } from "@/components/notifications-provider";
 import { AppShell } from "@/components/app-shell";
 import { useRouter } from "next/navigation";
@@ -28,10 +29,9 @@ import {
   ArrowRight,
   AlertCircle,
 } from "lucide-react";
-import { apiRequest } from "@/lib/api/client";
+import { api, apiRequest } from "@/lib/api/client";
 
 import { type LPNode, LP_NODES } from "@/lib/settlement-data";
-import { getExplorerTxUrl } from "@/utils/explorer";
 import { BankCombobox } from "@/components/offramp/BankCombobox";
 import { AccountNameField } from "@/components/offramp/AccountNameField";
 import { SuggestedBankChips } from "@/components/offramp/SuggestedBankChips";
@@ -44,6 +44,7 @@ import { useBankResolver } from "@/hooks/useBankResolver";
 import { fetchBankList } from "@/lib/api/bank";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
 import { useTranslations } from "@/context/locale-context";
+import { useVaults } from "@/hooks/useVaults";
 
 const SEND_ASSETS = [
   { symbol: "USDC", name: "USD Coin", image: "/usdc.png" },
@@ -71,12 +72,6 @@ interface QuoteResult {
   estimatedTime: string;
   isBest: boolean;
   rateOffset: number;
-}
-
-interface PortfolioSummary {
-  total_balance_usd: number;
-  total_deposited_usd: number;
-  total_yield_usd: number;
 }
 
 type QuotePhase = "idle" | "scanning" | "comparing" | "ranking" | "done";
@@ -147,50 +142,54 @@ type FormValues = z.infer<ReturnType<typeof createFormSchema>>;
 export default function OfframpPage() {
   const { isConnected } = useWallet();
   const { addNotification } = useNotifications();
+  const { userId } = useAuth();
   const router = useRouter();
   const { isOffline } = useOfflineStatus();
   const t = useTranslations();
 
-  // In a real app, this would come from the user's KYC state loaded via API
-  const [kycStatus] = useState<KYCStatus>("unverified");
-
-  // Fetch real user balance
-  const [userBalance, setUserBalance] = useState<number | null>(null);
-  const [balanceLoading, setBalanceLoading] = useState(true);
-  const [balanceError, setBalanceError] = useState<string | null>(null);
-  const [selectedVaultId, setSelectedVaultId] = useState<string | null>(null);
-
-  // Dynamic form schema based on loaded balance
-  const formSchema = createFormSchema(userBalance ?? 0);
-
+  // Live KYC status (nester#1125 — this previously always read "unverified"
+  // from local state and never reflected a real submission).
+  const [kycStatus, setKycStatus] = useState<KYCStatus>("unverified");
   useEffect(() => {
-    const fetchUserBalance = async () => {
-      try {
-        setBalanceLoading(true);
-        setBalanceError(null);
-        const portfolio =
-          await apiRequest<PortfolioSummary>("/portfolio/summary");
-        setUserBalance(portfolio.total_balance_usd);
-
-        // Fetch vaults to get the first vault ID for settlement
-        const vaults = await apiRequest<Array<{ id: string }>>("/vaults");
-        if (vaults && vaults.length > 0) {
-          setSelectedVaultId(vaults[0].id);
-        }
-      } catch (err) {
-        setBalanceError(
-          err instanceof Error ? err.message : "Failed to load balance",
-        );
-        setUserBalance(0); // Fail safely
-      } finally {
-        setBalanceLoading(false);
-      }
+    if (!userId) return;
+    let cancelled = false;
+    api.kyc
+      .getStatus(userId)
+      .then((result) => {
+        if (!cancelled) setKycStatus(result.status);
+      })
+      .catch(() => {
+        // Leave the default "unverified" state — the KYC banner still
+        // renders correctly (prompting verification) even if the status
+        // fetch fails.
+      });
+    return () => {
+      cancelled = true;
     };
+  }, [userId]);
 
-    if (isConnected) {
-      fetchUserBalance();
-    }
-  }, [isConnected]);
+  const [sendAsset, setSendAsset] = useState(SEND_ASSETS[0]);
+
+  // Live available balance, scoped to the selected send asset (nester#1125 —
+  // this previously validated withdrawal amounts against a hardcoded
+  // MOCK_BALANCE of 5000 regardless of what the user actually held).
+  const {
+    vaults,
+    isLoading: balanceLoading,
+    error: balanceError,
+  } = useVaults(userId);
+  const availableBalance = vaults
+    .filter(
+      (v) =>
+        v.status === "active" && v.currency.toUpperCase() === sendAsset.symbol,
+    )
+    .reduce((sum, v) => sum + Number(v.current_balance || 0), 0);
+  // useForm's resolver is captured once; a ref lets the async resolver below
+  // always validate against the latest fetched balance without re-mounting
+  // the form.
+  const availableBalanceRef = useRef(availableBalance);
+  availableBalanceRef.current = availableBalance;
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const {
     handleSubmit,
@@ -200,7 +199,12 @@ export default function OfframpPage() {
     formState: { errors, isValid, isDirty },
     trigger,
   } = useForm<FormValues>({
-    resolver: zodResolver(formSchema),
+    resolver: async (values, context, options) =>
+      zodResolver(createFormSchema(availableBalanceRef.current))(
+        values,
+        context,
+        options,
+      ),
     mode: "onBlur",
     defaultValues: {
       amount: "",
@@ -213,7 +217,6 @@ export default function OfframpPage() {
   const accountNumber = watch("accountNumber");
   const selectedBankCode = watch("bankCode");
 
-  const [sendAsset, setSendAsset] = useState(SEND_ASSETS[0]);
   const [receiveCurrency, setReceiveCurrency] = useState(RECEIVE_CURRENCIES[0]);
   const [manualName, setManualName] = useState("");
   const [payoutMode, setPayoutMode] = useState<PayoutMode>({ type: "manual" });
@@ -360,7 +363,7 @@ export default function OfframpPage() {
       payoutMode.type === "saved"
         ? numericAmount > 0 && quotePhase === "done" && quote
         : isValid && quotePhase === "done" && quote;
-    if (!canSubmit || !quote) {
+    if (!canSubmit || !quote || !userId) {
       return;
     }
 
@@ -370,6 +373,19 @@ export default function OfframpPage() {
     }
 
     setShowLargeWarning(false);
+    setSubmitError(null);
+
+    // The vault this withdrawal draws from: the caller's active vault
+    // holding the send asset, matching how `availableBalance` above is
+    // computed.
+    const sourceVault = vaults.find(
+      (v) =>
+        v.status === "active" && v.currency.toUpperCase() === sendAsset.symbol,
+    );
+    if (!sourceVault) {
+      setSubmitError(`No active ${sendAsset.symbol} vault to withdraw from.`);
+      return;
+    }
 
     if (payoutMode.type === "manual" && resolvedName) {
       void fetchBankList("NG").then((banks) => {
@@ -417,13 +433,13 @@ export default function OfframpPage() {
         };
       }
 
-      const settlement = await apiRequest<{
+      await apiRequest<{
         id: string;
       }>("/settlements", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          vault_id: selectedVaultId || "", // Use the real vault ID from user's vaults
+          vault_id: sourceVault.id,
           amount: numericAmount.toString(),
           currency: sendAsset.symbol,
           fiat_currency: receiveCurrency.symbol,
@@ -448,6 +464,9 @@ export default function OfframpPage() {
         { showToast: true },
       );
     } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to process withdrawal";
+      setSubmitError(message);
       addNotification(
         {
           // "error" is not a NotificationType. offramp_status is the member
@@ -455,10 +474,7 @@ export default function OfframpPage() {
           // flow whose success path above uses withdrawal_processed.
           type: "offramp_status",
           title: "Withdrawal Failed",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to process withdrawal",
+          message,
         },
         { showToast: true },
       );
@@ -623,7 +639,7 @@ export default function OfframpPage() {
                     <span className="text-red-500">Unable to load balance</span>
                   ) : (
                     <>
-                      Balance: {(userBalance ?? 0).toLocaleString()}{" "}
+                      Balance: {availableBalance.toLocaleString()}{" "}
                       {sendAsset.symbol}
                     </>
                   )}
@@ -950,6 +966,9 @@ export default function OfframpPage() {
                                 ? "Yes, confirm withdrawal"
                                 : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
             </button>
+            {submitError && (
+              <p className="mt-2 text-xs text-red-500">{submitError}</p>
+            )}
           </div>
         </motion.div>
 
