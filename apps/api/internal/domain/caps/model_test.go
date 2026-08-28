@@ -1,0 +1,186 @@
+package caps
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+)
+
+// stubTotals is an in-memory caps.Totals for tests.
+type stubTotals struct {
+	userTotals  map[uuid.UUID]decimal.Decimal
+	globalTotal decimal.Decimal
+}
+
+func (s *stubTotals) UserDepositTotal(_ context.Context, userID uuid.UUID) (decimal.Decimal, error) {
+	if v, ok := s.userTotals[userID]; ok {
+		return v, nil
+	}
+	return decimal.Zero, nil
+}
+
+func (s *stubTotals) GlobalDepositTotal(_ context.Context) (decimal.Decimal, error) {
+	return s.globalTotal, nil
+}
+
+func dec(s string) decimal.Decimal {
+	d, err := decimal.NewFromString(s)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+func TestChecker_PerUserCap_UnderCapAllowed(t *testing.T) {
+	userID := uuid.New()
+	totals := &stubTotals{userTotals: map[uuid.UUID]decimal.Decimal{userID: dec("900")}}
+	checker := NewChecker(Config{PerUserCap: dec("1000")}, totals, nil)
+
+	if err := checker.CheckDeposit(context.Background(), userID, dec("50")); err != nil {
+		t.Fatalf("expected deposit under cap to be allowed, got %v", err)
+	}
+}
+
+func TestChecker_PerUserCap_AtCapAllowed(t *testing.T) {
+	userID := uuid.New()
+	totals := &stubTotals{userTotals: map[uuid.UUID]decimal.Decimal{userID: dec("900")}}
+	checker := NewChecker(Config{PerUserCap: dec("1000")}, totals, nil)
+
+	// 900 + 100 == 1000 exactly: landing on the cap must be allowed, not
+	// rejected — only strictly exceeding it is refused.
+	if err := checker.CheckDeposit(context.Background(), userID, dec("100")); err != nil {
+		t.Fatalf("expected deposit landing exactly on cap to be allowed, got %v", err)
+	}
+}
+
+func TestChecker_PerUserCap_OverCapRejected(t *testing.T) {
+	userID := uuid.New()
+	totals := &stubTotals{userTotals: map[uuid.UUID]decimal.Decimal{userID: dec("900")}}
+	checker := NewChecker(Config{PerUserCap: dec("1000")}, totals, nil)
+
+	err := checker.CheckDeposit(context.Background(), userID, dec("100.01"))
+	if err == nil {
+		t.Fatal("expected deposit exceeding cap to be rejected")
+	}
+	if !errors.Is(err, ErrPerUserCapExceeded) {
+		t.Fatalf("expected ErrPerUserCapExceeded, got %v", err)
+	}
+	var capErr *CapExceededError
+	if !errors.As(err, &capErr) {
+		t.Fatalf("expected *CapExceededError, got %T", err)
+	}
+	if capErr.Kind != KindPerUser {
+		t.Fatalf("kind = %v, want KindPerUser", capErr.Kind)
+	}
+	if !capErr.CurrentTotal.Equal(dec("900")) {
+		t.Fatalf("current total = %v, want 900", capErr.CurrentTotal)
+	}
+}
+
+func TestChecker_GlobalCap_BoundaryConditions(t *testing.T) {
+	userID := uuid.New()
+
+	t.Run("under cap allowed", func(t *testing.T) {
+		totals := &stubTotals{globalTotal: dec("49000")}
+		checker := NewChecker(Config{GlobalCap: dec("50000")}, totals, nil)
+		if err := checker.CheckDeposit(context.Background(), userID, dec("500")); err != nil {
+			t.Fatalf("expected allowed, got %v", err)
+		}
+	})
+
+	t.Run("at cap allowed", func(t *testing.T) {
+		totals := &stubTotals{globalTotal: dec("49000")}
+		checker := NewChecker(Config{GlobalCap: dec("50000")}, totals, nil)
+		if err := checker.CheckDeposit(context.Background(), userID, dec("1000")); err != nil {
+			t.Fatalf("expected allowed at exact cap, got %v", err)
+		}
+	})
+
+	t.Run("over cap rejected", func(t *testing.T) {
+		totals := &stubTotals{globalTotal: dec("49000")}
+		checker := NewChecker(Config{GlobalCap: dec("50000")}, totals, nil)
+		err := checker.CheckDeposit(context.Background(), userID, dec("1000.01"))
+		if !errors.Is(err, ErrGlobalCapExceeded) {
+			t.Fatalf("expected ErrGlobalCapExceeded, got %v", err)
+		}
+	})
+}
+
+func TestChecker_DisabledCapsAllowEverything(t *testing.T) {
+	userID := uuid.New()
+	totals := &stubTotals{
+		userTotals:  map[uuid.UUID]decimal.Decimal{userID: dec("1000000")},
+		globalTotal: dec("1000000"),
+	}
+	checker := NewChecker(Config{}, totals, nil) // zero caps == disabled
+
+	if err := checker.CheckDeposit(context.Background(), userID, dec("999999")); err != nil {
+		t.Fatalf("expected disabled caps to allow everything, got %v", err)
+	}
+}
+
+func TestChecker_NilCheckerIsNoop(t *testing.T) {
+	var checker *Checker
+	if err := checker.CheckDeposit(context.Background(), uuid.New(), dec("100")); err != nil {
+		t.Fatalf("nil checker should be a no-op, got %v", err)
+	}
+}
+
+func TestChecker_WarnsOnceWhenCrossingThreshold(t *testing.T) {
+	userID := uuid.New()
+	totals := &stubTotals{userTotals: map[uuid.UUID]decimal.Decimal{userID: dec("750")}}
+
+	var warnings []Warning
+	checker := NewChecker(Config{
+		PerUserCap:        dec("1000"),
+		WarnThresholdsPct: []int{80, 90},
+	}, totals, func(_ context.Context, w Warning) {
+		warnings = append(warnings, w)
+	})
+
+	// 750 -> 850 crosses the 80% (800) line but not 90% (900).
+	if err := checker.CheckDeposit(context.Background(), userID, dec("100")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly 1 warning, got %d: %+v", len(warnings), warnings)
+	}
+	if warnings[0].ThresholdPct != 80 {
+		t.Fatalf("expected 80%% threshold warning, got %d", warnings[0].ThresholdPct)
+	}
+}
+
+func TestChecker_NoWarnWhenAlreadyPastThreshold(t *testing.T) {
+	userID := uuid.New()
+	// Already at 850 (past the 80% line of 800); a further deposit that
+	// stays under 90% must not re-fire the 80% warning.
+	totals := &stubTotals{userTotals: map[uuid.UUID]decimal.Decimal{userID: dec("850")}}
+
+	var warnings []Warning
+	checker := NewChecker(Config{
+		PerUserCap:        dec("1000"),
+		WarnThresholdsPct: []int{80, 90},
+	}, totals, func(_ context.Context, w Warning) {
+		warnings = append(warnings, w)
+	})
+
+	if err := checker.CheckDeposit(context.Background(), userID, dec("10")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings, got %+v", warnings)
+	}
+}
+
+func TestChecker_ZeroOrNegativeAmountSkipped(t *testing.T) {
+	userID := uuid.New()
+	totals := &stubTotals{userTotals: map[uuid.UUID]decimal.Decimal{userID: dec("1000")}}
+	checker := NewChecker(Config{PerUserCap: dec("1000")}, totals, nil)
+
+	if err := checker.CheckDeposit(context.Background(), userID, decimal.Zero); err != nil {
+		t.Fatalf("expected zero-amount check to be a no-op, got %v", err)
+	}
+}

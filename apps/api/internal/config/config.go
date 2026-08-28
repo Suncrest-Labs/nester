@@ -67,6 +67,7 @@ type Config struct {
 	indexer               IndexerConfig
 	circuitBreaker        CircuitBreakerConfig
 	rpcRetry              RPCRetryConfig
+	launchCaps            LaunchCapsConfig
 }
 
 // CircuitBreakerConfig is the policy protecting the chain upstreams, Soroban
@@ -202,6 +203,22 @@ type PerformanceConfig struct {
 type TVLConfig struct {
 	refreshInterval time.Duration
 }
+
+// LaunchCapsConfig governs the per-user deposit cap and global TVL cap for
+// the testnet launch (nester#1119). Amounts are stored as decimal strings
+// (matching RecurringDepositConfig.minDeposit) and parsed by whoever wires
+// the caps checker, so an operator can change either cap by editing the env
+// var and restarting — no code change or migration needed. A zero/empty
+// value disables that cap.
+type LaunchCapsConfig struct {
+	perUserDepositCap string
+	globalTVLCap      string
+	warnThresholdsPct []int
+}
+
+func (l LaunchCapsConfig) PerUserDepositCap() string { return l.perUserDepositCap }
+func (l LaunchCapsConfig) GlobalTVLCap() string       { return l.globalTVLCap }
+func (l LaunchCapsConfig) WarnThresholdsPct() []int   { return l.warnThresholdsPct }
 
 // APYRefreshConfig governs polling yield_registry for on-chain APY updates.
 type APYRefreshConfig struct {
@@ -443,6 +460,13 @@ func Load() (*Config, error) {
 		},
 		tvl: TVLConfig{
 			refreshInterval: loader.durationDefault("TVL_REFRESH_INTERVAL", 15*time.Minute),
+		},
+		launchCaps: LaunchCapsConfig{
+			// Empty/"0" disables the respective cap. No default cap is set:
+			// operators opt in explicitly for the testnet launch window.
+			perUserDepositCap: loader.stringDefault("LAUNCH_PER_USER_DEPOSIT_CAP", ""),
+			globalTVLCap:      loader.stringDefault("LAUNCH_GLOBAL_TVL_CAP", ""),
+			warnThresholdsPct: loader.intSliceDefault("LAUNCH_CAP_WARN_THRESHOLDS_PCT", []int{80, 90}),
 		},
 		apyRefresh: APYRefreshConfig{
 			refreshInterval:       loader.durationDefault("APY_REFRESH_INTERVAL", 5*time.Minute),
@@ -714,6 +738,10 @@ func (p PerformanceConfig) SnapshotInterval() time.Duration {
 
 func (c Config) TVL() TVLConfig {
 	return c.tvl
+}
+
+func (c Config) LaunchCaps() LaunchCapsConfig {
+	return c.launchCaps
 }
 
 func (t TVLConfig) RefreshInterval() time.Duration {
@@ -1606,6 +1634,28 @@ func (l *envLoader) stringSliceDefault(key string, fallback []string) []string {
 		if trimmed := strings.TrimSpace(p); trimmed != "" {
 			out = append(out, trimmed)
 		}
+	}
+	return out
+}
+
+func (l *envLoader) intSliceDefault(key string, fallback []int) []int {
+	raw, ok := l.lookup(key)
+	if !ok {
+		return fallback
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		value, err := strconv.Atoi(trimmed)
+		if err != nil {
+			l.addError(fmt.Sprintf("%s must be a comma-separated list of integers, got %q", key, raw))
+			return fallback
+		}
+		out = append(out, value)
 	}
 	return out
 }

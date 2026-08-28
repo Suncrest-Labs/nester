@@ -1,0 +1,194 @@
+// Package caps enforces the launch-minimum per-user deposit cap and global
+// TVL cap for the testnet launch (nester#1119).
+//
+// Kept dependency-free, like domain/moneypath, so the service layer and the
+// postgres repository can both depend on it without a repository -> service
+// import cycle.
+package caps
+
+import (
+	"context"
+	"errors"
+
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+)
+
+// ErrPerUserCapExceeded is returned when a deposit would push a user's total
+// vault balance above the configured per-user cap.
+var ErrPerUserCapExceeded = errors.New("deposit would exceed the per-user deposit cap")
+
+// ErrGlobalCapExceeded is returned when a deposit would push protocol-wide
+// TVL above the configured global cap.
+var ErrGlobalCapExceeded = errors.New("deposit would exceed the global TVL cap")
+
+// CapExceededError carries the numbers behind a rejected deposit so the API
+// response and logs can explain exactly why, without a second lookup.
+type CapExceededError struct {
+	// Kind is either ErrPerUserCapExceeded or ErrGlobalCapExceeded.
+	Kind Kind
+	// Cap is the configured limit that was hit.
+	Cap decimal.Decimal
+	// CurrentTotal is the balance already on record before this deposit.
+	CurrentTotal decimal.Decimal
+	// Attempted is the size of the deposit that was rejected.
+	Attempted decimal.Decimal
+}
+
+// Kind distinguishes which cap was hit.
+type Kind string
+
+const (
+	KindPerUser Kind = "per_user"
+	KindGlobal  Kind = "global"
+)
+
+func (e *CapExceededError) Error() string {
+	switch e.Kind {
+	case KindPerUser:
+		return ErrPerUserCapExceeded.Error()
+	default:
+		return ErrGlobalCapExceeded.Error()
+	}
+}
+
+func (e *CapExceededError) Unwrap() error {
+	if e.Kind == KindPerUser {
+		return ErrPerUserCapExceeded
+	}
+	return ErrGlobalCapExceeded
+}
+
+// Totals is the current state used to evaluate a prospective deposit against
+// the configured caps.
+type Totals interface {
+	// UserDepositTotal returns the sum of current_balance across every
+	// non-deleted vault owned by userID.
+	UserDepositTotal(ctx context.Context, userID uuid.UUID) (decimal.Decimal, error)
+	// GlobalDepositTotal returns the sum of current_balance across every
+	// non-deleted vault, i.e. protocol-wide TVL.
+	GlobalDepositTotal(ctx context.Context) (decimal.Decimal, error)
+}
+
+// WarnFunc is invoked when a deposit is allowed but crosses an approach
+// threshold (80%/90% of a cap) that wasn't crossed before the deposit. It is
+// the alerting hook (nester#1119): production wires this to the structured
+// logger (and, downstream, to log-based alerting) rather than blocking or
+// slowing the request.
+type WarnFunc func(ctx context.Context, w Warning)
+
+// Warning describes one cap-approach event.
+type Warning struct {
+	Kind         Kind
+	UserID       uuid.UUID // zero for KindGlobal
+	Cap          decimal.Decimal
+	NewTotal     decimal.Decimal
+	ThresholdPct int // e.g. 80 or 90
+}
+
+// Config is the effective, already-validated cap configuration.
+type Config struct {
+	// PerUserCap is the maximum a single user may hold across all vaults.
+	// Zero or negative disables the per-user cap.
+	PerUserCap decimal.Decimal
+	// GlobalCap is the maximum protocol-wide TVL. Zero or negative disables
+	// the global cap.
+	GlobalCap decimal.Decimal
+	// WarnThresholdsPct are the percentages of a cap (e.g. []int{80, 90}) at
+	// which an approach warning is emitted for a deposit that stays under the
+	// cap. Sorted ascending; empty disables warnings.
+	WarnThresholdsPct []int
+}
+
+func (c Config) perUserEnabled() bool { return c.PerUserCap.IsPositive() }
+func (c Config) globalEnabled() bool  { return c.GlobalCap.IsPositive() }
+
+// Checker evaluates deposits against the configured caps.
+type Checker struct {
+	cfg    Config
+	totals Totals
+	warn   WarnFunc
+}
+
+// NewChecker builds a Checker. warn may be nil to disable approach alerting.
+func NewChecker(cfg Config, totals Totals, warn WarnFunc) *Checker {
+	if warn == nil {
+		warn = func(context.Context, Warning) {}
+	}
+	return &Checker{cfg: cfg, totals: totals, warn: warn}
+}
+
+// CheckDeposit evaluates a prospective deposit of amount by userID against
+// both caps. It returns *CapExceededError when the deposit must be refused.
+// When the deposit is allowed but crosses a warn threshold that the prior
+// total had not yet crossed, the configured WarnFunc is invoked (best-effort;
+// a warning is never itself a reason to reject).
+func (c *Checker) CheckDeposit(ctx context.Context, userID uuid.UUID, amount decimal.Decimal) error {
+	if c == nil || c.totals == nil {
+		return nil
+	}
+	if !c.cfg.perUserEnabled() && !c.cfg.globalEnabled() {
+		return nil
+	}
+	if amount.Sign() <= 0 {
+		return nil
+	}
+
+	if c.cfg.perUserEnabled() {
+		current, err := c.totals.UserDepositTotal(ctx, userID)
+		if err != nil {
+			return err
+		}
+		newTotal := current.Add(amount)
+		if newTotal.GreaterThan(c.cfg.PerUserCap) {
+			return &CapExceededError{
+				Kind:         KindPerUser,
+				Cap:          c.cfg.PerUserCap,
+				CurrentTotal: current,
+				Attempted:    amount,
+			}
+		}
+		c.maybeWarn(ctx, KindPerUser, userID, c.cfg.PerUserCap, current, newTotal)
+	}
+
+	if c.cfg.globalEnabled() {
+		current, err := c.totals.GlobalDepositTotal(ctx)
+		if err != nil {
+			return err
+		}
+		newTotal := current.Add(amount)
+		if newTotal.GreaterThan(c.cfg.GlobalCap) {
+			return &CapExceededError{
+				Kind:         KindGlobal,
+				Cap:          c.cfg.GlobalCap,
+				CurrentTotal: current,
+				Attempted:    amount,
+			}
+		}
+		c.maybeWarn(ctx, KindGlobal, uuid.Nil, c.cfg.GlobalCap, current, newTotal)
+	}
+
+	return nil
+}
+
+// maybeWarn fires WarnFunc once per threshold newly crossed by this deposit,
+// i.e. when priorTotal was under a configured percentage of cap and newTotal
+// is at or above it. This deliberately alerts on the *first* deposit that
+// crosses each line, not on every subsequent deposit while already over it.
+func (c *Checker) maybeWarn(ctx context.Context, kind Kind, userID uuid.UUID, cap_ decimal.Decimal, priorTotal, newTotal decimal.Decimal) {
+	if cap_.Sign() <= 0 {
+		return
+	}
+	for _, pct := range c.cfg.WarnThresholdsPct {
+		threshold := cap_.Mul(decimal.NewFromInt(int64(pct))).Div(decimal.NewFromInt(100))
+		if priorTotal.LessThan(threshold) && newTotal.GreaterThanOrEqual(threshold) {
+			c.warn(ctx, Warning{
+				Kind:         kind,
+				UserID:       userID,
+				Cap:          cap_,
+				NewTotal:     newTotal,
+				ThresholdPct: pct,
+			})
+		}
+	}
+}

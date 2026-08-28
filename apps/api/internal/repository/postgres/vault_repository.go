@@ -1590,6 +1590,34 @@ func (r *VaultRepository) postRebalanceLedgerTx(ctx context.Context, tx *sql.Tx,
 	})
 }
 
+// UserDepositTotal returns the sum of current_balance across every
+// non-deleted vault owned by userID. Implements caps.Totals for the
+// per-user deposit cap (nester#1119).
+func (r *VaultRepository) UserDepositTotal(ctx context.Context, userID uuid.UUID) (decimal.Decimal, error) {
+	const query = `
+		SELECT COALESCE(SUM(current_balance), 0)
+		FROM vaults
+		WHERE user_id = $1 AND deleted_at IS NULL
+	`
+	var total decimal.Decimal
+	if err := r.db.QueryRowContext(ctx, query, userID.String()).Scan(&total); err != nil {
+		return decimal.Zero, err
+	}
+	return total, nil
+}
+
+// GlobalDepositTotal returns protocol-wide TVL: the sum of current_balance
+// across every non-deleted vault. Implements caps.Totals for the global TVL
+// cap (nester#1119).
+func (r *VaultRepository) GlobalDepositTotal(ctx context.Context) (decimal.Decimal, error) {
+	const query = `SELECT COALESCE(SUM(current_balance), 0) FROM vaults WHERE deleted_at IS NULL`
+	var total decimal.Decimal
+	if err := r.db.QueryRowContext(ctx, query).Scan(&total); err != nil {
+		return decimal.Zero, err
+	}
+	return total, nil
+}
+
 func mapRepositoryError(err error) error {
 	if err == nil {
 		return nil
