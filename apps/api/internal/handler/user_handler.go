@@ -247,6 +247,11 @@ func (h *UserHandler) submitKYC(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid user ID"))
 		return
 	}
+	// Ownership check (IDOR fix): only the authenticated user may submit KYC
+	// documents for their own account.
+	if !h.authorizeUserAccess(w, r, userID) {
+		return
+	}
 
 	h.submitKYCFor(w, r, userID)
 }
@@ -372,6 +377,11 @@ func (h *UserHandler) getKYCStatus(w http.ResponseWriter, r *http.Request) {
 	userID, err := uuid.Parse(idStr)
 	if err != nil {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid user ID"))
+		return
+	}
+	// Ownership check (IDOR fix): only the authenticated user may read their
+	// own KYC status.
+	if !h.authorizeUserAccess(w, r, userID) {
 		return
 	}
 
