@@ -1370,3 +1370,56 @@ func TestLoadQuotaValidationSkippedWhenDisabled(t *testing.T) {
 		t.Fatalf("Load() error = %v, want nil when quotas are disabled", err)
 	}
 }
+
+// TestLoadLaunchCapsValidation table-drives LAUNCH_PER_USER_DEPOSIT_CAP /
+// LAUNCH_GLOBAL_TVL_CAP parsing (nester CodeRabbit finding): blank/"0" must
+// disable the cap silently, a valid positive value must be accepted, and a
+// negative or malformed value must fail Load() rather than silently
+// disabling the cap.
+func TestLoadLaunchCapsValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "blank disables cap", value: "", wantErr: false},
+		{name: "zero disables cap", value: "0", wantErr: false},
+		{name: "valid positive enables cap", value: "1000.50", wantErr: false},
+		{name: "negative value errors", value: "-100", wantErr: true},
+		{name: "malformed value errors", value: "not-a-number", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run("per_user/"+tt.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("LAUNCH_PER_USER_DEPOSIT_CAP", tt.value)
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if tt.wantErr && err == nil {
+				t.Fatalf("Load() error = nil, want an error for LAUNCH_PER_USER_DEPOSIT_CAP=%q", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Load() error = %v, want nil for LAUNCH_PER_USER_DEPOSIT_CAP=%q", err, tt.value)
+			}
+		})
+
+		t.Run("global/"+tt.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("LAUNCH_GLOBAL_TVL_CAP", tt.value)
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if tt.wantErr && err == nil {
+				t.Fatalf("Load() error = nil, want an error for LAUNCH_GLOBAL_TVL_CAP=%q", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Load() error = %v, want nil for LAUNCH_GLOBAL_TVL_CAP=%q", err, tt.value)
+			}
+		})
+	}
+}
