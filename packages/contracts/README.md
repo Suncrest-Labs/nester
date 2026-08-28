@@ -336,7 +336,9 @@ stellar contract invoke --id <CONTRACT_ID> --source-account admin --network test
 
 ## References
 
+- [Contract Upgrade Posture & Governance](./UPGRADE_POSTURE.md)
 - [Soroban Documentation](https://soroban.stellar.org/)
 - [Soroban SDK Docs](https://docs.rs/soroban-sdk/)
 - [Rust Edition 2021](https://doc.rust-lang.org/edition-guide/rust-2021/index.html)
+
 
