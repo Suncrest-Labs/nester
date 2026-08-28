@@ -27,6 +27,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/cache"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/ledger"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
@@ -555,6 +556,31 @@ func run() error {
 	moneyPathSwitchService := service.NewMoneyPathSwitchService(
 		postgres.NewMoneyPathSwitchRepository(db), auditLogger)
 	vaultService.SetMoneyPathSwitches(moneyPathSwitchService)
+
+	// Launch caps: per-user deposit cap and global TVL cap (#1119).
+	// Config-driven (LAUNCH_PER_USER_DEPOSIT_CAP / LAUNCH_GLOBAL_TVL_CAP env
+	// vars) so operators can raise, lower, or disable either cap by changing
+	// the env var and restarting — no code change. An unset/invalid value
+	// disables that cap rather than failing startup, since the caps are a
+	// launch-window safety net, not a hard dependency.
+	{
+		perUserCap, _ := decimal.NewFromString(cfg.LaunchCaps().PerUserDepositCap())
+		globalCap, _ := decimal.NewFromString(cfg.LaunchCaps().GlobalTVLCap())
+		capsChecker := caps.NewChecker(caps.Config{
+			PerUserCap:        perUserCap,
+			GlobalCap:         globalCap,
+			WarnThresholdsPct: cfg.LaunchCaps().WarnThresholdsPct(),
+		}, vaultRepository, func(ctx context.Context, w caps.Warning) {
+			logpkg.FromContext(ctx).Warn("launch cap approaching threshold",
+				"kind", w.Kind,
+				"user_id", w.UserID,
+				"cap", w.Cap.String(),
+				"new_total", w.NewTotal.String(),
+				"threshold_pct", w.ThresholdPct,
+			)
+		})
+		vaultService.SetCapsChecker(capsChecker)
+	}
 
 	activityEventRepo := postgres.NewActivityEventRepository(db)
 	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)

@@ -153,6 +153,24 @@ type VaultService struct {
 	// built without one (tests, tooling) behaves as it did before the switch
 	// existed. Production wires it in SetMoneyPathSwitches.
 	moneyPathSwitches MoneyPathGate
+	// capsChecker enforces the per-user deposit cap and global TVL cap for
+	// the testnet launch (#1119). Optional: a nil checker allows everything,
+	// so a service built without one (tests, tooling) behaves as it did
+	// before the caps existed. Production wires it in SetCapsChecker.
+	capsChecker CapsChecker
+}
+
+// CapsChecker evaluates a prospective deposit against the configured
+// per-user and global caps. Declared here (rather than taking *caps.Checker
+// directly) so tests can substitute a checker without a database. Satisfied
+// by *caps.Checker.
+type CapsChecker interface {
+	CheckDeposit(ctx context.Context, userID uuid.UUID, amount decimal.Decimal) error
+}
+
+// SetCapsChecker installs the launch cap enforcement (#1119).
+func (s *VaultService) SetCapsChecker(checker CapsChecker) {
+	s.capsChecker = checker
 }
 
 // MoneyPathGate reports whether a money-path operation may proceed. Declared
@@ -433,6 +451,19 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 	txHash := strings.TrimSpace(input.TxHash)
 	if txHash != "" && s.chainVerifier == nil {
 		return vault.Vault{}, vault.ErrChainVerificationUnavailable
+	}
+
+	// Launch caps (#1119). Checked against the requested amount before the
+	// chain is touched, same principle as the money-path pause above: refuse
+	// early rather than after an on-chain call has already been made. When a
+	// chain event later verifies a different (contract-emitted) amount, that
+	// amount is smaller in the vast majority of cases (fees/slippage) and the
+	// pre-check is intentionally conservative rather than re-checked against
+	// the verified amount, keeping this a single, predictable gate.
+	if s.capsChecker != nil {
+		if err := s.capsChecker.CheckDeposit(ctx, userID, input.Amount); err != nil {
+			return vault.Vault{}, err
+		}
 	}
 
 	if txHash == "" && s.depositInvoker != nil {
