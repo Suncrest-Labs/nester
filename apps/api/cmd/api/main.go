@@ -598,12 +598,21 @@ func run() error {
 	// Launch caps: per-user deposit cap and global TVL cap (#1119).
 	// Config-driven (LAUNCH_PER_USER_DEPOSIT_CAP / LAUNCH_GLOBAL_TVL_CAP env
 	// vars) so operators can raise, lower, or disable either cap by changing
-	// the env var and restarting — no code change. An unset/invalid value
-	// disables that cap rather than failing startup, since the caps are a
-	// launch-window safety net, not a hard dependency.
+	// the env var and restarting — no code change. Blank or "0" explicitly
+	// disables a cap; any other malformed or negative value fails startup
+	// (nester CodeRabbit finding) rather than silently disabling the cap.
 	{
-		perUserCap, _ := decimal.NewFromString(cfg.LaunchCaps().PerUserDepositCap())
-		globalCap, _ := decimal.NewFromString(cfg.LaunchCaps().GlobalTVLCap())
+		// Blank/"0" explicitly disables a cap; anything else must parse as a
+		// non-negative decimal or startup fails loudly rather than silently
+		// disabling the cap on a typo (nester CodeRabbit finding).
+		perUserCap, err := caps.ParseCapValue(cfg.LaunchCaps().PerUserDepositCap())
+		if err != nil {
+			return fmt.Errorf("LAUNCH_PER_USER_DEPOSIT_CAP: %w", err)
+		}
+		globalCap, err := caps.ParseCapValue(cfg.LaunchCaps().GlobalTVLCap())
+		if err != nil {
+			return fmt.Errorf("LAUNCH_GLOBAL_TVL_CAP: %w", err)
+		}
 		capsChecker := caps.NewChecker(caps.Config{
 			PerUserCap:        perUserCap,
 			GlobalCap:         globalCap,

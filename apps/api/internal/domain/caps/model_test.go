@@ -3,6 +3,8 @@ package caps
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -183,4 +185,108 @@ func TestChecker_ZeroOrNegativeAmountSkipped(t *testing.T) {
 	if err := checker.CheckDeposit(context.Background(), userID, decimal.Zero); err != nil {
 		t.Fatalf("expected zero-amount check to be a no-op, got %v", err)
 	}
+}
+
+// TestParseCapValue table-drives the launch-cap env-var parser: blank/"0"
+// must disable the cap (decimal.Zero, no error), a valid positive value must
+// parse through, and negative or malformed input must error rather than
+// silently producing the zero-value "disabled" decimal (nester CodeRabbit
+// finding).
+func TestParseCapValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    decimal.Decimal
+		wantErr bool
+	}{
+		{name: "blank disables", input: "", want: decimal.Zero},
+		{name: "zero disables", input: "0", want: decimal.Zero},
+		{name: "whitespace disables", input: "   ", want: decimal.Zero},
+		{name: "valid positive enables", input: "1500.25", want: decimal.RequireFromString("1500.25")},
+		{name: "negative errors", input: "-1", wantErr: true},
+		{name: "malformed errors", input: "abc", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseCapValue(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCapValue(%q) error = nil, want an error", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCapValue(%q) error = %v, want nil", tt.input, err)
+			}
+			if !got.Equal(tt.want) {
+				t.Fatalf("ParseCapValue(%q) = %s, want %s", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestConcurrentDeposits_AtomicCheckAndCommitCannotBreachCaps is the
+// concurrency proof for nester CodeRabbit's TOCTOU finding: CheckDeposit
+// alone reads totals and returns before the caller's write commits, so two
+// concurrent deposits can each pass the check and collectively exceed a
+// cap. This test drives many goroutines through the *transactional* path —
+// EvaluateTotals invoked while holding a lock that serializes the read and
+// the "commit" (mirrors postgres.VaultRepository.RecordDepositWithCapCheck's
+// advisory-lock + same-transaction pattern) — and asserts neither the
+// per-user nor the global total is ever pushed over its cap.
+func TestConcurrentDeposits_AtomicCheckAndCommitCannotBreachCaps(t *testing.T) {
+	userID := uuid.New()
+	perUserCap := decimal.NewFromInt(100)
+	globalCap := decimal.NewFromInt(150)
+
+	checker := NewChecker(Config{
+		PerUserCap: perUserCap,
+		GlobalCap:  globalCap,
+	}, nil, nil)
+
+	var mu sync.Mutex
+	var userTotal, globalTotal decimal.Decimal
+	var accepted, rejected int32
+
+	const attempts = 50
+	const depositAmount = 10 // 50 * 10 = 500 attempted, far over both caps if unserialized
+
+	var wg sync.WaitGroup
+	wg.Add(attempts)
+	for i := 0; i < attempts; i++ {
+		go func() {
+			defer wg.Done()
+			amount := decimal.NewFromInt(depositAmount)
+
+			// Emulates a DB transaction holding an advisory lock across the
+			// read-check-write: the totals read and the credit that follows
+			// are atomic with respect to every other concurrent deposit.
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err := checker.EvaluateTotals(context.Background(), userID, amount, userTotal, globalTotal); err != nil {
+				atomic.AddInt32(&rejected, 1)
+				return
+			}
+			userTotal = userTotal.Add(amount)
+			globalTotal = globalTotal.Add(amount)
+			atomic.AddInt32(&accepted, 1)
+		}()
+	}
+	wg.Wait()
+
+	if userTotal.GreaterThan(perUserCap) {
+		t.Fatalf("per-user total %s exceeded cap %s after %d accepted deposits", userTotal, perUserCap, accepted)
+	}
+	if globalTotal.GreaterThan(globalCap) {
+		t.Fatalf("global total %s exceeded cap %s after %d accepted deposits", globalTotal, globalCap, accepted)
+	}
+	if accepted == 0 {
+		t.Fatal("expected at least one deposit to be accepted")
+	}
+	if int(accepted)+int(rejected) != attempts {
+		t.Fatalf("accepted(%d)+rejected(%d) != attempts(%d)", accepted, rejected, attempts)
+	}
+	t.Logf("accepted=%d rejected=%d userTotal=%s globalTotal=%s", accepted, rejected, userTotal, globalTotal)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/breaker"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
 	"github.com/suncrestlabs/nester/apps/api/internal/retry"
 )
@@ -1020,6 +1021,17 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.tracing.latencyThreshold < 0 {
 		loader.addError("TRACING_LATENCY_THRESHOLD must not be negative")
+	}
+
+	// Launch caps (#1119): blank/"0" explicitly disables a cap; anything else
+	// must parse as a non-negative decimal, checked at load time so a typo
+	// fails startup instead of silently disabling the cap (nester CodeRabbit
+	// finding).
+	if _, err := caps.ParseCapValue(c.launchCaps.perUserDepositCap); err != nil {
+		loader.addError(fmt.Sprintf("LAUNCH_PER_USER_DEPOSIT_CAP: %s", err))
+	}
+	if _, err := caps.ParseCapValue(c.launchCaps.globalTVLCap); err != nil {
+		loader.addError(fmt.Sprintf("LAUNCH_GLOBAL_TVL_CAP: %s", err))
 	}
 
 	if c.server.port <= 0 || c.server.port > 65535 {

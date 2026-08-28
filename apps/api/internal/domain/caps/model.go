@@ -9,6 +9,8 @@ package caps
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -100,6 +102,28 @@ type Config struct {
 	WarnThresholdsPct []int
 }
 
+// ParseCapValue parses a launch-cap env var value (LAUNCH_PER_USER_DEPOSIT_CAP
+// / LAUNCH_GLOBAL_TVL_CAP). Blank or "0" explicitly disables the cap and
+// returns decimal.Zero with no error. Any other value must parse as a
+// non-negative decimal; a malformed or negative value is an error so
+// misconfiguration fails startup instead of silently disabling the cap
+// (nester CodeRabbit finding: discarded parse errors produced a zero-value
+// decimal — indistinguishable from "disabled" — on malformed input).
+func ParseCapValue(raw string) (decimal.Decimal, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "0" {
+		return decimal.Zero, nil
+	}
+	value, err := decimal.NewFromString(trimmed)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("invalid cap value %q: %w", raw, err)
+	}
+	if value.IsNegative() {
+		return decimal.Zero, fmt.Errorf("cap value %q must not be negative", raw)
+	}
+	return value, nil
+}
+
 func (c Config) perUserEnabled() bool { return c.PerUserCap.IsPositive() }
 func (c Config) globalEnabled() bool  { return c.GlobalCap.IsPositive() }
 
@@ -169,6 +193,65 @@ func (c *Checker) CheckDeposit(ctx context.Context, userID uuid.UUID, amount dec
 	}
 
 	return nil
+}
+
+// EvaluateTotals is the transaction-safe counterpart to CheckDeposit
+// (nester CodeRabbit TOCTOU finding): CheckDeposit reads totals and returns
+// before the caller's deposit is actually committed, so two concurrent
+// deposits can each pass the check and collectively exceed a cap. Callers
+// that need atomicity (see postgres.VaultRepository.RecordDepositWithCapCheck)
+// instead read currentUserTotal/currentGlobalTotal themselves under a lock
+// that serializes concurrent deposits, inside the same DB transaction as the
+// balance credit, and pass them here — a pure decision with no I/O of its
+// own, safe to call while holding that lock.
+func (c *Checker) EvaluateTotals(ctx context.Context, userID uuid.UUID, amount, currentUserTotal, currentGlobalTotal decimal.Decimal) error {
+	if c == nil {
+		return nil
+	}
+	if !c.cfg.perUserEnabled() && !c.cfg.globalEnabled() {
+		return nil
+	}
+	if amount.Sign() <= 0 {
+		return nil
+	}
+
+	if c.cfg.perUserEnabled() {
+		newTotal := currentUserTotal.Add(amount)
+		if newTotal.GreaterThan(c.cfg.PerUserCap) {
+			return &CapExceededError{
+				Kind:         KindPerUser,
+				Cap:          c.cfg.PerUserCap,
+				CurrentTotal: currentUserTotal,
+				Attempted:    amount,
+			}
+		}
+		c.maybeWarn(ctx, KindPerUser, userID, c.cfg.PerUserCap, currentUserTotal, newTotal)
+	}
+
+	if c.cfg.globalEnabled() {
+		newTotal := currentGlobalTotal.Add(amount)
+		if newTotal.GreaterThan(c.cfg.GlobalCap) {
+			return &CapExceededError{
+				Kind:         KindGlobal,
+				Cap:          c.cfg.GlobalCap,
+				CurrentTotal: currentGlobalTotal,
+				Attempted:    amount,
+			}
+		}
+		c.maybeWarn(ctx, KindGlobal, uuid.Nil, c.cfg.GlobalCap, currentGlobalTotal, newTotal)
+	}
+
+	return nil
+}
+
+// Enabled reports whether either cap is configured, so a caller deciding
+// whether to pay the cost of a transactional lock (see EvaluateTotals) can
+// skip it entirely when caps are off.
+func (c *Checker) Enabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.cfg.perUserEnabled() || c.cfg.globalEnabled()
 }
 
 // maybeWarn fires WarnFunc once per threshold newly crossed by this deposit,
