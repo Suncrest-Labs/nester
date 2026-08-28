@@ -10,9 +10,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/balanceaudit"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/moneypath"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 type sharePriceCache struct {
@@ -158,6 +160,53 @@ type VaultService struct {
 	// so a service built without one (tests, tooling) behaves as it did
 	// before the caps existed. Production wires it in SetCapsChecker.
 	capsChecker CapsChecker
+	// balanceAudit appends every balance-changing operation to the
+	// append-only ledger (#1124). Optional and best-effort: a failure to
+	// record an audit entry is logged but never blocks or rolls back the
+	// underlying money movement, since the balance change has already been
+	// durably committed by the time the audit append runs.
+	balanceAudit BalanceAuditRecorder
+}
+
+// BalanceAuditRecorder appends one balance-changing operation to the
+// append-only audit ledger (#1124). Declared here (rather than taking
+// *postgres.BalanceAuditRepository directly) so tests can substitute a
+// recorder without a database. Satisfied by
+// *postgres.BalanceAuditRepository.
+type BalanceAuditRecorder interface {
+	Append(ctx context.Context, entry balanceaudit.Entry) (balanceaudit.Entry, error)
+}
+
+// SetBalanceAuditRecorder installs the balance-change audit ledger (#1124).
+func (s *VaultService) SetBalanceAuditRecorder(recorder BalanceAuditRecorder) {
+	s.balanceAudit = recorder
+}
+
+// recordBalanceAudit best-effort appends a balance-change entry. It never
+// returns an error to the caller: by the time it runs, the balance change
+// itself has already been committed, and refusing the user's deposit or
+// withdrawal because the audit-log write failed would make the audit trail
+// less available than the money path it is meant to observe. A failure is
+// logged loudly instead so it can be alerted on.
+func (s *VaultService) recordBalanceAudit(ctx context.Context, vaultID, userID uuid.UUID, actor string, op balanceaudit.Operation, amount, before, after decimal.Decimal, chainRef string, metadata map[string]any) {
+	if s.balanceAudit == nil {
+		return
+	}
+	entry := balanceaudit.Entry{
+		VaultID:        vaultID,
+		UserID:         userID,
+		Actor:          actor,
+		Operation:      op,
+		Amount:         amount,
+		BalanceBefore:  before,
+		BalanceAfter:   after,
+		ChainReference: chainRef,
+		Metadata:       metadata,
+	}
+	if _, err := s.balanceAudit.Append(ctx, entry); err != nil {
+		logpkg.FromContext(ctx).Error("balance audit append failed",
+			"vault_id", vaultID, "user_id", userID, "operation", string(op), "error", err)
+	}
 }
 
 // CapsChecker evaluates a prospective deposit against the configured
@@ -171,6 +220,14 @@ type CapsChecker interface {
 // SetCapsChecker installs the launch cap enforcement (#1119).
 func (s *VaultService) SetCapsChecker(checker CapsChecker) {
 	s.capsChecker = checker
+}
+
+// CapsChecker returns the installed cap checker (or nil), so another
+// VaultService instance sharing the same repository (e.g. the recurring
+// deposit job's ledger service) can be wired with the identical checker
+// rather than building its own.
+func (s *VaultService) CapsChecker() CapsChecker {
+	return s.capsChecker
 }
 
 // MoneyPathGate reports whether a money-path operation may proceed. Declared
@@ -527,7 +584,15 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 		return vault.Vault{}, err
 	}
 
-	return s.repository.GetVault(ctx, input.VaultID)
+	updated, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return vault.Vault{}, err
+	}
+
+	s.recordBalanceAudit(ctx, input.VaultID, userID, userID.String(), balanceaudit.OperationDeposit,
+		amount, existing.CurrentBalance, updated.CurrentBalance, txHash, nil)
+
+	return updated, nil
 }
 
 func (s *VaultService) UpdateAllocations(ctx context.Context, input UpdateAllocationsInput) (vault.Vault, error) {
@@ -853,7 +918,15 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 		return vault.Vault{}, err
 	}
 
-	return s.repository.GetVault(ctx, input.VaultID)
+	updated, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return vault.Vault{}, err
+	}
+
+	s.recordBalanceAudit(ctx, input.VaultID, userID, userID.String(), balanceaudit.OperationWithdrawal,
+		amount, existing.CurrentBalance, updated.CurrentBalance, txHash, nil)
+
+	return updated, nil
 }
 
 // stroopsPerUnit is the fixed-point scale Soroban uses for asset and share
@@ -1042,6 +1115,12 @@ func (s *VaultService) HarvestVault(ctx context.Context, input HarvestVaultInput
 			HarvestedAt: time.Now().UTC(),
 			TxHash:      txHash,
 		})
+	}
+
+	if refreshed, refreshErr := s.repository.GetVault(ctx, input.VaultID); refreshErr == nil {
+		s.recordBalanceAudit(ctx, input.VaultID, input.UserID, balanceaudit.SystemActor("harvest"),
+			balanceaudit.OperationHarvest, netYield, existing.CurrentBalance, refreshed.CurrentBalance, txHash,
+			map[string]any{"compounded": compound, "performance_fee": performanceFee.String()})
 	}
 
 	return HarvestResult{

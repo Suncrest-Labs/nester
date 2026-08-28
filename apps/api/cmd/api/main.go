@@ -620,6 +620,9 @@ func run() error {
 		vaultService.SetCapsChecker(capsChecker)
 	}
 
+	// Append-only balance-change audit trail (#1124).
+	vaultService.SetBalanceAuditRecorder(postgres.NewBalanceAuditRepository(db))
+
 	activityEventRepo := postgres.NewActivityEventRepository(db)
 	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)
 	nudgeOutcomeService := service.NewNudgeOutcomeService(nudgeHistoryRepo)
@@ -1225,6 +1228,11 @@ func run() error {
 	// the denominator of the deposit success rate.
 	ledgerVaultService := service.NewVaultService(vaultRepository)
 	ledgerVaultService.SetMetrics(appMetrics)
+	// Recurring deposits are still deposits: subject to the same launch
+	// caps and the same balance-change audit trail as the interactive path
+	// (#1119, #1124).
+	ledgerVaultService.SetCapsChecker(vaultService.CapsChecker())
+	ledgerVaultService.SetBalanceAuditRecorder(postgres.NewBalanceAuditRepository(db))
 	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
 	goalProgressSvc := service.NewGoalProgressService(savingsGoalRepo)
 
