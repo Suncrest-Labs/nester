@@ -22,6 +22,20 @@ func NewBalanceAuditRepository(db *sql.DB) *BalanceAuditRepository {
 }
 
 func (r *BalanceAuditRepository) Append(ctx context.Context, entry balanceaudit.Entry) (balanceaudit.Entry, error) {
+	return appendBalanceAuditEntry(ctx, r.db, entry)
+}
+
+// queryRowContexter is satisfied by both *sql.DB and *sql.Tx, letting
+// appendBalanceAuditEntry insert either standalone (via Append) or as part
+// of another repository's transaction (see
+// VaultRepository.RecordDepositWithAudit), so the audit append and the
+// balance mutation it describes commit or roll back together — durability
+// nester CodeRabbit's audit-gap finding requires (#1124).
+type queryRowContexter interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func appendBalanceAuditEntry(ctx context.Context, q queryRowContexter, entry balanceaudit.Entry) (balanceaudit.Entry, error) {
 	if entry.ID == uuid.Nil {
 		entry.ID = uuid.New()
 	}
@@ -47,7 +61,7 @@ func (r *BalanceAuditRepository) Append(ctx context.Context, entry balanceaudit.
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING created_at
 	`
-	err := r.db.QueryRowContext(ctx, query,
+	err := q.QueryRowContext(ctx, query,
 		entry.ID.String(), entry.VaultID.String(), entry.UserID.String(),
 		entry.Actor, string(entry.Operation), entry.Amount, entry.BalanceBefore, entry.BalanceAfter,
 		chainRef, nullableJSON(metadataJSON),
@@ -142,6 +156,12 @@ func scanBalanceAuditEntries(rows *sql.Rows) ([]balanceaudit.Entry, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	// balanceaudit.Repository's contract documents ErrNotFound for a lookup
+	// with no entries; returning (nil, nil) here would silently violate it
+	// for every caller of ListByVault/ListByUser (nester CodeRabbit finding).
+	if len(out) == 0 {
+		return nil, balanceaudit.ErrNotFound
 	}
 	return out, nil
 }

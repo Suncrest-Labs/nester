@@ -39,8 +39,26 @@ revisit if/when table size becomes an operational concern.
 
 ## What writes it
 
-`VaultService` (in `apps/api/internal/service/vault_service.go`) calls an
-optional `BalanceAuditRecorder` after each successful balance change. The
-write is best-effort: a failure to append is logged loudly but never blocks
-or rolls back the underlying deposit/withdrawal/harvest, since by the time
-the append runs the balance change itself is already durably committed.
+`VaultService` (in `apps/api/internal/service/vault_service.go`) writes the
+audit entry as part of the same database transaction as the balance
+mutation, via `postgres.VaultRepository`'s `RecordDepositWithAudit` /
+`RecordWithdrawalWithAudit` / `RecordHarvestWithAudit`: the balance change
+and its audit entry commit together, or neither commits. A failed audit
+append rolls back the deposit/withdrawal/harvest with it, so the ledger can
+never silently fall behind the balance it describes.
+
+(`VaultService.recordBalanceAudit` — the older, best-effort, append-after-commit
+path — still exists as a fallback for repository implementations, such as
+test doubles, that don't implement the transactional `*WithAudit` methods;
+the production Postgres repository always takes the atomic path above.)
+
+## Launch caps and concurrent deposits
+
+The per-user and global launch caps (nester#1119) are enforced inside the
+same transaction as the deposit's balance credit and audit append —
+`RecordDepositWithAudit` re-reads both totals under a Postgres advisory
+transaction lock (keyed per-user, and a fixed key for the global cap) before
+crediting, so two concurrent deposits can never both pass the check and
+collectively push a total over its cap. (An earlier, non-transactional
+`CheckDeposit` path remains for callers that only need a fast, non-atomic
+pre-check, e.g. to fail a request before it ever reaches the chain.)
