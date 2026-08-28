@@ -490,19 +490,27 @@ func TestWorker_PropagatesCorrelationIDToHandlerContextAndLogs(t *testing.T) {
 	// Every log line emitted during processing of this job — including the
 	// one the handler itself wrote via the context-bound logger, and the
 	// worker's own "job succeeded" line — must carry the correlation id.
-	lines := buf.Lines()
-	found := 0
-	for _, line := range lines {
-		var entry map[string]any
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
+	// The job's status flips to StatusSucceeded before the worker's terminal
+	// log line is actually written, so wait for that log line to land too
+	// before asserting on it, rather than racing it (nester CodeRabbit
+	// finding: this test was flaky on a slow CI runner).
+	countCorrelated := func() int {
+		found := 0
+		for _, line := range buf.Lines() {
+			var entry map[string]any
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				continue
+			}
+			if entry["correlation_id"] == correlationID {
+				found++
+			}
 		}
-		if entry["correlation_id"] == correlationID {
-			found++
-		}
+		return found
 	}
-	if found < 2 {
-		t.Fatalf("expected at least 2 log lines carrying correlation_id=%q (handler + worker), got %d in: %v", correlationID, found, lines)
+	waitFor(t, time.Second, func() bool { return countCorrelated() >= 2 })
+
+	if found := countCorrelated(); found < 2 {
+		t.Fatalf("expected at least 2 log lines carrying correlation_id=%q (handler + worker), got %d in: %v", correlationID, found, buf.Lines())
 	}
 }
 
