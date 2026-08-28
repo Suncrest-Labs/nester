@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/balanceaudit"
+
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
@@ -699,5 +701,88 @@ func TestVaultServiceRecordDeposit_AllowsWhenUnderCap(t *testing.T) {
 	}
 	if checker.callCount != 1 {
 		t.Fatalf("expected caps checker to be consulted exactly once, got %d", checker.callCount)
+	}
+}
+
+// memoryBalanceAuditRecorder is an in-memory BalanceAuditRecorder for tests.
+type memoryBalanceAuditRecorder struct {
+	entries []balanceaudit.Entry
+}
+
+func (r *memoryBalanceAuditRecorder) Append(_ context.Context, entry balanceaudit.Entry) (balanceaudit.Entry, error) {
+	r.entries = append(r.entries, entry)
+	return entry, nil
+}
+
+// TestVaultServiceRecordDeposit_AppendsBalanceAuditEntry verifies every
+// deposit is appended to the audit ledger with actor, operation, before,
+// after and chain reference populated, and that replaying the resulting
+// ledger reproduces the vault's live balance (nester#1124).
+func TestVaultServiceRecordDeposit_AppendsBalanceAuditEntry(t *testing.T) {
+	userID := uuid.New()
+	repository := newMemoryVaultRepository(userID)
+	svc := NewVaultService(repository)
+
+	recorder := &memoryBalanceAuditRecorder{}
+	svc.SetBalanceAuditRecorder(recorder)
+
+	created, err := svc.CreateVault(context.Background(), CreateVaultInput{
+		UserID:          userID,
+		ContractAddress: "CA123",
+		Currency:        "usdc",
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	if _, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
+		VaultID: created.ID,
+		Amount:  decimal.RequireFromString("100"),
+	}); err != nil {
+		t.Fatalf("RecordDeposit() #1 error = %v", err)
+	}
+	if _, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
+		VaultID: created.ID,
+		Amount:  decimal.RequireFromString("50"),
+	}); err != nil {
+		t.Fatalf("RecordDeposit() #2 error = %v", err)
+	}
+
+	final, err := svc.RecordWithdrawal(context.Background(), RecordWithdrawalInput{
+		VaultID: created.ID,
+		Amount:  decimal.RequireFromString("30"),
+	})
+	if err != nil {
+		t.Fatalf("RecordWithdrawal() error = %v", err)
+	}
+
+	if len(recorder.entries) != 3 {
+		t.Fatalf("expected 3 audit entries, got %d", len(recorder.entries))
+	}
+
+	first := recorder.entries[0]
+	if first.Operation != balanceaudit.OperationDeposit {
+		t.Fatalf("entry[0] operation = %v, want deposit", first.Operation)
+	}
+	if first.Actor != userID.String() {
+		t.Fatalf("entry[0] actor = %q, want %q", first.Actor, userID.String())
+	}
+	if !first.BalanceBefore.IsZero() || !first.BalanceAfter.Equal(decimal.RequireFromString("100")) {
+		t.Fatalf("entry[0] before/after = %s/%s, want 0/100", first.BalanceBefore, first.BalanceAfter)
+	}
+	if first.ChainReference != "" {
+		t.Fatalf("entry[0] chain reference = %q, want empty (no chain verifier configured in this test)", first.ChainReference)
+	}
+
+	last := recorder.entries[2]
+	if last.Operation != balanceaudit.OperationWithdrawal {
+		t.Fatalf("entry[2] operation = %v, want withdrawal", last.Operation)
+	}
+
+	// Replaying the recorded ledger from zero must reproduce the vault's
+	// actual current balance exactly.
+	replayed := balanceaudit.Reconcile(recorder.entries)
+	if !replayed.Equal(final.CurrentBalance) {
+		t.Fatalf("replayed balance %s does not match live balance %s", replayed, final.CurrentBalance)
 	}
 }
