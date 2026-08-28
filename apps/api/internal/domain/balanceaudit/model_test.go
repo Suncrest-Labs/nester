@@ -70,3 +70,35 @@ func TestReconcile_DetectsDrift(t *testing.T) {
 		t.Fatal("expected replayed total to diverge from an unreconciled live balance")
 	}
 }
+
+// TestReconcile_OpeningBalanceEntryAccountsForPreexistingBalance verifies
+// that a vault which already held a nonzero balance before the ledger
+// existed reconciles correctly once migration 107's opening-balance entry is
+// present — i.e. Reconcile only works because every vault's entry chain
+// starts from a true balance-before-history of zero (nester#1124,
+// CodeRabbit finding).
+func TestReconcile_OpeningBalanceEntryAccountsForPreexistingBalance(t *testing.T) {
+	vaultID := uuid.New()
+	userID := uuid.New()
+
+	entries := []Entry{
+		// The vault already held 500 before the audit trail existed.
+		{VaultID: vaultID, UserID: userID, Actor: "system:migration", Operation: OperationOpeningBalance,
+			Amount: dec("500"), BalanceBefore: dec("0"), BalanceAfter: dec("500")},
+		{VaultID: vaultID, UserID: userID, Actor: userID.String(), Operation: OperationDeposit,
+			Amount: dec("25"), BalanceBefore: dec("500"), BalanceAfter: dec("525")},
+	}
+
+	got := Reconcile(entries)
+	want := dec("525")
+	if !got.Equal(want) {
+		t.Fatalf("Reconcile() = %s, want %s (opening balance entry must be included)", got, want)
+	}
+
+	// Without the opening entry, replaying only the deposit would reconcile
+	// to 25, not 525 — demonstrating why the opening entry is required.
+	withoutOpening := Reconcile(entries[1:])
+	if withoutOpening.Equal(want) {
+		t.Fatalf("expected replay without the opening entry to diverge from %s, got %s", want, withoutOpening)
+	}
+}

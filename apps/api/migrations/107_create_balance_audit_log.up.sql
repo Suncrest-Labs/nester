@@ -37,3 +37,29 @@ CREATE INDEX IF NOT EXISTS idx_balance_audit_log_vault_id ON balance_audit_log(v
 CREATE INDEX IF NOT EXISTS idx_balance_audit_log_user_id ON balance_audit_log(user_id, created_at);
 
 COMMENT ON TABLE balance_audit_log IS 'Append-only ledger of every balance-changing vault operation (nester#1124). No UPDATE/DELETE from application code.';
+
+-- Opening-balance entries for vaults that already existed (and may already
+-- carry a nonzero balance) at the moment this migration runs. Without this,
+-- balanceaudit.Reconcile — which sums balance_after - balance_before across
+-- every entry starting from zero — would omit whatever balance a vault
+-- already had before the audit trail started recording, making
+-- reconciliation fail for every pre-existing vault with a nonzero balance.
+-- One immutable row per vault: before=0, after=current_balance, actor is a
+-- fixed system label (not a real user), same convention as
+-- balanceaudit.SystemActor.
+INSERT INTO balance_audit_log (
+    vault_id, user_id, actor, operation, amount, balance_before, balance_after, created_at
+)
+SELECT
+    v.id,
+    v.user_id,
+    'system:migration',
+    'opening_balance',
+    v.current_balance,
+    0,
+    v.current_balance,
+    v.created_at
+FROM vaults v
+WHERE NOT EXISTS (
+    SELECT 1 FROM balance_audit_log b WHERE b.vault_id = v.id
+);
