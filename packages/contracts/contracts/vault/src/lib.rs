@@ -67,6 +67,17 @@ impl<'a> VaultTokenContractClient<'a> {
         )
     }
 
+    fn mint_for_fee(&self, to: &Address, shares: &i128) -> i128 {
+        self.call(
+            "mint_for_fee",
+            soroban_sdk::vec![
+                self.env,
+                to.clone().into_val(self.env),
+                (*shares).into_val(self.env)
+            ],
+        )
+    }
+
     fn amount_for_shares(&self, shares: &i128) -> i128 {
         self.call(
             "amount_for_shares",
@@ -2320,28 +2331,37 @@ impl VaultContract {
             .checked_sub(total_fee_collected)
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
-        // Transfer performance fee to treasury.
+        // Accrue performance fees as a liability rather than transferring them
+        // immediately. This preserves share price for all holders while tracking
+        // the treasury's claim on vault value.
+        //
+        // The performance fee value is already reflected in total_assets (from
+        // report_yield). By adding it to accrued_fees, the share price calculation
+        // (which uses net_assets = total_assets - accrued_fees) remains unchanged:
+        //
+        //   Before harvest_vault: price = total_assets / total_supply
+        //   After harvest_vault:  price = (total_assets - accrued_fees) / total_supply
+        //                              = net_assets / total_supply
+        //
+        // Since the fee is added to accrued_fees, net_assets stays constant and
+        // share price is preserved. The treasury can later collect the accrued
+        // fees via the collect_fees function, which transfers liquid assets and
+        // reduces accrued_fees accordingly.
+        //
+        // This is option #2 from issue #1159: "Track fees as a liability excluded
+        // from get_net_total_assets so share price never reflects money already
+        // owed to the treasury."
         if total_fee_collected > 0 {
-            let token_address = self::VaultContract::get_token(env.clone());
-            transfer_tokens(
-                &env,
-                &token_address,
-                &env.current_contract_address(),
-                &config.treasury_address,
-                &total_fee_collected,
-            );
-            invoke_allowed::<()>(
-                &env,
-                &config.treasury_address,
-                &Symbol::new(&env, "receive_fees"),
-                (total_fee_collected,).into_val(&env),
-            );
-            // Reduce TotalAssets by the fee sent to treasury.
-            let total_assets = get_total_assets(&env);
-            let post_fee_assets = total_assets
-                .checked_sub(total_fee_collected)
+            // Add the fee to accrued fees (liability)
+            let current_accrued = get_accrued_fees(&env);
+            let new_accrued = current_accrued
+                .checked_add(total_fee_collected)
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
-            set_total_assets(&env, post_fee_assets);
+            set_accrued_fees(&env, new_accrued);
+
+            // Sync the vault_token's total_assets to reflect net assets
+            // (total_assets - accrued_fees). This ensures share price calculations
+            // use the correct net asset value.
             sync_vault_token_total_assets(&env);
         }
 

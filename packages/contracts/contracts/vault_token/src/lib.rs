@@ -298,6 +298,31 @@ impl VaultTokenContract {
         shares
     }
 
+    /// Called by the Vault during vault-wide harvest to pay performance fees.
+    ///
+    /// Mints `shares` directly to `to` without modifying total_assets.
+    /// The Vault contract is responsible for reducing total_assets by the
+    /// fee amount before calling this function.
+    ///
+    /// This is the correct mechanism for charging aggregate fees where there
+    /// is no single user to burn shares from (unlike per-user harvest). By
+    /// minting shares while the Vault reduces total_assets proportionally,
+    /// the share price is preserved for all holders while giving the treasury
+    /// a claim on the fee portion of vault value.
+    ///
+    /// All existing holders are diluted proportionally, which is fair since
+    /// the yield was from collective vault performance.
+    pub fn mint_for_fee(env: Env, to: Address, shares: i128) -> i128 {
+        require_vault(&env);
+        let total_supply = get_total_supply(&env);
+        receive_balance(&env, &to, shares);
+        set_total_supply(&env, total_supply + shares);
+        // Note: total_assets is managed by the Vault contract, not here
+        env.events()
+            .publish((symbol_short!("fee_mint"), to), shares);
+        shares
+    }
+
     /// Called by the Vault during a withdrawal.
     ///
     /// Atomically:
