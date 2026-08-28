@@ -186,7 +186,7 @@ interface KYCStatusResponse {
 // which resolves the user from the session rather than trusting a
 // client-supplied id (nester#1148-1152 — session-scoped identity avoids the
 // impersonation surface a passed-in userId would otherwise open).
-function useKYCState() {
+export function useKYCState() {
   const [status, setStatus] = useState<KYCStatus>("unverified");
   const [submittedAt, setSubmittedAt] = useState<string | null>(null);
   const [reviewedAt, setReviewedAt] = useState<string | null>(null);
@@ -195,6 +195,10 @@ function useKYCState() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Set only when the submission itself succeeded but the follow-up status
+  // refresh failed — distinct from submitError so the form isn't reopened
+  // and the user isn't told their submission failed when it didn't.
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   // Fetch KYC status from server (authenticated endpoint that uses session user ID)
   const refresh = useCallback(async () => {
@@ -217,19 +221,23 @@ function useKYCState() {
           ? err.message
           : "Failed to load verification status",
       );
+      throw err;
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  // Load status on mount
+  // Load status on mount. Errors are already captured in loadError above;
+  // swallow the rejection here so it doesn't surface as an unhandled
+  // promise rejection on initial load.
   useEffect(() => {
-    refresh();
+    refresh().catch(() => {});
   }, [refresh]);
 
   const submitKYC = async (formData: FormData) => {
     setIsSubmitting(true);
     setSubmitError(null);
+    setRefreshError(null);
     try {
       const resp = await fetch(`/api/v1/users/me/kyc`, {
         method: "POST",
@@ -241,13 +249,25 @@ function useKYCState() {
           errorData.message || `KYC submission failed: ${resp.statusText}`,
         );
       }
-      // Refresh status after successful submission
-      await refresh();
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : "Failed to submit verification",
       );
+      setIsSubmitting(false);
       throw err;
+    }
+    // The submission itself succeeded at this point. A failure to refresh
+    // the status afterward is a separate, lesser problem: it must not be
+    // reported as a failed submission or reopen the form (nester
+    // CodeRabbit finding).
+    try {
+      await refresh();
+    } catch (err) {
+      setRefreshError(
+        err instanceof Error
+          ? err.message
+          : "Submitted, but couldn't refresh verification status",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -261,8 +281,9 @@ function useKYCState() {
     isLoading,
     loadError,
     isSubmitting,
-    submitKYC,
     submitError,
+    refreshError,
+    submitKYC,
     refresh,
   };
 }
@@ -405,6 +426,12 @@ export default function SettingsPage() {
                     {kyc.submitError && (
                       <p className="mt-3 text-sm text-red-500">
                         {kyc.submitError}
+                      </p>
+                    )}
+                    {kyc.refreshError && (
+                      <p className="mt-3 text-sm text-amber-500">
+                        Verification submitted. {kyc.refreshError} — refresh the
+                        page to see the latest status.
                       </p>
                     )}
                   </>
