@@ -36,6 +36,13 @@ const (
 	OperationRebalanceWithdraw Operation = "rebalance_withdraw"
 	OperationRebalanceDeposit  Operation = "rebalance_deposit"
 	OperationEmergencyWithdraw Operation = "emergency_withdraw"
+	// OperationOpeningBalance marks the one immutable entry migration 107
+	// inserts per pre-existing vault, recording whatever balance it already
+	// held before the audit trail started (before=0, after=current balance
+	// at migration time). Without it, Reconcile (which sums from zero) would
+	// omit that pre-existing balance for every vault created before this
+	// ledger existed.
+	OperationOpeningBalance Operation = "opening_balance"
 )
 
 // SystemActor prefixes a non-user actor, e.g. "system:harvest".
@@ -80,9 +87,10 @@ type Repository interface {
 	Append(ctx context.Context, entry Entry) (Entry, error)
 	// ListByVault returns every entry for a vault, oldest first — the
 	// order needed to replay the ledger and reconstruct balance history.
+	// Returns ErrNotFound when the vault has no entries.
 	ListByVault(ctx context.Context, vaultID uuid.UUID) ([]Entry, error)
 	// ListByUser returns every entry across all of a user's vaults, oldest
-	// first.
+	// first. Returns ErrNotFound when the user has no entries.
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]Entry, error)
 }
 
@@ -91,6 +99,13 @@ type Repository interface {
 // summing every recorded change from zero. Comparing the result to the
 // vault's live current_balance is the reconciliation check (nester#1124):
 // equal means the audit trail fully accounts for the current balance.
+//
+// This is only correct because migration 107 inserts an OperationOpeningBalance
+// entry (before=0, after=current balance at migration time) for every vault
+// that already existed when the ledger table was created — otherwise summing
+// from zero would omit whatever balance a pre-existing vault already held.
+// Every vault, including ones created after migration 107, therefore has an
+// unbroken chain of entries back to a true balance-before-history of zero.
 func Reconcile(entries []Entry) decimal.Decimal {
 	total := decimal.Zero
 	for _, e := range entries {
