@@ -1,16 +1,21 @@
 package jobqueue
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 // memRepo is an in-memory Repository that mirrors the Postgres semantics
@@ -441,3 +446,88 @@ func TestWorker_GracefulShutdownDrainsInFlight(t *testing.T) {
 
 // staticRepo/compile check: memRepo satisfies Repository.
 var _ Repository = (*memRepo)(nil)
+
+// TestWorker_PropagatesCorrelationIDToHandlerContextAndLogs verifies the
+// request id minted at the HTTP edge (nester#1111) survives all the way into
+// a background job handler: both via the handler's context (so the handler
+// can pull a request-scoped logger with logpkg.FromContext) and directly on
+// every log line the worker itself emits for that job.
+func TestWorker_PropagatesCorrelationIDToHandlerContextAndLogs(t *testing.T) {
+	repo := newMemRepo()
+
+	var buf syncBuffer
+	testLogger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	var gotFromCtx string
+	w := NewWorker(repo, fastConfig(), testLogger, nil).
+		Register("with-correlation", HandlerFunc(func(ctx context.Context, job Job) error {
+			// The handler should be able to recover a logger already bound to
+			// the correlation id purely from ctx, without reading job.CorrelationID.
+			logpkg.FromContext(ctx).Info("handler log line")
+			gotFromCtx = logpkg.RequestIDFromContext(ctx)
+			return nil
+		}), 0)
+
+	const correlationID = "req-abc-123"
+	job, _, err := repo.Enqueue(context.Background(), EnqueueInput{
+		Type:          "with-correlation",
+		CorrelationID: correlationID,
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = w.Run(ctx) }()
+
+	waitFor(t, time.Second, func() bool { return repo.get(job.ID).Status == StatusSucceeded })
+
+	if gotFromCtx != correlationID {
+		t.Fatalf("correlation id from handler ctx = %q, want %q", gotFromCtx, correlationID)
+	}
+
+	// Every log line emitted during processing of this job — including the
+	// one the handler itself wrote via the context-bound logger, and the
+	// worker's own "job succeeded" line — must carry the correlation id.
+	lines := buf.Lines()
+	found := 0
+	for _, line := range lines {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry["correlation_id"] == correlationID {
+			found++
+		}
+	}
+	if found < 2 {
+		t.Fatalf("expected at least 2 log lines carrying correlation_id=%q (handler + worker), got %d in: %v", correlationID, found, lines)
+	}
+}
+
+// syncBuffer is a concurrency-safe io.Writer capturing lines, since the
+// worker logs from multiple goroutines (dispatch loop, heartbeat, handler).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) Lines() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	raw := b.buf.String()
+	var lines []string
+	for _, l := range strings.Split(raw, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
