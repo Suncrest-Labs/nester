@@ -72,10 +72,14 @@ func newKYCTestHandler(t *testing.T, withStore bool) (*UserHandler, *recordingKY
 	return h, repo, userID
 }
 
-func newTestServer(h *UserHandler) *httptest.Server {
+// newTestServer wires the handler behind the same fake-auth middleware
+// vault_idor_test.go uses, authenticated as userID — submitKYC/getKYCStatus
+// enforce ownership (nester#1191 IDOR fix) so an unauthenticated request
+// never reaches the handler body at all.
+func newTestServer(h *UserHandler, userID uuid.UUID) *httptest.Server {
 	mux := http.NewServeMux()
 	h.Register(mux)
-	return httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux))
+	return httptest.NewServer(fakeAuthMiddleware(userID)(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)))
 }
 
 // buildKYCMultipartBody constructs a multipart/form-data body for the
@@ -110,7 +114,7 @@ func buildKYCMultipartBody(t *testing.T, fields map[string]string, filename stri
 
 func TestSubmitKYC_FullSubmissionRoundTrips(t *testing.T) {
 	h, repo, userID := newKYCTestHandler(t, true)
-	server := newTestServer(h)
+	server := newTestServer(h, userID)
 	defer server.Close()
 
 	fields := map[string]string{
@@ -166,7 +170,7 @@ func TestSubmitKYC_FullSubmissionRoundTrips(t *testing.T) {
 
 func TestSubmitKYC_HostileFilenameDoesNotInfluenceTheStoredKey(t *testing.T) {
 	h, repo, userID := newKYCTestHandler(t, true)
-	server := newTestServer(h)
+	server := newTestServer(h, userID)
 	defer server.Close()
 
 	fields := map[string]string{
@@ -198,7 +202,7 @@ func TestSubmitKYC_HostileFilenameDoesNotInfluenceTheStoredKey(t *testing.T) {
 
 func TestSubmitKYC_MissingFullNameIsRejected(t *testing.T) {
 	h, _, userID := newKYCTestHandler(t, true)
-	server := newTestServer(h)
+	server := newTestServer(h, userID)
 	defer server.Close()
 
 	fields := map[string]string{
@@ -218,7 +222,7 @@ func TestSubmitKYC_MissingFullNameIsRejected(t *testing.T) {
 
 func TestSubmitKYC_InvalidDateOfBirthIsRejected(t *testing.T) {
 	h, _, userID := newKYCTestHandler(t, true)
-	server := newTestServer(h)
+	server := newTestServer(h, userID)
 	defer server.Close()
 
 	fields := map[string]string{
@@ -238,7 +242,7 @@ func TestSubmitKYC_InvalidDateOfBirthIsRejected(t *testing.T) {
 
 func TestSubmitKYC_UnknownCountryCodeIsRejected(t *testing.T) {
 	h, _, userID := newKYCTestHandler(t, true)
-	server := newTestServer(h)
+	server := newTestServer(h, userID)
 	defer server.Close()
 
 	fields := map[string]string{
@@ -258,7 +262,7 @@ func TestSubmitKYC_UnknownCountryCodeIsRejected(t *testing.T) {
 
 func TestSubmitKYC_RejectsUploadWhenStorageIsNotConfigured(t *testing.T) {
 	h, repo, userID := newKYCTestHandler(t, false) // no SetKYCStore call
-	server := newTestServer(h)
+	server := newTestServer(h, userID)
 	defer server.Close()
 
 	fields := map[string]string{
@@ -286,7 +290,7 @@ func TestSubmitKYC_RejectsUploadWhenStorageIsNotConfigured(t *testing.T) {
 
 func TestSubmitKYC_RejectsDisallowedContentType(t *testing.T) {
 	h, _, userID := newKYCTestHandler(t, true)
-	server := newTestServer(h)
+	server := newTestServer(h, userID)
 	defer server.Close()
 
 	var buf bytes.Buffer
@@ -317,7 +321,7 @@ func TestSubmitKYC_ResponseBodyDoesNotLeakTheStorageKey(t *testing.T) {
 	// The response only ever needs to tell the client the submission is
 	// pending — no reason to echo storage internals back.
 	h, _, userID := newKYCTestHandler(t, true)
-	server := newTestServer(h)
+	server := newTestServer(h, userID)
 	defer server.Close()
 
 	fields := map[string]string{
