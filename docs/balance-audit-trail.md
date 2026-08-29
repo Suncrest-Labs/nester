@@ -1,7 +1,7 @@
 # Balance audit trail (nester#1124)
 
 Every balance-changing vault operation (deposit, withdrawal, harvest) appends
-one row to `balance_audit_log` (migration `apps/api/migrations/107_create_balance_audit_log.up.sql`):
+one row to `balance_audit_log` (migration `apps/api/migrations/108_create_balance_audit_log.up.sql`):
 
 | column           | meaning                                              |
 |------------------|-------------------------------------------------------|
