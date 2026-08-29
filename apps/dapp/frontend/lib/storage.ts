@@ -192,6 +192,29 @@ export const safeStorage = {
     },
 
     /**
+     * Clears BOTH backing stores.
+     *
+     * `window.localStorage.clear()` alone is not enough, and the difference
+     * is a real bug rather than a test-only concern: since a present
+     * memoryStore entry is authoritative over a native read (see
+     * readNative), any key whose write once fell back to memory (private
+     * browsing, quota exceeded) keeps shadowing localStorage for the rest of
+     * the session. A caller that "cleared storage" and then read the key
+     * back would still get the stale fallback value — e.g. a user who hit a
+     * quota error while switching networks would keep reading the old
+     * network id even after a clear.
+     */
+    clear() {
+        memoryStore.clear();
+        if (!isBrowser()) return;
+        try {
+            window.localStorage.clear();
+        } catch {
+            // ignore — storage may be disabled; the memory fallback is cleared
+        }
+    },
+
+    /**
      * Subscribe to cross-tab updates for a single key. The callback receives
      * the parsed value when another tab writes, or `null` on remove. Returns
      * an unsubscribe function.

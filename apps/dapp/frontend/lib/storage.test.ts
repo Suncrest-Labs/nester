@@ -94,4 +94,39 @@ describe("safeStorage", () => {
       expect(safeStorage.getRaw("missing")).toBeNull();
     });
   });
+
+  describe("clear", () => {
+    it("clears the in-memory fallback, not just localStorage", () => {
+      // A write that hits quota falls back to the in-memory map, and that
+      // entry is authoritative over a native read. Clearing only the native
+      // store would leave it shadowing localStorage for the rest of the
+      // session, so a caller that cleared storage would still read the stale
+      // value back.
+      const setItem = vi
+        .spyOn(window.localStorage.__proto__, "setItem")
+        .mockImplementation(() => {
+          throw new DOMException("QuotaExceededError");
+        });
+      safeStorage.set("shadowed", "from-memory");
+      setItem.mockRestore();
+
+      expect(safeStorage.get("shadowed", null)).toBe("from-memory");
+
+      safeStorage.clear();
+      expect(safeStorage.get("shadowed", null)).toBeNull();
+    });
+
+    it("clears values that were written durably to localStorage", () => {
+      safeStorage.set("durable", "v");
+      safeStorage.clear();
+      expect(safeStorage.get("durable", null)).toBeNull();
+    });
+
+    it("does not throw when localStorage.clear itself throws", () => {
+      vi.spyOn(window.localStorage.__proto__, "clear").mockImplementation(() => {
+        throw new Error("SecurityError");
+      });
+      expect(() => safeStorage.clear()).not.toThrow();
+    });
+  });
 });

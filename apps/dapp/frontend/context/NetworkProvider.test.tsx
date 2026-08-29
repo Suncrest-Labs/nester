@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { NetworkProvider, useNetwork } from "./NetworkProvider";
 import { readNetworkId } from "@/lib/storageKeys";
+import { safeStorage } from "@/lib/storage";
 
 // Issue #1233: NetworkProvider must route through safeStorage rather than
 // raw localStorage, and setNetwork must never leave React state and
@@ -21,7 +22,13 @@ function TestConsumer() {
 
 describe("NetworkProvider (#1233)", () => {
   beforeEach(() => {
-    window.localStorage.clear();
+    // safeStorage.clear(), not window.localStorage.clear(): a test whose
+    // write fell back to the in-memory map (the quota/throwing cases below)
+    // would otherwise leave that value shadowing localStorage for every
+    // later test in this file, since a present memoryStore entry wins over a
+    // native read. Clearing only the native store made the cache-purge test
+    // fail purely on test order.
+    safeStorage.clear();
   });
 
   afterEach(() => {
