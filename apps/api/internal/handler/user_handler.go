@@ -328,6 +328,7 @@ func (h *UserHandler) submitKYCFor(w http.ResponseWriter, r *http.Request, userI
 		backContentType := idBackHeader.Header.Get("Content-Type")
 		bk, err := h.storeKYCDocument(r.Context(), userID, backContentType, idBackFile)
 		if err != nil {
+			h.cleanupKYCDocuments(r.Context(), frontKey)
 			h.writeKYCUploadError(w, r, err)
 			return
 		}
@@ -335,6 +336,11 @@ func (h *UserHandler) submitKYCFor(w http.ResponseWriter, r *http.Request, userI
 	}
 
 	if err := h.service.SubmitKYC(r.Context(), userID, identity, idType, idNumber, frontKey, backKey); err != nil {
+		if backKey != nil {
+			h.cleanupKYCDocuments(r.Context(), frontKey, *backKey)
+		} else {
+			h.cleanupKYCDocuments(r.Context(), frontKey)
+		}
 		h.writeDomainError(w, r, err)
 		return
 	}
@@ -353,6 +359,22 @@ func (h *UserHandler) storeKYCDocument(ctx context.Context, userID uuid.UUID, co
 		return "", err
 	}
 	return key, nil
+}
+
+// cleanupKYCDocuments removes already-stored KYC documents on a later
+// failure path. Store has no transaction to roll back a partial upload, so
+// this is compensating cleanup: without it, an id_front (and/or id_back)
+// object that was successfully persisted before a subsequent step failed
+// (validating id_back, or SubmitKYC itself) would be orphaned — never
+// referenced by any KYC record and never removed. Best-effort: a delete
+// failure is logged, not surfaced, since the request is already failing for
+// its own reason and the caller has nothing to fall back to.
+func (h *UserHandler) cleanupKYCDocuments(ctx context.Context, keys ...string) {
+	for _, key := range keys {
+		if err := h.kycStore.Delete(ctx, key); err != nil {
+			logpkg.FromContext(ctx).Error("failed to clean up orphaned kyc document", "key", key, "error", err.Error())
+		}
+	}
 }
 
 // writeKYCUploadError maps a storage-layer failure to an HTTP response. A

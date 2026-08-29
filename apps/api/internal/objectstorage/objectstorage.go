@@ -47,6 +47,15 @@ type Store interface {
 	// generated key (e.g. to a user id) without letting the caller choose
 	// the key itself. Returns the server-generated key on success.
 	Put(ctx context.Context, keyPrefix string, contentType string, r io.Reader) (key string, err error)
+
+	// Delete removes the object previously stored under key. It is used as
+	// compensating cleanup when a later step in a multi-object upload flow
+	// fails after some objects have already been persisted (e.g. id_front
+	// stored but id_back rejected, or the subsequent domain call fails) —
+	// Store has no transaction to roll back, so the caller calls Delete
+	// itself to avoid leaving an orphaned, unreferenced object behind.
+	// Deleting a key that does not exist is not an error.
+	Delete(ctx context.Context, key string) error
 }
 
 // LocalDiskStore is a real, working Store backed by the local filesystem.
@@ -123,6 +132,22 @@ func (s *LocalDiskStore) Put(_ context.Context, keyPrefix string, contentType st
 	}
 
 	return key, nil
+}
+
+// Delete removes the object stored at key. A missing file is not treated as
+// an error: the caller is cleaning up best-effort, and the object being
+// already gone satisfies that goal just as well as removing it now.
+//
+// #nosec G304 -- key originates only from this store's own generateKey
+// output, embedded in a caller-held storage key string (e.g. persisted on a
+// KYC record or passed straight back from Put) — never derived from
+// unsanitized client input.
+func (s *LocalDiskStore) Delete(_ context.Context, key string) error {
+	destPath := filepath.Join(s.BaseDir, key)
+	if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("objectstorage: delete: %w", err)
+	}
+	return nil
 }
 
 // generateKey builds a storage key from keyPrefix and a fresh random
