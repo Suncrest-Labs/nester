@@ -218,6 +218,25 @@ func (l LaunchCapsConfig) PerUserDepositCap() string { return l.perUserDepositCa
 func (l LaunchCapsConfig) GlobalTVLCap() string       { return l.globalTVLCap }
 func (l LaunchCapsConfig) WarnThresholdsPct() []int   { return l.warnThresholdsPct }
 
+// validateWarnThresholdsPct enforces LAUNCH_CAP_WARN_THRESHOLDS_PCT's
+// contract: every threshold must be a percentage in (0, 100], and the list
+// must be strictly increasing (no duplicates, no out-of-order values) so the
+// cap checker can rely on it being sorted ascending. An empty list is valid
+// — it just means no warning thresholds are configured.
+func validateWarnThresholdsPct(thresholds []int) error {
+	prev := 0
+	for i, t := range thresholds {
+		if t < 1 || t > 100 {
+			return fmt.Errorf("threshold %d (index %d) must be between 1 and 100", t, i)
+		}
+		if i > 0 && t <= prev {
+			return fmt.Errorf("thresholds must be strictly increasing: %d (index %d) is not greater than %d", t, i, prev)
+		}
+		prev = t
+	}
+	return nil
+}
+
 // APYRefreshConfig governs polling yield_registry for on-chain APY updates.
 type APYRefreshConfig struct {
 	refreshInterval       time.Duration
@@ -969,6 +988,9 @@ func (c *Config) validate(loader *envLoader) {
 	}
 	if _, err := caps.ParseCapValue(c.launchCaps.globalTVLCap); err != nil {
 		loader.addError(fmt.Sprintf("LAUNCH_GLOBAL_TVL_CAP: %s", err))
+	}
+	if err := validateWarnThresholdsPct(c.launchCaps.warnThresholdsPct); err != nil {
+		loader.addError(fmt.Sprintf("LAUNCH_CAP_WARN_THRESHOLDS_PCT: %s", err))
 	}
 
 	if c.server.port <= 0 || c.server.port > 65535 {
