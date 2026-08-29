@@ -102,6 +102,32 @@ func TestBalanceAuditRepositoryIntegration_ListByVault_Paginates(t *testing.T) {
 	if len(userPage) != 3 {
 		t.Fatalf("len(ListByUser page) = %d, want 3", len(userPage))
 	}
+
+	// An offset past the end of an otherwise non-empty result set (total=5,
+	// offset=10) must return an empty slice with the correct total and a nil
+	// error — not balanceaudit.ErrNotFound (nester CodeRabbit post-rebase
+	// finding: this used to be conflated with "no entries at all").
+	pastEnd, totalPastEnd, err := auditRepo.ListByVault(ctx, created.ID, 2, 10)
+	if err != nil {
+		t.Fatalf("ListByVault() past-end offset error = %v, want nil", err)
+	}
+	if totalPastEnd != numEntries {
+		t.Fatalf("ListByVault() past-end offset total = %d, want %d", totalPastEnd, numEntries)
+	}
+	if len(pastEnd) != 0 {
+		t.Fatalf("ListByVault() past-end offset page = %+v, want empty", pastEnd)
+	}
+
+	userPastEnd, userTotalPastEnd, err := auditRepo.ListByUser(ctx, userID, 2, 10)
+	if err != nil {
+		t.Fatalf("ListByUser() past-end offset error = %v, want nil", err)
+	}
+	if userTotalPastEnd != numEntries {
+		t.Fatalf("ListByUser() past-end offset total = %d, want %d", userTotalPastEnd, numEntries)
+	}
+	if len(userPastEnd) != 0 {
+		t.Fatalf("ListByUser() past-end offset page = %+v, want empty", userPastEnd)
+	}
 }
 
 // TestBalanceAuditRepositoryIntegration_ListByVault_NotFound confirms an
