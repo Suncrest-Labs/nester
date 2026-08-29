@@ -178,12 +178,62 @@ func TestChecker_NoWarnWhenAlreadyPastThreshold(t *testing.T) {
 }
 
 func TestChecker_ZeroOrNegativeAmountSkipped(t *testing.T) {
-	userID := uuid.New()
-	totals := &stubTotals{userTotals: map[uuid.UUID]decimal.Decimal{userID: dec("1000")}}
-	checker := NewChecker(Config{PerUserCap: dec("1000")}, totals, nil)
+	tests := []struct {
+		name   string
+		amount decimal.Decimal
+	}{
+		{name: "zero", amount: decimal.Zero},
+		{name: "negative", amount: dec("-100")},
+	}
 
-	if err := checker.CheckDeposit(context.Background(), userID, decimal.Zero); err != nil {
-		t.Fatalf("expected zero-amount check to be a no-op, got %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			userID := uuid.New()
+			totals := &stubTotals{userTotals: map[uuid.UUID]decimal.Decimal{userID: dec("1000")}}
+			checker := NewChecker(Config{PerUserCap: dec("1000")}, totals, nil)
+
+			if err := checker.CheckDeposit(context.Background(), userID, tt.amount); err != nil {
+				t.Fatalf("expected %s-amount check to be a no-op, got %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestChecker_NoWarnWhenRejectedByLaterCap is a regression test for a
+// nester CodeRabbit post-rebase finding: warnings must not be emitted until
+// every enabled cap check has succeeded. A deposit that crosses the
+// per-user warn threshold but is then rejected by the global cap must emit
+// no warning at all — the per-user check alone used to fire its warning
+// immediately, before the global check ran and rejected the deposit.
+func TestChecker_NoWarnWhenRejectedByLaterCap(t *testing.T) {
+	userID := uuid.New()
+	totals := &stubTotals{
+		userTotals:  map[uuid.UUID]decimal.Decimal{userID: dec("750")},
+		globalTotal: dec("49950"),
+	}
+
+	var warnings []Warning
+	checker := NewChecker(Config{
+		PerUserCap:        dec("1000"),
+		GlobalCap:         dec("50000"),
+		WarnThresholdsPct: []int{80, 90},
+	}, totals, func(_ context.Context, w Warning) {
+		warnings = append(warnings, w)
+	})
+
+	// Per-user: 750 -> 850 crosses the 80% (800) warn line and stays under
+	// the 1000 cap. Global: 49950 -> 50050 exceeds the 50000 cap, so the
+	// whole deposit is rejected — the per-user warning must not fire.
+	err := checker.CheckDeposit(context.Background(), userID, dec("100"))
+	if err == nil {
+		t.Fatal("expected the global cap to reject the deposit, got nil error")
+	}
+	var capErr *CapExceededError
+	if !errors.As(err, &capErr) || capErr.Kind != KindGlobal {
+		t.Fatalf("expected a global CapExceededError, got %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings when the deposit is ultimately rejected, got %+v", warnings)
 	}
 }
 

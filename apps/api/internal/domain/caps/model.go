@@ -158,6 +158,8 @@ func (c *Checker) CheckDeposit(ctx context.Context, userID uuid.UUID, amount dec
 		return nil
 	}
 
+	var warnings []Warning
+
 	if c.cfg.perUserEnabled() {
 		current, err := c.totals.UserDepositTotal(ctx, userID)
 		if err != nil {
@@ -172,7 +174,7 @@ func (c *Checker) CheckDeposit(ctx context.Context, userID uuid.UUID, amount dec
 				Attempted:    amount,
 			}
 		}
-		c.maybeWarn(ctx, KindPerUser, userID, c.cfg.PerUserCap, current, newTotal)
+		warnings = append(warnings, c.collectWarnings(KindPerUser, userID, c.cfg.PerUserCap, current, newTotal)...)
 	}
 
 	if c.cfg.globalEnabled() {
@@ -189,9 +191,10 @@ func (c *Checker) CheckDeposit(ctx context.Context, userID uuid.UUID, amount dec
 				Attempted:    amount,
 			}
 		}
-		c.maybeWarn(ctx, KindGlobal, uuid.Nil, c.cfg.GlobalCap, current, newTotal)
+		warnings = append(warnings, c.collectWarnings(KindGlobal, uuid.Nil, c.cfg.GlobalCap, current, newTotal)...)
 	}
 
+	c.emitWarnings(ctx, warnings)
 	return nil
 }
 
@@ -215,6 +218,8 @@ func (c *Checker) EvaluateTotals(ctx context.Context, userID uuid.UUID, amount, 
 		return nil
 	}
 
+	var warnings []Warning
+
 	if c.cfg.perUserEnabled() {
 		newTotal := currentUserTotal.Add(amount)
 		if newTotal.GreaterThan(c.cfg.PerUserCap) {
@@ -225,7 +230,7 @@ func (c *Checker) EvaluateTotals(ctx context.Context, userID uuid.UUID, amount, 
 				Attempted:    amount,
 			}
 		}
-		c.maybeWarn(ctx, KindPerUser, userID, c.cfg.PerUserCap, currentUserTotal, newTotal)
+		warnings = append(warnings, c.collectWarnings(KindPerUser, userID, c.cfg.PerUserCap, currentUserTotal, newTotal)...)
 	}
 
 	if c.cfg.globalEnabled() {
@@ -238,9 +243,10 @@ func (c *Checker) EvaluateTotals(ctx context.Context, userID uuid.UUID, amount, 
 				Attempted:    amount,
 			}
 		}
-		c.maybeWarn(ctx, KindGlobal, uuid.Nil, c.cfg.GlobalCap, currentGlobalTotal, newTotal)
+		warnings = append(warnings, c.collectWarnings(KindGlobal, uuid.Nil, c.cfg.GlobalCap, currentGlobalTotal, newTotal)...)
 	}
 
+	c.emitWarnings(ctx, warnings)
 	return nil
 }
 
@@ -254,18 +260,26 @@ func (c *Checker) Enabled() bool {
 	return c.cfg.perUserEnabled() || c.cfg.globalEnabled()
 }
 
-// maybeWarn fires WarnFunc once per threshold newly crossed by this deposit,
-// i.e. when priorTotal was under a configured percentage of cap and newTotal
-// is at or above it. This deliberately alerts on the *first* deposit that
-// crosses each line, not on every subsequent deposit while already over it.
-func (c *Checker) maybeWarn(ctx context.Context, kind Kind, userID uuid.UUID, cap_ decimal.Decimal, priorTotal, newTotal decimal.Decimal) {
+// collectWarnings returns one Warning per threshold newly crossed by this
+// deposit, i.e. when priorTotal was under a configured percentage of cap and
+// newTotal is at or above it. This deliberately alerts on the *first*
+// deposit that crosses each line, not on every subsequent deposit while
+// already over it.
+//
+// It only builds the Warning values — it does not invoke WarnFunc. Callers
+// must collect warnings from every enabled cap check and emit them (via
+// emitWarnings) only once all checks have passed, so a deposit that crosses
+// the per-user warn threshold but is then rejected by the global cap never
+// emits a misleading warning (nester CodeRabbit finding).
+func (c *Checker) collectWarnings(kind Kind, userID uuid.UUID, cap_ decimal.Decimal, priorTotal, newTotal decimal.Decimal) []Warning {
 	if cap_.Sign() <= 0 {
-		return
+		return nil
 	}
+	var warnings []Warning
 	for _, pct := range c.cfg.WarnThresholdsPct {
 		threshold := cap_.Mul(decimal.NewFromInt(int64(pct))).Div(decimal.NewFromInt(100))
 		if priorTotal.LessThan(threshold) && newTotal.GreaterThanOrEqual(threshold) {
-			c.warn(ctx, Warning{
+			warnings = append(warnings, Warning{
 				Kind:         kind,
 				UserID:       userID,
 				Cap:          cap_,
@@ -273,5 +287,14 @@ func (c *Checker) maybeWarn(ctx context.Context, kind Kind, userID uuid.UUID, ca
 				ThresholdPct: pct,
 			})
 		}
+	}
+	return warnings
+}
+
+// emitWarnings invokes WarnFunc for every collected warning. Called only
+// after all enabled cap checks for a deposit have succeeded.
+func (c *Checker) emitWarnings(ctx context.Context, warnings []Warning) {
+	for _, w := range warnings {
+		c.warn(ctx, w)
 	}
 }
