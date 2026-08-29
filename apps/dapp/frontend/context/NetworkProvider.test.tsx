@@ -22,12 +22,19 @@ function TestConsumer() {
 
 describe("NetworkProvider (#1233)", () => {
   beforeEach(() => {
-    // safeStorage.clear(), not window.localStorage.clear(): a test whose
-    // write fell back to the in-memory map (the quota/throwing cases below)
-    // would otherwise leave that value shadowing localStorage for every
-    // later test in this file, since a present memoryStore entry wins over a
-    // native read. Clearing only the native store made the cache-purge test
-    // fail purely on test order.
+    // safeStorage's in-memory fallback is module state and survives between
+    // tests, so a test that forces a write to fall back (the quota case
+    // below) leaves nester_network_id behind, shadowing localStorage for
+    // every later test: a present memoryStore entry wins over a native read.
+    // The next test then starts on mainnet, its "switch to mainnet" is a
+    // no-op, and the cache purge it asserts on never runs.
+    //
+    // safeStorage.clear() drains both stores. It supersedes the earlier
+    // removeByPrefix("") used here: an empty prefix happens to match every
+    // key, but it reads as a prefix sweep rather than as "reset storage",
+    // and it only worked around the shadowing in tests while leaving it
+    // live in production — a user who hit a quota error kept reading the
+    // stale value back for the rest of the session.
     safeStorage.clear();
   });
 

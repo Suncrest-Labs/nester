@@ -14,7 +14,7 @@ name: Synthetic probes (staging)
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       allow_mutations:
@@ -44,7 +44,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       # A missing secret must never let a probe fall back to localhost or to
       # production. probe.py refuses to guess a target on its own; this guard
@@ -54,18 +54,44 @@ jobs:
         id: guard
         env:
           API_BASE_URL: ${{ secrets.STAGING_PROBE_API_BASE_URL }}
+          INTELLIGENCE_BASE_URL: ${{ secrets.STAGING_PROBE_INTELLIGENCE_BASE_URL }}
+          AUTH_TOKEN: ${{ secrets.STAGING_PROBE_AUTH_TOKEN }}
+          INTELLIGENCE_TOKEN: ${{ secrets.STAGING_PROBE_INTELLIGENCE_TOKEN }}
+          VAULT_ID: ${{ secrets.STAGING_PROBE_VAULT_ID }}
         run: |
-          if [ -z "$API_BASE_URL" ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::STAGING_PROBE_API_BASE_URL is not set — skipping the probe run."
-          else
+          all_set=true
+          for var in API_BASE_URL INTELLIGENCE_BASE_URL AUTH_TOKEN INTELLIGENCE_TOKEN VAULT_ID; do
+            if [ -z "$(eval echo \$$var)" ]; then
+              echo "::notice::STAGING_PROBE_${var} is not set — skipping the probe run."
+              all_set=false
+            fi
+          done
+          if [ "$all_set" = "true" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            # Surfaced in the job summary, not only as an annotation. The
+            # guard requires all five secrets, so a partially-configured
+            # environment disables every probe while the workflow still
+            # reports green — the state most likely to be mistaken for
+            # "probes are running and finding nothing".
+            {
+              echo "### Synthetic probes skipped"
+              echo
+              echo "Not all STAGING_PROBE_* secrets are configured, so no probe ran."
+              echo "Monitoring is **not** active for this run. See docs/ci/secrets.md."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Run synthetic probes
         id: probes
         if: steps.guard.outputs.configured == 'true'
         continue-on-error: true
+        # continue-on-error allows the Pushgateway push (below) to happen even
+        # if probes fail, so metrics are always published for alerting. The
+        # actual build gate is the "Report probe failure" step that follows,
+        # which exits 1 if this step failed. This ensures failures are visible
+        # in both the Actions UI and through alerting metrics.
         env:
           PROBE_API_BASE_URL: ${{ secrets.STAGING_PROBE_API_BASE_URL }}
           PROBE_INTELLIGENCE_BASE_URL: ${{ secrets.STAGING_PROBE_INTELLIGENCE_BASE_URL }}

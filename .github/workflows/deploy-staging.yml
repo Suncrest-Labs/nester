@@ -149,6 +149,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check required secrets
+        env:
+          STAGING_DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$STAGING_DEPLOY_TOKEN" ]; then
+            echo "::error::STAGING_DEPLOY_TOKEN is not configured. This secret is required to deploy to staging."
+            echo "Set it in GitHub repository settings: Settings → Secrets and variables → Actions → STAGING_DEPLOY_TOKEN"
+            echo "See docs/ci/secrets.md for details."
+            exit 1
+          fi
+
       - name: Download dApp artifacts
         if: needs.build-dapp.result == 'success'
         uses: actions/download-artifact@v4
@@ -172,12 +183,12 @@ jobs:
           # This is a placeholder; replace with actual deploy script/tool
           # Examples: Kubernetes, Docker Swarm, serverless deployment, etc.
           echo "Deploying to staging environment..."
-          
+
           # Example: Deploy via kubectl
           # kubectl set image deployment/nester-dapp \
           #   dapp=gcr.io/nester/dapp:${{ env.IMAGE_TAG }} \
           #   -n staging
-          
+
           # For now, simulate successful deployment
           echo "url=https://staging.nester.dev" >> $GITHUB_OUTPUT
           echo "deployment_id=$(date +%s)" >> $GITHUB_OUTPUT
@@ -234,14 +245,21 @@ jobs:
           STAGING_URL: ${{ needs.deploy.outputs.staging_url || 'https://staging.nester.dev' }}
           SMOKE_TEST: "1"
           SMOKE_TEST_WALLET_SECRET: ${{ secrets.SMOKE_TEST_WALLET_SECRET }}
-          
+
           # Optional: Testnet overrides if staging uses different network
           # NEXT_PUBLIC_STELLAR_NETWORK: "Test SDF Network ; September 2015"
           # NEXT_PUBLIC_STELLAR_RPC_URL: "https://soroban-testnet.stellar.org"
           # NEXT_PUBLIC_STELLAR_HORIZON_URL: "https://horizon-testnet.stellar.org"
         run: |
+          if [ -z "$SMOKE_TEST_WALLET_SECRET" ]; then
+            echo "::error::SMOKE_TEST_WALLET_SECRET is not configured. This secret is required for smoke tests."
+            echo "Set it in GitHub repository settings: Settings → Secrets and variables → Actions → SMOKE_TEST_WALLET_SECRET"
+            echo "See docs/ci/secrets.md for details."
+            exit 1
+          fi
+
           cd apps/dapp/frontend
-          
+
           # `--run` is a Vitest flag; Playwright rejects it with "unknown
           # option" before running a single test. The JSON reporter also
           # needs an explicit output path or nothing is written to disk.
@@ -315,7 +333,7 @@ jobs:
           script: |
             const status = "${{ steps.summary.outputs.status }}";
             const summary = "${{ steps.summary.outputs.summary }}";
-            
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -367,21 +385,21 @@ jobs:
         run: |
           DEPLOY_RESULT="${{ needs.deploy.result }}"
           SMOKE_RESULT="${{ needs.smoke-test.result }}"
-          
+
           if [ "$DEPLOY_RESULT" != "success" ]; then
             echo "❌ Deployment failed (status: $DEPLOY_RESULT)"
             exit 1
           fi
-          
+
           if [ "$SMOKE_RESULT" = "failure" ]; then
             echo "❌ Smoke tests failed - promotion blocked"
             exit 1
           fi
-          
+
           if [ "$SMOKE_RESULT" = "skipped" ]; then
             echo "⚠️  Smoke tests were skipped - promotion allowed but not recommended"
           fi
-          
+
           echo "✅ All checks passed - promotion to production allowed"
 
       - name: Report status

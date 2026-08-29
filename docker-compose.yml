@@ -2,7 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -12,7 +12,7 @@ services:
   postgres:
     image: postgres:16-alpine
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: nester_dev
       POSTGRES_USER: nester
@@ -30,7 +30,7 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile.dev
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       APP_ENV: development
       DATABASE_DSN: postgres://nester:nester_dev_password@postgres:5432/nester_dev?sslmode=disable
@@ -38,8 +38,10 @@ services:
       STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
       STELLAR_RPC_URL: https://soroban-testnet.stellar.org
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
-      # DO NOT use in production — this is a development-only placeholder
-      AUTH_JWT_SECRET: dev-nester-jwt-secret-change-in-production
+      # Development JWT secret. Set via AUTH_JWT_SECRET env var or .env file.
+      # The development deny-list in internal/config/config.go accepts the default
+      # below, but production rejects it. If unset, falls back to the placeholder.
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-nester-jwt-secret-change-in-production}
       LOG_LEVEL: info
       LOG_FORMAT: text
       RUN_MIGRATIONS: "true"
@@ -83,14 +85,27 @@ services:
       PGPASSWORD: nester_dev_password
     volumes:
       - ./scripts/seed.sql:/seed.sql:ro
-    command: ["psql", "-h", "postgres", "-U", "nester", "-d", "nester_dev", "-v", "ON_ERROR_STOP=1", "-f", "/seed.sql"]
+    command:
+      [
+        "psql",
+        "-h",
+        "postgres",
+        "-U",
+        "nester",
+        "-d",
+        "nester_dev",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        "/seed.sql",
+      ]
 
   frontend:
     build:
       context: ./apps/dapp/frontend
       dockerfile: Dockerfile.dev
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8080/api/v1
       NEXT_PUBLIC_WS_URL: ws://localhost:8080/ws
@@ -105,7 +120,7 @@ services:
     build:
       context: ./apps/intelligence
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       # Optional: a fresh clone has no .env yet, and a hard requirement here
       # makes every `docker compose` command fail to parse — even ones that
@@ -161,7 +176,7 @@ services:
     profiles: ["observability"]
     ports:
       # Jaeger UI.
-      - "16686:16686"
+      - "127.0.0.1:16686:16686"
     environment:
       # Jaeger accepts OTLP directly; the collector forwards to it here.
       COLLECTOR_OTLP_ENABLED: "true"
@@ -180,9 +195,9 @@ services:
       - ./deploy/observability/otel-collector.yaml:/etc/otel/config.yaml:ro
     ports:
       # OTLP gRPC — what both services export to by default.
-      - "4317:4317"
+      - "127.0.0.1:4317:4317"
       # OTLP HTTP, for tools that cannot speak gRPC.
-      - "4318:4318"
+      - "127.0.0.1:4318:4318"
     depends_on:
       # Restored in nester#1056: the #1065/#1067 merge left this key with an
       # empty body, which makes the whole compose file fail to parse — every
@@ -198,7 +213,7 @@ services:
     image: prom/prometheus:v3.1.0
     profiles: ["observability"]
     ports:
-      - "9091:9090"
+      - "127.0.0.1:9091:9090"
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       # SLO recording and alerting rules (nester#1056). Mounted read-only from
@@ -231,7 +246,7 @@ services:
     image: prom/alertmanager:v0.28.0
     profiles: ["observability"]
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     volumes:
       - ./docker/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
@@ -248,7 +263,7 @@ services:
     image: grafana/grafana:11.4.0
     profiles: ["observability"]
     ports:
-      - "3002:3000"
+      - "127.0.0.1:3002:3000"
     environment:
       # Local-only convenience: anonymous viewer access so a developer does
       # not have to log in to look at a graph. Never mirror this in a

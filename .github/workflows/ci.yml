@@ -87,7 +87,6 @@ jobs:
       - name: Lint website
         run: pnpm --filter @nester/website lint
 
-
   intelligence:
     name: Intelligence (Python)
     needs: changes
@@ -117,7 +116,6 @@ jobs:
       - name: Test
         run: pytest
 
-
   dapp-frontend:
     name: Dapp Frontend (Next.js)
     needs: changes
@@ -136,9 +134,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # Gates on the security ruleset, which is what the step name promises
+      # and what nester#1236 asked for. Pointing it at the full `lint` surface
+      # made it fail on 47 pre-existing style and react-hooks errors in files
+      # no security change had touched — a gate that red-lines every unrelated
+      # PR gets switched back off, which is how it ended up non-blocking in
+      # the first place.
       - name: Lint (security rules)
-        run: pnpm --filter @nester/dapp run lint
+        run: pnpm --filter @nester/dapp run lint:security
+
+      # The full ruleset still runs and still reports; tightening the 47
+      # pre-existing errors is separate work, so it does not block a merge yet.
+      - name: Lint (full, non-blocking)
         continue-on-error: true
+        run: pnpm --filter @nester/dapp run lint
 
       - name: Build
         run: pnpm --filter @nester/dapp run build
@@ -216,7 +225,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install promtool and amtool
         run: |
@@ -392,7 +401,57 @@ jobs:
 
       - name: Audit Python dependencies
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-        run: pip-audit -r requirements.txt
+        run: |
+          set +e
+          pip-audit -r requirements.txt --format json --output pip-audit-report.json
+          EXIT_CODE=$?
+          set -e
+
+          if [ ! -f pip-audit-report.json ]; then
+            echo "::error::pip-audit report missing"
+            exit 1
+          fi
+
+          # pip-audit exits 1 on findings and 2 on its own failure. Only the
+          # first is a result we can parse; the second means the scan never
+          # ran, and without this check a crashed scan reads as a clean one.
+          if [ "$EXIT_CODE" -gt 1 ]; then
+            echo "::error::pip-audit failed to run (exit $EXIT_CODE); treating as a failed scan"
+            exit "$EXIT_CODE"
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = Path("pip-audit-report.json")
+          findings = json.loads(report.read_text() or "[]")
+          # pip-audit --format json emits {"dependencies": [{"name":..,
+          # "vulns": [...]}, ...]}, not a flat list of vulnerabilities. Reading
+          # it as a list made len() count the dict's *keys* — reporting "Found
+          # 2 Python vulnerabilities" on a clean scan — and then iterating it
+          # yielded strings, so .get() raised AttributeError and failed the
+          # job unconditionally. Older pip-audit versions did return a list,
+          # so both shapes are accepted.
+          dependencies = findings.get("dependencies", []) if isinstance(findings, dict) else findings
+
+          vulns = []
+          for dep in dependencies:
+              if not isinstance(dep, dict):
+                  continue
+              for vuln in dep.get("vulns", []):
+                  vulns.append((dep.get("name", "unknown"), vuln))
+
+          if vulns:
+              print(f"::error::Found {len(vulns)} Python vulnerabilities")
+              for name, vuln in vulns:
+                  vid = vuln.get("id", "unknown")
+                  desc = str(vuln.get("description", ""))[:120]
+                  print(f"  {name} {vid}: {desc}")
+              raise SystemExit(1)
+
+          print("✓ No Python vulnerabilities detected")
+          PY
         working-directory: apps/intelligence
 
       - name: Run bandit
@@ -400,17 +459,31 @@ jobs:
         run: bandit -r app -ll
         working-directory: apps/intelligence
 
+      # semgrep/semgrep-action is archived, and the SHA this was pinned to
+      # does not exist upstream — the job aborted at "Set up job" with
+      # "unable to resolve action". Run the maintained CLI directly instead,
+      # pinned to a released version, which keeps the reproducibility this
+      # PR was after without depending on a dead action.
       - name: Semgrep SAST (TypeScript/Next.js)
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: >-
-            p/typescript
-            p/react
-            p/nextjs
-            p/secrets
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          pip install "semgrep==1.175.0"
+          semgrep scan --error --quiet --config p/typescript --config p/react --config p/nextjs --config p/secrets apps/dapp/frontend
+
+      - name: Check Semgrep cloud token status
+        if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          if [ -z "$SEMGREP_APP_TOKEN" ]; then
+            echo "::warning::SEMGREP_APP_TOKEN is not configured. Semgrep will run with reduced capabilities (local rules only, no cloud findings)."
+            echo "To enable cloud scanning, set SEMGREP_APP_TOKEN in GitHub repository settings."
+            echo "See docs/ci/secrets.md for details."
+          else
+            echo "✓ Semgrep cloud scanning enabled"
+          fi
 
   api:
     name: API (Go)
@@ -499,7 +572,6 @@ jobs:
           TEST_DATABASE_DSN: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
         run: go test -race -timeout 900s -count=1 -p 1 ./...
 
-
   contracts:
     name: Contracts (Rust)
     needs: changes
@@ -517,7 +589,6 @@ jobs:
 
       - name: Add wasm32-unknown-unknown target
         run: rustup target add wasm32-unknown-unknown
-
 
       - name: Build yield_registry WASM
         run: cargo build --release --target wasm32-unknown-unknown -p yield-registry-contract
@@ -565,4 +636,3 @@ jobs:
             echo "ERROR: No vault-contract tests ran — possible missing WASM artifact"
             exit 1
           fi
-
