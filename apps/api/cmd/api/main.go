@@ -1142,6 +1142,26 @@ func run() error {
 	defer cancelSavingsGoalPurge()
 	go savingsGoalPurgeJob.Run(savingsGoalPurgeCtx, 24*time.Hour)
 
+	// Data retention sweep (#1226): hard-deletes activity_events and
+	// nudge_dispatch_log (nudge_outcomes cascades) rows past their retention
+	// window — see docs/data-retention.md for the policy and
+	// DataRetentionConfig's defaults. Deliberately does NOT touch audit_logs,
+	// KYC records, or processed_events — the policy doc explains why each of
+	// those is out of scope for this job. Runs daily, leader-elected like the
+	// other sweep jobs, and audit-logs every deletion via the same
+	// auditLogger every other audited action in this file uses.
+	dataRetentionJob := scheduler.NewDataRetentionJob(
+		activityEventRepo,
+		nudgeHistoryRepo,
+		auditLogger,
+		scheduler.DataRetentionConfig{},
+		baseLogger.WithGroup("data-retention"),
+	)
+	dataRetentionJob.SetLeaderChecker(schedulerLeadership)
+	dataRetentionCtx, cancelDataRetention := context.WithCancel(context.Background())
+	defer cancelDataRetention()
+	go dataRetentionJob.Run(dataRetentionCtx, 24*time.Hour)
+
 	jobWorker := jobqueue.NewWorker(
 		jobQueueRepo,
 		jobqueue.Config{

@@ -91,6 +91,55 @@ handler returns) is recorded by the deferred middleware with whatever status
 was written, defaulting to 200. Panics are recorded as 5xx by the recover
 middleware before this metric observes them.
 
+### 1a. Per-route availability (nester#1227)
+
+| | |
+|---|---|
+| **Numerator** | Requests to one route returning 5xx |
+| **Denominator** | Requests to that route that matched a registered route, minus 4xx |
+| **Source** | `nester_http_requests_total{route,method,status_class}`, same series as §1 |
+| **Window** | 1h only — no attainment window, no burn-rate policy (see below) |
+| **Aggregation** | `sum by (route) (rate(...))` |
+| **Recorded as** | `route:availability:{eligible,bad,error_ratio}_rate1h` |
+| **Alert** | `EndpointErrorRateHigh` — single absolute threshold, `> 20%` sustained 15m |
+
+**Why this exists alongside §1, not instead of it:** §1 answers "is the API
+healthy overall", and deposit/withdraw volume dominates that aggregate — a
+low-traffic endpoint (an analytics or savings-goal route, say) can fail
+continuously without moving it, because the money-path volume swamps the
+signal. This section answers the narrower per-route question, using the same
+bounded `route` label §1 already uses (never an arbitrary client-supplied
+path — see `internal/metrics/http.go`'s `resolveRoute`, and its own tests
+`TestRouteLabelUsesPatternNotRawPath` / `TestRouteLabelBoundedForUnmatchedPaths`
+in `apps/api/internal/metrics/http_test.go`), so grouping `by (route)` cannot
+mint an unbounded number of series.
+
+**Why not the full burn-rate treatment §1 gets:** with roughly 93 registered
+routes, replicating the four-window, two-severity burn-rate machinery per
+route would multiply the alert count by ~93 and produce a flood of
+near-duplicate pages for a single root cause (the aggregate alert and the
+affected route's alert would both fire). A single absolute-threshold alert is
+the deliberately simpler tool for "is this one route currently broken",
+matching the doctrine §5 (balance freshness) already uses for signals that
+don't warrant burn-rate shape.
+
+**The 20% threshold and the 15m `for:`:** looser and slower than §1's
+1.344%/2m fast-burn pair on purpose. This alert exists to catch a route that
+is broken *continuously*, not one that is occasionally degraded — a
+low-traffic route naturally has more variance, and a route carrying enough
+traffic to be statistically meaningful at a low error rate is already covered
+by the aggregate. Ticket severity, never page: the aggregate and the
+money-path flow alerts already page for anything urgent enough to wake
+someone; a single misbehaving low-traffic endpoint is a business-hours fix.
+
+**Cardinality guard:** the `eligible_rate1h > 0.01` condition on the alert
+(roughly one request per 100 seconds) exists so a single stray request on an
+otherwise-idle route cannot produce a 100% error ratio and fire. Bounded
+`route`-label cardinality itself is asserted at the promtool level in
+`slo_alerts_test.yml` (`per-route recording rules do not introduce unbounded
+labels beyond the bounded route set`) and at the Go level by the two
+`resolveRoute` tests named above.
+
 ### 2. Deposit success rate
 
 | | |

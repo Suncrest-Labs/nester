@@ -14,9 +14,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/analytics"
 	perfdom "github.com/suncrestlabs/nester/apps/api/internal/domain/performance"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/analytics"
 )
 
 // VaultLister is the subset of the vault repo we need. Defined locally so
@@ -171,7 +171,6 @@ func (s *Service) GetAPYHistory(
 		DataPoints:   dataPoints,
 	}, nil
 }
-
 
 // CalculateRealizedAPY annualizes the return between two snapshots.
 //
@@ -383,21 +382,26 @@ func buildVaultMonthlyYield(
 }
 
 func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTime, toTime time.Time) (*analytics.AnalyticsResponse, error) {
-	// Get user's vaults
+	// Get user's vaults. A 1,000-vault ceiling is safe here the same way
+	// portfolio_service.go's GetUserPortfolioSummary reasons about its own
+	// 10,000 ceiling (nester#1193/#1225): this is ListUserVaults (bounded by
+	// how many vaults one person can plausibly create through the product
+	// UI), not a cross-user or transaction-volume-scaled list. If vault
+	// creation ever becomes bulk/programmatic this stops holding.
 	userVaults, _, err := s.vaultRepo.ListUserVaults(ctx, userID, vault.UserListFilter{Page: 1, PerPage: 1000})
 	if err != nil {
 		return &analytics.AnalyticsResponse{}, fmt.Errorf("failed to get user vaults: %w", err)
 	}
 
 	if len(userVaults) == 0 {
-	// Return empty response if user has no vaults
-	return &analytics.AnalyticsResponse{
-		DailySnapshots:      []analytics.DailySnapshot{},
-		VaultMonthlyYield:   []analytics.VaultMonthlyYield{},
-		CurrentAllocation:   []analytics.CurrentAllocation{},
-		PerformanceMetrics:  analytics.PerformanceMetrics{},
-		Vaults:              []analytics.VaultInfo{},
-	}, nil
+		// Return empty response if user has no vaults
+		return &analytics.AnalyticsResponse{
+			DailySnapshots:     []analytics.DailySnapshot{},
+			VaultMonthlyYield:  []analytics.VaultMonthlyYield{},
+			CurrentAllocation:  []analytics.CurrentAllocation{},
+			PerformanceMetrics: analytics.PerformanceMetrics{},
+			Vaults:             []analytics.VaultInfo{},
+		}, nil
 	}
 
 	// Read every vault's history once. Both the daily series and the monthly
@@ -507,19 +511,19 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 		lockPeriodDays = 0 // placeholder
 
 		vaultsInfo = append(vaultsInfo, analytics.VaultInfo{
-			ID:            vault.ID.String(),
-			Name:          vault.ContractAddress,
-			BalanceUSD:    vault.CurrentBalance.InexactFloat64(),
-			APY:           0, // placeholder - would calculate from allocations
-			YieldEarned:   vault.YieldEarned.InexactFloat64(),
+			ID:             vault.ID.String(),
+			Name:           vault.ContractAddress,
+			BalanceUSD:     vault.CurrentBalance.InexactFloat64(),
+			APY:            0, // placeholder - would calculate from allocations
+			YieldEarned:    vault.YieldEarned.InexactFloat64(),
 			LockPeriodDays: lockPeriodDays,
 		})
 	}
 
 	return &analytics.AnalyticsResponse{
-		DailySnapshots:      dailySnapshots,
-		VaultMonthlyYield:   vaultMonthlyYield,
-		CurrentAllocation:   currentAllocation,
+		DailySnapshots:    dailySnapshots,
+		VaultMonthlyYield: vaultMonthlyYield,
+		CurrentAllocation: currentAllocation,
 		PerformanceMetrics: analytics.PerformanceMetrics{
 			TotalYieldEarned: totalYieldEarned.InexactFloat64(),
 			YieldChangePCT:   yieldChangePCT,

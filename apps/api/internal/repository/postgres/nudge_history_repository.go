@@ -100,6 +100,25 @@ func (r *NudgeHistoryRepository) GetLatestDispatchByType(ctx context.Context, us
 	return &l, nil
 }
 
+// DeleteDispatchesOlderThan permanently removes nudge_dispatch_log rows
+// whose sent_at is before cutoff (nester#1226 retention policy). Their
+// nudge_outcomes rows cascade automatically (migration 072:
+// dispatch_id REFERENCES nudge_dispatch_log(id) ON DELETE CASCADE), so this
+// is the only delete this job needs to issue for either table. Returns the
+// number of dispatch rows removed for the audit log. cutoff must stay well
+// past effectivenessWindow (90 days) — GetEffectivenessStats reads dispatch
+// rows back that far, and deleting inside that window would silently starve
+// it of data rather than erroring.
+func (r *NudgeHistoryRepository) DeleteDispatchesOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		DELETE FROM nudge_dispatch_log WHERE sent_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // NudgesEnabled reads the user's nudges_enabled preference. Absence of a
 // notification_preferences row means the user has never touched their
 // settings, so it defaults to enabled (matches DefaultPreferences).

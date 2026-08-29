@@ -143,6 +143,50 @@ groups:
           runbook: docs/observability/runbooks/api-availability.md
 
   # ---------------------------------------------------------------------------
+  # Per-endpoint error rate (nester#1227)
+  # ---------------------------------------------------------------------------
+  #
+  # A single absolute-threshold alert, not a burn-rate policy — see
+  # slo_recording.yml's slo_route_availability group for why. 20% sustained
+  # over 1h is deliberately looser than the aggregate's 1.344% fast-burn
+  # threshold: this alert exists to catch a route that is broken continuously
+  # (not occasionally degraded), and a route carrying enough traffic to be
+  # statistically meaningful at a low error rate is already covered by the
+  # aggregate. `for: 15m` (not the aggregate's 2m) because a single route has
+  # far less traffic to smooth out a brief blip, and this alert is a
+  # same-day-ticket signal, not a page — the aggregate and the money-path
+  # flow alerts already page for anything urgent enough to wake someone.
+  - name: slo_alerts_route_availability
+    rules:
+      - alert: EndpointErrorRateHigh
+        expr: |
+          route:availability:error_ratio_rate1h > 0.20
+          and
+          route:availability:eligible_rate1h > 0.01
+        for: 15m
+        labels:
+          severity: ticket
+          slo: route_availability
+          service: api
+        annotations:
+          summary: >-
+            {{ $labels.route }} erroring at {{ $value | humanizePercentage }}
+            over 1h, independent of overall API availability
+          description: >-
+            Route {{ $labels.route }} has sustained a 5xx rate above 20% for
+            15+ minutes. This route may carry too little traffic to move the
+            aggregate api:availability ratio (APIAvailabilityFastBurn/SlowBurn
+            above), which is exactly the blind spot this alert exists to
+            close — an endpoint nobody watches can otherwise fail
+            indefinitely inside the aggregate's budget. The second condition
+            (eligible_rate1h > 0.01, roughly one request per 100 seconds)
+            guards against a single stray request producing a 100% ratio on
+            an idle route. 4xx and unmatched routes are excluded, same as the
+            aggregate SLI.
+          dashboard: /d/nester-slo-api/api-availability
+          runbook: docs/observability/runbooks/api-availability.md
+
+  # ---------------------------------------------------------------------------
   # Deposit / withdrawal success — target 99.5%
   # ---------------------------------------------------------------------------
   # budget 0.5% => fast 13.44 * 0.005 = 0.0672 (6.72%)
