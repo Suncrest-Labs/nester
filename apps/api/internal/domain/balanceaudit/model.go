@@ -12,7 +12,7 @@
 // the team doesn't yet need.
 //
 // Retention: rows are kept indefinitely; see the comment on the
-// balance_audit_log table (migration 107) for the growth-rate rationale.
+// balance_audit_log table (migration 108) for the growth-rate rationale.
 package balanceaudit
 
 import (
@@ -36,7 +36,7 @@ const (
 	OperationRebalanceWithdraw Operation = "rebalance_withdraw"
 	OperationRebalanceDeposit  Operation = "rebalance_deposit"
 	OperationEmergencyWithdraw Operation = "emergency_withdraw"
-	// OperationOpeningBalance marks the one immutable entry migration 107
+	// OperationOpeningBalance marks the one immutable entry migration 108
 	// inserts per pre-existing vault, recording whatever balance it already
 	// held before the audit trail started (before=0, after=current balance
 	// at migration time). Without it, Reconcile (which sums from zero) would
@@ -80,18 +80,28 @@ type Entry struct {
 // ErrNotFound is returned when no entries exist for a lookup.
 var ErrNotFound = errors.New("balance audit: no entries found")
 
+// DefaultListLimit is the page size ListByVault/ListByUser callers get when
+// they don't yet need to page (mirrors reconciliation.vaultReconcilePageSize's
+// role: a generous default rather than an unbounded SELECT against an
+// append-only table that only grows).
+const DefaultListLimit = 500
+
 // Repository is the persistence port. Deliberately exposes no Update or
 // Delete method — see the package doc. Append is the only write.
 type Repository interface {
 	// Append inserts a new entry. The row is immutable once written.
 	Append(ctx context.Context, entry Entry) (Entry, error)
-	// ListByVault returns every entry for a vault, oldest first — the
-	// order needed to replay the ledger and reconstruct balance history.
-	// Returns ErrNotFound when the vault has no entries.
-	ListByVault(ctx context.Context, vaultID uuid.UUID) ([]Entry, error)
-	// ListByUser returns every entry across all of a user's vaults, oldest
-	// first. Returns ErrNotFound when the user has no entries.
-	ListByUser(ctx context.Context, userID uuid.UUID) ([]Entry, error)
+	// ListByVault returns up to limit entries for a vault starting at offset,
+	// oldest first — the order needed to replay the ledger and reconstruct
+	// balance history — plus the total entry count so a caller can keep
+	// paging (the same Limit/Offset/total shape reconciliation.Reconcile
+	// uses to page through vault.ListVaults). Returns ErrNotFound when the
+	// vault has no entries.
+	ListByVault(ctx context.Context, vaultID uuid.UUID, limit, offset int) ([]Entry, int, error)
+	// ListByUser returns up to limit entries across all of a user's vaults
+	// starting at offset, oldest first, plus the total entry count. Returns
+	// ErrNotFound when the user has no entries.
+	ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Entry, int, error)
 }
 
 // Reconcile replays entries (which must already be ordered oldest-first, as
@@ -100,11 +110,11 @@ type Repository interface {
 // vault's live current_balance is the reconciliation check (nester#1124):
 // equal means the audit trail fully accounts for the current balance.
 //
-// This is only correct because migration 107 inserts an OperationOpeningBalance
+// This is only correct because migration 108 inserts an OperationOpeningBalance
 // entry (before=0, after=current balance at migration time) for every vault
 // that already existed when the ledger table was created — otherwise summing
 // from zero would omit whatever balance a pre-existing vault already held.
-// Every vault, including ones created after migration 107, therefore has an
+// Every vault, including ones created after migration 108, therefore has an
 // unbroken chain of entries back to a true balance-before-history of zero.
 func Reconcile(entries []Entry) decimal.Decimal {
 	total := decimal.Zero

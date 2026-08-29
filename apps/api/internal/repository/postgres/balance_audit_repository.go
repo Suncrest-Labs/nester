@@ -11,7 +11,7 @@ import (
 )
 
 // BalanceAuditRepository persists the append-only balance change ledger
-// (nester#1124, migration 107). It intentionally exposes no Update or
+// (nester#1124, migration 108). It intentionally exposes no Update or
 // Delete method.
 type BalanceAuditRepository struct {
 	db *sql.DB
@@ -72,36 +72,78 @@ func appendBalanceAuditEntry(ctx context.Context, q queryRowContexter, entry bal
 	return entry, nil
 }
 
-func (r *BalanceAuditRepository) ListByVault(ctx context.Context, vaultID uuid.UUID) ([]balanceaudit.Entry, error) {
+func (r *BalanceAuditRepository) ListByVault(ctx context.Context, vaultID uuid.UUID, limit, offset int) ([]balanceaudit.Entry, int, error) {
+	limit, offset = normalizeListPage(limit, offset)
+
+	var total int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM balance_audit_log WHERE vault_id = $1`, vaultID.String(),
+	).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
 	const query = `
 		SELECT id, vault_id, user_id, actor, operation, amount, balance_before, balance_after,
 		       chain_reference, metadata, created_at
 		FROM balance_audit_log
 		WHERE vault_id = $1
 		ORDER BY created_at ASC, id ASC
+		LIMIT $2 OFFSET $3
 	`
-	rows, err := r.db.QueryContext(ctx, query, vaultID.String())
+	rows, err := r.db.QueryContext(ctx, query, vaultID.String(), limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	return scanBalanceAuditEntries(rows)
+	entries, err := scanBalanceAuditEntries(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return entries, total, nil
 }
 
-func (r *BalanceAuditRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]balanceaudit.Entry, error) {
+func (r *BalanceAuditRepository) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]balanceaudit.Entry, int, error) {
+	limit, offset = normalizeListPage(limit, offset)
+
+	var total int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM balance_audit_log WHERE user_id = $1`, userID.String(),
+	).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
 	const query = `
 		SELECT id, vault_id, user_id, actor, operation, amount, balance_before, balance_after,
 		       chain_reference, metadata, created_at
 		FROM balance_audit_log
 		WHERE user_id = $1
 		ORDER BY created_at ASC, id ASC
+		LIMIT $2 OFFSET $3
 	`
-	rows, err := r.db.QueryContext(ctx, query, userID.String())
+	rows, err := r.db.QueryContext(ctx, query, userID.String(), limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	return scanBalanceAuditEntries(rows)
+	entries, err := scanBalanceAuditEntries(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return entries, total, nil
+}
+
+// normalizeListPage applies balanceaudit.DefaultListLimit when a caller
+// passes a non-positive limit (the "reasonable default" callers that don't
+// yet page get, matching how reconciliation's vaultReconcilePageSize backs
+// its own Limit/Offset paging) and clamps a negative offset to 0.
+func normalizeListPage(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = balanceaudit.DefaultListLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
 }
 
 func scanBalanceAuditEntries(rows *sql.Rows) ([]balanceaudit.Entry, error) {

@@ -73,7 +73,7 @@ func TestReconcile_DetectsDrift(t *testing.T) {
 
 // TestReconcile_OpeningBalanceEntryAccountsForPreexistingBalance verifies
 // that a vault which already held a nonzero balance before the ledger
-// existed reconciles correctly once migration 107's opening-balance entry is
+// existed reconciles correctly once migration 108's opening-balance entry is
 // present — i.e. Reconcile only works because every vault's entry chain
 // starts from a true balance-before-history of zero (nester#1124,
 // CodeRabbit finding).

@@ -68,12 +68,12 @@ func TestVaultRepositoryIntegrationRecordDepositWithAudit_AtomicWithBalance(t *t
 		t.Fatalf("CurrentBalance = %s, want 42", fetched.CurrentBalance)
 	}
 
-	entries, err := auditRepo.ListByVault(ctx, created.ID)
+	entries, total, err := auditRepo.ListByVault(ctx, created.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("ListByVault() error = %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	if len(entries) != 1 || total != 1 {
+		t.Fatalf("expected 1 audit entry, got %d (total=%d)", len(entries), total)
 	}
 	if !balanceaudit.Reconcile(entries).Equal(fetched.CurrentBalance) {
 		t.Fatalf("Reconcile() = %s, want %s (vault's live balance)", balanceaudit.Reconcile(entries), fetched.CurrentBalance)
