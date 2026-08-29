@@ -101,13 +101,27 @@ type ProjectionPoint struct {
 
 // ProjectionOutput represents the result of a compound interest calculation
 type ProjectionOutput struct {
-	VaultID      *uuid.UUID        `json:"vault_id,omitempty"`
-	Currency     string            `json:"currency"`
-	CurrentAPY   float64           `json:"current_apy"`
-	Input        ProjectionInput   `json:"input"`
-	Timeline     []ProjectionPoint `json:"timeline"`
-	Summary      ProjectionSummary `json:"summary"`
-	CalculatedAt time.Time         `json:"calculated_at"`
+	VaultID      *uuid.UUID            `json:"vault_id,omitempty"`
+	Currency     string                `json:"currency"`
+	CurrentAPY   float64               `json:"current_apy"`
+	Input        ProjectionInput       `json:"input"`
+	Timeline     []ProjectionPoint     `json:"timeline"`
+	Summary      ProjectionSummary     `json:"summary"`
+	Assumptions  ProjectionAssumptions `json:"assumptions"`
+	CalculatedAt time.Time             `json:"calculated_at"`
+}
+
+// ProjectionAssumptions documents the parameters a projection actually used,
+// so the numbers in Timeline/Summary are interpretable rather than opaque.
+// RecurringAmount/Cadence describe the periodic contribution rolled into
+// MonthlyContribution (zero/empty when there is none), and ContributionSource
+// says where that came from — mirroring SimulationOutput.ContributionSource.
+type ProjectionAssumptions struct {
+	RecurringAmount    decimal.Decimal `json:"recurring_amount"`
+	Cadence            string          `json:"cadence,omitempty"` // "weekly" | "biweekly" | "monthly" | ""
+	ProjectedAPY       float64         `json:"projected_apy"`
+	TimelineMonths     int             `json:"timeline_months"`
+	ContributionSource string          `json:"contribution_source"` // "schedule" | "single_deposit"
 }
 
 // ProjectionSummary provides aggregate statistics about the projection

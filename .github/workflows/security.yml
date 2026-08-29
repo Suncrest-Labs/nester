@@ -91,7 +91,14 @@ jobs:
           cache: true
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # Pinned (#1221): an unpinned @latest means whatever the registry
+        # serves at that moment runs in CI with repository context, and a
+        # rerun of a green build can turn red with no line changed. The pin
+        # lives in security-scanner-versions.env so ci.yml and this workflow
+        # can't drift apart; see that file for the update cadence.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
       - name: Run govulncheck
         run: |

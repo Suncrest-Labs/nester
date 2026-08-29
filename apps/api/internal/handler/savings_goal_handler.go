@@ -336,6 +336,13 @@ func (h *SavingsGoalHandler) coaching(w http.ResponseWriter, r *http.Request) {
 
 // goalCoachingRequest builds the intelligence service request payload from an
 // already-progress-enriched savings goal.
+//
+// TargetAmount/CurrentAmount are converted to float64 deliberately, not by a
+// discarded return value (#1223): intelligence.SavingsGoalContext mirrors the
+// intelligence service's pydantic model, which declares these fields as
+// floats, so float64 is genuinely required at this boundary. The discarded
+// exactness flag is safe to ignore here — coaching narrative/milestones are
+// informational, not the source of truth for a user's balance.
 func goalCoachingRequest(goal savingsgoal.SavingsGoal) intelligence.CoachingRequest {
 	targetAmount, _ := goal.TargetAmount.Float64()
 	currentAmount, _ := goal.CurrentAmount.Float64()

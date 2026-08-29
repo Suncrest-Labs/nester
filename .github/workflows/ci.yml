@@ -303,7 +303,12 @@ jobs:
 
       - name: Install govulncheck
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # Pinned (#1221): see security-scanner-versions.env for why and the
+        # update cadence. Keep this in sync with security.yml's install step
+        # — both source the same file so they can't drift apart.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
       - name: Audit Go dependencies
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
@@ -332,7 +337,11 @@ jobs:
 
       - name: Install gosec
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        # Pinned (#1221): see security-scanner-versions.env for why and the
+        # update cadence.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
 
       # Enforcing gate (#1035). The backlog this previously tolerated is
       # cleared: gosec -severity medium reports zero issues. Findings that were

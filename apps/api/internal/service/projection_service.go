@@ -65,12 +65,23 @@ func (s *ProjectionService) CalculateCompoundProjection(ctx context.Context, inp
 
 	summary := s.calculateSummary(input, timeline)
 
+	contributionSource := "single_deposit"
+	if input.MonthlyContribution.GreaterThan(decimal.Zero) {
+		contributionSource = "caller_supplied"
+	}
+
 	output := &projection.ProjectionOutput{
-		Currency:     "USD",
-		CurrentAPY:   input.APY.InexactFloat64(),
-		Input:        input,
-		Timeline:     timeline,
-		Summary:      summary,
+		Currency:   "USD",
+		CurrentAPY: input.APY.InexactFloat64(),
+		Input:      input,
+		Timeline:   timeline,
+		Summary:    summary,
+		Assumptions: projection.ProjectionAssumptions{
+			RecurringAmount:    input.MonthlyContribution,
+			ProjectedAPY:       input.APY.InexactFloat64(),
+			TimelineMonths:     input.PeriodMonths,
+			ContributionSource: contributionSource,
+		},
 		CalculatedAt: time.Now(),
 	}
 
@@ -110,10 +121,24 @@ func (s *ProjectionService) CalculateVaultProjection(ctx context.Context, input 
 		}
 	}
 
+	// Resolve the vault's real recurring contribution, if any, rather than
+	// assuming a single deposit (#1224). A vault has at most one linked
+	// savings goal, and a goal has at most one active schedule.
+	monthlyContribution := decimal.Zero
+	cadence := ""
+	contributionSource := "single_deposit"
+	if goal, goalErr := s.savingsGoalRepo.GetByVaultID(ctx, input.VaultID); goalErr == nil && goal != nil {
+		if schedule, schedErr := s.savingsScheduleRepo.GetActiveByGoal(ctx, goal.ID, goal.UserID); schedErr == nil && schedule != nil {
+			monthlyContribution = monthlyEquivalent(schedule.Amount, schedule.Frequency)
+			cadence = string(schedule.Frequency)
+			contributionSource = "schedule"
+		}
+	}
+
 	// Build projection input
 	projInput := projection.ProjectionInput{
 		InitialDeposit:      input.Deposit,
-		MonthlyContribution: decimal.Zero, // Single deposit for now
+		MonthlyContribution: monthlyContribution,
 		APY:                 *apy,
 		PeriodMonths:        periodMonths,
 		CompoundFrequency:   compoundFreq,
@@ -131,12 +156,19 @@ func (s *ProjectionService) CalculateVaultProjection(ctx context.Context, input 
 	summary := s.calculateSummary(projInput, timeline)
 
 	output := &projection.ProjectionOutput{
-		VaultID:      &input.VaultID,
-		Currency:     vaultEntity.Currency,
-		CurrentAPY:   apy.InexactFloat64(),
-		Input:        projInput,
-		Timeline:     timeline,
-		Summary:      summary,
+		VaultID:    &input.VaultID,
+		Currency:   vaultEntity.Currency,
+		CurrentAPY: apy.InexactFloat64(),
+		Input:      projInput,
+		Timeline:   timeline,
+		Summary:    summary,
+		Assumptions: projection.ProjectionAssumptions{
+			RecurringAmount:    monthlyContribution,
+			Cadence:            cadence,
+			ProjectedAPY:       apy.InexactFloat64(),
+			TimelineMonths:     periodMonths,
+			ContributionSource: contributionSource,
+		},
 		CalculatedAt: time.Now(),
 	}
 

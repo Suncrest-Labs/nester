@@ -10,7 +10,7 @@ export interface Transaction {
   timestamp: string; // ISO string
   type: 'Deposit' | 'Withdrawal' | 'Rebalance' | 'Settlement' | 'Yield Earned';
   vaultName: string;
-  amount: number;
+  amount: string; // exact decimal string from the API, e.g. "123.45" (#1223)
   asset: string;
   status: 'Confirmed' | 'Pending' | 'Failed';
   txHash?: string;
@@ -87,7 +87,7 @@ const TransactionTable: React.FC<Props> = ({ transactions, loading, error, onExp
               <td className="px-4 py-2 text-sm text-gray-700">{tx.type}</td>
               <td className="px-4 py-2 text-sm text-gray-700">{tx.vaultName}</td>
               <td className="px-4 py-2 font-mono text-sm text-gray-700">
-                {tx.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 })} {tx.asset}
+                {Number(tx.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 })} {tx.asset}
               </td>
               <td className="px-4 py-2">{renderStatus(tx.status)}</td>
               <td className="px-4 py-2">
