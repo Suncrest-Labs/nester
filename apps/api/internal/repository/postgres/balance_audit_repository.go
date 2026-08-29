@@ -95,7 +95,7 @@ func (r *BalanceAuditRepository) ListByVault(ctx context.Context, vaultID uuid.U
 		return nil, 0, err
 	}
 	defer rows.Close()
-	entries, err := scanBalanceAuditEntries(rows)
+	entries, err := scanBalanceAuditEntries(rows, total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -125,7 +125,7 @@ func (r *BalanceAuditRepository) ListByUser(ctx context.Context, userID uuid.UUI
 		return nil, 0, err
 	}
 	defer rows.Close()
-	entries, err := scanBalanceAuditEntries(rows)
+	entries, err := scanBalanceAuditEntries(rows, total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -146,7 +146,7 @@ func normalizeListPage(limit, offset int) (int, int) {
 	return limit, offset
 }
 
-func scanBalanceAuditEntries(rows *sql.Rows) ([]balanceaudit.Entry, error) {
+func scanBalanceAuditEntries(rows *sql.Rows, total int) ([]balanceaudit.Entry, error) {
 	var out []balanceaudit.Entry
 	for rows.Next() {
 		var (
@@ -200,9 +200,15 @@ func scanBalanceAuditEntries(rows *sql.Rows) ([]balanceaudit.Entry, error) {
 		return nil, err
 	}
 	// balanceaudit.Repository's contract documents ErrNotFound for a lookup
-	// with no entries; returning (nil, nil) here would silently violate it
-	// for every caller of ListByVault/ListByUser (nester CodeRabbit finding).
-	if len(out) == 0 {
+	// with no entries at all; returning (nil, nil) here would silently
+	// violate it for every caller of ListByVault/ListByUser (nester
+	// CodeRabbit finding). But an empty page is not the same as an empty
+	// result set: total is the true count for the vault/user regardless of
+	// this page's LIMIT/OFFSET, so an offset landing at or past the end of an
+	// otherwise non-empty result set (e.g. total=5, offset=10) must return an
+	// empty slice with a nil error, not ErrNotFound (nester CodeRabbit
+	// post-rebase finding).
+	if total == 0 {
 		return nil, balanceaudit.ErrNotFound
 	}
 	return out, nil
