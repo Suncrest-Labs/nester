@@ -403,7 +403,13 @@ export default function OfframpPage() {
     // Call real settlement API
     try {
       // Build destination from payoutMode
-      let destination: any;
+      let destination: {
+        type: string;
+        provider: string;
+        account_number?: string;
+        account_name: string;
+        bank_code?: string;
+      };
       let bankAccountID: string | undefined;
       if (payoutMode.type === "saved") {
         // SavedBankAccount deliberately carries only account_last4 — the API
