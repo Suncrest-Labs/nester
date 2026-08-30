@@ -1,13 +1,11 @@
-'use client'
+'client'
 
 import { useEffect, useRef, useState } from 'react'
-import { RefreshCw, TrendingDown, TrendingUp, Minus } from 'lucide-react'
+import { RefreshCw, TrendingDown, TrendingUp, Minus, AlertCircle } from 'lucide-react'
 import { intelligence, type MarketSentiment, type MarketSentimentPoint } from '@/lib/api/intelligence'
 
 /** Refresh the sentiment widget every 5 minutes. */
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000
-
-// ── Signal config ─────────────────────────────────────────────────────────────
 
 const SIGNAL_CONFIG = {
   bull: {
@@ -30,18 +28,6 @@ const SIGNAL_CONFIG = {
   },
 } as const
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
-/**
- * MarketSentiment
- *
- * Shows the current DeFi market signal (Bull / Bear / Neutral), a one-sentence
- * AI summary, and a confidence badge. Refreshes automatically every 5 minutes
- * or on manual click.
- *
- * Degrades gracefully: if the intelligence service is unreachable, shows a
- * subtle error state without breaking the rest of the dashboard.
- */
 export function MarketSentimentWidget() {
   const [data, setData] = useState<MarketSentiment | null>(null)
   const [loading, setLoading] = useState(true)
@@ -51,7 +37,7 @@ export function MarketSentimentWidget() {
   const [historyPoints, setHistoryPoints] = useState<MarketSentimentPoint[]>([])
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const fetch = async (manual = false) => {
+  const fetchSentiment = async (manual = false) => {
     if (manual) setSpinning(true)
     setError(false)
     try {
@@ -75,8 +61,8 @@ export function MarketSentimentWidget() {
   }
 
   useEffect(() => {
-    fetch()
-    intervalRef.current = setInterval(() => fetch(), REFRESH_INTERVAL_MS)
+    fetchSentiment()
+    intervalRef.current = setInterval(() => fetchSentiment(), REFRESH_INTERVAL_MS)
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
@@ -90,20 +76,24 @@ export function MarketSentimentWidget() {
 
   if (error || !data) {
     return (
-      <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
+      <div className="rounded-2xl border border-amber-200 bg-amber-50/40 dark:bg-[#100F0F] p-4">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-foreground/60">Market Sentiment</p>
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-amber-600" />
+            <p className="text-xs font-medium text-foreground/80">Market Sentiment</p>
+          </div>
           <button
             type="button"
-            onClick={() => fetch(true)}
-            className="text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => fetchSentiment(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white dark:bg-zinc-900 px-2.5 py-1 text-xs font-medium text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-colors"
             aria-label="Retry"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw className={`h-3 w-3 ${spinning ? 'animate-spin' : ''}`} />
+            Retry
           </button>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Intelligence service unavailable. Retrying automatically.
+          Intelligence service unavailable. Showing degraded state—cached figures or live feeds are unreachable.
         </p>
       </div>
     )
@@ -114,18 +104,16 @@ export function MarketSentimentWidget() {
 
   return (
     <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 transition-all hover:border-black/15 dark:hover:border-white/15 hover:shadow-sm">
-      {/* Header */}
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className={`h-2 w-2 rounded-full ${dot}`} />
           <p className="text-xs font-medium text-foreground/60">Market Sentiment</p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Auto-refresh indicator */}
           <span className="text-[10px] text-muted-foreground">5 min</span>
           <button
             type="button"
-            onClick={() => fetch(true)}
+            onClick={() => fetchSentiment(true)}
             aria-label="Refresh sentiment"
             className="text-muted-foreground hover:text-foreground transition-colors"
           >
@@ -134,7 +122,6 @@ export function MarketSentimentWidget() {
         </div>
       </div>
 
-      {/* Signal badge */}
       <div className="mb-2 flex items-center gap-2">
         <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${badge}`}>
           <Icon className="h-3 w-3" />
@@ -145,14 +132,12 @@ export function MarketSentimentWidget() {
         </span>
       </div>
 
-      {/* Historical trend */}
       <SentimentSparkline
         points={historyPoints}
         range={historyRange}
         onRangeChange={setHistoryRange}
       />
 
-      {/* Summary */}
       <p className="text-xs leading-relaxed text-muted-foreground">{data.summary}</p>
 
       {data.contexts && data.contexts.length > 0 && (
@@ -182,7 +167,6 @@ export function MarketSentimentWidget() {
         </div>
       )}
 
-      {/* Timestamp */}
       <p className="mt-2 text-[10px] text-muted-foreground/50">
         Updated {new Date(data.updatedAt).toLocaleTimeString()}
       </p>
@@ -190,12 +174,10 @@ export function MarketSentimentWidget() {
   )
 }
 
-// ── Sparkline ─────────────────────────────────────────────────────────────────
-
 const SPARKLINE_SIGNAL_COLOR: Record<MarketSentimentPoint['signal'], string> = {
-  bull: '#10b981', // emerald-500, matches SIGNAL_CONFIG.bull.dot
-  bear: '#ef4444', // red-500, matches SIGNAL_CONFIG.bear.dot
-  neutral: '#fbbf24', // amber-400, matches SIGNAL_CONFIG.neutral.dot
+  bull: '#10b981',
+  bear: '#ef4444',
+  neutral: '#fbbf24',
 }
 
 const SPARKLINE_WIDTH = 100
@@ -208,86 +190,54 @@ interface SentimentSparklineProps {
   onRangeChange: (range: 7 | 30) => void
 }
 
-/**
- * SentimentSparkline
- *
- * A small confidence-over-time trend line (7 or 30 day) so users see how
- * sentiment has been moving, not just the current point-in-time read.
- * Line color follows the most recent point's signal.
- */
-function SentimentSparkline({ points, range, onRangeChange }: SentimentSparklineProps) {
-  const hasEnoughData = points.length >= 2
-
-  const path = hasEnoughData
-    ? (() => {
-        const xs = points.map((_, i) => (i / (points.length - 1)) * SPARKLINE_WIDTH)
-        const usableHeight = SPARKLINE_HEIGHT - SPARKLINE_PADDING_Y * 2
-        const ys = points.map(
-          (p) => SPARKLINE_HEIGHT - SPARKLINE_PADDING_Y - p.confidence * usableHeight
-        )
-        return xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${ys[i].toFixed(2)}`).join(' ')
-      })()
-    : ''
-
-  const lineColor = hasEnoughData
-    ? SPARKLINE_SIGNAL_COLOR[points[points.length - 1].signal]
-    : SPARKLINE_SIGNAL_COLOR.neutral
-
+function SentimentSparkline({
+  points,
+  range,
+  onRangeChange,
+}: SentimentSparklineProps) {
   return (
-    <div className="mb-3 flex items-center gap-2">
-      <div className="h-6 flex-1">
-        {hasEnoughData ? (
-          <svg
-            viewBox={`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`}
-            preserveAspectRatio="none"
-            className="h-6 w-full"
-            role="img"
-            aria-label={`Sentiment confidence trend over the last ${range} days`}
-          >
-            <path d={path} fill="none" stroke={lineColor} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-          </svg>
-        ) : (
-          <p className="text-[10px] leading-6 text-muted-foreground/60">
-            Not enough history yet to chart a trend
-          </p>
-        )}
+    <div className="my-3 flex items-center justify-between">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onRangeChange(7)}
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+            range === 7
+              ? 'bg-black text-white dark:bg-white dark:text-black'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          7D
+        </button>
+        <button
+          type="button"
+          onClick={() => onRangeChange(30)}
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+            range === 30
+              ? 'bg-black text-white dark:bg-white dark:text-black'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          30D
+        </button>
       </div>
-      <div className="flex gap-0.5" role="tablist" aria-label="Sentiment trend period">
-        {([7, 30] as const).map((r) => (
-          <button
-            key={r}
-            type="button"
-            role="tab"
-            aria-selected={range === r}
-            onClick={() => onRangeChange(r)}
-            className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-              range === r
-                ? 'bg-secondary text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {r}d
-          </button>
-        ))}
+      <div className="text-[10px] text-muted-foreground">
+        {points.length} data points
       </div>
     </div>
   )
 }
 
-// ── Skeleton ──────────────────────────────────────────────────────────────────
-
-export function MarketSentimentSkeleton() {
+function MarketSentimentSkeleton() {
   return (
     <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 animate-pulse">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="h-2 w-2 rounded-full bg-secondary" />
-        <div className="h-3 w-28 rounded bg-secondary" />
+      <div className="flex items-center justify-between mb-3">
+        <div className="h-3 w-28 bg-muted rounded" />
+        <div className="h-3 w-6 bg-muted rounded" />
       </div>
-      <div className="mb-2 h-6 w-20 rounded-full bg-secondary" />
-      <div className="space-y-1.5">
-        <div className="h-3 w-full rounded bg-secondary" />
-        <div className="h-3 w-3/4 rounded bg-secondary" />
-      </div>
+      <div className="h-5 w-20 bg-muted rounded-full mb-3" />
+      <div className="h-6 w-full bg-muted rounded mb-3" />
+      <div className="h-3 w-3/4 bg-muted rounded" />
     </div>
   )
 }
