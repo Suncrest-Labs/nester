@@ -46,9 +46,14 @@ COMMENT ON TABLE balance_audit_log IS 'Append-only ledger of every balance-chang
 -- reconciliation fail for every pre-existing vault with a nonzero balance.
 -- One immutable row per vault: before=0, after=current_balance, actor is a
 -- fixed system label (not a real user), same convention as
--- balanceaudit.SystemActor.
+-- balanceaudit.SystemActor. created_at is left to the column default (NOW())
+-- rather than backdated to v.created_at: the vault's balance may have
+-- changed many times between vault creation and this migration running, none
+-- of which is recorded, so stamping the vault's creation time on an entry
+-- that actually reflects the balance as of the migration run would be
+-- misleading.
 INSERT INTO balance_audit_log (
-    vault_id, user_id, actor, operation, amount, balance_before, balance_after, created_at
+    vault_id, user_id, actor, operation, amount, balance_before, balance_after
 )
 SELECT
     v.id,
@@ -57,8 +62,7 @@ SELECT
     'opening_balance',
     v.current_balance,
     0,
-    v.current_balance,
-    v.created_at
+    v.current_balance
 FROM vaults v
 WHERE NOT EXISTS (
     SELECT 1 FROM balance_audit_log b WHERE b.vault_id = v.id
