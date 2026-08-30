@@ -444,7 +444,7 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 			currentAllocation = append(currentAllocation, analytics.CurrentAllocation{
 				Protocol:      protocol,
 				AllocationPCT: allocationPCT,
-				Balance:    amount,
+				Balance:       amount,
 				APY:           avgAPY,
 			})
 		}
@@ -513,7 +513,7 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 		vaultsInfo = append(vaultsInfo, analytics.VaultInfo{
 			ID:             vault.ID.String(),
 			Name:           vault.ContractAddress,
-			Balance:     vault.CurrentBalance,
+			Balance:        vault.CurrentBalance,
 			APY:            0, // placeholder - would calculate from allocations
 			YieldEarned:    vault.YieldEarned,
 			LockPeriodDays: lockPeriodDays,

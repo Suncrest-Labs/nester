@@ -40,10 +40,21 @@ spec:
                 secretKeyRef:
                   name: nester-staging-secrets
                   key: redis-url
+            # Sourced from a ConfigMap rather than inlined: these are the
+            # testnet addresses the staging deploy points at, and they change
+            # whenever the contracts are redeployed. The literals that were
+            # here were not valid Stellar contract IDs, so a cluster applying
+            # this manifest unchanged came up pointing at nothing.
             - name: CONTRACT_ADDRESS_VAULT_FACTORY
-              value: "CC7B2STAGINGVAULTFACTORYTESTNETADDRESS"
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-staging-contracts
+                  key: vault-factory-address
             - name: CONTRACT_ADDRESS_YIELD_REGISTRY
-              value: "CC7B2STAGINGYIELDREGISTRYTESTNETADDRESS"
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-staging-contracts
+                  key: yield-registry-address
             - name: FUNDED_TEST_ACCOUNT_SECRET
               valueFrom:
                 secretKeyRef:

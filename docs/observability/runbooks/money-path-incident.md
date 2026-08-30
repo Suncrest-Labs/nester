@@ -42,7 +42,23 @@ When a deposit, withdrawal, or core money-path transaction is stuck or failing a
 
 ### How to Remediate
 - **If Soroban RPC is timing out / degraded:** Fail over to backup RPC endpoint by updating `STELLAR_RPC_URL` in Vault secret / environment config and restarting pods.
-- **If stuck in pending submission queue due to nonce or gas mismatch:** Use the admin CLI tool or database transaction review to inspect the submission. If safe and unconfirmed on-chain after 15 minutes, re-queue or cancel via administrative override.
+- **If stuck in the pending queue:** The backlog behind `submission:pending:count` is rows in `transactions` with `status = 'pending'` and a non-null `tx_hash`; the transaction poller reconciles them against the chain. Inspect the oldest directly:
+
+  ```sql
+  SELECT id, vault_id, type, amount, tx_hash, created_at, error_reason
+  FROM transactions
+  WHERE status = 'pending' AND tx_hash IS NOT NULL
+  ORDER BY created_at ASC
+  LIMIT 20;
+  ```
+
+  Take each `tx_hash` to Horizon before touching the row — the chain, not the database, is the source of truth for whether the money moved:
+
+  ```bash
+  curl -s "$HORIZON_URL/transactions/<TX_HASH>" | jq '{successful, ledger, created_at}'
+  ```
+
+  If Horizon reports the transaction succeeded, the submission landed and only reconciliation is behind: leave the row alone and let the poller catch up, or restart the API to restart polling. If Horizon returns 404 well past the ledger close window, the transaction never landed and the row can be failed so the user can retry. Do not mark a row confirmed by hand.
 - **If database connection pool is exhausted:** Scale up connection limit or restart API instances if leaked connections are holding locks.
 
 ### How to Verify Recovery
@@ -137,3 +153,35 @@ When a deposit, withdrawal, or core money-path transaction is stuck or failing a
 - `/healthz` endpoint returns HTTP 200.
 - Database connection pool metrics stabilize (`nester_db_pool_acquired_connections` well below max).
 - API 5xx rate drops back to baseline (<0.1%).
+
+---
+
+## Rehearsal
+
+**Status: not yet rehearsed.** Issue #1113 requires this runbook to be walked
+through against staging and corrected from what the walkthrough exposes. That
+has not happened, and it is the remaining work on this document — every
+procedure below the detection queries is reasoned from the code rather than
+confirmed by having done it.
+
+Rehearse against the staging environment from #1114, not production. Reset it
+first (`docs/observability/runbooks/staging-reset-procedure.md`) so the drill
+starts from a known state.
+
+Suggested drill order, cheapest to most disruptive:
+
+1. **RPC outage.** Point `STELLAR_RPC_URL` at an unroutable address, submit a
+   deposit, and confirm `nester_outbound_errors_total{upstream="soroban_rpc"}`
+   climbs and the dApp degrades honestly rather than spinning.
+2. **Indexer stall.** Stop the indexer, confirm `IndexerLagHigh` fires and that
+   the lag figures in section 2 match what the runbook says to look at.
+3. **Stuck deposit.** Kill the API between chain submission and reconciliation,
+   then follow section 1 end to end — including the Horizon check — and confirm
+   the row resolves the way the runbook claims.
+4. **Database failover.** Restart the Postgres container under load and confirm
+   the pool recovers without a manual API restart, or correct section 4 if it
+   does not.
+
+What a rehearsal is for is finding the steps that read plausibly and do not
+work. Correct this document in place from what each drill exposes, and replace
+this section with the date and findings once all six scenarios have been run.
