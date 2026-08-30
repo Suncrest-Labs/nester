@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -54,7 +55,45 @@ import (
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
-var version = "dev"
+// version and commit identify the running build. Both are injected at link
+// time (see the ldflags in the Dockerfile and the release workflow); the
+// defaults are what a plain `go build` or `go run` produces locally.
+//
+// commit falls back to the VCS revision Go stamps into the build info, so a
+// binary built without explicit ldflags still reports what it was built from
+// rather than "unknown" (issue #1117).
+var (
+	version = "dev"
+	commit  = ""
+)
+
+// buildCommit returns the commit the binary was built from, preferring the
+// ldflags value and falling back to the VCS stamp Go records automatically.
+func buildCommit() string {
+	if commit != "" {
+		return commit
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	var revision, modified string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value
+		}
+	}
+	if revision == "" {
+		return "unknown"
+	}
+	if modified == "true" {
+		return revision + "-dirty"
+	}
+	return revision
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -98,6 +137,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// Stamp the build into the first log line so what is deployed can be read
+	// straight off the logs, not only from /health/detailed (issue #1117).
+	baseLogger.Info("starting nester api", "version", version, "commit", buildCommit())
 
 	// Created early (rather than just before ListenAndServe, as before) so
 	// components that need to release resources as soon as shutdown begins —
@@ -821,6 +864,7 @@ func run() error {
 		startedAt:    startedAt,
 		environment:  cfg.Environment(),
 		buildVersion: version,
+		buildCommit:  buildCommit(),
 		breakers:     chainBreakers.readers(),
 	}
 	// Left nil when Redis is unconfigured, so readiness does not fail an
@@ -2001,6 +2045,7 @@ type healthDeps struct {
 	startedAt    time.Time
 	environment  string
 	buildVersion string
+	buildCommit  string
 
 	// breakers is keyed by upstream; nil entries mean that dependency is not
 	// guarded. The probes below deliberately do NOT go through these clients:
@@ -2159,6 +2204,7 @@ type detailedHealthResponse struct {
 	Status      string           `json:"status"`
 	Environment string           `json:"environment"`
 	Version     string           `json:"version"`
+	Commit      string           `json:"commit"`
 	UptimeSecs  int64            `json:"uptime_seconds"`
 	Database    dbStatus         `json:"database"`
 	Redis       redisStatus      `json:"redis"`
@@ -2203,6 +2249,7 @@ func detailedHealthHandler(deps healthDeps) http.HandlerFunc {
 			Status:      "ok",
 			Environment: deps.environment,
 			Version:     deps.buildVersion,
+			Commit:      deps.buildCommit,
 			UptimeSecs:  int64(time.Since(deps.startedAt).Seconds()),
 			GeneratedAt: time.Now().UTC(),
 		}

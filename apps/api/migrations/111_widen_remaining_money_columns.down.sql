@@ -1,3 +1,4 @@
+-- migration:irreversible
 -- Revert the money columns widened by 111 to their previous precision.
 --
 -- This narrowing is lossy by nature: any amount that needed the widened range

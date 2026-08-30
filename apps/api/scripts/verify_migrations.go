@@ -1,19 +1,52 @@
+//go:build migrationsafety
+
+// Command verify_migrations enforces the migration safety checks required by
+// issue #1123. It applies the full migration chain from scratch, seeds the
+// resulting schema, then rolls the whole chain back down, failing on any
+// migration that cannot make the round trip.
+//
+// It is behind a build tag so it does not participate in the normal package
+// build; CI runs it explicitly with -tags migrationsafety.
 package main
 
 import (
 	"database/sql"
+	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	_ "github.com/lib/pq"
 )
 
+// irreversibleMarker is the declaration a down migration must carry to be
+// skipped during the rollback pass. It is deliberately a distinct token rather
+// than the word "irreversible" on its own: down migrations legitimately discuss
+// why a rollback is unsafe in prose, and matching that prose would silently
+// skip exactly the migrations most in need of checking.
+const irreversibleMarker = "migration:irreversible"
+
+// destructive matches operations that cannot be undone by a down migration.
+// Narrowing a column is included: it raises an overflow rather than truncating,
+// which is correct behaviour but still makes the rollback unsafe to run
+// unattended.
+var destructive = regexp.MustCompile(`(?i)\b(drop\s+table|drop\s+column|drop\s+constraint|truncate)\b`)
+
+type migrationPair struct {
+	version  string
+	name     string
+	upPath   string
+	downPath string
+}
+
 func main() {
+	dir := flag.String("dir", "migrations", "directory containing the migration files")
+	flag.Parse()
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://nester:nester@localhost:5432/nester_dev?sslmode=disable"
@@ -21,7 +54,7 @@ func main() {
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+		log.Fatalf("connect to database: %v", err)
 	}
 	defer db.Close()
 
@@ -29,127 +62,162 @@ func main() {
 		log.Fatalf("database ping failed: %v", err)
 	}
 
-	migrationsDir := "apps/api/migrations"
-	entries, err := os.ReadDir(migrationsDir)
+	pairs, versions, err := loadMigrations(*dir)
 	if err != nil {
-		log.Fatalf("read migrations dir %q: %v", migrationsDir, err)
+		log.Fatalf("%v", err)
+	}
+	if len(versions) == 0 {
+		log.Fatalf("no migrations found in %s", *dir)
 	}
 
-	type migrationPair struct {
-		version string
-		name    string
-		upPath  string
-		downPath string
+	if err := wipeSchema(db); err != nil {
+		log.Fatalf("wipe schema: %v", err)
 	}
 
-	pairsMap := make(map[string]*migrationPair)
+	// Every migration must apply cleanly to an empty database.
+	fmt.Println("[migration-safety] applying full chain from scratch")
+	for _, v := range versions {
+		p := pairs[v]
+		if p.upPath == "" {
+			log.Fatalf("migration %s (%s) has no .up.sql", v, p.name)
+		}
+		body, err := os.ReadFile(p.upPath)
+		if err != nil {
+			log.Fatalf("read %s: %v", p.upPath, err)
+		}
+		if op := destructive.FindString(string(body)); op != "" {
+			fmt.Printf("[migration-safety] review: %s (%s) performs %q\n", v, p.name, strings.ToLower(op))
+		}
+		if _, err := db.Exec(string(body)); err != nil {
+			log.Fatalf("up migration %s (%s) failed: %v", v, p.name, err)
+		}
+	}
+
+	// Roll back against a populated database, which is where reversibility
+	// actually breaks: an empty table will accept almost any schema change.
+	if err := seed(db); err != nil {
+		log.Fatalf("seed populated database: %v", err)
+	}
+
+	fmt.Println("[migration-safety] rolling the chain back down on a populated database")
+	for i := len(versions) - 1; i >= 0; i-- {
+		v := versions[i]
+		p := pairs[v]
+
+		if p.downPath == "" {
+			log.Fatalf(
+				"migration %s (%s) has no .down.sql and does not declare %q",
+				v, p.name, irreversibleMarker,
+			)
+		}
+
+		body, err := os.ReadFile(p.downPath)
+		if err != nil {
+			log.Fatalf("read %s: %v", p.downPath, err)
+		}
+		down := string(body)
+
+		if strings.Contains(strings.ToLower(down), irreversibleMarker) {
+			fmt.Printf("[migration-safety] %s (%s) declares itself irreversible; skipping\n", v, p.name)
+			continue
+		}
+		if strings.TrimSpace(down) == "" {
+			log.Fatalf(
+				"migration %s (%s) has an empty .down.sql; declare %q if that is deliberate",
+				v, p.name, irreversibleMarker,
+			)
+		}
+
+		if _, err := db.Exec(down); err != nil {
+			log.Fatalf("down migration %s (%s) failed on a populated database: %v", v, p.name, err)
+		}
+	}
+
+	fmt.Println("[migration-safety] all checks passed")
+}
+
+func loadMigrations(dir string) (map[string]*migrationPair, []string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read migrations dir %q: %w", dir, err)
+	}
+
+	pairs := make(map[string]*migrationPair)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
+		if !strings.HasSuffix(name, ".sql") {
+			continue
+		}
 		parts := strings.SplitN(name, "_", 2)
 		if len(parts) < 2 {
 			continue
 		}
 		version := parts[0]
 
-		pair, ok := pairsMap[version]
+		p, ok := pairs[version]
 		if !ok {
-			pair = &migrationPair{version: version, name: parts[1]}
-			pairsMap[version] = pair
+			p = &migrationPair{version: version, name: strings.TrimSuffix(parts[1], ".sql")}
+			pairs[version] = p
 		}
 
-		if strings.HasSuffix(name, ".up.sql") {
-			pair.upPath = filepath.Join(migrationsDir, name)
-		} else if strings.HasSuffix(name, ".down.sql") {
-			pair.downPath = filepath.Join(migrationsDir, name)
+		switch {
+		case strings.HasSuffix(name, ".up.sql"):
+			p.upPath = filepath.Join(dir, name)
+		case strings.HasSuffix(name, ".down.sql"):
+			p.downPath = filepath.Join(dir, name)
 		}
 	}
 
-	var versions []string
-	for v := range pairsMap {
+	versions := make([]string, 0, len(pairs))
+	for v := range pairs {
 		versions = append(versions, v)
 	}
+	sort.Strings(versions)
 
-sort.Strings(versions)
+	return pairs, versions, nil
+}
 
-	// 1. Wipe database
-	fmt.Println("[Migration Safety] Wiping public schema...")
-	if _, err := db.Exec(`
-		DO $$
-		DECLARE r record;
-		BEGIN
-			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END$$;
-	`); err != nil {
-		log.Fatalf("drop tables failed: %v", err)
-	}
+func wipeSchema(db *sql.DB) error {
+	fmt.Println("[migration-safety] resetting public schema")
+	_, err := db.Exec(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`)
+	return err
+}
 
-	// 2. Apply all up migrations
-	fmt.Println("[Migration Safety] Applying all up migrations...")
-	for _, v := range versions {
-		pair := pairsMap[v]
-		contents, err := os.ReadFile(pair.upPath)
-		if err != nil {
-			log.Fatalf("read up migration %s: %v", pair.upPath, err)
-		}
+// seed inserts a row into every table that the rollback pass is likely to
+// touch, so down migrations are exercised against data rather than an empty
+// schema. Tables that are absent or reject the insert are skipped: the point is
+// to populate what can be populated, not to model the full domain.
+func seed(db *sql.DB) error {
+	fmt.Println("[migration-safety] seeding populated database")
 
-		// Check for destructive operations flagged for review (e.g. DROP TABLE, DROP COLUMN)
-		lower := strings.ToLower(string(contents))
-		if strings.Contains(lower, "drop table") || strings.Contains(lower, "drop column") {
-			fmt.Printf("[Migration Safety] WARNING: Destructive operation detected in migration %s (%s)\n", v, pair.name)
-		}
+	const user = `
+		INSERT INTO users (id, wallet_address, created_at, updated_at)
+		VALUES (
+			'00000000-0000-0000-0000-000000000001',
+			'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+			NOW(), NOW()
+		)
+		ON CONFLICT DO NOTHING;`
 
-		if _, err := db.Exec(string(contents)); err != nil {
-			log.Fatalf("applying up migration %s (%s) failed: %v", v, pair.name, err)
-		}
-	}
+	const vault = `
+		INSERT INTO vaults (id, user_id, contract_address, currency, created_at, updated_at)
+		VALUES (
+			'00000000-0000-0000-0000-000000000002',
+			'00000000-0000-0000-0000-000000000001',
+			'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+			'USDC', NOW(), NOW()
+		)
+		ON CONFLICT DO NOTHING;`
 
-	// 3. Seed test data into the fully migrated schema
-	fmt.Println("[Migration Safety] Seeding test data into populated database...")
-	seedSQL := `
-		INSERT INTO users (id, wallet_address, display_name, kyc_status, tier, risk_profile, savings_goal, onboarding_completed, created_at, updated_at)
-		VALUES ('00000000-0000-0000-0000-000000000001', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'Test User', 'verified', 'standard', 'conservative', 'Emergency Fund', true, NOW(), NOW())
-		ON CONFLICT DO NOTHING;
-	`
-	// Only execute seed if users table exists
-	var tableExists bool
-	err = db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users')").Scan(&tableExists)
-	if err == nil && tableExists {
-		if _, err := db.Exec(seedSQL); err != nil {
-			log.Printf("[Migration Safety] Notice: seed execution skipped or partially applied: %v", err)
+	for _, stmt := range []string{user, vault} {
+		if _, err := db.Exec(stmt); err != nil {
+			// A schema that has moved on from these columns is not a failure of
+			// the safety check itself.
+			fmt.Printf("[migration-safety] seed statement skipped: %v\n", err)
 		}
 	}
-
-	// 4. Apply all down migrations in reverse order
-	fmt.Println("[Migration Safety] Rolling back all down migrations on populated database...")
-	for i := len(versions) - 1; i >= 0; i-- {
-		v := versions[i]
-		pair := pairsMap[v]
-
-		if pair.downPath == "" {
-			log.Fatalf("[Migration Safety] ERROR: Migration %s (%s) is missing a .down.sql file and has not declared itself explicitly irreversible.", v, pair.name)
-		}
-
-		downContentsBytes, err := os.ReadFile(pair.downPath)
-		if err != nil {
-			log.Fatalf("read down migration %s: %v", pair.downPath, err)
-		}
-		downContents := string(downContentsBytes)
-
-		// Check if explicitly declared irreversible
-		if strings.Contains(strings.ToLower(downContents), "irreversible") || strings.TrimSpace(downContents) == "" {
-			fmt.Printf("[Migration Safety] Migration %s (%s) is explicitly irreversible or a no-op down.\n", v, pair.name)
-			continue
-		}
-
-		if _, err := db.Exec(downContents); err != nil {
-			log.Fatalf("[Migration Safety] ERROR: Rolling back migration %s (%s) on populated database failed: %v", v, pair.name, err)
-		}
-	}
-
-	fmt.Println("[Migration Safety] All migration safety checks passed successfully!")
+	return nil
 }

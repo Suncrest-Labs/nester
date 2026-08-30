@@ -551,6 +551,17 @@ jobs:
             echo "OK: No migration prefix collisions."
           fi
 
+      # Collision checking above proves the chain is well-named, not that it
+      # works. This applies every migration from scratch, seeds the result, then
+      # rolls the whole chain back down — reversibility breaks against data, not
+      # against an empty schema (issue #1123). A migration that cannot make the
+      # round trip fails the build; one that is deliberately irreversible has to
+      # say so with a `migration:irreversible` marker in its .down.sql.
+      - name: Check migration safety (up, seed, down)
+        env:
+          DATABASE_URL: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
+        run: go run -tags migrationsafety ./scripts/verify_migrations.go -dir migrations
+
       - name: Build
         run: go build ./...
 
