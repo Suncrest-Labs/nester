@@ -214,23 +214,24 @@ func TestWorkerIntegration_WorkerDiesMidJob(t *testing.T) {
 	// Config.withDefaults() rewrites HeartbeatInterval <= 0 to Lease/3, so the
 	// heartbeat cannot be switched off through config: w1 would renew its lease
 	// forever and the job would never become reclaimable. Bound the handler with
-	// JobTimeout instead (withDefaults leaves it alone). When it fires, the job
-	// context is cancelled, the heartbeat goroutine returns on <-ctx.Done(), and
-	// the lease is left to lapse the way a hard crash leaves it.
+	// JobTimeout instead (withDefaults leaves it alone). When it fires the job
+	// context is cancelled and the heartbeat goroutine returns, so the lease is
+	// left to lapse the way a hard crash leaves it.
 	cfg.JobTimeout = 300 * time.Millisecond
 
 	// w1 claims the job and hangs until its JobTimeout fires. Concurrency is
 	// pinned to 1 so w1 can never take a second copy of its own job.
 	w1 := jobqueue.NewWorker(repo, cfg, nil, nil).
-		Register("die", jobqueue.HandlerFunc(func(ctx context.Context, job jobqueue.Job) error {
+		Register("die", jobqueue.HandlerFunc(func(_ context.Context, _ jobqueue.Job) error {
 			w1Claims.Add(1)
 			close(firstClaimStarted)
-			select {
-			case <-ctx.Done(): // JobTimeout fired: heartbeat stops, lease lapses
-			case <-releaseW1:
-			}
-			// Return nil rather than ctx.Err(): a non-nil error would make w1
-			// reschedule the job and could clobber w2's terminal write.
+			// A crashed worker never records an outcome. Block until the test
+			// tears down so w1 writes no terminal state at all: if this handler
+			// returned, process() would mark the job complete or reschedule it
+			// and w2 would have nothing left to reclaim. JobTimeout still fires
+			// underneath, cancelling the job context and stopping the heartbeat
+			// so the lease lapses and w2 can take the job.
+			<-releaseW1
 			return nil
 		}), 1)
 
@@ -251,7 +252,7 @@ func TestWorkerIntegration_WorkerDiesMidJob(t *testing.T) {
 	t.Cleanup(func() { close(releaseW1) })
 
 	w2 := jobqueue.NewWorker(repo, cfg, nil, nil).
-		Register("die", jobqueue.HandlerFunc(func(ctx context.Context, job jobqueue.Job) error {
+		Register("die", jobqueue.HandlerFunc(func(_ context.Context, _ jobqueue.Job) error {
 			w2Claims.Add(1)
 			return nil
 		}), 1)
