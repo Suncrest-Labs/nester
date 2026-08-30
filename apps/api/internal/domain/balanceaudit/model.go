@@ -12,7 +12,7 @@
 // the team doesn't yet need.
 //
 // Retention: rows are kept indefinitely; see the comment on the
-// balance_audit_log table (migration 108) for the growth-rate rationale.
+// balance_audit_log table (migration 110) for the growth-rate rationale.
 package balanceaudit
 
 import (
@@ -36,7 +36,7 @@ const (
 	OperationRebalanceWithdraw Operation = "rebalance_withdraw"
 	OperationRebalanceDeposit  Operation = "rebalance_deposit"
 	OperationEmergencyWithdraw Operation = "emergency_withdraw"
-	// OperationOpeningBalance marks the one immutable entry migration 108
+	// OperationOpeningBalance marks the one immutable entry migration 110
 	// inserts per pre-existing vault, recording whatever balance it already
 	// held before the audit trail started (before=0, after=current balance
 	// at migration time). Without it, Reconcile (which sums from zero) would
@@ -110,11 +110,11 @@ type Repository interface {
 // vault's live current_balance is the reconciliation check (nester#1124):
 // equal means the audit trail fully accounts for the current balance.
 //
-// This is only correct because migration 108 inserts an OperationOpeningBalance
+// This is only correct because migration 110 inserts an OperationOpeningBalance
 // entry (before=0, after=current balance at migration time) for every vault
 // that already existed when the ledger table was created — otherwise summing
 // from zero would omit whatever balance a pre-existing vault already held.
-// Every vault, including ones created after migration 108, therefore has an
+// Every vault, including ones created after migration 110, therefore has an
 // unbroken chain of entries back to a true balance-before-history of zero.
 func Reconcile(entries []Entry) decimal.Decimal {
 	total := decimal.Zero
