@@ -552,6 +552,9 @@ func (r *VaultRepository) RecordWithdrawalWithAudit(
 		}
 		return balanceaudit.Entry{}, err
 	}
+	if before.LessThan(record.Amount) {
+		return balanceaudit.Entry{}, vault.ErrWithdrawalExceedsPosition
+	}
 
 	result, err := tx.ExecContext(
 		ctx,
