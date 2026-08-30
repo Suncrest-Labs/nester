@@ -11,7 +11,7 @@ import (
 )
 
 // BalanceAuditRepository persists the append-only balance change ledger
-// (nester#1124, migration 108). It intentionally exposes no Update or
+// (nester#1124, migration 110). It intentionally exposes no Update or
 // Delete method.
 type BalanceAuditRepository struct {
 	db *sql.DB
