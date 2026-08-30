@@ -315,8 +315,8 @@ func aggregateDailySnapshots(
 		}
 		out = append(out, analytics.DailySnapshot{
 			Date:            key,
-			TotalBalanceUSD: balance.InexactFloat64(),
-			YieldEarnedUSD:  yield.InexactFloat64(),
+			TotalBalanceUSD: balance,
+			YieldEarnedUSD:  yield,
 		})
 	}
 
@@ -372,7 +372,7 @@ func buildVaultMonthlyYield(
 				VaultID:   v.ID.String(),
 				VaultName: name,
 				Month:     month,
-				YieldUSD:  cumulative.Sub(prevCumulative).InexactFloat64(),
+				YieldUSD:  cumulative.Sub(prevCumulative),
 			})
 			prevCumulative = cumulative
 		}
@@ -444,7 +444,7 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 			currentAllocation = append(currentAllocation, analytics.CurrentAllocation{
 				Protocol:      protocol,
 				AllocationPCT: allocationPCT,
-				BalanceUSD:    amount.InexactFloat64(),
+				Balance:       amount,
 				APY:           avgAPY,
 			})
 		}
@@ -513,9 +513,9 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 		vaultsInfo = append(vaultsInfo, analytics.VaultInfo{
 			ID:             vault.ID.String(),
 			Name:           vault.ContractAddress,
-			BalanceUSD:     vault.CurrentBalance.InexactFloat64(),
+			Balance:        vault.CurrentBalance,
 			APY:            0, // placeholder - would calculate from allocations
-			YieldEarned:    vault.YieldEarned.InexactFloat64(),
+			YieldEarned:    vault.YieldEarned,
 			LockPeriodDays: lockPeriodDays,
 		})
 	}
@@ -525,14 +525,14 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 		VaultMonthlyYield: vaultMonthlyYield,
 		CurrentAllocation: currentAllocation,
 		PerformanceMetrics: analytics.PerformanceMetrics{
-			TotalYieldEarned: totalYieldEarned.InexactFloat64(),
+			TotalYieldEarned: totalYieldEarned,
 			YieldChangePCT:   yieldChangePCT,
 			BestVaultName:    bestVaultName,
 			BestVaultAPY:     bestVaultAPY,
 			AverageAPY:       averageAPY,
-			TotalDeposited:   totalDeposited.InexactFloat64(),
-			TotalWithdrawn:   totalWithdrawn.InexactFloat64(),
-			NetPosition:      netPosition.InexactFloat64(),
+			TotalDeposited:   totalDeposited,
+			TotalWithdrawn:   totalWithdrawn,
+			NetPosition:      netPosition,
 		},
 		Vaults: vaultsInfo,
 	}, nil

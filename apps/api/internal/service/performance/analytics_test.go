@@ -94,11 +94,11 @@ func TestGetUserAnalytics_DailySnapshotsAggregateAllVaults(t *testing.T) {
 
 	// Day one: 100 + 500 balance, 10 + 50 yield — not either vault alone.
 	got := resp.DailySnapshots[0]
-	if got.Date != "2026-03-01" || got.TotalBalanceUSD != 600 || got.YieldEarnedUSD != 60 {
+	if got.Date != "2026-03-01" || !got.TotalBalanceUSD.Equal(decimal.NewFromInt(600)) || !got.YieldEarnedUSD.Equal(decimal.NewFromInt(60)) {
 		t.Fatalf("day one must sum both vaults, got %+v", got)
 	}
 	got = resp.DailySnapshots[1]
-	if got.Date != "2026-03-02" || got.TotalBalanceUSD != 630 || got.YieldEarnedUSD != 90 {
+	if got.Date != "2026-03-02" || !got.TotalBalanceUSD.Equal(decimal.NewFromInt(630)) || !got.YieldEarnedUSD.Equal(decimal.NewFromInt(90)) {
 		t.Fatalf("day two must sum both vaults, got %+v", got)
 	}
 }
@@ -131,7 +131,7 @@ func TestGetUserAnalytics_CarriesVaultForwardAcrossMissingDays(t *testing.T) {
 		t.Fatalf("expected 2 daily snapshots, got %+v", resp.DailySnapshots)
 	}
 	// 110 (day two) + 500 (carried from day one), not 110 alone.
-	if got := resp.DailySnapshots[1]; got.TotalBalanceUSD != 610 {
+	if got := resp.DailySnapshots[1]; !got.TotalBalanceUSD.Equal(decimal.NewFromInt(610)) {
 		t.Fatalf("expected the un-snapshotted vault to carry forward, got %+v", got)
 	}
 }
@@ -160,12 +160,12 @@ func TestGetUserAnalytics_PopulatesVaultMonthlyYield(t *testing.T) {
 	}
 
 	first := resp.VaultMonthlyYield[0]
-	if first.Month != "2026-03" || first.YieldUSD != 30 || first.VaultID != vaultA.String() {
+	if first.Month != "2026-03" || !first.YieldUSD.Equal(decimal.NewFromInt(30)) || first.VaultID != vaultA.String() {
 		t.Fatalf("March entry wrong: %+v", first)
 	}
 	second := resp.VaultMonthlyYield[1]
 	// 80 cumulative minus 30 already earned = 50 earned in April.
-	if second.Month != "2026-04" || second.YieldUSD != 50 {
+	if second.Month != "2026-04" || !second.YieldUSD.Equal(decimal.NewFromInt(50)) {
 		t.Fatalf("April entry must report the month's growth, not the cumulative total: %+v", second)
 	}
 }
@@ -210,7 +210,7 @@ func TestGetUserAnalytics_VaultWithoutSnapshotsIsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserAnalytics: %v", err)
 	}
-	if len(resp.DailySnapshots) != 1 || resp.DailySnapshots[0].TotalBalanceUSD != 100 {
+	if len(resp.DailySnapshots) != 1 || !resp.DailySnapshots[0].TotalBalanceUSD.Equal(decimal.NewFromInt(100)) {
 		t.Fatalf("expected only the snapshotted vault to contribute, got %+v", resp.DailySnapshots)
 	}
 	for _, entry := range resp.VaultMonthlyYield {

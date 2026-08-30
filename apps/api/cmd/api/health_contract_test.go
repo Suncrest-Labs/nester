@@ -283,7 +283,9 @@ func (tc healthContractCase) assertDetailedContract(t *testing.T, raw []byte) {
 		t.Fatalf("GET %s returned invalid JSON: %v (body %q)", tc.path, err, raw)
 	}
 	assertKeySet(t, "response", envelope,
-		[]string{"status", "environment", "version", "uptime_seconds", "database", "redis", "horizon", "soroban_rpc", "generated_at"},
+		// "commit" joins "version" here: #1117 requires the running build to be
+		// identifiable from the status endpoint, not only from the logs.
+		[]string{"status", "environment", "version", "commit", "uptime_seconds", "database", "redis", "horizon", "soroban_rpc", "generated_at"},
 		nil)
 
 	// latency_ms and error are omitempty, so they are permitted rather than

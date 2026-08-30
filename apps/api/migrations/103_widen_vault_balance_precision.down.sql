@@ -1,3 +1,4 @@
+-- migration:irreversible
 -- Revert vault balance columns to NUMERIC(20,8).
 --
 -- This narrowing is lossy by nature: any balance that needed the widened range
