@@ -1,7 +1,7 @@
 /**
  * prd-register.test.js
  * 
- * Test suite for LAUNCH_READINESS_REGISTER.md
+ * Test suite for docs/launch-readiness-register.md
  * 
  * Verifies:
  * 1. Register file exists and is well-formed
@@ -17,7 +17,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const { describe, it, beforeAll } = require('@jest/globals');
 
-const REGISTER_PATH = path.join(__dirname, '..', 'LAUNCH_READINESS_REGISTER.md');
+const REGISTER_PATH = path.join(__dirname, '..', 'docs', 'launch-readiness-register.md');
 const EVIDENCE_JSON_PATH = path.join(__dirname, '..', 'docs', 'launch-readiness-evidence.json');
 const VERIFY_SCRIPT = path.join(__dirname, '..', 'scripts', 'verify-prd-refs.js');
 const REPO_ROOT = path.join(__dirname, '..');

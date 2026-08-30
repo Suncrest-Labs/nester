@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, panic_with_error, symbol_short,
-    Address, Env, Vec, Symbol, vec, Val, IntoVal,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, vec,
+    Address, Env, IntoVal, Symbol, Val, Vec,
 };
 
 // ── Error codes ───────────────────────────────────────────────────────────────
@@ -10,11 +10,11 @@ use soroban_sdk::{
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum AggregatorError {
-    NoRoutesFound    = 1,
+    NoRoutesFound = 1,
     SlippageExceeded = 2,
-    MaxHopsExceeded  = 3,
-    EmptyPath        = 4,
-    InvalidMaxHops   = 5,
+    MaxHopsExceeded = 3,
+    EmptyPath = 4,
+    InvalidMaxHops = 5,
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -23,16 +23,16 @@ pub enum AggregatorError {
 #[derive(Clone)]
 pub struct SwapHop {
     pub pool_address: Address,
-    pub token_in:     Address,
-    pub token_out:    Address,
-    pub amount_in:    i128,
+    pub token_in: Address,
+    pub token_out: Address,
+    pub amount_in: i128,
 }
 
 #[contracttype]
 #[derive(Clone)]
 pub struct SwapRoute {
-    pub hops:             Vec<SwapHop>,
-    pub expected_out:     i128,
+    pub hops: Vec<SwapHop>,
+    pub expected_out: i128,
     pub price_impact_bps: u32,
 }
 
@@ -41,7 +41,7 @@ pub struct SwapRoute {
 /// Default maximum hops for execute_path_payment (prevents unbounded execution cost).
 const MAX_HOPS_DEFAULT: u32 = 3;
 /// Hard ceiling for find_paths max_hops parameter.
-const MAX_HOPS_LIMIT: u32   = 5;
+const MAX_HOPS_LIMIT: u32 = 5;
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
@@ -59,20 +59,29 @@ impl LpAggregator {
             .unwrap_or(vec![env])
     }
 
-    /// Simulate a single-pool swap using the constant-product formula.
-    /// Attempts to call the pool's `get_reserves` for live reserve data; falls back
-    /// to 1:1 reserves when the call is unavailable (e.g. in unit tests).
-    fn simulate_swap(env: &Env, pool: Address, amount_in: i128) -> SwapRoute {
+    /// Simulate a single-pool swap using the constant-product formula, priced
+    /// off the pool's real, live reserves.
+    ///
+    /// Calls the pool's `get_reserves` and returns `None` if the call fails
+    /// or the pool reports non-positive reserves (e.g. an unregistered or
+    /// misbehaving pool address) — callers skip that route rather than
+    /// pricing a swap against fabricated 1:1 reserves (nester#1189).
+    fn simulate_swap(env: &Env, pool: Address, amount_in: i128) -> Option<SwapRoute> {
         let args: Vec<Val> = vec![env];
-        // Use try_invoke_contract so tests with unregistered pool addresses don't panic.
-        let _ = env.try_invoke_contract::<Val, AggregatorError>(
-            &pool,
-            &Symbol::new(env, "get_reserves"),
-            args,
-        );
+        let (reserve_in, reserve_out) = match env
+            .try_invoke_contract::<(i128, i128), AggregatorError>(
+                &pool,
+                &Symbol::new(env, "get_reserves"),
+                args,
+            ) {
+            Ok(Ok(reserves)) => reserves,
+            _ => return None,
+        };
+        if reserve_in <= 0 || reserve_out <= 0 {
+            return None;
+        }
 
         // Constant product: output = (amount_in * reserve_out) / (reserve_in + amount_in)
-        let (reserve_in, reserve_out): (i128, i128) = (1_000_000, 1_000_000);
         let expected_out = (amount_in * reserve_out) / (reserve_in + amount_in);
 
         let price_impact_bps = if amount_in > 0 {
@@ -83,11 +92,15 @@ impl LpAggregator {
 
         let hop = SwapHop {
             pool_address: pool.clone(),
-            token_in:     pool.clone(),
-            token_out:    pool.clone(),
+            token_in: pool.clone(),
+            token_out: pool.clone(),
             amount_in,
         };
-        SwapRoute { hops: vec![env, hop], expected_out, price_impact_bps }
+        Some(SwapRoute {
+            hops: vec![env, hop],
+            expected_out,
+            price_impact_bps,
+        })
     }
 
     /// Execute one hop via cross-contract call to the pool's `swap` function.
@@ -123,17 +136,20 @@ impl LpAggregator {
         let mut best: Option<SwapRoute> = None;
 
         for pool in pools.iter() {
-            let route = Self::simulate_swap(&env, pool, amount_in);
+            let route = match Self::simulate_swap(&env, pool, amount_in) {
+                Some(r) => r,
+                None => continue,
+            };
             best = Some(match best {
-                None                                        => route,
+                None => route,
                 Some(b) if route.expected_out > b.expected_out => route,
-                Some(b)                                     => b,
+                Some(b) => b,
             });
         }
 
         match best {
             Some(r) => r,
-            None    => panic_with_error!(&env, AggregatorError::NoRoutesFound),
+            None => panic_with_error!(&env, AggregatorError::NoRoutesFound),
         }
     }
 
@@ -158,7 +174,9 @@ impl LpAggregator {
 
         // 1-hop: one pool directly
         for pool in pools.iter() {
-            routes.push_back(Self::simulate_swap(&env, pool, amount_in));
+            if let Some(route) = Self::simulate_swap(&env, pool, amount_in) {
+                routes.push_back(route);
+            }
         }
 
         if max_hops >= 2 {
@@ -168,26 +186,34 @@ impl LpAggregator {
                         continue;
                     }
 
-                    let first   = Self::simulate_swap(&env, pool_a.clone(), amount_in);
+                    let first = match Self::simulate_swap(&env, pool_a.clone(), amount_in) {
+                        Some(r) => r,
+                        None => continue,
+                    };
                     let mid_out = first.expected_out;
                     if mid_out <= 0 {
                         continue;
                     }
 
-                    let second = Self::simulate_swap(&env, pool_b.clone(), mid_out);
-                    let impact2 = first.price_impact_bps.saturating_add(second.price_impact_bps);
+                    let second = match Self::simulate_swap(&env, pool_b.clone(), mid_out) {
+                        Some(r) => r,
+                        None => continue,
+                    };
+                    let impact2 = first
+                        .price_impact_bps
+                        .saturating_add(second.price_impact_bps);
 
                     let hop_a = SwapHop {
                         pool_address: pool_a.clone(),
-                        token_in:     token_in.clone(),
-                        token_out:    pool_a.clone(),
+                        token_in: token_in.clone(),
+                        token_out: pool_a.clone(),
                         amount_in,
                     };
                     let hop_b = SwapHop {
                         pool_address: pool_b.clone(),
-                        token_in:     pool_a.clone(),
-                        token_out:    token_out.clone(),
-                        amount_in:    mid_out,
+                        token_in: pool_a.clone(),
+                        token_out: token_out.clone(),
+                        amount_in: mid_out,
                     };
                     let mut hops2: Vec<SwapHop> = vec![&env];
                     hops2.push_back(hop_a);
@@ -199,30 +225,37 @@ impl LpAggregator {
                             if pool_c == pool_a || pool_c == pool_b {
                                 continue;
                             }
-                            let third = Self::simulate_swap(&env, pool_c.clone(), second.expected_out);
+                            let third = match Self::simulate_swap(
+                                &env,
+                                pool_c.clone(),
+                                second.expected_out,
+                            ) {
+                                Some(r) => r,
+                                None => continue,
+                            };
                             if third.expected_out <= 0 {
                                 continue;
                             }
                             let impact3 = impact2.saturating_add(third.price_impact_bps);
                             let hop_c = SwapHop {
                                 pool_address: pool_c.clone(),
-                                token_in:     pool_b.clone(),
-                                token_out:    token_out.clone(),
-                                amount_in:    second.expected_out,
+                                token_in: pool_b.clone(),
+                                token_out: token_out.clone(),
+                                amount_in: second.expected_out,
                             };
                             let mut hops3 = hops2.clone();
                             hops3.push_back(hop_c);
                             routes.push_back(SwapRoute {
-                                hops:             hops3,
-                                expected_out:     third.expected_out,
+                                hops: hops3,
+                                expected_out: third.expected_out,
                                 price_impact_bps: impact3,
                             });
                         }
                     }
 
                     routes.push_back(SwapRoute {
-                        hops:             hops2,
-                        expected_out:     second.expected_out,
+                        hops: hops2,
+                        expected_out: second.expected_out,
                         price_impact_bps: impact2,
                     });
                 }
@@ -273,14 +306,14 @@ impl LpAggregator {
         let mut running = amount_in;
 
         for i in 0..hops {
-            let pool = pools.get(0).unwrap_or_else(|| {
-                panic_with_error!(&env, AggregatorError::NoRoutesFound)
-            });
+            let pool = pools
+                .get(0)
+                .unwrap_or_else(|| panic_with_error!(&env, AggregatorError::NoRoutesFound));
             let hop = SwapHop {
                 pool_address: pool,
-                token_in:     path.get(i).unwrap(),
-                token_out:    path.get(i + 1).unwrap(),
-                amount_in:    running,
+                token_in: path.get(i).unwrap(),
+                token_out: path.get(i + 1).unwrap(),
+                amount_in: running,
             };
             running = Self::execute_hop(&env, hop, running);
         }
@@ -314,20 +347,50 @@ impl LpAggregator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nester_test_utils::mocks::{MockAmmPool, MockAmmPoolClient};
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::Env;
 
+    /// Registers `n` real `MockAmmPool` contracts (not bare generated
+    /// addresses) so `simulate_swap`'s `get_reserves` cross-contract call has
+    /// a live pool to read from, each seeded with balanced 1_000_000/1_000_000
+    /// reserves — the same shape the old hardcoded fallback assumed, but now
+    /// actually read from the pool rather than fabricated (nester#1189).
     fn setup_with_pools(n: u32) -> (Env, Address, Vec<Address>) {
         let env = Env::default();
         let contract_id = env.register_contract(None, LpAggregator);
         let mut pools: Vec<Address> = vec![&env];
         for _ in 0..n {
-            pools.push_back(Address::generate(&env));
+            let pool_id = env.register_contract(None, MockAmmPool);
+            let pool = MockAmmPoolClient::new(&env, &pool_id);
+            let token_a = Address::generate(&env);
+            pool.initialize(&token_a, &1_000_000, &1_000_000);
+            pools.push_back(pool_id);
         }
         env.as_contract(&contract_id, || {
-            env.storage().instance().set(&symbol_short!("POOLS"), &pools);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("POOLS"), &pools);
         });
         (env, contract_id, pools)
+    }
+
+    /// Registers a single `MockAmmPool` with the given reserves, for tests
+    /// that need to control the reserve ratio or size directly.
+    fn setup_with_pool_reserves(reserve_a: i128, reserve_b: i128) -> (Env, Address, Address) {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, LpAggregator);
+        let pool_id = env.register_contract(None, MockAmmPool);
+        let pool = MockAmmPoolClient::new(&env, &pool_id);
+        let token_a = Address::generate(&env);
+        pool.initialize(&token_a, &reserve_a, &reserve_b);
+        let pools: Vec<Address> = vec![&env, pool_id.clone()];
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("POOLS"), &pools);
+        });
+        (env, contract_id, pool_id)
     }
 
     // ── find_paths ────────────────────────────────────────────────────────────
@@ -364,9 +427,7 @@ mod tests {
 
         let routes = client.find_paths(&ti, &to, &1_000_000, &3);
         for i in 1..routes.len() {
-            assert!(
-                routes.get(i - 1).unwrap().expected_out >= routes.get(i).unwrap().expected_out
-            );
+            assert!(routes.get(i - 1).unwrap().expected_out >= routes.get(i).unwrap().expected_out);
         }
     }
 
@@ -397,7 +458,7 @@ mod tests {
         let (env, contract_id, _) = setup_with_pools(2);
         let client = LpAggregatorClient::new(&env, &contract_id);
         let usdc = Address::generate(&env);
-        let xlm  = Address::generate(&env);
+        let xlm = Address::generate(&env);
         let yxlm = Address::generate(&env);
         let path: Vec<Address> = vec![&env, usdc, xlm, yxlm];
         // execute_hop returns 0; min_amount_out = 0 passes
@@ -454,6 +515,83 @@ mod tests {
         client.execute_path_payment(&path, &1_000_000, &0);
     }
 
+    // ── simulate_swap uses real reserves (nester#1189) ───────────────────────
+
+    #[test]
+    fn test_get_best_route_prices_off_real_balanced_reserves() {
+        let (env, contract_id, pool_id) = setup_with_pool_reserves(1_000_000, 1_000_000);
+        let client = LpAggregatorClient::new(&env, &contract_id);
+        let ti = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        let route = client.get_best_route(&ti, &to, &100_000);
+        // Constant product with a balanced 1_000_000/1_000_000 pool:
+        // out = 100_000 * 1_000_000 / (1_000_000 + 100_000) = 90_909
+        assert_eq!(route.expected_out, 90_909);
+        assert_eq!(route.hops.get(0).unwrap().pool_address, pool_id);
+    }
+
+    #[test]
+    fn test_get_best_route_prices_off_real_imbalanced_reserves() {
+        // Heavily imbalanced pool: 10x more of the out-token than the in-token,
+        // so a real read must produce a very different (much larger) output
+        // than the old hardcoded 1:1 fallback would have.
+        let (env, contract_id, _pool_id) = setup_with_pool_reserves(1_000_000, 10_000_000);
+        let client = LpAggregatorClient::new(&env, &contract_id);
+        let ti = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        let route = client.get_best_route(&ti, &to, &100_000);
+        // out = 100_000 * 10_000_000 / (1_000_000 + 100_000) = 909_090
+        assert_eq!(route.expected_out, 909_090);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_get_best_route_panics_when_no_pool_reserves_are_reachable() {
+        // Registered "pools" that are bare generated addresses (no contract
+        // behind them) can never answer get_reserves, so every route must be
+        // skipped and get_best_route has nothing left to return.
+        let (env, contract_id, _) = setup_with_pools(0);
+        let mut pools: Vec<Address> = vec![&env];
+        pools.push_back(Address::generate(&env));
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("POOLS"), &pools);
+        });
+        let client = LpAggregatorClient::new(&env, &contract_id);
+        let ti = Address::generate(&env);
+        let to = Address::generate(&env);
+        client.get_best_route(&ti, &to, &100_000);
+    }
+
+    #[test]
+    fn test_find_paths_skips_unreachable_pools_without_panicking() {
+        // Mix one real pool with one unreachable (bare address, no contract)
+        // pool. find_paths must skip the unreachable one and still return the
+        // route(s) priced off the real pool, rather than panicking or pricing
+        // the unreachable pool with a fabricated fallback.
+        let (env, contract_id, real_pool) = setup_with_pool_reserves(1_000_000, 1_000_000);
+        env.as_contract(&contract_id, || {
+            let mut pools: Vec<Address> = vec![&env, real_pool.clone()];
+            pools.push_back(Address::generate(&env));
+            env.storage()
+                .instance()
+                .set(&symbol_short!("POOLS"), &pools);
+        });
+        let client = LpAggregatorClient::new(&env, &contract_id);
+        let ti = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        let routes = client.find_paths(&ti, &to, &100_000, &1);
+        assert_eq!(routes.len(), 1);
+        assert_eq!(
+            routes.get(0).unwrap().hops.get(0).unwrap().pool_address,
+            real_pool
+        );
+    }
+
     // ── legacy ────────────────────────────────────────────────────────────────
 
     #[test]
@@ -468,15 +606,15 @@ mod tests {
     fn test_swap_route_struct() {
         let env = Env::default();
         let pool = Address::generate(&env);
-        let hop  = SwapHop {
+        let hop = SwapHop {
             pool_address: pool.clone(),
-            token_in:     pool.clone(),
-            token_out:    pool.clone(),
-            amount_in:    1_000_000,
+            token_in: pool.clone(),
+            token_out: pool.clone(),
+            amount_in: 1_000_000,
         };
         let route = SwapRoute {
-            hops:             vec![&env, hop],
-            expected_out:     980_000,
+            hops: vec![&env, hop],
+            expected_out: 980_000,
             price_impact_bps: 200,
         };
         assert_eq!(route.hops.len(), 1);

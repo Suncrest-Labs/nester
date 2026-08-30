@@ -641,8 +641,8 @@ func TestSavingsGoalHandler_Create_ForeignVaultForbidden(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("create status = %d, want 403", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("create status = %d, want 404", resp.StatusCode)
 	}
 }
 

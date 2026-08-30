@@ -41,6 +41,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Playwright run artifacts
-test-results/
-playwright-report/
+# playwright
+/playwright-report/
+/test-results/
+/blob-report/

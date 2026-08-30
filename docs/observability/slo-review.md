@@ -202,7 +202,7 @@ On-call during period:
 | Flow latency | 99% <30s | | | | |
 | Intelligence availability | 99% | | | | |
 | Intelligence TTFT | 95% <3s | | | | |
-| Balance freshness | ≤60 ledgers | n/a | n/a | | |
+| Balance freshness | ≤300s staleness | n/a | n/a | | |
 | Intelligence refusal | <30% | n/a | n/a | | |
 
 ## 2. Incidents

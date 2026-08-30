@@ -100,10 +100,6 @@ type sloCollectors struct {
 	flowAttemptsTotal *prometheus.CounterVec
 	flowDuration      *prometheus.HistogramVec
 
-	indexerLagLedgers      prometheus.Gauge
-	indexerLagStaleness    prometheus.Gauge
-	indexerLagScrapeErrors prometheus.Counter
-
 	reconcileRunsTotal      *prometheus.CounterVec
 	reconcileDivergences    *prometheus.CounterVec
 	reconcileLastRunAge     prometheus.Gauge
@@ -181,38 +177,6 @@ func newSLOCollectors() *sloCollectors {
 			Buckets:   flowDurationBuckets,
 		}, []string{"flow", "outcome"}),
 
-		// Balance freshness. Ledgers rather than seconds because the
-		// indexer's own unit is the ledger sequence, and converting to time
-		// would bake in an assumed close interval that varies.
-		indexerLagLedgers: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: Namespace,
-			Subsystem: "indexer",
-			Name:      "lag_ledgers",
-			Help:      "Network ledger tip minus last successfully indexed ledger.",
-		}),
-
-		// A lag gauge alone cannot distinguish "lag is 0" from "the sampler
-		// died and the value is frozen at its last write". This gauge is the
-		// age of the lag reading, so an alert can require freshness of the
-		// freshness signal. Without it the balance SLI fails silently in the
-		// most dangerous direction: reporting perfect health.
-		indexerLagStaleness: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: Namespace,
-			Subsystem: "indexer",
-			Name:      "lag_last_sample_age_seconds",
-			Help:      "Seconds since the indexer lag gauge was last successfully updated.",
-		}),
-
-		// Sampling errors are counted rather than folded into the lag value,
-		// because writing a sentinel lag on error would be indistinguishable
-		// from a real stall and would page for the wrong reason.
-		indexerLagScrapeErrors: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: Namespace,
-			Subsystem: "indexer",
-			Name:      "lag_sample_errors_total",
-			Help:      "Failed attempts to sample indexer lag.",
-		}),
-
 		// Reconciliation (nester#1108). The reconciler compares our record of
 		// the money path against the chain. Until now it reported only to the
 		// log, which means a divergence — the single most serious signal this
@@ -279,9 +243,6 @@ func (c *sloCollectors) collectors() []prometheus.Collector {
 	return []prometheus.Collector{
 		c.flowAttemptsTotal,
 		c.flowDuration,
-		c.indexerLagLedgers,
-		c.indexerLagStaleness,
-		c.indexerLagScrapeErrors,
 		c.reconcileRunsTotal,
 		c.reconcileDivergences,
 		c.reconcileLastRunAge,
@@ -313,35 +274,6 @@ func (m *Metrics) RecordFlowAttempt(flow Flow, outcome FlowOutcome, duration tim
 	}
 }
 
-// SetIndexerLag publishes the current indexer lag and resets the staleness
-// gauge, which the sampler's own ticker ages between calls.
-func (m *Metrics) SetIndexerLag(lagLedgers uint64) {
-	if m == nil {
-		return
-	}
-
-	m.slo.indexerLagLedgers.Set(float64(lagLedgers))
-	m.slo.indexerLagStaleness.Set(0)
-}
-
-// SetIndexerLagSampleAge publishes how old the lag reading is.
-func (m *Metrics) SetIndexerLagSampleAge(age time.Duration) {
-	if m == nil {
-		return
-	}
-
-	m.slo.indexerLagStaleness.Set(age.Seconds())
-}
-
-// RecordIndexerLagSampleError counts a failed lag sample.
-func (m *Metrics) RecordIndexerLagSampleError() {
-	if m == nil {
-		return
-	}
-
-	m.slo.indexerLagScrapeErrors.Inc()
-}
-
 // RecordReconcileRun records one completed reconciliation pass and resets the
 // last-run age, so an alert can distinguish a clean pass from a reconciler
 // that has stopped running.
@@ -356,6 +288,23 @@ func (m *Metrics) RecordReconcileRun(outcome ReconcileOutcome) {
 
 	m.slo.reconcileRunsTotal.WithLabelValues(string(outcome)).Inc()
 	m.slo.reconcileLastRunAge.Set(0)
+}
+
+// RecordBalanceReconcileRun records one pass of the vault-balance reconciler
+// (nester#1082) on the shared runs counter.
+//
+// It deliberately does NOT reset nester_reconcile_last_run_age_seconds: that
+// gauge is the transaction poller's liveness signal, and a balance pass
+// resetting it would let a dead poller hide behind a healthy balance
+// reconciler (and vice versa). The balance reconciler's liveness is a
+// separate scrape-time series — see RegisterBalanceReconcileAge — so each
+// loop's death is visible on its own.
+func (m *Metrics) RecordBalanceReconcileRun(outcome ReconcileOutcome) {
+	if m == nil {
+		return
+	}
+
+	m.slo.reconcileRunsTotal.WithLabelValues(string(outcome)).Inc()
 }
 
 // RecordReconcileDivergence counts one finding where our record and the chain

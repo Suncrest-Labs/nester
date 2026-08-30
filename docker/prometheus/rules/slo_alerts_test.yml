@@ -361,6 +361,128 @@ tests:
         exp_alerts: []
 
   # ===========================================================================
+  # Per-endpoint error rate (nester#1227)
+  # ===========================================================================
+  #
+  # The scenario the issue exists to fix: one low-volume, unwatched endpoint
+  # fails continuously while the money-path volume keeps the aggregate
+  # api:availability ratio healthy. Proves EndpointErrorRateHigh catches it
+  # AND that APIAvailabilityFastBurn/SlowBurn stay silent throughout — the
+  # aggregate genuinely cannot see this on its own, which is the bug.
+  - interval: 1m
+    name: A single broken low-volume endpoint pages EndpointErrorRateHigh without moving aggregate availability
+    input_series:
+      # High-volume, perfectly healthy money-path route: 1000/s, all 2xx.
+      - series: 'nester_http_requests_total{route="POST /api/v1/vaults/{id}/deposit",method="POST",status_class="2xx"}'
+        values: '0+60000x120'   # 1000/s
+      # A savings-goal endpoint nobody watches: 0.5/s, entirely 5xx.
+      - series: 'nester_http_requests_total{route="GET /api/v1/savings-goals/{id}/progress",method="GET",status_class="5xx"}'
+        values: '0+30x120'      # 0.5/s, 100% error ratio on this route
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: EndpointErrorRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: route_availability
+              service: api
+              route: 'GET /api/v1/savings-goals/{id}/progress'
+            exp_annotations:
+              summary: "GET /api/v1/savings-goals/{id}/progress erroring at 100% over 1h, independent of overall API availability"
+              description: "Route GET /api/v1/savings-goals/{id}/progress has sustained a 5xx rate above 20% for 15+ minutes. This route may carry too little traffic to move the aggregate api:availability ratio (APIAvailabilityFastBurn/SlowBurn above), which is exactly the blind spot this alert exists to close — an endpoint nobody watches can otherwise fail indefinitely inside the aggregate's budget. The second condition (eligible_rate1h > 0.01, roughly one request per 100 seconds) guards against a single stray request producing a 100% ratio on an idle route. 4xx and unmatched routes are excluded, same as the aggregate SLI."
+              dashboard: /d/nester-slo-api/api-availability
+              runbook: docs/observability/runbooks/api-availability.md
+      # The aggregate never sees this: 0.5 err/s against 1000.5 total/s is
+      # ~0.05%, an order of magnitude under even the slow-burn threshold
+      # (0.56%), let alone fast (1.344%). This is the exact gap #1227 reports.
+      - eval_time: 20m
+        alertname: APIAvailabilityFastBurn
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: APIAvailabilitySlowBurn
+        exp_alerts: []
+
+  - interval: 1m
+    name: EndpointErrorRateHigh does not fire on a healthy route
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/portfolio",method="GET",status_class="2xx"}'
+        values: '0+600x120'   # 10/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/portfolio",method="GET",status_class="5xx"}'
+        values: '0+6x120'     # 0.1/s => 1% error ratio, well under 20%
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: EndpointErrorRateHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: EndpointErrorRateHigh does not fire on a single stray request on an idle route
+    input_series:
+      # One request, ever, and it 5xxs. 100% error ratio on the route, but
+      # the eligible_rate1h > 0.01 guard must suppress this — a route this
+      # quiet is not "broken", it is unused, and one sample is not evidence.
+      - series: 'nester_http_requests_total{route="POST /api/v1/admin/rare-op",method="POST",status_class="5xx"}'
+        values: '0 1 1x118'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: EndpointErrorRateHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: "EndpointErrorRateHigh requires the full 15m for: duration, not an instant blip"
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/webhooks/log",method="GET",status_class="2xx"}'
+        values: '0+60x120'   # 1/s baseline
+      # A short spike of failures that does not persist 15m.
+      - series: 'nester_http_requests_total{route="GET /api/v1/webhooks/log",method="GET",status_class="5xx"}'
+        values: '0+300x5 1500+0x115'  # 5/s for 5m, then flat
+    alert_rule_test:
+      # At 5m the route's 1h ratio is already over 20% (the burst dominates
+      # the still-filling window), but `for: 15m` has not elapsed yet.
+      - eval_time: 5m
+        alertname: EndpointErrorRateHigh
+        exp_alerts: []
+
+  # ===========================================================================
+  # Route label cardinality (nester#1227 acceptance criterion)
+  # ===========================================================================
+  #
+  # The route label is bounded by construction (internal/metrics/http.go
+  # resolves it from the mux's registered patterns or the constant "other" —
+  # never an arbitrary client-supplied path), so this cannot be proven by a
+  # promtool unit test acting alone on synthetic series. What IS testable
+  # here, and is the promtool-level half of that guarantee: the per-route
+  # recording rules never introduce an UNBOUNDED label of their own (e.g.
+  # accidentally grouping by a raw path or query parameter instead of the
+  # bounded `route`) — every series this group produces carries only `route`
+  # values that were present in the bounded input. The Go-level guarantee
+  # (that `route` itself can only ever be a registered pattern or "other") is
+  # asserted by resolveRoute's existing unit tests in
+  # apps/api/internal/metrics/http_test.go.
+  - interval: 1m
+    name: per-route recording rules do not introduce unbounded labels beyond the bounded route set
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx"}'
+        values: '0+60x120'
+      - series: 'nester_http_requests_total{route="GET /api/v1/portfolio",method="GET",status_class="2xx"}'
+        values: '0+60x120'
+      - series: 'nester_http_requests_total{route="other",method="GET",status_class="4xx"}'
+        values: '0+600x120'   # unmatched/scanner traffic — must be excluded entirely
+    promql_expr_test:
+      # Evaluated at 90m (not 30m) so the 1h window is fully saturated —
+      # a partially-filled rate() window extrapolates and reads short of
+      # the true 1/s the input series encodes.
+      - expr: route:availability:eligible_rate1h
+        eval_time: 90m
+        exp_samples:
+          - labels: 'route:availability:eligible_rate1h{route="GET /api/v1/vaults"}'
+            value: 1
+          - labels: 'route:availability:eligible_rate1h{route="GET /api/v1/portfolio"}'
+            value: 1
+          # No "other" series: route="other" is excluded from the recording
+          # rule's input entirely, so it cannot appear as a result series no
+          # matter how much traffic it carries.
+
+  # ===========================================================================
   # Deposit success — fast burn, and the exclusions
   # ===========================================================================
   #
@@ -515,9 +637,16 @@ tests:
     input_series:
       - series: 'nester_indexer_lag_ledgers'
         values: '2x30'
+      - series: 'nester_indexer_lag_seconds'
+        values: '16x30'
+      - series: 'nester_indexer_staleness_budget_seconds'
+        values: '300x30'
       - series: 'nester_indexer_lag_last_sample_age_seconds'
         values: '0x30'
     alert_rule_test:
+      - eval_time: 20m
+        alertname: IndexerStalenessBudgetExceeded
+        exp_alerts: []
       - eval_time: 20m
         alertname: IndexerLagHigh
         exp_alerts: []
@@ -600,6 +729,106 @@ tests:
             exp_annotations:
               summary: "Event indexer has not reported lag for 20m 0s"
               description: "The lag gauge has not been updated in over 5 minutes, so the freshness signal itself is stale. The indexer polls every 6s, so this means it is wedged, erroring, or dead. Critically, the lag gauge may still read healthy — do not trust it. Check nester_indexer_lag_sample_errors_total and the indexer logs."
+              dashboard: /d/nester-slo-balance/balance-freshness
+              runbook: docs/observability/runbooks/balance-freshness.md
+
+  # ---------------------------------------------------------------------------
+  # The staleness budget (nester#1088)
+  # ---------------------------------------------------------------------------
+  #
+  # The budget is not a literal in the rule — it is a series the application
+  # exports — so these cases also prove the comparison reads it rather than a
+  # hardcoded 300.
+  #
+  # Boundary: the expression uses `>`, so lag exactly at the budget is inside
+  # it and must not fire. This is the same rule the API's stale flag applies.
+  - interval: 1m
+    name: staleness exactly at the budget does not page
+    input_series:
+      - series: 'nester_indexer_lag_seconds'
+        values: '300x30'
+      - series: 'nester_indexer_staleness_budget_seconds'
+        values: '300x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: IndexerStalenessBudgetExceeded
+        exp_alerts: []
+
+  - interval: 1m
+    name: staleness past the budget pages after the confirmation window
+    input_series:
+      # Flat rather than a ramp, so the asserted annotation does not depend on
+      # which sample promtool considers current at eval time.
+      - series: 'nester_indexer_lag_seconds'
+        values: '900x30'
+      - series: 'nester_indexer_staleness_budget_seconds'
+        values: '300x30'
+    alert_rule_test:
+      # Over the budget from t=0, held pending by `for: 2m`.
+      - eval_time: 1m
+        alertname: IndexerStalenessBudgetExceeded
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: IndexerStalenessBudgetExceeded
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: balance_freshness
+              service: api
+            exp_annotations:
+              summary: "Indexed balances are 15m 0s out of date, past the staleness budget"
+              description: "The indexed view of the chain is 15m 0s old against a staleness budget of 5m 0s. The API is now returning X-Indexer-Stale: true on every /api/ response, so clients are being told their balances are out of date. This fires whether the indexer is merely behind or has stopped completely: nester_indexer_lag_seconds is derived from the clock at scrape time, so it keeps climbing with nothing running to push it. Check nester_indexer_lag_last_sample_age_seconds first — near zero means running but behind, climbing means stopped."
+              dashboard: /d/nester-slo-balance/balance-freshness
+              runbook: docs/observability/runbooks/balance-freshness.md
+
+  # A retuned budget moves the alert with it. Same lag as the case above, but a
+  # 30 minute budget: nothing may fire. This is what proves the threshold comes
+  # from the application rather than from a number in this repository.
+  - interval: 1m
+    name: a widened budget silences the same staleness
+    input_series:
+      - series: 'nester_indexer_lag_seconds'
+        values: '900x30'
+      - series: 'nester_indexer_staleness_budget_seconds'
+        values: '1800x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: IndexerStalenessBudgetExceeded
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # A completely dead indexer. The case this issue exists for.
+  # ---------------------------------------------------------------------------
+  #
+  # The indexer stopped, so it never published another position and
+  # nester_indexer_lag_ledgers is absent entirely — IndexerLagHigh has nothing
+  # to fire on and correctly does not. The seconds view is still present and
+  # still climbing, because the process derives it from the clock at scrape
+  # time, and it is what pages.
+  - interval: 1m
+    name: a dead indexer pages on staleness even with no ledger lag series
+    input_series:
+      # Deliberately no nester_indexer_lag_ledgers series at all.
+      - series: 'nester_indexer_lag_seconds'
+        values: '1200x30'
+      - series: 'nester_indexer_staleness_budget_seconds'
+        values: '300x30'
+      - series: 'nester_indexer_lag_last_sample_age_seconds'
+        values: '1200x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: IndexerLagHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: IndexerStalenessBudgetExceeded
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: balance_freshness
+              service: api
+            exp_annotations:
+              summary: "Indexed balances are 20m 0s out of date, past the staleness budget"
+              description: "The indexed view of the chain is 20m 0s old against a staleness budget of 5m 0s. The API is now returning X-Indexer-Stale: true on every /api/ response, so clients are being told their balances are out of date. This fires whether the indexer is merely behind or has stopped completely: nester_indexer_lag_seconds is derived from the clock at scrape time, so it keeps climbing with nothing running to push it. Check nester_indexer_lag_last_sample_age_seconds first — near zero means running but behind, climbing means stopped."
               dashboard: /d/nester-slo-balance/balance-freshness
               runbook: docs/observability/runbooks/balance-freshness.md
 

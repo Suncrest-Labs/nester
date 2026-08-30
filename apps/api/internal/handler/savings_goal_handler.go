@@ -336,6 +336,13 @@ func (h *SavingsGoalHandler) coaching(w http.ResponseWriter, r *http.Request) {
 
 // goalCoachingRequest builds the intelligence service request payload from an
 // already-progress-enriched savings goal.
+//
+// TargetAmount/CurrentAmount are converted to float64 deliberately, not by a
+// discarded return value (#1223): intelligence.SavingsGoalContext mirrors the
+// intelligence service's pydantic model, which declares these fields as
+// floats, so float64 is genuinely required at this boundary. The discarded
+// exactness flag is safe to ignore here — coaching narrative/milestones are
+// informational, not the source of truth for a user's balance.
 func goalCoachingRequest(goal savingsgoal.SavingsGoal) intelligence.CoachingRequest {
 	targetAmount, _ := goal.TargetAmount.Float64()
 	currentAmount, _ := goal.CurrentAmount.Float64()
@@ -795,7 +802,9 @@ func (h *SavingsGoalHandler) writeError(w http.ResponseWriter, r *http.Request, 
 	case errors.Is(err, savingsgoal.ErrRecoveryWindowExpired):
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "RECOVERY_WINDOW_EXPIRED", err.Error()))
 	case errors.Is(err, savingsgoal.ErrUnauthorized):
-		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "vault does not belong to you"))
+		// 404, not 403 — "vault does not belong to you" confirms the vault
+		// exists to a caller who does not own it (#1101).
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 	case errors.Is(err, savingsgoal.ErrInvalidGoal):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	case errors.Is(err, goalnotification.ErrInvalidPreference):

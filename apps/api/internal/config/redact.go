@@ -165,6 +165,53 @@ func (i IntelligenceConfig) LogValue() slog.Value {
 }
 
 // ---------------------------------------------------------------------------
+// RateLimitConfig
+// ---------------------------------------------------------------------------
+
+// RateLimitConfig holds quotaBypassToken, which lets its bearer skip cost
+// accounting entirely. The limits and windows around it are ordinary
+// operational settings and stay readable — a redacted config that hides them
+// makes a misconfigured limiter harder to diagnose without making the token
+// any safer.
+
+func (r RateLimitConfig) String() string {
+	return fmt.Sprintf(
+		"RateLimitConfig{globalLimit:%d globalWindow:%s writeLimit:%d writeWindow:%s "+
+			"walletLimit:%d walletWindow:%s rebalanceLimit:%d rebalanceWindow:%s "+
+			"authLimit:%d authWindow:%s settlementLimit:%d settlementWindow:%s "+
+			"trustedProxyCount:%d quotaEnabled:%t quotaLimit:%d quotaWindow:%s "+
+			"quotaBypassToken:%q}",
+		r.globalLimit, r.globalWindow, r.writeLimit, r.writeWindow,
+		r.walletLimit, r.walletWindow, r.rebalanceLimit, r.rebalanceWindow,
+		r.authLimit, r.authWindow, r.settlementLimit, r.settlementWindow,
+		r.trustedProxyCount, r.quotaEnabled, r.quotaLimit, r.quotaWindow,
+		redact(r.quotaBypassToken),
+	)
+}
+
+func (r RateLimitConfig) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.Int("global_limit", r.globalLimit),
+		slog.Duration("global_window", r.globalWindow),
+		slog.Int("write_limit", r.writeLimit),
+		slog.Duration("write_window", r.writeWindow),
+		slog.Int("wallet_limit", r.walletLimit),
+		slog.Duration("wallet_window", r.walletWindow),
+		slog.Int("rebalance_limit", r.rebalanceLimit),
+		slog.Duration("rebalance_window", r.rebalanceWindow),
+		slog.Int("auth_limit", r.authLimit),
+		slog.Duration("auth_window", r.authWindow),
+		slog.Int("settlement_limit", r.settlementLimit),
+		slog.Duration("settlement_window", r.settlementWindow),
+		slog.Int("trusted_proxy_count", r.trustedProxyCount),
+		slog.Bool("quota_enabled", r.quotaEnabled),
+		slog.Int("quota_limit", r.quotaLimit),
+		slog.Duration("quota_window", r.quotaWindow),
+		slog.String("quota_bypass_token", redact(r.quotaBypassToken)),
+	)
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 

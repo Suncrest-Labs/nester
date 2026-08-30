@@ -10,6 +10,10 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 )
 
+// maxPoolConns caps the pgxpool connection count. It also keeps the value well
+// inside int32 range, so narrowing it for pgxpool.Config.MaxConns is safe.
+const maxPoolConns = 25
+
 // PostgresDB wraps the pgxpool to provide database access and readiness checks.
 type PostgresDB struct {
 	Pool *pgxpool.Pool
@@ -57,9 +61,17 @@ func newPostgresDB(cfg config.DatabaseConfig, tracingEnabled bool) (*PostgresDB,
 		return nil, fmt.Errorf("unable to parse database config: %w", err)
 	}
 
+	// Clamp into [1, maxPoolConns] before narrowing to int32. PoolSize() is an
+	// int parsed from the environment, so on a 64-bit build it can exceed
+	// int32 range, and pgxpool rejects MaxConns below 1. maxPoolConns is far
+	// inside int32, so the conversion below cannot overflow. DATABASE_POOL_SIZE
+	// is additionally rejected above maxDatabasePoolSize by config validation.
 	poolSize := cfg.PoolSize()
-	if poolSize > 25 {
-		poolSize = 25
+	if poolSize < 1 {
+		poolSize = 1
+	}
+	if poolSize > maxPoolConns {
+		poolSize = maxPoolConns
 	}
 	poolConfig.MaxConns = int32(poolSize)
 	poolConfig.MaxConnIdleTime = 5 * time.Minute

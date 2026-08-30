@@ -29,11 +29,21 @@ function isBrowser() {
 }
 
 function readNative(key: string): string | null {
-    if (!isBrowser()) return memoryStore.get(key) ?? null;
+    // memoryStore holds `key` only when the most recent WRITE for it fell
+    // back to in-memory (writeNative's catch branch) — a successful native
+    // write always deletes any stale memoryStore entry for the same key
+    // (see writeNative below), so a present memoryStore entry is always the
+    // authoritative last-write result and must win over a native read that
+    // simply never saw that write land (issue #1233: previously a value
+    // that fell back to memoryStore on write was invisible to any
+    // subsequent read that didn't ALSO throw, breaking the "keep working in
+    // the same tab" guarantee this module's own header comment promises).
+    if (memoryStore.has(key)) return memoryStore.get(key) ?? null;
+    if (!isBrowser()) return null;
     try {
         return window.localStorage.getItem(key);
     } catch {
-        return memoryStore.get(key) ?? null;
+        return null;
     }
 }
 
@@ -136,9 +146,71 @@ export const safeStorage = {
         return ok;
     },
 
+    /**
+     * Writes `value` as a raw, un-encoded string — pairs with `getRaw`.
+     * Use this (rather than `set`) for a key whose existing readers expect
+     * the bare string on disk (e.g. a pre-existing key that predates this
+     * module and was never JSON-encoded); `set`'s JSON-quoting would break
+     * that reader. Same never-throws guarantee as `set`.
+     */
+    setRaw(key: string, value: string): boolean {
+        const ok = writeNative(key, value);
+        if (ok) maybeWarnAboutQuota();
+        return ok;
+    },
+
     /** Removes the key from both backing stores. */
     remove(key: string) {
         removeNative(key);
+    },
+
+    /**
+     * Removes every key (across both the native store and the in-memory
+     * fallback) whose name starts with `prefix`. Used for cache-invalidation
+     * sweeps (e.g. clearing per-network cached data on a network switch)
+     * that would otherwise call the unguarded `Object.keys(localStorage)`
+     * directly — that enumeration itself can throw in the same environments
+     * get/set/remove already guard against.
+     */
+    removeByPrefix(prefix: string) {
+        for (const key of memoryStore.keys()) {
+            if (key.startsWith(prefix)) memoryStore.delete(key);
+        }
+        if (!isBrowser()) return;
+        try {
+            const toRemove: string[] = [];
+            for (let i = 0; i < window.localStorage.length; i++) {
+                const key = window.localStorage.key(i);
+                if (key && key.startsWith(prefix)) toRemove.push(key);
+            }
+            for (const key of toRemove) {
+                window.localStorage.removeItem(key);
+            }
+        } catch {
+            // ignore — storage may be disabled or full; nothing more to clear
+        }
+    },
+
+    /**
+     * Clears BOTH backing stores.
+     *
+     * `window.localStorage.clear()` alone is not enough, and the difference is
+     * a production bug rather than a test-only concern: since a present
+     * memoryStore entry is authoritative over a native read (see readNative),
+     * any key whose write once fell back to memory — private browsing, quota
+     * exceeded — keeps shadowing localStorage for the rest of the session. A
+     * caller that "cleared storage" and then read the key back would still get
+     * the stale fallback value. Concretely: a user who hit a quota error while
+     * switching networks kept reading the old network id even after a clear.
+     */
+    clear() {
+        memoryStore.clear();
+        if (!isBrowser()) return;
+        try {
+            window.localStorage.clear();
+        } catch {
+            // ignore — storage may be disabled; the memory fallback is cleared
+        }
     },
 
     /**

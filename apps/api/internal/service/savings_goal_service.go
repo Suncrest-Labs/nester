@@ -18,10 +18,11 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
 
-// streakNotifyTimeout bounds the detached streak-milestone notification. It is
-// generous enough for a slow notifier but finite, so a wedged downstream cannot
-// accumulate goroutines.
-const streakNotifyTimeout = 30 * time.Second
+// asyncNotifyTimeout bounds detached notification goroutines fired from this
+// service (streak and goal milestones). It is generous enough for a slow
+// notifier but finite, so a wedged downstream cannot accumulate goroutines
+// without limit (nester#1198).
+const asyncNotifyTimeout = 30 * time.Second
 
 // VaultReader exposes the single read the savings goal service needs from the
 // vault store: looking up a vault to validate ownership/currency at link time
@@ -580,7 +581,11 @@ func (s *SavingsGoalService) validateGoalVault(ctx context.Context, userID, vaul
 	v, err := s.vaultRepo.GetVault(ctx, vaultID)
 	if err != nil {
 		if errors.Is(err, vault.ErrVaultNotFound) {
-			return fmt.Errorf("%w: vault not found", savingsgoal.ErrInvalidGoal)
+			// Same error as a vault owned by someone else, so the two cases
+			// are indistinguishable to the caller (#1101). Reporting "not
+			// found" here and "unauthorized" below would let a caller probe
+			// which vault IDs exist.
+			return savingsgoal.ErrUnauthorized
 		}
 		return err
 	}
@@ -948,7 +953,7 @@ func (s *SavingsGoalService) updateStreak(ctx context.Context, userID uuid.UUID)
 		// G118). It is bounded by its own timeout so a wedged notifier cannot
 		// leak the goroutine indefinitely.
 		go func() { // #nosec G118 -- intentionally detached background work, bounded by its own timeout
-			nctx, cancel := context.WithTimeout(context.Background(), streakNotifyTimeout)
+			nctx, cancel := context.WithTimeout(context.Background(), asyncNotifyTimeout)
 			defer cancel()
 			s.streakNotifier.SendStreakMilestone(nctx, uid, milestone)
 		}()
@@ -961,8 +966,16 @@ func (s *SavingsGoalService) notifyMilestonesAsync(goal savingsgoal.SavingsGoal,
 	for _, milestone := range milestones {
 		m := milestone
 		goalCopy := goal
-		go func() {
-			s.notifier.SendGoalMilestone(context.Background(), goalCopy.UserID, goalCopy, m)
+		// Deliberately detached from the request context (same reasoning as
+		// the streak-milestone goroutine above): the caller's context is
+		// cancelled once the HTTP response is written, and inheriting it
+		// would cancel the notification before it is sent. Bounded by its
+		// own timeout so a wedged notifier cannot leak the goroutine
+		// indefinitely (nester#1198).
+		go func() { // #nosec G118 -- intentionally detached background work, bounded by its own timeout
+			nctx, cancel := context.WithTimeout(context.Background(), asyncNotifyTimeout)
+			defer cancel()
+			s.notifier.SendGoalMilestone(nctx, goalCopy.UserID, goalCopy, m)
 		}()
 	}
 }

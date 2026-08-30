@@ -51,13 +51,38 @@ func TestRank_EffectivenessBreaksTieBetweenEqualBaseImpact(t *testing.T) {
 	// Both types share BaseImpact 0.7 in the catalog; a higher historical
 	// conversion rate for one should be what breaks the tie.
 	stats := map[NudgeType]EffectivenessStats{
-		NudgeTypeMilestone:       {ConversionRate: 0.1},
-		NudgeTypeStreakMilestone: {ConversionRate: 0.9},
+		NudgeTypeMilestone:       {ConversionRate: 0.1, HasData: true},
+		NudgeTypeStreakMilestone: {ConversionRate: 0.9, HasData: true},
 	}
 
 	ranked := Rank(candidates, usersignal.SegmentActiveSaver, usersignal.TierEngaged, stats)
 
 	if ranked[0].Candidate.Type != NudgeTypeStreakMilestone {
 		t.Fatalf("expected the higher-converting nudge type to rank first, got %s", ranked[0].Candidate.Type)
+	}
+}
+
+func TestRank_ColdStartEntryDoesNotOutrankRealData(t *testing.T) {
+	userID := uuid.New()
+	candidates := []Candidate{
+		{Type: NudgeTypeMilestone, UserID: userID},
+		{Type: NudgeTypeStreakMilestone, UserID: userID},
+	}
+	// Both types share BaseImpact 0.7. A cold-start entry (HasData: false,
+	// the zero-value ConversionRate) must not be treated as a perfect 1.0
+	// conversion rate: with the old behavior a cold-start entry would score
+	// 0.7*(0.5+1.0)=1.05, beating even this strong 0.7 measured conversion
+	// rate (0.7*(0.5+0.7)=0.84). With the fix, cold start gets no boost at
+	// all and stays at the unscaled BaseImpact of 0.7 — so the type with
+	// real, strong measured performance must win (nester#1196).
+	stats := map[NudgeType]EffectivenessStats{
+		NudgeTypeMilestone:       {ConversionRate: 0.7, HasData: true},
+		NudgeTypeStreakMilestone: {HasData: false}, // cold start: zero-value ConversionRate
+	}
+
+	ranked := Rank(candidates, usersignal.SegmentActiveSaver, usersignal.TierEngaged, stats)
+
+	if ranked[0].Candidate.Type != NudgeTypeMilestone {
+		t.Fatalf("expected the nudge type with real measured data to rank first over a cold-start entry, got %s", ranked[0].Candidate.Type)
 	}
 }

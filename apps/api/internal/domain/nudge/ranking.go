@@ -42,6 +42,12 @@ type Outcome struct {
 
 type EffectivenessStats struct {
 	ConversionRate float64 // 0 to 1
+	// HasData is false for a cold-start nudge type (no dispatches yet in the
+	// measurement window). Rank treats a cold-start entry the same as a
+	// missing one — no effectiveness boost — rather than the misleading
+	// "perfect conversion" a zero-value ConversionRate would otherwise imply
+	// (nester#1196).
+	HasData bool
 }
 
 type HistoryRepository interface {
@@ -69,7 +75,7 @@ func Rank(candidates []Candidate, segment usersignal.Segment, engagement usersig
 		score := def.BaseImpact
 
 		stats, ok := effectiveness[c.Type]
-		if ok {
+		if ok && stats.HasData {
 			score = score * (0.5 + stats.ConversionRate) // just a heuristic for the test
 		}
 

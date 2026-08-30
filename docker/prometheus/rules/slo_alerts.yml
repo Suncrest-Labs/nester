@@ -143,6 +143,50 @@ groups:
           runbook: docs/observability/runbooks/api-availability.md
 
   # ---------------------------------------------------------------------------
+  # Per-endpoint error rate (nester#1227)
+  # ---------------------------------------------------------------------------
+  #
+  # A single absolute-threshold alert, not a burn-rate policy — see
+  # slo_recording.yml's slo_route_availability group for why. 20% sustained
+  # over 1h is deliberately looser than the aggregate's 1.344% fast-burn
+  # threshold: this alert exists to catch a route that is broken continuously
+  # (not occasionally degraded), and a route carrying enough traffic to be
+  # statistically meaningful at a low error rate is already covered by the
+  # aggregate. `for: 15m` (not the aggregate's 2m) because a single route has
+  # far less traffic to smooth out a brief blip, and this alert is a
+  # same-day-ticket signal, not a page — the aggregate and the money-path
+  # flow alerts already page for anything urgent enough to wake someone.
+  - name: slo_alerts_route_availability
+    rules:
+      - alert: EndpointErrorRateHigh
+        expr: |
+          route:availability:error_ratio_rate1h > 0.20
+          and
+          route:availability:eligible_rate1h > 0.01
+        for: 15m
+        labels:
+          severity: ticket
+          slo: route_availability
+          service: api
+        annotations:
+          summary: >-
+            {{ $labels.route }} erroring at {{ $value | humanizePercentage }}
+            over 1h, independent of overall API availability
+          description: >-
+            Route {{ $labels.route }} has sustained a 5xx rate above 20% for
+            15+ minutes. This route may carry too little traffic to move the
+            aggregate api:availability ratio (APIAvailabilityFastBurn/SlowBurn
+            above), which is exactly the blind spot this alert exists to
+            close — an endpoint nobody watches can otherwise fail
+            indefinitely inside the aggregate's budget. The second condition
+            (eligible_rate1h > 0.01, roughly one request per 100 seconds)
+            guards against a single stray request producing a 100% ratio on
+            an idle route. 4xx and unmatched routes are excluded, same as the
+            aggregate SLI.
+          dashboard: /d/nester-slo-api/api-availability
+          runbook: docs/observability/runbooks/api-availability.md
+
+  # ---------------------------------------------------------------------------
   # Deposit / withdrawal success — target 99.5%
   # ---------------------------------------------------------------------------
   # budget 0.5% => fast 13.44 * 0.005 = 0.0672 (6.72%)
@@ -443,22 +487,73 @@ groups:
   # continuous quantity, not a ratio of events, and forcing it into burn-rate
   # shape would produce a number with no meaning.
   #
-  # Three distinct alerts, because three distinct things go wrong and they need
-  # different responses:
+  # Four alerts, because four distinct things go wrong and they need different
+  # responses:
   #
-  #   IndexerLagHigh    — the indexer is running but falling behind.
-  #   IndexerLagStale   — the indexer stopped updating the gauge at all. This
-  #                       is the dangerous one: without it a crashed sampler
-  #                       leaves a frozen healthy value and the SLI reports
-  #                       perfect freshness forever.
+  #   IndexerStalenessBudgetExceeded — the staleness budget is blown. This is
+  #                       the authoritative one and the only one stated in the
+  #                       same terms as the API's stale flag, so a page here
+  #                       means clients are being told their balances are
+  #                       stale. It catches an indexer that is behind AND one
+  #                       that is dead, because its metric climbs on the clock.
+  #   IndexerLagHigh    — the indexer is running but falling behind, in
+  #                       ledgers. Kept as the diagnostic split: it fires only
+  #                       when the indexer is alive enough to report a
+  #                       position, which is what distinguishes "behind" from
+  #                       "stopped".
+  #   IndexerLagStale   — the indexer stopped reporting at all. Says "do not
+  #                       trust the ledger figure beside this".
   #   IndexerMetricsAbsent — the series vanished entirely (process gone, scrape
   #                       failing). Without this, deleting the metric would
   #                       silence every alert above it.
+  #
+  # All four carry slo: balance_freshness, so Alertmanager groups them into one
+  # notification during an incident rather than four pages.
   #
   # Together these ensure missing telemetry fails visibly rather than silently,
   # which is the requirement that matters most for a freshness signal.
   - name: slo_alerts_balance_freshness
     rules:
+      # The staleness budget alert (nester#1088).
+      #
+      # Note that neither side of this comparison is a literal. The right-hand
+      # side is the budget the API is actually enforcing, exported by the
+      # process itself, so this alert fires on exactly the condition that makes
+      # the API start returning X-Indexer-Stale: true. Writing 300 here instead
+      # would let the pager and the UI disagree the first time anyone retuned
+      # INDEXER_STALENESS_BUDGET.
+      #
+      # `for: 2m` rather than the 5m the ledger alert uses. The budget has
+      # already elapsed by the time this expression is true — five minutes of
+      # staleness have accumulated — so a long `for:` would add that delay
+      # again on top. Two minutes is enough to ride out a scrape gap or a
+      # rolling restart without letting a genuine stall sit unpaged.
+      - alert: IndexerStalenessBudgetExceeded
+        expr: |
+          indexer:freshness:lag_seconds > indexer:freshness:budget_seconds
+        for: 2m
+        labels:
+          severity: page
+          slo: balance_freshness
+          service: api
+        annotations:
+          summary: >-
+            Indexed balances are {{ $value | humanizeDuration }} out of date,
+            past the staleness budget
+          description: >-
+            The indexed view of the chain is {{ $value | humanizeDuration }}
+            old against a staleness budget of
+            {{ with query "indexer:freshness:budget_seconds" }}{{ . | first | value | humanizeDuration }}{{ end }}.
+            The API is now returning X-Indexer-Stale: true on every /api/
+            response, so clients are being told their balances are out of date.
+            This fires whether the indexer is merely behind or has stopped
+            completely: nester_indexer_lag_seconds is derived from the clock at
+            scrape time, so it keeps climbing with nothing running to push it.
+            Check nester_indexer_lag_last_sample_age_seconds first — near zero
+            means running but behind, climbing means stopped.
+          dashboard: /d/nester-slo-balance/balance-freshness
+          runbook: docs/observability/runbooks/balance-freshness.md
+
       - alert: IndexerLagHigh
         expr: indexer:freshness:lag_ledgers > 60
         for: 5m
@@ -545,8 +640,9 @@ groups:
             Reconciliation found {{ $value | printf "%.0f" }} divergence(s)
             between our records and the chain in the last hour
           description: >-
-            The reconciler compared our transaction records against the chain
-            and they disagree. Breakdown by kind:
+            Reconciliation compared our records — transaction statuses and
+            vault balances — against the chain and they disagree. Breakdown
+            by kind:
             {{ with query "reconcile:divergence:rate30m" }}
             {{ range . }}{{ .Labels.kind }}={{ .Value | printf "%.4f" }}/s
             {{ end }}{{ end }}
@@ -587,9 +683,11 @@ groups:
           runbook: docs/observability/runbooks/money-path-integrity.md
 
       - alert: ReconciliationFailing
-        # A pass that cannot list its work. Distinct from the stall above: the
-        # loop is alive and ticking, but every pass aborts before inspecting
-        # anything, which also produces a false-clean divergence count.
+        # A pass that cannot complete its work. Distinct from the stalls: the
+        # loop is alive and ticking, but every pass aborts before finishing,
+        # which also produces a false-clean divergence count. Both loops feed
+        # this series — the transaction poller and the vault-balance
+        # reconciler (nester#1082).
         expr: reconcile:health:failed_run_rate5m > 0
         for: 15m
         labels:
@@ -600,12 +698,70 @@ groups:
           summary: >-
             Reconciliation passes are failing before inspecting anything
           description: >-
-            The poller is running but its passes abort while listing pending
-            transactions, so nothing is being reconciled and the divergence
-            count is falsely clean. Usually a database error on the
-            list-pending query. Ticketing rather than paging because
-            ReconciliationStalled pages if the loop stops entirely; this is
+            A reconciliation loop is running but its passes abort before
+            completing, so nothing is being verified and the divergence count
+            is falsely clean. Both loops feed this series: the transaction
+            poller (usually a database error on the list-pending query) and
+            the vault-balance reconciler (a database error listing vaults, or
+            the chain read failing every pass). Ticketing rather than paging
+            because the stall alerts page if a loop stops entirely; this is
             the narrower case where it keeps ticking without doing work.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: BalanceReconciliationStalled
+        # Same doctrine as ReconciliationStalled, for the vault-balance job
+        # (nester#1082): zero balance divergences is only good news if the
+        # comparison actually ran. The balance reconciler has its own age
+        # series because the shared gauge above is reset every 15s by the
+        # transaction poller, which would mask this job's death entirely.
+        # Threshold is six times the 5m default interval so a slow sweep or a
+        # leadership handover does not page.
+        expr: reconcile:balance:last_run_age_seconds > 1800
+        for: 10m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Vault-balance reconciliation has not completed a pass for
+            {{ $value | humanizeDuration }}
+          description: >-
+            The vault-balance reconciler has not finished a pass in over 30
+            minutes, against a 5m default interval. While this is firing,
+            balance divergence silence is unknown, not clean: nothing is
+            comparing vaults.current_balance against the chain. Check the
+            balance-reconciler goroutine, scheduler leadership, and
+            nester_reconcile_runs_total{outcome="failed"}. If
+            RECONCILE_INTERVAL was raised past 30 minutes this threshold must
+            move with it.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: BalanceReconciliationMetricsAbsent
+        # The balance age series is emitted only while the reconciler runs and
+        # only by the elected leader, so cluster-wide absence means the money
+        # path's balance safety net is off: RECONCILE_ENABLED=false, no
+        # replica holds leadership, or the process never registered the
+        # collector. Dry-run mode still emits — a rehearsal is alive.
+        expr: absent(nester_reconcile_balance_last_run_age_seconds)
+        for: 10m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Vault-balance reconciliation metrics are absent
+          description: >-
+            nester_reconcile_balance_last_run_age_seconds has not been
+            reported for 10 minutes, so nothing is confirming that vault
+            balances still agree with the chain — the safety net the rest of
+            the money path relies on is dark. Either the API is down (other
+            alerts are firing), no replica holds scheduler leadership, or the
+            reconciler was disabled via RECONCILE_ENABLED=false — disabling
+            the safety net is expected to page rather than pass silently.
           dashboard: /d/nester-slo-money-path/money-path-integrity
           runbook: docs/observability/runbooks/money-path-integrity.md
 
@@ -649,11 +805,12 @@ groups:
             Money-path integrity metrics are absent
           description: >-
             nester_reconcile_last_run_age_seconds has not been reported for 10
-            minutes. Every alert in this group evaluates against it, so
-            reconciliation and pending-submission monitoring are both dark.
-            Either the API is down (in which case other alerts are firing) or
-            the transaction poller was never started — TX_POLLER_ENABLED unset
-            disables it silently at boot.
+            minutes. The transaction poller's reconciliation and
+            pending-submission alerts evaluate against it, so both are dark
+            (the vault-balance reconciler has its own series and absence
+            alert). Either the API is down (in which case other alerts are
+            firing) or the transaction poller was never started —
+            TX_POLLER_ENABLED unset disables it silently at boot.
           dashboard: /d/nester-slo-money-path/money-path-integrity
           runbook: docs/observability/runbooks/money-path-integrity.md
 

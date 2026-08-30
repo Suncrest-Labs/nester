@@ -1,11 +1,13 @@
 package postgres
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
@@ -43,8 +45,14 @@ func TestIntegrationMoneyPathConstraintsRejectViolations(t *testing.T) {
 		// Two vaults on one contract makes the indexer's
 		// `WHERE contract_address = $1` update both, so one user's on-chain
 		// deposit credits another user's vault.
-		if err := insertVault(uuid.New(), contract); err == nil {
+		err := insertVault(uuid.New(), contract)
+		if err == nil {
 			t.Fatal("a second vault on the same contract address was accepted")
+		}
+		// The rejection must reach callers as a distinct domain error, not an
+		// opaque driver error the handler can only turn into a 500 (#1148).
+		if mapped := mapRepositoryError(err); !errors.Is(mapped, vault.ErrContractAddressRegistered) {
+			t.Fatalf("mapRepositoryError = %v, want ErrContractAddressRegistered", mapped)
 		}
 	})
 

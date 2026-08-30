@@ -4,7 +4,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Indexer lag and the staleness guard over it (nester#1056).",
+  "description": "Indexer lag in ledgers and seconds against the staleness budget (nester#1056, nester#1088).",
   "editable": false,
   "graphTooltip": 1,
   "links": [],
@@ -18,10 +18,10 @@
       },
       "id": 1,
       "options": {
-        "content": "**SLI** network ledger tip minus last indexed ledger.\n\nThis is a gauge, not a ratio of events, so it has no burn rate and no error budget \u2014 forcing one would produce a number that means nothing during an incident.\n\nThe staleness panel is the important one: a lag gauge that reads healthy because nothing is updating it is the failure mode this SLI exists to prevent.\n\n**Runbook** `docs/observability/runbooks/balance-freshness.md`",
+        "content": "**SLI** how far behind the chain the indexed view is, in ledgers and in seconds.\n\nThis is a gauge, not a ratio of events, so it has no burn rate and no error budget \u2014 forcing one would produce a number that means nothing during an incident.\n\n**Read data staleness first.** It is the number the staleness budget, the page, and the `X-Indexer-Stale` header the API returns to clients are all stated against, and it is the only one that keeps climbing when the indexer has stopped completely.\n\n**Runbook** `docs/observability/runbooks/balance-freshness.md`",
         "mode": "markdown"
       },
-      "title": "Balance freshness \u2014 indexer lag under 60 ledgers",
+      "title": "Balance freshness \u2014 staleness budget 5 minutes",
       "type": "text"
     },
     {
@@ -29,7 +29,75 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Ledgers behind the tip. Pages above 60 (~5 minutes).",
+      "description": "Age of the indexed view: time since the last freshness sample plus that sample's ledger lag. Pages above the budget (300s), and above it the API reports every response as stale.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 120
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "indexer:freshness:lag_seconds",
+          "instant": true,
+          "legendFormat": "Data staleness",
+          "range": false,
+          "refId": "Data sta"
+        }
+      ],
+      "title": "Data staleness",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Ledgers behind the tip. Pages above 60 (~5 minutes). No data here means the indexer has not reported a position at all \u2014 read data staleness instead.",
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
@@ -57,11 +125,11 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
-        "x": 0,
+        "w": 6,
+        "x": 6,
         "y": 5
       },
-      "id": 2,
+      "id": 3,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -97,7 +165,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Seconds since the lag gauge was last updated. Pages above 300. If this is climbing, do not trust the lag value beside it.",
+      "description": "Seconds since the indexer last reported a position. Near zero means running but behind; climbing means stopped. This is the panel that tells the two apart.",
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
@@ -125,11 +193,11 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
-        "x": 8,
+        "w": 6,
+        "x": 12,
         "y": 5
       },
-      "id": 3,
+      "id": 4,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -189,11 +257,11 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
-        "x": 16,
+        "w": 6,
+        "x": 18,
         "y": 5
       },
-      "id": 4,
+      "id": 5,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -223,6 +291,91 @@
       ],
       "title": "Sample errors",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Staleness plotted against the budget the API is actually enforcing, so the crossing point is exactly where clients start being told their balances are stale. Recovery shows as a sharp drop back under the budget line.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "indexer:freshness:lag_seconds",
+          "instant": false,
+          "legendFormat": "staleness",
+          "range": true,
+          "refId": "stalenes"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "indexer:freshness:budget_seconds",
+          "instant": false,
+          "legendFormat": "budget",
+          "range": true,
+          "refId": "budget"
+        }
+      ],
+      "title": "Data staleness against the budget",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -262,10 +415,10 @@
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 10
       },
-      "id": 5,
+      "id": 7,
       "options": {
         "legend": {
           "calcs": [
@@ -302,7 +455,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Should sit near zero and reset every poll. A steady climb means the sampler stopped, and the lag gauge is frozen at whatever it last read.",
+      "description": "Should sit near zero and reset every poll. A steady climb means the indexer stopped reporting, and the ledger lag beside it is frozen at whatever it last read.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -334,11 +487,11 @@
       },
       "gridPos": {
         "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 10
+        "w": 24,
+        "x": 0,
+        "y": 19
       },
-      "id": 6,
+      "id": 8,
       "options": {
         "legend": {
           "calcs": [

@@ -21,6 +21,11 @@
 #      queue depth — a deep queue that drains is healthy, a shallow one that
 #      never drains is not.
 #   5. Absent metrics page rather than silently disabling the group.
+#
+#   6. The vault-balance reconciler (nester#1082) has its own liveness and
+#      absence alerts, because the shared reconcile age gauge is reset every
+#      15s by the transaction poller and would mask the balance job's death —
+#      one loop's health must not vouch for the other's.
 
 rule_files:
   - slo_recording.yml
@@ -38,6 +43,10 @@ tests:
       # Reconciler completing passes: age resets, so it stays low.
       - series: 'nester_reconcile_last_run_age_seconds'
         values: '0+0x60'
+      # Balance reconciler (nester#1082) sweeping on its 5m cadence: the age
+      # sawtooths but never nears the 1800s threshold.
+      - series: 'nester_reconcile_balance_last_run_age_seconds'
+        values: '0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0'
       - series: 'nester_reconcile_runs_total{outcome="completed"}'
         values: '0+4x60'
       - series: 'nester_reconcile_runs_total{outcome="failed"}'
@@ -65,6 +74,12 @@ tests:
         exp_alerts: []
       - eval_time: 45m
         alertname: MoneyPathMetricsAbsent
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: BalanceReconciliationStalled
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: BalanceReconciliationMetricsAbsent
         exp_alerts: []
 
   # ---------------------------------------------------------------------
@@ -100,7 +115,7 @@ tests:
               summary: >-
                 Reconciliation found 1 divergence(s) between our records and the chain in the last hour
               description: >-
-                The reconciler compared our transaction records against the chain and they disagree. Breakdown by kind:  mismatch=0.0006/s  A "mismatch" is the most serious — both sides have the record and the values differ, which means a displayed balance is wrong. "missing" and "extra" mean a record exists on one side only. "stuck" means a submission has not reached a terminal state. Paging rather than ticketing because a savings product whose balance disagrees with the chain cannot be allowed to keep taking deposits while someone reads a ticket queue.
+                Reconciliation compared our records — transaction statuses and vault balances — against the chain and they disagree. Breakdown by kind:  mismatch=0.0006/s  A "mismatch" is the most serious — both sides have the record and the values differ, which means a displayed balance is wrong. "missing" and "extra" mean a record exists on one side only. "stuck" means a submission has not reached a terminal state. Paging rather than ticketing because a savings product whose balance disagrees with the chain cannot be allowed to keep taking deposits while someone reads a ticket queue.
               dashboard: /d/nester-slo-money-path/money-path-integrity
               runbook: docs/observability/runbooks/money-path-integrity.md
 
@@ -196,7 +211,7 @@ tests:
               summary: >-
                 Reconciliation passes are failing before inspecting anything
               description: >-
-                The poller is running but its passes abort while listing pending transactions, so nothing is being reconciled and the divergence count is falsely clean. Usually a database error on the list-pending query. Ticketing rather than paging because ReconciliationStalled pages if the loop stops entirely; this is the narrower case where it keeps ticking without doing work.
+                A reconciliation loop is running but its passes abort before completing, so nothing is being verified and the divergence count is falsely clean. Both loops feed this series: the transaction poller (usually a database error on the list-pending query) and the vault-balance reconciler (a database error listing vaults, or the chain read failing every pass). Ticketing rather than paging because the stall alerts page if a loop stops entirely; this is the narrower case where it keeps ticking without doing work.
               dashboard: /d/nester-slo-money-path/money-path-integrity
               runbook: docs/observability/runbooks/money-path-integrity.md
       # A ticking loop is not a stalled one.
@@ -297,6 +312,95 @@ tests:
               summary: >-
                 Money-path integrity metrics are absent
               description: >-
-                nester_reconcile_last_run_age_seconds has not been reported for 10 minutes. Every alert in this group evaluates against it, so reconciliation and pending-submission monitoring are both dark. Either the API is down (in which case other alerts are firing) or the transaction poller was never started — TX_POLLER_ENABLED unset disables it silently at boot.
+                nester_reconcile_last_run_age_seconds has not been reported for 10 minutes. The transaction poller's reconciliation and pending-submission alerts evaluate against it, so both are dark (the vault-balance reconciler has its own series and absence alert). Either the API is down (in which case other alerts are firing) or the transaction poller was never started — TX_POLLER_ENABLED unset disables it silently at boot.
               dashboard: /d/nester-slo-money-path/money-path-integrity
               runbook: docs/observability/runbooks/money-path-integrity.md
+
+  # ---------------------------------------------------------------------
+  # 6. Balance reconciler (nester#1082)
+  # ---------------------------------------------------------------------
+  # The balance job's version of the stall case: the transaction poller keeps
+  # ticking — its gauge reads healthy — while the balance reconciler is dead.
+  # This is exactly the masking the separate age series exists to defeat: on
+  # the shared gauge this scenario is invisible.
+  - interval: 1m
+    name: a stalled balance reconciler pages while the transaction poller looks healthy
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      # Constant past the threshold rather than a ramp — the summary
+      # humanizes this value, and a ramp makes the rendered figure depend on
+      # scrape alignment at the evaluation boundary (same reasoning as the
+      # stalled-reconciler case above).
+      - series: 'nester_reconcile_balance_last_run_age_seconds'
+        values: '2700x60'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '10x60'
+      - series: 'nester_reconcile_runs_total{outcome="failed"}'
+        values: '0x60'
+      - series: 'nester_reconcile_divergences_total{kind="mismatch"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BalanceReconciliationStalled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: money_path_integrity
+              service: api
+            exp_annotations:
+              summary: >-
+                Vault-balance reconciliation has not completed a pass for 45m 0s
+              description: >-
+                The vault-balance reconciler has not finished a pass in over 30 minutes, against a 5m default interval. While this is firing, balance divergence silence is unknown, not clean: nothing is comparing vaults.current_balance against the chain. Check the balance-reconciler goroutine, scheduler leadership, and nester_reconcile_runs_total{outcome="failed"}. If RECONCILE_INTERVAL was raised past 30 minutes this threshold must move with it.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/money-path-integrity.md
+      # The transaction poller's own stall alert correctly stays quiet — its
+      # loop is fine. One loop's health must not vouch for the other's.
+      - eval_time: 20m
+        alertname: ReconciliationStalled
+        exp_alerts: []
+
+  # Boundary: just under the threshold stays quiet.
+  - interval: 1m
+    name: a balance reconciler just under the threshold does not page
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_reconcile_balance_last_run_age_seconds'
+        values: '1700x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: BalanceReconciliationStalled
+        exp_alerts: []
+
+  # The dark case: the series is gone entirely. The age series is emitted
+  # only by a running leader, so absence means the balance safety net is off
+  # — disabled, leaderless, or never wired. The transaction poller's series
+  # being present must not cover for it: MoneyPathMetricsAbsent stays quiet
+  # here and the balance-specific absence alert is what fires.
+  - interval: 1m
+    name: an absent balance reconciler series pages on its own alert
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '0+4x60'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: BalanceReconciliationMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: money_path_integrity
+              service: api
+            exp_annotations:
+              summary: >-
+                Vault-balance reconciliation metrics are absent
+              description: >-
+                nester_reconcile_balance_last_run_age_seconds has not been reported for 10 minutes, so nothing is confirming that vault balances still agree with the chain — the safety net the rest of the money path relies on is dark. Either the API is down (other alerts are firing), no replica holds scheduler leadership, or the reconciler was disabled via RECONCILE_ENABLED=false — disabling the safety net is expected to page rather than pass silently.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/money-path-integrity.md
+      - eval_time: 15m
+        alertname: MoneyPathMetricsAbsent
+        exp_alerts: []

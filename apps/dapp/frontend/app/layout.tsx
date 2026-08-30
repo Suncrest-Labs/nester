@@ -15,6 +15,13 @@ import { OnboardingProvider } from "@/hooks/useOnboarding";
 import { NetworkProvider } from "@/context/NetworkProvider";
 import { NetworkBanner } from "@/components/network/NetworkSelector";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
+import {
+    E2E_HARNESS_CHANNELS,
+    E2E_HARNESS_TOKEN,
+    E2E_HARNESS_ENABLED,
+    E2E_HARNESS_HEARTBEAT_INTERVAL_MS,
+    E2E_HARNESS_HEARTBEAT_TIMEOUT_MS,
+} from "@/lib/e2e-harness";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -89,7 +96,28 @@ export default function RootLayout({
                                                     <OfflineBanner />
                                                     <NetworkBanner />
                                                     <PortfolioProvider>
-                                                        <WebSocketProvider>
+                                                        <WebSocketProvider
+                                                            channelsOverride={
+                                                                E2E_HARNESS_ENABLED
+                                                                    ? E2E_HARNESS_CHANNELS
+                                                                    : undefined
+                                                            }
+                                                            tokenOverride={
+                                                                E2E_HARNESS_ENABLED
+                                                                    ? E2E_HARNESS_TOKEN
+                                                                    : undefined
+                                                            }
+                                                            heartbeatInterval={
+                                                                E2E_HARNESS_ENABLED
+                                                                    ? E2E_HARNESS_HEARTBEAT_INTERVAL_MS
+                                                                    : undefined
+                                                            }
+                                                            heartbeatTimeout={
+                                                                E2E_HARNESS_ENABLED
+                                                                    ? E2E_HARNESS_HEARTBEAT_TIMEOUT_MS
+                                                                    : undefined
+                                                            }
+                                                        >
                                                             <OnboardingProvider>
                                                                 {children}
                                                                 <NotificationsToaster />

@@ -1,6 +1,14 @@
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
+
+// exposedHeaders lists the response headers a browser may read cross-origin.
+// Without this a cross-origin client can see the freshness headers on the
+// wire but not from JavaScript, so the UI could not degrade on stale data.
+var exposedHeaders = strings.Join(freshnessHeaders, ", ")
 
 // CORS returns a middleware that echoes the request's Origin header back in
 // Access-Control-Allow-Origin only when the origin is in allowedOrigins.
@@ -26,6 +34,7 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				if _, ok := allowed[origin]; ok {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 					w.Header().Set("Access-Control-Allow-Credentials", "true")
+					w.Header().Set("Access-Control-Expose-Headers", exposedHeaders)
 
 					if r.Method == http.MethodOptions {
 						w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")

@@ -21,6 +21,7 @@ import { InsightCard, InsightCardSkeleton } from "@/components/ai/insightCard"
 import { MarketSentimentWidget } from "@/components/ai/marketSentiment"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
+import { safeStorage } from "@/lib/storage"
 
 const INSIGHT_DISMISSAL_KEY_PREFIX = "nester_ai_insight_dismissed_"
 
@@ -28,15 +29,15 @@ function getDismissKey(id: string): string {
   return `${INSIGHT_DISMISSAL_KEY_PREFIX}${id}`
 }
 
+// #1233: safeStorage never throws — a throwing accessor (private browsing,
+// full quota) falls back to the in-memory map instead of crashing whichever
+// component calls these.
 function isDismissed(id: string): boolean {
-  if (typeof window === "undefined") return false
-  return localStorage.getItem(getDismissKey(id)) === "true"
+  return safeStorage.get<boolean>(getDismissKey(id), false)
 }
 
 function markDismissed(id: string) {
-  if (typeof window !== "undefined") {
-    localStorage.setItem(getDismissKey(id), "true")
-  }
+  safeStorage.set(getDismissKey(id), true)
 }
 
 interface CoachingContent {

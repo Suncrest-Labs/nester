@@ -152,7 +152,11 @@ export function CreateVaultWizard() {
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">Description (Optional)</label>
           <textarea
-            value={data.description}
+            // ?? "" keeps this controlled. description became optional on
+            // WizardVaultData, and passing undefined to value flips React to
+            // an uncontrolled textarea mid-render — it warns, and the field
+            // stops tracking state.
+            value={data.description ?? ""}
             onChange={(e) => setData({ ...data, description: e.target.value })}
             placeholder="What is the goal of this vault?"
             rows={3}

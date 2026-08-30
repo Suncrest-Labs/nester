@@ -25,6 +25,7 @@ import (
 // the default unit-test job rather than only where PostgreSQL is available.
 type stubSysRepo struct {
 	values map[string]string
+	getErr error
 	setErr error
 }
 
@@ -33,6 +34,9 @@ func newStubSysRepo() *stubSysRepo {
 }
 
 func (s *stubSysRepo) Get(_ context.Context, key string) (string, error) {
+	if s.getErr != nil {
+		return "", s.getErr
+	}
 	v, ok := s.values[key]
 	if !ok {
 		return "", systemstate.ErrKeyNotFound
@@ -270,8 +274,9 @@ func TestIntegrationCursorAndBalanceCommitAtomically(t *testing.T) {
 		t.Fatal("retry did not apply the event; it was wrongly recorded as processed")
 	}
 
+	// 999000000000 stroops is 99900 asset units (nester#1146).
 	assertVault(t, db, vaultA, vaultExpectation{
-		totalDeposited: "999000000000.00000000",
+		totalDeposited: "99900.00000000",
 		currentBalance: "0.00000000",
 		yieldEarned:    "0.00000000",
 		status:         "active",
@@ -365,21 +370,29 @@ func TestSortEventsForApply_EnforcesLedgerOrder(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestIntegrationLargeAmountRoundTripsExactly proves a large i128 stroop
-// amount survives parsing, arithmetic, persistence, and read-back with no
-// precision loss.
+// amount survives parsing, the stroop -> asset-unit conversion, persistence,
+// and read-back with no precision loss.
 //
 // 1e18 and the odd 17-digit values below are all above float64's 2^53
 // exact-integer limit, so any float64 anywhere in this path corrupts them.
+//
+// The expectation is the amount divided by 1e7, not the raw stroop figure:
+// balances are stored in asset units (nester#1146). The division is exact on
+// decimal.Decimal, so an odd stroop count keeps its low digits after the
+// decimal point rather than being rounded away — which is precisely what this
+// test guards.
 func TestIntegrationLargeAmountRoundTripsExactly(t *testing.T) {
 	db := replayDB(t)
 
 	cases := []struct {
 		name   string
 		amount string
+		// want is amount/1e7 rendered at the column's 8dp scale.
+		want string
 	}{
-		{"one quintillion stroops", "1000000000000000000"},
-		{"odd value above 2^53", "90071992547409931"},
-		{"max-ish i64 stroops", "9223372036854775807"},
+		{"one quintillion stroops", "1000000000000000000", "100000000000.00000000"},
+		{"odd value above 2^53", "90071992547409931", "9007199254.74099310"},
+		{"max-ish i64 stroops", "9223372036854775807", "922337203685.47758070"},
 	}
 
 	for _, tc := range cases {
@@ -405,9 +418,8 @@ func TestIntegrationLargeAmountRoundTripsExactly(t *testing.T) {
 				t.Fatalf("read balance: %v", err)
 			}
 
-			want := tc.amount + ".00000000"
-			if stored != want {
-				t.Fatalf("amount lost precision: stored %s, want %s", stored, want)
+			if stored != tc.want {
+				t.Fatalf("amount lost precision: stored %s, want %s", stored, tc.want)
 			}
 		})
 	}
@@ -450,13 +462,13 @@ func TestAmountPathHasNoFloat64(t *testing.T) {
 // has already lost precision before the indexer saw it, so writing it would
 // store a wrong balance. Rejecting surfaces the problem instead.
 func TestExtractEventAmount_RejectsUnsafeFloat64(t *testing.T) {
-	if _, ok := extractEventAmount(indexedEvent{
+	if _, ok := extractEventAmountStroops(indexedEvent{
 		Data: map[string]any{"amount": float64(1e18)},
 	}); ok {
 		t.Fatal("a float64 amount above 2^53 was accepted; it has already lost precision (B-11)")
 	}
 
-	got, ok := extractEventAmount(indexedEvent{
+	got, ok := extractEventAmountStroops(indexedEvent{
 		Data: map[string]any{"amount": json.Number("1000000000000000000")},
 	})
 	if !ok {

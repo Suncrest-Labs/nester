@@ -344,25 +344,29 @@ func TestIntegrationReplay_CleanSinglePass(t *testing.T) {
 	// not against whatever the code produced. A test that only compared runs to
 	// each other would pass happily on a uniformly wrong implementation.
 	//
-	// Amounts are stored as emitted: the indexer persists raw contract amounts
-	// and does not rescale stroops into display units anywhere in this path.
+	// The fixture emits STROOPS, as a contract does; balances are stored in
+	// asset units, so every figure below is the hand-computed stroop total
+	// divided by 1e7 (nester#1146). The division is exact on decimal.Decimal,
+	// so this remains the B-11 precision evidence: a float64 anywhere in the
+	// path still corrupts vault B's values, which sit far above 2^53.
 	//
-	// Vault A: deposits 25000000000 + 12500000000 + 750000000 = 38250000000,
-	//          harvest 375000000, withdraw 5000000000.
-	//          current_balance = 38250000000 + 375000000 - 5000000000.
-	// Vault B: deposit 1e18, harvest 2.5e17, withdraw 5e17 — every one of
-	//          these is far above float64's 2^53 exact-integer limit, so the
-	//          exact totals below are the B-11 precision evidence.
+	// Vault A: deposits 25000000000 + 12500000000 + 750000000 = 38250000000
+	//          stroops = 3825 units; harvest 375000000 = 37.5;
+	//          withdraw 5000000000 = 500.
+	//          current_balance = 3825 + 37.5 - 500 = 3362.5.
+	// Vault B: deposit 1e18 = 1e11 units, harvest 2.5e17 = 2.5e10,
+	//          withdraw 5e17 = 5e10.
+	//          current_balance = 1e11 + 2.5e10 - 5e10 = 7.5e10.
 	assertVault(t, db, vaultA, vaultExpectation{
-		totalDeposited: "38250000000.00000000",
-		currentBalance: "33625000000.00000000",
-		yieldEarned:    "375000000.00000000",
+		totalDeposited: "3825.00000000",
+		currentBalance: "3362.50000000",
+		yieldEarned:    "37.50000000",
 		status:         "active",
 	})
 	assertVault(t, db, vaultB, vaultExpectation{
-		totalDeposited: "1000000000000000000.00000000",
-		currentBalance: "750000000000000000.00000000",
-		yieldEarned:    "250000000000000000.00000000",
+		totalDeposited: "100000000000.00000000",
+		currentBalance: "75000000000.00000000",
+		yieldEarned:    "25000000000.00000000",
 		status:         "active",
 	})
 

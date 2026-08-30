@@ -5,13 +5,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/moneypath"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	"github.com/suncrestlabs/nester/apps/api/internal/ws"
@@ -23,9 +23,9 @@ import (
 const maxRequestBodyBytes int64 = 1 << 20
 
 type VaultHandler struct {
-	service            *service.VaultService
-	rebalanceSvc       *service.VaultRebalanceService
-	wsHub              *ws.Hub
+	service              *service.VaultService
+	rebalanceSvc         *service.VaultRebalanceService
+	wsHub                *ws.Hub
 	rebalanceRateLimiter func(http.Handler) http.Handler
 }
 
@@ -89,7 +89,6 @@ func (h *VaultHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/vaults/{id}/preview-deposit", h.previewDeposit)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/preview-withdraw", h.previewWithdraw)
 	mux.HandleFunc("GET /api/v1/vaults", h.listUserVaults)
-	mux.HandleFunc("GET /api/v1/vaults/all", h.listVaults)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/deposit", h.depositToVault)
 	mux.HandleFunc("POST /api/v1/vaults/{id}/withdraw", h.withdrawFromVault)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/rebalance-suggestion", h.getRebalanceSuggestion)
@@ -176,57 +175,14 @@ func (h *VaultHandler) getVault(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if model.UserID.String() != user.ID {
-		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		// 404, not 403: a non-owner must not be able to tell an existing
+		// vault from one that was never there. Answering 403 here turns the
+		// endpoint into an existence oracle for other users' vault IDs.
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 		return
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(model))
-}
-
-func (h *VaultHandler) listVaults(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-
-	limit := 20
-	if raw := q.Get("limit"); raw != "" {
-		v, err := strconv.Atoi(raw)
-		if err != nil || v < 1 {
-			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("limit must be a positive integer"))
-			return
-		}
-		if v > 100 {
-			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("limit must not exceed 100"))
-			return
-		}
-		limit = v
-	}
-
-	offset := 0
-	if raw := q.Get("offset"); raw != "" {
-		v, err := strconv.Atoi(raw)
-		if err != nil || v < 0 {
-			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("offset must be a non-negative integer"))
-			return
-		}
-		offset = v
-	}
-
-	vaults, total, err := h.service.ListVaults(r.Context(), service.ListVaultsInput{
-		Limit:  limit,
-		Offset: offset,
-		Status: q.Get("status"),
-	})
-	if err != nil {
-		h.writeDomainError(w, r, err)
-		return
-	}
-
-	out := response.OK(vaults)
-	out.Meta = &response.Meta{
-		Page:       offset/limit + 1,
-		PerPage:    limit,
-		TotalCount: total,
-	}
-	response.WriteJSON(w, http.StatusOK, out)
 }
 
 func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
@@ -243,7 +199,10 @@ func (h *VaultHandler) listUserVaults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if authUser.ID != userID.String() {
-		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		// 404, not 403: a non-owner must not be able to tell an existing
+		// vault from one that was never there. Answering 403 here turns the
+		// endpoint into an existence oracle for other users' vault IDs.
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 		return
 	}
 
@@ -397,7 +356,10 @@ func (h *VaultHandler) getAllocations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if v.UserID.String() != user.ID {
-		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		// 404, not 403: a non-owner must not be able to tell an existing
+		// vault from one that was never there. Answering 403 here turns the
+		// endpoint into an existence oracle for other users' vault IDs.
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 		return
 	}
 
@@ -492,7 +454,10 @@ func (h *VaultHandler) emergencyWithdraw(w http.ResponseWriter, r *http.Request)
 	}
 
 	if existing.UserID.String() != authUser.ID {
-		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		// 404, not 403: a non-owner must not be able to tell an existing
+		// vault from one that was never there. Answering 403 here turns the
+		// endpoint into an existence oracle for other users' vault IDs.
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 		return
 	}
 
@@ -537,18 +502,18 @@ func (h *VaultHandler) rebalancePosition(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := validateCurrencyCode(req.Currency); err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid currency: " + err.Error()))
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid currency: "+err.Error()))
 		return
 	}
 
 	result, err := h.service.RebalancePosition(r.Context(), service.RebalancePositionInput{
-		VaultID:     vaultID,
-		UserID:      userID,
+		VaultID:      vaultID,
+		UserID:       userID,
 		FromProtocol: req.FromProtocol,
 		ToProtocol:   req.ToProtocol,
-		Amount:      amount,
-		Currency:    req.Currency,
-		TxHash:      "",
+		Amount:       amount,
+		Currency:     req.Currency,
+		TxHash:       "",
 	})
 	if err != nil {
 		h.writeDomainError(w, r, err)
@@ -556,13 +521,13 @@ func (h *VaultHandler) rebalancePosition(w http.ResponseWriter, r *http.Request)
 	}
 
 	type rebalanceResponse struct {
-		Vault              vault.Vault          `json:"vault"`
-		FromProtocolBalance decimal.Decimal      `json:"from_protocol_balance"`
-		ToProtocolBalance   decimal.Decimal      `json:"to_protocol_balance"`
+		Vault               vault.Vault     `json:"vault"`
+		FromProtocolBalance decimal.Decimal `json:"from_protocol_balance"`
+		ToProtocolBalance   decimal.Decimal `json:"to_protocol_balance"`
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(rebalanceResponse{
-		Vault:              result.Vault,
+		Vault:               result.Vault,
 		FromProtocolBalance: result.FromProtocolBalance,
 		ToProtocolBalance:   result.ToProtocolBalance,
 	}))
@@ -652,7 +617,10 @@ func (h *VaultHandler) depositToVault(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if vaultModel.UserID.String() != user.ID {
-		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		// 404, not 403: a non-owner must not be able to tell an existing
+		// vault from one that was never there. Answering 403 here turns the
+		// endpoint into an existence oracle for other users' vault IDs.
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 		return
 	}
 
@@ -717,7 +685,10 @@ func (h *VaultHandler) withdrawFromVault(w http.ResponseWriter, r *http.Request)
 	}
 
 	if vault.UserID.String() != user.ID {
-		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		// 404, not 403: a non-owner must not be able to tell an existing
+		// vault from one that was never there. Answering 403 here turns the
+		// endpoint into an existence oracle for other users' vault IDs.
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 		return
 	}
 
@@ -740,10 +711,21 @@ func (h *VaultHandler) withdrawFromVault(w http.ResponseWriter, r *http.Request)
 
 func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	// The global pause switch (#1120). 503 with the operator's own reason,
+	// so the UI can say what is happening and why rather than showing a
+	// generic failure. Retry-After is deliberately absent: unlike an upstream
+	// blip, a pause is released by a person, and inviting a client to retry
+	// in a second would just add load to a system already in an incident.
+	case errors.Is(err, moneypath.ErrPaused):
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(
+			http.StatusServiceUnavailable, "MONEY_PATH_PAUSED", err.Error()))
 	case errors.Is(err, vault.ErrVaultNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 	case errors.Is(err, vault.ErrVaultForbidden):
-		response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+		// 404, not 403: a non-owner must not be able to tell an existing
+		// vault from one that was never there. Answering 403 here turns the
+		// endpoint into an existence oracle for other users' vault IDs.
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 	case errors.Is(err, vault.ErrUserNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("user"))
 	case errors.Is(err, vault.ErrInvalidVault), errors.Is(err, vault.ErrInvalidAmount), errors.Is(err, vault.ErrInvalidAllocation), errors.Is(err, vault.ErrInvalidHarvestFrequency):
@@ -752,14 +734,52 @@ func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, 
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	case errors.Is(err, vault.ErrDuplicateTransaction):
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "DUPLICATE_TRANSACTION", err.Error()))
+	// 409, not 400: the request is well-formed, it just lost a race with an
+	// address another live vault already holds (nester#1148).
+	case errors.Is(err, vault.ErrContractAddressRegistered):
+		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "CONTRACT_ADDRESS_REGISTERED", err.Error()))
+	// Corrupted balances, not bad input: the caller cannot fix this by
+	// changing the request, so it is a 500 via the default branch rather
+	// than a 400. Named here only to keep that deliberate.
+	case errors.Is(err, vault.ErrInvalidSharePrice):
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Err(http.StatusInternalServerError, "INVALID_SHARE_PRICE", err.Error()))
+	// 403, not 400: the request is well-formed and the amount is valid; the
+	// server simply refuses to fund it. The message names the remedy, which
+	// is to sign the deposit from the user wallet (nester#1152).
+	case errors.Is(err, vault.ErrOperatorFundedDepositRefused):
+		response.WriteJSON(w, http.StatusForbidden,
+			response.Err(http.StatusForbidden, "OPERATOR_FUNDED_DEPOSIT_REFUSED", err.Error()))
 	case errors.Is(err, vault.ErrInsufficientBalance), errors.Is(err, vault.ErrVaultClosed), errors.Is(err, vault.ErrVaultNotActive):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+
+	// The chain never gave us an answer: either the circuit breaker declined
+	// to call it (nester#1087) or the call was retried to exhaustion
+	// (nester#1086). Both are 503 rather than the default 500, because both
+	// are known, temporary upstream conditions rather than a fault in this
+	// service — and because 500 would tell a client to treat it as a bug
+	// rather than to back off.
+	//
+	// One response code for both: a client's correct action is identical, and
+	// the distinction that matters to us is in the metrics, not on the wire.
+	//
+	// Deliberately not logged here. An open breaker can reject every request
+	// for its whole open period, and a log line each would turn an upstream
+	// outage into a logging outage; the breaker's rejection counter and the
+	// RPC exhaustion counter carry that volume instead.
+	case isUpstreamUnavailable(err):
+		writeUpstreamUnavailable(w, err)
+
 	default:
 		logpkg.FromContext(r.Context()).Error("vault handler failed", "error", err.Error())
 		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
 	}
 }
 
+// retryAfterSeconds renders the breaker's remaining open period as a
+// Retry-After value, so a client backs off for as long as the shedding will
+// actually last instead of guessing. Falls back to "1" when the breaker did
+// not carry a duration, which is still better than no hint at all.
 func decodeJSON(r *http.Request, destination any) error {
 	decoder := json.NewDecoder(io.LimitReader(r.Body, maxRequestBodyBytes))
 	decoder.DisallowUnknownFields()
@@ -888,10 +908,42 @@ func (h *VaultHandler) previewWithdraw(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, http.StatusOK, response.OK(out))
 }
 
+// requireVaultOwner resolves a vault and confirms the authenticated caller owns
+// it. Callers get 404 rather than 403 on a vault owned by someone else, for the
+// same reason getVault does: a 403 distinguishes "exists but not yours" from
+// "does not exist", which turns the endpoint into an existence oracle for other
+// users' vault IDs (#1101, #1150).
+func (h *VaultHandler) requireVaultOwner(w http.ResponseWriter, r *http.Request, vaultID uuid.UUID) bool {
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
+		return false
+	}
+
+	model, err := h.service.GetVault(r.Context(), vaultID)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return false
+	}
+
+	if model.UserID.String() != user.ID {
+		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
+		return false
+	}
+
+	return true
+}
+
 func (h *VaultHandler) getSharePrice(w http.ResponseWriter, r *http.Request) {
 	vaultID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	// The response carries total assets and total shares for this vault, so it
+	// is owner-only despite reading like a public quote.
+	if !h.requireVaultOwner(w, r, vaultID) {
 		return
 	}
 
@@ -908,6 +960,12 @@ func (h *VaultHandler) convert(w http.ResponseWriter, r *http.Request) {
 	vaultID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	// Conversion is evaluated at this vault's own share price, so the result
+	// discloses the same balance data as the share-price endpoint.
+	if !h.requireVaultOwner(w, r, vaultID) {
 		return
 	}
 

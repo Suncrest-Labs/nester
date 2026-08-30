@@ -640,25 +640,49 @@ def build_intelligence_dashboard() -> dict[str, Any]:
 def build_balance_dashboard() -> dict[str, Any]:
     panels = [
         _text(
-            "Balance freshness — indexer lag under 60 ledgers",
+            "Balance freshness — staleness budget 5 minutes",
             (
-                "**SLI** network ledger tip minus last indexed ledger.\n\n"
+                "**SLI** how far behind the chain the indexed view is, in "
+                "ledgers and in seconds.\n\n"
                 "This is a gauge, not a ratio of events, so it has no burn rate "
                 "and no error budget — forcing one would produce a number that "
                 "means nothing during an incident.\n\n"
-                "The staleness panel is the important one: a lag gauge that "
-                "reads healthy because nothing is updating it is the failure "
-                "mode this SLI exists to prevent.\n\n"
+                "**Read data staleness first.** It is the number the staleness "
+                "budget, the page, and the `X-Indexer-Stale` header the API "
+                "returns to clients are all stated against, and it is the only "
+                "one that keeps climbing when the indexer has stopped "
+                "completely.\n\n"
                 "**Runbook** `docs/observability/runbooks/balance-freshness.md`"
             ),
             {"h": 5, "w": 24, "x": 0, "y": 0},
         ),
         _stat(
+            "Data staleness",
+            "indexer:freshness:lag_seconds",
+            "s",
+            {"h": 5, "w": 6, "x": 0, "y": 5},
+            description=(
+                "Age of the indexed view: time since the last freshness sample "
+                "plus that sample's ledger lag. Pages above the budget (300s), "
+                "and above it the API reports every response as stale."
+            ),
+            decimals=0,
+            thresholds=[
+                {"color": "green", "value": None},
+                {"color": "orange", "value": 120},
+                {"color": "red", "value": 300},
+            ],
+        ),
+        _stat(
             "Indexer lag",
             "indexer:freshness:lag_ledgers",
             "none",
-            {"h": 5, "w": 8, "x": 0, "y": 5},
-            description="Ledgers behind the tip. Pages above 60 (~5 minutes).",
+            {"h": 5, "w": 6, "x": 6, "y": 5},
+            description=(
+                "Ledgers behind the tip. Pages above 60 (~5 minutes). No data "
+                "here means the indexer has not reported a position at all — "
+                "read data staleness instead."
+            ),
             decimals=0,
             thresholds=[
                 {"color": "green", "value": None},
@@ -670,10 +694,11 @@ def build_balance_dashboard() -> dict[str, Any]:
             "Lag sample age",
             "indexer:freshness:sample_age_seconds",
             "s",
-            {"h": 5, "w": 8, "x": 8, "y": 5},
+            {"h": 5, "w": 6, "x": 12, "y": 5},
             description=(
-                "Seconds since the lag gauge was last updated. Pages above 300. "
-                "If this is climbing, do not trust the lag value beside it."
+                "Seconds since the indexer last reported a position. Near zero "
+                "means running but behind; climbing means stopped. This is the "
+                "panel that tells the two apart."
             ),
             decimals=0,
             thresholds=[
@@ -686,7 +711,7 @@ def build_balance_dashboard() -> dict[str, Any]:
             "Sample errors",
             "indexer:freshness:sample_error_rate5m",
             "none",
-            {"h": 5, "w": 8, "x": 16, "y": 5},
+            {"h": 5, "w": 6, "x": 18, "y": 5},
             description="Failed lag samples per second. Non-zero means the indexer loop is erroring.",
             thresholds=[
                 {"color": "green", "value": None},
@@ -694,10 +719,29 @@ def build_balance_dashboard() -> dict[str, Any]:
             ],
         ),
         _timeseries(
+            "Data staleness against the budget",
+            [
+                ("indexer:freshness:lag_seconds", "staleness"),
+                ("indexer:freshness:budget_seconds", "budget"),
+            ],
+            "s",
+            {"h": 9, "w": 12, "x": 0, "y": 10},
+            description=(
+                "Staleness plotted against the budget the API is actually "
+                "enforcing, so the crossing point is exactly where clients "
+                "start being told their balances are stale. Recovery shows as "
+                "a sharp drop back under the budget line."
+            ),
+            thresholds=[
+                {"color": "green", "value": None},
+                {"color": "red", "value": 300},
+            ],
+        ),
+        _timeseries(
             "Indexer lag over time",
             [("indexer:freshness:lag_ledgers", "lag (ledgers)")],
             "none",
-            {"h": 9, "w": 12, "x": 0, "y": 10},
+            {"h": 9, "w": 12, "x": 12, "y": 10},
             description="A sawtooth is normal (the cursor advances in steps). A monotonic climb is a stall.",
             thresholds=[
                 {"color": "green", "value": None},
@@ -708,11 +752,11 @@ def build_balance_dashboard() -> dict[str, Any]:
             "Freshness signal age",
             [("indexer:freshness:sample_age_seconds", "sample age")],
             "s",
-            {"h": 9, "w": 12, "x": 12, "y": 10},
+            {"h": 9, "w": 24, "x": 0, "y": 19},
             description=(
                 "Should sit near zero and reset every poll. A steady climb means "
-                "the sampler stopped, and the lag gauge is frozen at whatever it "
-                "last read."
+                "the indexer stopped reporting, and the ledger lag beside it is "
+                "frozen at whatever it last read."
             ),
             thresholds=[
                 {"color": "green", "value": None},
@@ -724,7 +768,7 @@ def build_balance_dashboard() -> dict[str, Any]:
     return _dashboard(
         "nester-slo-balance",
         "SLO — Balance freshness",
-        "Indexer lag and the staleness guard over it (nester#1056).",
+        "Indexer lag in ledgers and seconds against the staleness budget (nester#1056, nester#1088).",
         panels,
     )
 
@@ -934,10 +978,12 @@ def build_money_path_dashboard() -> dict[str, Any]:
             "none",
             {"h": 9, "w": 12, "x": 12, "y": 11},
             description=(
-                "completed vs failed. A healthy reconciler shows a flat "
-                "completed line and no failed line. failed means passes are "
-                "running but inspecting nothing — usually a database error on "
-                "the list-pending query."
+                "completed vs failed, summed across both loops (the tx "
+                "poller and the balance reconciler, nester#1082). A healthy "
+                "system shows a flat completed line and no failed line. "
+                "failed means passes are running but completing nothing — a "
+                "database error on the list-pending query, or the balance "
+                "sweep unable to list vaults or reach the chain."
             ),
         ),
         _timeseries(
@@ -957,13 +1003,20 @@ def build_money_path_dashboard() -> dict[str, Any]:
         ),
         _timeseries(
             "Reconciler age over time",
-            [("reconcile:health:last_run_age_seconds", "last run age")],
+            [
+                ("reconcile:health:last_run_age_seconds", "tx poller age"),
+                ("reconcile:balance:last_run_age_seconds", "balance reconciler age"),
+            ],
             "s",
             {"h": 9, "w": 12, "x": 12, "y": 20},
             description=(
-                "Should sawtooth near zero, resetting every pass. A monotonic "
-                "climb means the poller stopped, and every integrity signal on "
-                "this board froze with it."
+                "Both loops should sawtooth near zero, resetting every pass. "
+                "A monotonic climb means that loop stopped, and its integrity "
+                "signals on this board froze with it. The tx poller pages "
+                "above 600 (15s interval); the balance reconciler "
+                "(nester#1082) pages above 1800 (5m interval). The series are "
+                "separate deliberately: one loop's health must not vouch for "
+                "the other's."
             ),
             thresholds=[
                 {"color": "green", "value": None},

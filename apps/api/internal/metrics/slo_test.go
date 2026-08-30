@@ -17,9 +17,6 @@ func TestNilMetricsIsSafeOnEveryPath(t *testing.T) {
 
 	m.RecordFlowAttempt(FlowDeposit, OutcomeSucceeded, time.Second)
 	m.RecordFlowAttempt(FlowWithdrawal, OutcomeFailedChain, 0)
-	m.SetIndexerLag(42)
-	m.SetIndexerLagSampleAge(time.Minute)
-	m.RecordIndexerLagSampleError()
 	m.RecordReconcileRun(ReconcileCompleted)
 	m.RecordReconcileRun(ReconcileFailed)
 	m.RecordReconcileDivergence(DivergenceMismatch)
@@ -134,55 +131,6 @@ func TestFlowLabelCardinalityIsBounded(t *testing.T) {
 	}
 
 	t.Fatal("nester_flow_attempts_total not found in registry")
-}
-
-func TestIndexerLagGauges(t *testing.T) {
-	m := New()
-
-	m.SetIndexerLag(37)
-	if got := gaugeValue(t, m.Registry(), "nester_indexer_lag_ledgers"); got != 37 {
-		t.Fatalf("lag gauge = %v, want 37", got)
-	}
-
-	// A successful sample resets the staleness gauge: the reading is current.
-	if got := gaugeValue(t, m.Registry(), "nester_indexer_lag_last_sample_age_seconds"); got != 0 {
-		t.Fatalf("sample age after a successful sample = %v, want 0", got)
-	}
-
-	m.SetIndexerLagSampleAge(90 * time.Second)
-	if got := gaugeValue(t, m.Registry(), "nester_indexer_lag_last_sample_age_seconds"); got != 90 {
-		t.Fatalf("sample age = %v, want 90", got)
-	}
-}
-
-// The staleness gauge is what distinguishes "lag is genuinely low" from "the
-// sampler died and the value is frozen at a healthy number". Without it the
-// balance-freshness SLI fails in its most dangerous direction: reporting
-// perfect health. This asserts the lag value and its age are independent, so
-// an ageing sample cannot be masked by a stale-but-low lag reading.
-func TestStalenessIsIndependentOfLagValue(t *testing.T) {
-	m := New()
-
-	m.SetIndexerLag(3)
-	m.SetIndexerLagSampleAge(600 * time.Second)
-
-	if got := gaugeValue(t, m.Registry(), "nester_indexer_lag_ledgers"); got != 3 {
-		t.Fatalf("lag gauge = %v, want 3 (a healthy-looking value)", got)
-	}
-	if got := gaugeValue(t, m.Registry(), "nester_indexer_lag_last_sample_age_seconds"); got != 600 {
-		t.Fatalf("sample age = %v, want 600 (stale despite the healthy lag)", got)
-	}
-}
-
-func TestIndexerLagSampleErrorsAreCounted(t *testing.T) {
-	m := New()
-
-	m.RecordIndexerLagSampleError()
-	m.RecordIndexerLagSampleError()
-
-	if got := counterValue(t, m.Registry(), "nester_indexer_lag_sample_errors_total", nil); got != 2 {
-		t.Fatalf("sample errors = %v, want 2", got)
-	}
 }
 
 // ---------------------------------------------------------------------------
