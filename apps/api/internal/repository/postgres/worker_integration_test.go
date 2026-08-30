@@ -57,8 +57,8 @@ func TestWorkerIntegration_RetryAndBackoff(t *testing.T) {
 
 	cfg := fastIntegrationConfig()
 	// predictable backoff for assertion
-	cfg.Backoff = jobqueue.BackoffConfig{Base: 50 * time.Millisecond, Max: 500 * time.Millisecond} 
-	
+	cfg.Backoff = jobqueue.BackoffConfig{Base: 50 * time.Millisecond, Max: 500 * time.Millisecond}
+
 	w := jobqueue.NewWorker(repo, cfg, nil, nil).
 		Register("transient", jobqueue.HandlerFunc(func(ctx context.Context, job jobqueue.Job) error {
 			c := attempts.Add(1)
@@ -122,7 +122,7 @@ func TestWorkerIntegration_PanicIsTreatedAsFailure(t *testing.T) {
 		j := getJobByID(t, repo, job.ID)
 		return j.Status == jobqueue.StatusDead
 	})
-	
+
 	finalJob := getJobByID(t, repo, job.ID)
 	if finalJob.LastError == "" {
 		t.Fatal("expected last_error to contain panic info")
@@ -204,22 +204,24 @@ func TestWorkerIntegration_Concurrency(t *testing.T) {
 
 func TestWorkerIntegration_WorkerDiesMidJob(t *testing.T) {
 	repo := setupJobRepo(t)
-	
-	var claimCount atomic.Int32
+
+	var w1Claims, w2Claims atomic.Int32
 	firstClaimStarted := make(chan struct{})
+	releaseW1 := make(chan struct{})
 
 	cfg := fastIntegrationConfig()
 	cfg.Lease = 200 * time.Millisecond
-	cfg.HeartbeatInterval = 0 // disabled
+	cfg.HeartbeatInterval = 0 // disabled: a dead worker stops renewing its lease
 
+	// w1 claims the job, then hangs. Concurrency is pinned to 1 so w1 can never
+	// take a second copy of the job once its own lease expires.
 	w1 := jobqueue.NewWorker(repo, cfg, nil, nil).
 		Register("die", jobqueue.HandlerFunc(func(ctx context.Context, job jobqueue.Job) error {
-			if claimCount.Add(1) == 1 {
-				close(firstClaimStarted)
-				<-make(chan struct{}) // Block forever
-			}
+			w1Claims.Add(1)
+			close(firstClaimStarted)
+			<-releaseW1 // hang until the test tears down
 			return nil
-		}), 0)
+		}), 1)
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	go func() { _ = w1.Run(ctx1) }()
@@ -230,27 +232,34 @@ func TestWorkerIntegration_WorkerDiesMidJob(t *testing.T) {
 	}
 
 	<-firstClaimStarted
-	
-	// Simulate hard crash
+
+	// Simulate a hard crash: stop w1's poll loop so it never claims again. The
+	// in-flight handler is detached by design, so it stays blocked and the lease
+	// is left to expire rather than being released cleanly.
 	cancel1()
+	t.Cleanup(func() { close(releaseW1) })
 
 	w2 := jobqueue.NewWorker(repo, cfg, nil, nil).
 		Register("die", jobqueue.HandlerFunc(func(ctx context.Context, job jobqueue.Job) error {
-			claimCount.Add(1)
+			w2Claims.Add(1)
 			return nil
-		}), 0)
+		}), 1)
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	go func() { _ = w2.Run(ctx2) }()
 
-	waitForIntegration(t, 5*time.Second, func() bool {
+	// w2 can only pick the job up after w1's 200ms lease expires.
+	waitForIntegration(t, 10*time.Second, func() bool {
 		j := getJobByID(t, repo, job.ID)
 		return j.Status == jobqueue.StatusSucceeded
 	})
 
-	if c := claimCount.Load(); c != 2 {
-		t.Fatalf("handler ran %d times (1 for w1, 1 for w2), want 2", c)
+	if c := w1Claims.Load(); c != 1 {
+		t.Fatalf("w1 ran the handler %d times, want exactly 1", c)
+	}
+	if c := w2Claims.Load(); c != 1 {
+		t.Fatalf("w2 ran the handler %d times, want exactly 1 after lease expiry", c)
 	}
 }
 
