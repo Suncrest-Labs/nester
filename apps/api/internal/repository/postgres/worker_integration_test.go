@@ -250,10 +250,19 @@ func TestWorkerIntegration_WorkerDiesMidJob(t *testing.T) {
 	go func() { _ = w2.Run(ctx2) }()
 
 	// w2 can only pick the job up after w1's 200ms lease expires.
-	waitForIntegration(t, 10*time.Second, func() bool {
-		j := getJobByID(t, repo, job.ID)
-		return j.Status == jobqueue.StatusSucceeded
-	})
+	deadline := time.Now().Add(15 * time.Second)
+	var last jobqueue.Job
+	for time.Now().Before(deadline) {
+		last = getJobByID(t, repo, job.ID)
+		if last.Status == jobqueue.StatusSucceeded {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if last.Status != jobqueue.StatusSucceeded {
+		t.Fatalf("job never reached succeeded: status=%q attempts=%d max=%d w1=%d w2=%d",
+			last.Status, last.Attempts, last.MaxAttempts, w1Claims.Load(), w2Claims.Load())
+	}
 
 	if c := w1Claims.Load(); c != 1 {
 		t.Fatalf("w1 ran the handler %d times, want exactly 1", c)
