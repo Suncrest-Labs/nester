@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/intelligence"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
@@ -17,9 +19,10 @@ import (
 // realistic goal horizon without requiring a new repository method.
 const goalCoachingLookaheadDays = 10_000
 
-// GoalCoachingRepository is the read the weekly coaching job needs.
+// GoalCoachingRepository is the read and update operations the weekly coaching job needs.
 type GoalCoachingRepository interface {
 	ListActiveApproachingDeadline(ctx context.Context, maxDays int) ([]savingsgoal.SavingsGoal, error)
+	UpdateNotes(ctx context.Context, goalID uuid.UUID, notes string) error
 }
 
 // GoalCoachingClient requests an AI progress assessment for a single goal.
@@ -134,6 +137,12 @@ func (s *GoalCoachingScheduler) sendCoaching(ctx context.Context, goal savingsgo
 	if err != nil {
 		s.logger.Warn("goal coaching: generation failed", "goal_id", goal.ID.String(), "error", err.Error())
 		return
+	}
+
+	if result != nil && result.ProgressAssessment != "" {
+		if err := s.repo.UpdateNotes(ctx, goal.ID, result.ProgressAssessment); err != nil {
+			s.logger.Warn("goal coaching: failed to persist notes", "goal_id", goal.ID.String(), "error", err.Error())
+		}
 	}
 
 	title := "Your weekly savings check-in"

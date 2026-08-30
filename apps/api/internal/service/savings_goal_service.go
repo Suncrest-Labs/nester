@@ -460,6 +460,21 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	return s.EnrichProgress(ctx, *goal)
 }
 
+func (s *SavingsGoalService) UpdateNotes(ctx context.Context, userID, goalID uuid.UUID, notes string) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if err := s.repo.UpdateNotes(ctx, goalID, notes); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.Notes = notes
+	return s.EnrichProgress(ctx, *goal)
+}
+
 // Delete soft-deletes the goal (#924): it stamps deleted_at rather than
 // destroying the row, leaving a SavingsGoalRecoveryWindow-long window during
 // which Restore can undo it before the scheduled purge job hard-deletes it.

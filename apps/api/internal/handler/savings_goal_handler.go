@@ -44,6 +44,7 @@ type SavingsGoalManager interface {
 	ListContributions(ctx context.Context, userID, goalID uuid.UUID, params listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error)
 	ListTemplates(ctx context.Context) ([]savingsgoal.GoalTemplate, error)
 	CreateFromTemplate(ctx context.Context, userID uuid.UUID, in service.CreateFromTemplateInput) (savingsgoal.SavingsGoal, error)
+	UpdateNotes(ctx context.Context, userID, goalID uuid.UUID, notes string) (savingsgoal.SavingsGoal, error)
 }
 
 type SavingsGoalHandler struct {
@@ -330,6 +331,11 @@ func (h *SavingsGoalHandler) coaching(w http.ResponseWriter, r *http.Request) {
 		logpkg.FromContext(r.Context()).Error("goal coaching failed", "error", err.Error())
 		response.WriteJSON(w, http.StatusBadGateway, response.Err(http.StatusBadGateway, "UPSTREAM_ERROR", err.Error()))
 		return
+	}
+	if result != nil && result.ProgressAssessment != "" {
+		if _, err := h.svc.UpdateNotes(r.Context(), userID, goalID, result.ProgressAssessment); err != nil {
+			logpkg.FromContext(r.Context()).Error("failed to persist coaching summary to goal notes", "goal_id", goalID, "error", err.Error())
+		}
 	}
 	response.WriteJSON(w, http.StatusOK, response.OK(result))
 }
