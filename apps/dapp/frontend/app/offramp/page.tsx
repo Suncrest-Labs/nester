@@ -973,7 +973,9 @@ export default function OfframpPage() {
                                 : `Withdraw ${displayReceive.toLocaleString("en-US", { minimumFractionDigits: 2 })} ${receiveCurrency.symbol}`}
             </button>
             {submitError && (
-              <p className="mt-2 text-xs text-red-500">{submitError}</p>
+              <p className="mt-2 text-xs text-red-500" role="alert">
+                {submitError}
+              </p>
             )}
           </div>
         </motion.div>
