@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -75,8 +76,12 @@ func TestVaultRepositoryIntegrationRecordDepositWithAudit_AtomicWithBalance(t *t
 	if len(entries) != 1 || total != 1 {
 		t.Fatalf("expected 1 audit entry, got %d (total=%d)", len(entries), total)
 	}
-	if !balanceaudit.Reconcile(entries).Equal(fetched.CurrentBalance) {
-		t.Fatalf("Reconcile() = %s, want %s (vault's live balance)", balanceaudit.Reconcile(entries), fetched.CurrentBalance)
+	reconciled, err := balanceaudit.Reconcile(entries)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if !reconciled.Equal(fetched.CurrentBalance) {
+		t.Fatalf("Reconcile() = %s, want %s (vault's live balance)", reconciled, fetched.CurrentBalance)
 	}
 }
 
@@ -154,4 +159,70 @@ func TestVaultRepositoryIntegrationRecordDepositWithAudit_ConcurrentDepositsResp
 		t.Fatalf("accepted(%d)+rejected(%d) != attempts(%d)", accepted, rejected, attempts)
 	}
 	t.Logf("accepted=%d rejected=%d finalBalance=%s", accepted, rejected, fetched.CurrentBalance)
+}
+
+// TestVaultRepositoryIntegrationRecordWithdrawalWithAudit_OverWithdrawalReturnsDomainError
+// is the CodeRabbit-flagged finding: RecordWithdrawalWithAudit locks the
+// vault row and reads its balance before updating it, but must compare that
+// balance against the requested amount itself and return
+// vault.ErrWithdrawalExceedsPosition, rather than relying on a DB
+// CHECK-constraint violation the repository doesn't map to a domain error.
+func TestVaultRepositoryIntegrationRecordWithdrawalWithAudit_OverWithdrawalReturnsDomainError(t *testing.T) {
+	db := openIntegrationDB(t)
+	applyIntegrationMigrations(t, db)
+	resetIntegrationTables(t, db)
+
+	repository := NewVaultRepository(db)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, db)
+
+	created, err := repository.CreateVault(ctx, vault.Vault{
+		ID:              uuid.New(),
+		UserID:          userID,
+		ContractAddress: "CA-INT-AUDIT-OVERWITHDRAW",
+		TotalDeposited:  decimal.Zero,
+		CurrentBalance:  decimal.Zero,
+		Currency:        "USDC",
+		Status:          vault.StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	if _, err := repository.RecordDepositWithAudit(ctx, created.ID, vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               decimal.RequireFromString("50"),
+		SharesMintedOrBurned: decimal.RequireFromString("50"),
+		SharePriceAtTime:     decimal.NewFromInt(1),
+	}, nil, balanceaudit.Entry{
+		UserID:    userID,
+		Actor:     userID.String(),
+		Operation: balanceaudit.OperationDeposit,
+		Amount:    decimal.RequireFromString("50"),
+	}); err != nil {
+		t.Fatalf("RecordDepositWithAudit() error = %v", err)
+	}
+
+	_, err = repository.RecordWithdrawalWithAudit(ctx, created.ID, vault.TransactionRecord{
+		UserID:               userID,
+		Amount:               decimal.RequireFromString("75"),
+		SharesMintedOrBurned: decimal.RequireFromString("75"),
+		SharePriceAtTime:     decimal.NewFromInt(1),
+	}, balanceaudit.Entry{
+		UserID:    userID,
+		Actor:     userID.String(),
+		Operation: balanceaudit.OperationWithdrawal,
+		Amount:    decimal.RequireFromString("75"),
+	})
+	if !errors.Is(err, vault.ErrWithdrawalExceedsPosition) {
+		t.Fatalf("RecordWithdrawalWithAudit() error = %v, want ErrWithdrawalExceedsPosition", err)
+	}
+
+	fetched, err := repository.GetVault(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetVault() error = %v", err)
+	}
+	if !fetched.CurrentBalance.Equal(decimal.RequireFromString("50")) {
+		t.Fatalf("CurrentBalance = %s, want 50 (over-withdrawal must not partially apply)", fetched.CurrentBalance)
+	}
 }

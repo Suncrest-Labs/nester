@@ -1,6 +1,7 @@
 package balanceaudit
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -34,7 +35,10 @@ func TestReconcile_ReplayReproducesCurrentBalance(t *testing.T) {
 			Amount: dec("30"), BalanceBefore: dec("155.25"), BalanceAfter: dec("125.25")},
 	}
 
-	got := Reconcile(entries)
+	got, err := Reconcile(entries)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
 	want := dec("125.25")
 	if !got.Equal(want) {
 		t.Fatalf("Reconcile() = %s, want %s", got, want)
@@ -48,7 +52,11 @@ func TestReconcile_ReplayReproducesCurrentBalance(t *testing.T) {
 }
 
 func TestReconcile_EmptyLedgerIsZero(t *testing.T) {
-	if got := Reconcile(nil); !got.IsZero() {
+	got, err := Reconcile(nil)
+	if err != nil {
+		t.Fatalf("Reconcile(nil) error = %v", err)
+	}
+	if !got.IsZero() {
 		t.Fatalf("Reconcile(nil) = %s, want 0", got)
 	}
 }
@@ -64,10 +72,41 @@ func TestReconcile_DetectsDrift(t *testing.T) {
 		{VaultID: vaultID, UserID: userID, Operation: OperationDeposit,
 			Amount: dec("100"), BalanceBefore: dec("0"), BalanceAfter: dec("100")},
 	}
-	replayed := Reconcile(entries)
+	replayed, err := Reconcile(entries)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
 	actualCurrentBalance := dec("140") // an unrecorded +40 happened out of band
 	if replayed.Equal(actualCurrentBalance) {
 		t.Fatal("expected replayed total to diverge from an unreconciled live balance")
+	}
+}
+
+// TestReconcile_DetectsChainGap is the CodeRabbit-flagged case: a ledger
+// whose recorded before/after values sum to the correct live balance by
+// coincidence, even though the chain between two entries is broken (the
+// second entry's BalanceBefore does not match the first entry's
+// BalanceAfter — a balance change happened that was never recorded, or was
+// recorded out of order). Reconcile must reject this instead of silently
+// returning the coincidentally-correct sum.
+func TestReconcile_DetectsChainGap(t *testing.T) {
+	vaultID := uuid.New()
+	userID := uuid.New()
+
+	entries := []Entry{
+		{VaultID: vaultID, UserID: userID, Operation: OperationDeposit,
+			Amount: dec("100"), BalanceBefore: dec("0"), BalanceAfter: dec("100")},
+		// Gap: an out-of-band change moved the balance from 100 to 50 before
+		// this entry, but that change was never recorded. This entry's sum
+		// contribution (75-50=25) still happens to make the total (125)
+		// match a live balance of 125, which is exactly what the chain
+		// check must catch.
+		{VaultID: vaultID, UserID: userID, Operation: OperationWithdrawal,
+			Amount: dec("25"), BalanceBefore: dec("50"), BalanceAfter: dec("75")},
+	}
+
+	if _, err := Reconcile(entries); !errors.Is(err, ErrReconciliationGap) {
+		t.Fatalf("Reconcile() error = %v, want ErrReconciliationGap", err)
 	}
 }
 
@@ -89,7 +128,10 @@ func TestReconcile_OpeningBalanceEntryAccountsForPreexistingBalance(t *testing.T
 			Amount: dec("25"), BalanceBefore: dec("500"), BalanceAfter: dec("525")},
 	}
 
-	got := Reconcile(entries)
+	got, err := Reconcile(entries)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
 	want := dec("525")
 	if !got.Equal(want) {
 		t.Fatalf("Reconcile() = %s, want %s (opening balance entry must be included)", got, want)
@@ -97,7 +139,10 @@ func TestReconcile_OpeningBalanceEntryAccountsForPreexistingBalance(t *testing.T
 
 	// Without the opening entry, replaying only the deposit would reconcile
 	// to 25, not 525 — demonstrating why the opening entry is required.
-	withoutOpening := Reconcile(entries[1:])
+	withoutOpening, err := Reconcile(entries[1:])
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
 	if withoutOpening.Equal(want) {
 		t.Fatalf("expected replay without the opening entry to diverge from %s, got %s", want, withoutOpening)
 	}
