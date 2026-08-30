@@ -781,7 +781,10 @@ func TestVaultServiceRecordDeposit_AppendsBalanceAuditEntry(t *testing.T) {
 
 	// Replaying the recorded ledger from zero must reproduce the vault's
 	// actual current balance exactly.
-	replayed := balanceaudit.Reconcile(recorder.entries)
+	replayed, err := balanceaudit.Reconcile(recorder.entries)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
 	if !replayed.Equal(final.CurrentBalance) {
 		t.Fatalf("replayed balance %s does not match live balance %s", replayed, final.CurrentBalance)
 	}

@@ -18,6 +18,7 @@ package balanceaudit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -80,6 +81,15 @@ type Entry struct {
 // ErrNotFound is returned when no entries exist for a lookup.
 var ErrNotFound = errors.New("balance audit: no entries found")
 
+// ErrReconciliationGap is returned by Reconcile when the entry chain for a
+// vault is broken: some entry's BalanceBefore does not match the prior
+// entry's BalanceAfter, meaning a balance-changing operation happened that
+// was never recorded (or was recorded out of order). Summing such a ledger
+// anyway can silently produce a total that happens to match the live
+// balance despite the chain being wrong, which is exactly the failure mode
+// this check exists to catch.
+var ErrReconciliationGap = errors.New("balance audit: reconciliation gap in entry chain")
+
 // DefaultListLimit is the page size ListByVault/ListByUser callers get when
 // they don't yet need to page (mirrors reconciliation.vaultReconcilePageSize's
 // role: a generous default rather than an unbounded SELECT against an
@@ -110,16 +120,37 @@ type Repository interface {
 // vault's live current_balance is the reconciliation check (nester#1124):
 // equal means the audit trail fully accounts for the current balance.
 //
+// Before summing, Reconcile walks the entries and validates chain
+// continuity: every entry's BalanceBefore must equal the previous entry's
+// BalanceAfter (the first entry's BalanceBefore is the opening balance and
+// is accepted as-is). Without this check, a gap — a balance change that
+// happened but was never recorded, or entries applied out of order — can
+// still sum to a total that coincidentally matches the live balance,
+// silently hiding a broken chain. ErrReconciliationGap is returned the
+// moment such a mismatch is found, per vault, so callers know the trail
+// cannot be trusted rather than trusting a possibly-wrong total.
+//
 // This is only correct because migration 110 inserts an OperationOpeningBalance
 // entry (before=0, after=current balance at migration time) for every vault
 // that already existed when the ledger table was created — otherwise summing
 // from zero would omit whatever balance a pre-existing vault already held.
 // Every vault, including ones created after migration 110, therefore has an
 // unbroken chain of entries back to a true balance-before-history of zero.
-func Reconcile(entries []Entry) decimal.Decimal {
+func Reconcile(entries []Entry) (decimal.Decimal, error) {
 	total := decimal.Zero
+	prevByVault := make(map[uuid.UUID]decimal.Decimal, 1)
+	seen := make(map[uuid.UUID]bool, 1)
 	for _, e := range entries {
+		if seen[e.VaultID] {
+			if !e.BalanceBefore.Equal(prevByVault[e.VaultID]) {
+				return decimal.Zero, fmt.Errorf("%w: vault %s entry balance_before %s does not match prior balance_after %s",
+					ErrReconciliationGap, e.VaultID, e.BalanceBefore, prevByVault[e.VaultID])
+			}
+		} else {
+			seen[e.VaultID] = true
+		}
+		prevByVault[e.VaultID] = e.BalanceAfter
 		total = total.Add(e.BalanceAfter.Sub(e.BalanceBefore))
 	}
-	return total
+	return total, nil
 }
