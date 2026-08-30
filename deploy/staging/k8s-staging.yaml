@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nester-api-staging
+  namespace: nester-staging
+  labels:
+    app: nester-api
+    env: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nester-api
+      env: staging
+  template:
+    metadata:
+      labels:
+        app: nester-api
+        env: staging
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/suncrestlabs/nester-api:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: APP_ENV
+              value: "staging"
+            - name: STELLAR_NETWORK
+              value: "testnet"
+            - name: STELLAR_HORIZON_URL
+              value: "https://horizon-testnet.stellar.org"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nester-staging-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nester-staging-secrets
+                  key: redis-url
+            - name: CONTRACT_ADDRESS_VAULT_FACTORY
+              value: "CC7B2STAGINGVAULTFACTORYTESTNETADDRESS"
+            - name: CONTRACT_ADDRESS_YIELD_REGISTRY
+              value: "CC7B2STAGINGYIELDREGISTRYTESTNETADDRESS"
+            - name: FUNDED_TEST_ACCOUNT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nester-staging-secrets
+                  key: funded-test-account-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nester-api-staging
+  namespace: nester-staging
+spec:
+  selector:
+    app: nester-api
+    env: staging
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
