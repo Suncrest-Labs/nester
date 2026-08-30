@@ -213,11 +213,16 @@ func TestUserHandler_KYCSubmissionAndRetrieval(t *testing.T) {
 
 	mux := http.NewServeMux()
 	handler.Register(mux)
-	server := httptest.NewServer(mux)
-	defer server.Close()
 
 	// Create a user
 	u, _ := svc.RegisterUser(context.Background(), "G-KYC-TEST", "Bob")
+
+	// getKYCStatus/submitKYC enforce ownership (nester#1191 IDOR fix), so
+	// requests must be authenticated as the KYC subject to reach the
+	// handler body at all — same pattern as user_kyc_handler_test.go's
+	// newTestServer.
+	server := httptest.NewServer(fakeAuthMiddleware(u.ID)(mux))
+	defer server.Close()
 
 	// Submit KYC with a hand-built multipart form. formBody below carries
 	// the payload; the bytes.Buffer this used to allocate was never written
