@@ -10,23 +10,79 @@ import (
 	"testing"
 )
 
-func TestNoFloat64OnAmountPath(t *testing.T) {
-	// Enforce that float64 is not used anywhere in domain or service amount logic.
-	root := filepath.Join("..", "domain")
-	svcRoot := filepath.Join("..", "service")
-
-	checkDir(t, root)
-	checkDir(t, svcRoot)
+// Amount-bearing struct fields must never be represented as a binary floating
+// point type. Stellar amounts are i128 stroops; float64 carries 53 bits of
+// mantissa and silently loses precision well before that range is exhausted.
+// See issue #1121 and the column widening done in #1074.
+//
+// This guard is deliberately name-driven rather than type-driven. Plenty of
+// legitimate non-monetary values in these packages are float64 — APY
+// percentages, deterioration z-scores, allocation ratios, capacity warning
+// thresholds. Banning the float64 identifier outright flags all of those and
+// says nothing about precision on the money path.
+var amountFieldNames = map[string]bool{
+	"amount":         true,
+	"balance":        true,
+	"currentbalance": true,
+	"totaldeposited": true,
+	"totalwithdrawn": true,
+	"yieldearned":    true,
+	"feespaid":       true,
+	"fee":            true,
+	"principal":      true,
+	"deposit":        true,
+	"withdrawal":     true,
+	"grossamount":    true,
+	"netamount":      true,
+	"softcapacity":   true,
+	"stroops":        true,
 }
 
-func checkDir(t *testing.T, dir string) {
+// floatTypes are the representations that cannot hold an exact decimal amount.
+var floatTypes = map[string]bool{
+	"float32": true,
+	"float64": true,
+}
+
+// exemptFiles hold advisory projections rather than settled amounts. The
+// savings planner returns a forecast produced by the intelligence service; it
+// never represents a real balance, is never written to the ledger and never
+// crosses the contract boundary, so decimal precision is not meaningful there.
+var exemptFiles = map[string]bool{
+	filepath.Join("..", "domain", "intelligence", "model.go"): true,
+}
+
+func TestNoFloatOnAmountPath(t *testing.T) {
+	for _, dir := range []string{
+		filepath.Join("..", "domain"),
+		filepath.Join("..", "service"),
+		filepath.Join("..", "handler"),
+	} {
+		checkAmountFieldsInDir(t, dir)
+	}
+}
+
+func checkAmountFieldsInDir(t *testing.T, dir string) {
+	t.Helper()
+
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Fatalf("guarded directory %s does not exist", dir)
+	}
+
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
-			verifyNoFloat64(t, path)
+		if info.IsDir() || !strings.HasSuffix(info.Name(), ".go") {
+			return nil
 		}
+		if strings.HasSuffix(info.Name(), "_test.go") {
+			return nil
+		}
+		if exemptFiles[path] {
+			return nil
+		}
+		checkAmountFieldsInFile(t, path)
 		return nil
 	})
 	if err != nil {
@@ -34,7 +90,9 @@ func checkDir(t *testing.T, dir string) {
 	}
 }
 
-func verifyNoFloat64(t *testing.T, path string) {
+func checkAmountFieldsInFile(t *testing.T, path string) {
+	t.Helper()
+
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
@@ -42,18 +100,41 @@ func verifyNoFloat64(t *testing.T, path string) {
 	}
 
 	ast.Inspect(f, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if ok {
-			if ident, ok := sel.X.(*ast.Ident); ok {
-				if ident.Name == "builtin" && sel.Sel.Name == "float64" {
-					t.Errorf("%s: forbidden float64 usage detected", fset.Position(n.Pos()))
+		st, ok := n.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return true
+		}
+		for _, field := range st.Fields.List {
+			typeName := floatTypeName(field.Type)
+			if typeName == "" {
+				continue
+			}
+			for _, name := range field.Names {
+				if amountFieldNames[strings.ToLower(name.Name)] {
+					t.Errorf(
+						"%s: field %s is %s; amounts must use decimal.Decimal to preserve the full i128 stroop range",
+						fset.Position(name.Pos()), name.Name, typeName,
+					)
 				}
 			}
 		}
-		ident, ok := n.(*ast.Ident)
-		if ok && ident.Name == "float64" {
-			t.Errorf("%s: forbidden float64 type/identifier detected", fset.Position(n.Pos()))
-		}
 		return true
 	})
+}
+
+// floatTypeName reports the underlying float type name for an expression,
+// unwrapping pointers and slices, and returns "" when the expression is not a
+// float type.
+func floatTypeName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		if floatTypes[e.Name] {
+			return e.Name
+		}
+	case *ast.StarExpr:
+		return floatTypeName(e.X)
+	case *ast.ArrayType:
+		return floatTypeName(e.Elt)
+	}
+	return ""
 }
