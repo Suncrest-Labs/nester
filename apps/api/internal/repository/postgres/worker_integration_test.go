@@ -211,15 +211,26 @@ func TestWorkerIntegration_WorkerDiesMidJob(t *testing.T) {
 
 	cfg := fastIntegrationConfig()
 	cfg.Lease = 200 * time.Millisecond
-	cfg.HeartbeatInterval = 0 // disabled: a dead worker stops renewing its lease
+	// Config.withDefaults() rewrites HeartbeatInterval <= 0 to Lease/3, so the
+	// heartbeat cannot be switched off through config: w1 would renew its lease
+	// forever and the job would never become reclaimable. Bound the handler with
+	// JobTimeout instead (withDefaults leaves it alone). When it fires, the job
+	// context is cancelled, the heartbeat goroutine returns on <-ctx.Done(), and
+	// the lease is left to lapse the way a hard crash leaves it.
+	cfg.JobTimeout = 300 * time.Millisecond
 
-	// w1 claims the job, then hangs. Concurrency is pinned to 1 so w1 can never
-	// take a second copy of the job once its own lease expires.
+	// w1 claims the job and hangs until its JobTimeout fires. Concurrency is
+	// pinned to 1 so w1 can never take a second copy of its own job.
 	w1 := jobqueue.NewWorker(repo, cfg, nil, nil).
 		Register("die", jobqueue.HandlerFunc(func(ctx context.Context, job jobqueue.Job) error {
 			w1Claims.Add(1)
 			close(firstClaimStarted)
-			<-releaseW1 // hang until the test tears down
+			select {
+			case <-ctx.Done(): // JobTimeout fired: heartbeat stops, lease lapses
+			case <-releaseW1:
+			}
+			// Return nil rather than ctx.Err(): a non-nil error would make w1
+			// reschedule the job and could clobber w2's terminal write.
 			return nil
 		}), 1)
 
@@ -234,8 +245,8 @@ func TestWorkerIntegration_WorkerDiesMidJob(t *testing.T) {
 	<-firstClaimStarted
 
 	// Simulate a hard crash: stop w1's poll loop so it never claims again. The
-	// in-flight handler is detached by design, so it stays blocked and the lease
-	// is left to expire rather than being released cleanly.
+	// in-flight handler is detached from this context by design, so it keeps
+	// running until JobTimeout cancels it and the lease is left to lapse.
 	cancel1()
 	t.Cleanup(func() { close(releaseW1) })
 
