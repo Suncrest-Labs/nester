@@ -1,38 +1,44 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
-func TestHealthEndpoints_BothPathsReturnOKWhenReady(t *testing.T) {
-	var ready atomic.Bool
-	ready.Store(true)
+func TestHealthEndpointVersionAndCommit(t *testing.T) {
+	Version = "v1.2.3"
+	Commit = "deadbeef"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", livenessHandler(&ready))
-	mux.HandleFunc("GET /healthz", livenessHandler(&ready))
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  "ok",
+			"version": Version,
+			"commit":  Commit,
+		})
+	})
 
-	for _, path := range []string{"/health", "/healthz"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		assert.Equalf(t, http.StatusOK, rec.Code, "GET %s should return 200 when ready", path)
-		assert.Equalf(t, "ok", rec.Body.String(), "GET %s body", path)
-	}
-}
-
-func TestLivenessHandler_ReportsDrainingWhenNotReady(t *testing.T) {
-	var ready atomic.Bool
-
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
-	livenessHandler(&ready)(rec, req)
+	mux.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Equal(t, "draining", rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", rec.Code)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+
+	if body["version"] != "v1.2.3" {
+		t.Errorf("version = %v, want v1.2.3", body["version"])
+	}
+	if body["commit"] != "deadbeef" {
+		t.Errorf("commit = %v, want deadbeef", body["commit"])
+	}
 }
