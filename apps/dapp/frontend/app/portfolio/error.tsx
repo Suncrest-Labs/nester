@@ -1,14 +1,20 @@
 "use client";
 
-import { RecoverableError } from "@/components/recoverable-error";
+import { RouteErrorFallback } from "@/components/ui/error-boundary/route-error-fallback";
 
-export default function RouteError({
+export default function PortfolioError({
   error,
   reset,
 }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  return <RecoverableError error={error} reset={reset} route="/portfolio" />;
+  return (
+    <RouteErrorFallback
+      error={error}
+      reset={reset}
+      boundary="portfolio"
+      section="Portfolio"
+    />
+  );
 }
-

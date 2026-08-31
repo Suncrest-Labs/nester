@@ -163,7 +163,11 @@ func jitteredTTL(base time.Duration) time.Duration {
 		return base
 	}
 	spread := float64(base) * jitterFraction
-	offset := time.Duration(rand.Float64()*2*spread - spread) // [-spread, +spread]
+	// math/rand is correct here: the jitter spreads cache expiry to avoid a
+	// thundering herd, and predicting it grants an attacker nothing beyond
+	// knowing when a cache entry expires. A CSPRNG would add cost for no
+	// security benefit (nester#1035, G404).
+	offset := time.Duration(rand.Float64()*2*spread - spread) // #nosec G404 -- cache TTL jitter, not a security decision
 	return base + offset
 }
 

@@ -74,7 +74,9 @@ describe("RecoverableError", () => {
   });
 
   it("shows error digest when present", () => {
-    const error = new Error("Digest error");
+    // digest is Next.js's own addition to Error on the server-error path, so
+    // it is not on the base Error type.
+    const error: Error & { digest?: string } = new Error("Digest error");
     error.digest = "abc123";
 
     render(

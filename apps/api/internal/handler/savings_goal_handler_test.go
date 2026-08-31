@@ -321,6 +321,16 @@ func (m *mockSavingsGoalService) CreateFromTemplate(_ context.Context, _ uuid.UU
 	return savingsgoal.SavingsGoal{}, nil
 }
 
+func (m *mockSavingsGoalService) UpdateNotes(_ context.Context, userID, goalID uuid.UUID, notes string) (savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[goalID]
+	if !ok || g.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	g.Notes = notes
+	m.goals[goalID] = g
+	return g, nil
+}
+
 func withAuthUser(next http.Handler, userID uuid.UUID) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := auth.User{ID: userID.String(), WalletAddress: "GTEST"}
@@ -641,8 +651,8 @@ func TestSavingsGoalHandler_Create_ForeignVaultForbidden(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("create status = %d, want 403", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("create status = %d, want 404", resp.StatusCode)
 	}
 }
 

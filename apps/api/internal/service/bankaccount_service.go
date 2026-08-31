@@ -21,9 +21,9 @@ var (
 
 // BankAccountService manages saved payout accounts for users.
 type BankAccountService struct {
-	repo      bankaccount.Repository
-	cipher    *crypto.AccountCipher
-	resolver  *BankService
+	repo     bankaccount.Repository
+	cipher   *crypto.AccountCipher
+	resolver *BankService
 }
 
 func NewBankAccountService(

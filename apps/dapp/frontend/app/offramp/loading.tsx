@@ -1,8 +1,15 @@
-"use client";
+import { AppShell } from "@/components/app-shell";
+import { SettlementsSkeleton } from "@/components/skeletons/dashboard-skeleton";
 
-import { PageSkeleton } from "@/components/page-skeleton";
-
-export default function OfframpLoading() {
-  return <PageSkeleton />;
+/**
+ * Route-level loading UI. Next.js renders this while the segment is being
+ * prepared, so navigation never shows a blank frame. The navigation shell stays
+ * mounted so the user can move elsewhere while this loads.
+ */
+export default function Loading() {
+  return (
+    <AppShell>
+      <SettlementsSkeleton />
+    </AppShell>
+  );
 }
-

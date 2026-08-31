@@ -62,6 +62,13 @@ func PingHorizon(ctx context.Context, client *http.Client, horizonURL string) He
 
 // PingSorobanRPC issues a getHealth JSON-RPC call to a Soroban RPC node and
 // reports reachability.
+//
+// This is the one Soroban call that deliberately does NOT go through the
+// shared retry client (nester#1086), for the same reason it bypasses the
+// circuit breaker: a health probe must report the upstream's real state right
+// now. Retrying would make an unreachable endpoint look merely slow, and would
+// hold /health/detailed open for the retry budget while doing it. The caller
+// supplies its own timeout via ctx.
 func PingSorobanRPC(ctx context.Context, client *http.Client, rpcURL string) HealthResult {
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",

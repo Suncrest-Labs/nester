@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -23,6 +22,8 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
 func TestVaultHandlerIntegrationCreateGetListAndErrors(t *testing.T) {
@@ -56,10 +57,7 @@ func TestVaultHandlerIntegrationCreateGetListAndErrors(t *testing.T) {
 		t.Fatalf("expected 201, got %d", response.StatusCode)
 	}
 
-	var created vault.Vault
-	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
-		t.Fatalf("decode create response: %v", err)
-	}
+	created := decodeAPIData[vault.Vault](t, response.Body)
 
 	if _, err := vaultService.RecordDeposit(context.Background(), service.RecordDepositInput{
 		VaultID: created.ID,
@@ -92,10 +90,7 @@ func TestVaultHandlerIntegrationCreateGetListAndErrors(t *testing.T) {
 	}
 	defer getResponse.Body.Close()
 
-	var fetched vault.Vault
-	if err := json.NewDecoder(getResponse.Body).Decode(&fetched); err != nil {
-		t.Fatalf("decode get response: %v", err)
-	}
+	fetched := decodeAPIData[vault.Vault](t, getResponse.Body)
 	if len(fetched.Allocations) != 2 {
 		t.Fatalf("expected 2 allocations, got %d", len(fetched.Allocations))
 	}
@@ -106,10 +101,7 @@ func TestVaultHandlerIntegrationCreateGetListAndErrors(t *testing.T) {
 	}
 	defer listResponse.Body.Close()
 
-	var listed []vault.Vault
-	if err := json.NewDecoder(listResponse.Body).Decode(&listed); err != nil {
-		t.Fatalf("decode list response: %v", err)
-	}
+	listed := decodeAPIData[[]vault.Vault](t, listResponse.Body)
 	if len(listed) != 1 {
 		t.Fatalf("expected 1 listed vault, got %d", len(listed))
 	}
@@ -152,54 +144,9 @@ func openHandlerIntegrationDB(t *testing.T) *sql.DB {
 
 func applyHandlerIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-
-	// Wipe every table in the public schema before applying. The docker
-	// volume persists across container restarts, so tables created in prior
-	// runs must be dropped to avoid non-idempotent CREATE TABLE statements
-	// (e.g. 006_create_settlements_table) failing on the second run. CASCADE
-	// pulls in dependent objects; schema_migrations and any tables outside
-	// the public schema are untouched.
-	if _, err := db.Exec(`
-		DO $$
-		DECLARE r record;
-		BEGIN
-			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END$$;
-	`); err != nil {
-		t.Fatalf("drop tables: %v", err)
-	}
-
-	// 033 must run BEFORE 023: 033 renames vault_transactions.tx_hash →
-	// transaction_hash, and 023 creates the UNIQUE INDEX on that column. 035
-	// is a byte-identical duplicate of 033 whose non-idempotent RENAME COLUMN
-	// would fail on re-runs, so it is intentionally skipped.
-	// 010 and 020 are deliberately omitted: they DROP users.email and RENAME
-	// users.name → display_name, which would break the seed helpers that
-	// INSERT into users (id, email, name). Apply either via a separate,
-	// opt-in helper if user-profile tests are extended.
-	for _, name := range []string{
-		"001_create_users_table.up.sql",
-		"002_create_vaults_table.up.sql",
-		"005_create_allocations_table.up.sql",
-		"006_create_settlements_table.up.sql",
-		"007_add_vault_deleted_at.up.sql",
-		"008_add_vault_transactions.up.sql",
-		"014_add_missing_columns.up.sql",
-		"027_user_profile_fields.up.sql",
-		"033_update_vault_transactions.up.sql",
-		"023_vault_transactions_hash_unique.up.sql",
-	} {
-		path := filepath.Join("..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
+	// The full migration chain in numeric order — see testutil.ApplyAllMigrations
+	// for why no per-test subset is used.
+	testutil.ApplyAllMigrations(t, db, filepath.Join("..", "..", "migrations"))
 }
 
 func resetHandlerIntegrationTables(t *testing.T, db *sql.DB) {
@@ -215,9 +162,9 @@ func seedHandlerIntegrationUser(t *testing.T, db *sql.DB) uuid.UUID {
 
 	userID := uuid.New()
 	if _, err := db.Exec(
-		`INSERT INTO users (id, email, name) VALUES ($1, $2, $3)`,
+		`INSERT INTO users (id, wallet_address, display_name) VALUES ($1, $2, $3)`,
 		userID.String(),
-		userID.String()+"@example.com",
+		"G"+userID.String(), // final schema: wallet_address NOT NULL UNIQUE, email dropped by 010
 		"Handler Integration User",
 	); err != nil {
 		t.Fatalf("seed user failed: %v", err)
@@ -257,10 +204,7 @@ func TestVaultHandlerDepositAndWithdrawIntegration(t *testing.T) {
 		t.Fatalf("expected 201, got %d", response.StatusCode)
 	}
 
-	var created vault.Vault
-	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
-		t.Fatalf("decode create response: %v", err)
-	}
+	created := decodeAPIData[vault.Vault](t, response.Body)
 
 	// Test: Deposit to vault
 	depositResponse, err := http.Post(
@@ -277,10 +221,7 @@ func TestVaultHandlerDepositAndWithdrawIntegration(t *testing.T) {
 		t.Fatalf("expected 201 for deposit, got %d", depositResponse.StatusCode)
 	}
 
-	var depositedVault vault.Vault
-	if err := json.NewDecoder(depositResponse.Body).Decode(&depositedVault); err != nil {
-		t.Fatalf("decode deposit response: %v", err)
-	}
+	depositedVault := decodeAPIData[vault.Vault](t, depositResponse.Body)
 
 	if depositedVault.TotalDeposited.Cmp(decimal.RequireFromString("100.50")) != 0 {
 		t.Fatalf("expected total_deposited 100.50, got %v", depositedVault.TotalDeposited)
@@ -301,10 +242,7 @@ func TestVaultHandlerDepositAndWithdrawIntegration(t *testing.T) {
 		t.Fatalf("expected 200 for withdraw, got %d", withdrawResponse.StatusCode)
 	}
 
-	var withdrawnVault vault.Vault
-	if err := json.NewDecoder(withdrawResponse.Body).Decode(&withdrawnVault); err != nil {
-		t.Fatalf("decode withdraw response: %v", err)
-	}
+	withdrawnVault := decodeAPIData[vault.Vault](t, withdrawResponse.Body)
 
 	if withdrawnVault.CurrentBalance.Cmp(decimal.RequireFromString("50.50")) != 0 {
 		t.Fatalf("expected current_balance 50.50 after withdrawal, got %v", withdrawnVault.CurrentBalance)
@@ -372,7 +310,8 @@ func TestVaultHandlerDepositAndWithdrawIntegration(t *testing.T) {
 	}
 	defer forbiddenResponse.Body.Close()
 
-	if forbiddenResponse.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for other user's vault, got %d", forbiddenResponse.StatusCode)
+	// 404 rather than 403 — a non-owner must not learn the vault exists (#1101).
+	if forbiddenResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for other user's vault, got %d", forbiddenResponse.StatusCode)
 	}
 }

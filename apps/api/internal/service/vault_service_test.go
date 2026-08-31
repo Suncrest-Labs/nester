@@ -12,7 +12,6 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
-
 func TestVaultServiceRecordDepositAndUpdateAllocations(t *testing.T) {
 	userID := uuid.New()
 	repository := newMemoryVaultRepository(userID)
@@ -275,6 +274,34 @@ func newMemoryVaultRepository(userIDs ...uuid.UUID) *memoryVaultRepository {
 	}
 }
 
+// setBalance moves a vault's current balance without recording a transaction,
+// which is how a test sets a share price: ComputeSharePrice is
+// current_balance / total_deposited.
+func (r *memoryVaultRepository) setBalance(id uuid.UUID, balance decimal.Decimal) {
+	model, ok := r.vaults[id]
+	if !ok {
+		return
+	}
+	model.CurrentBalance = balance
+	r.vaults[id] = cloneVault(model)
+}
+
+// lastWithdrawalShares returns the share count recorded against the most
+// recent withdrawal, or zero if none was recorded.
+func (r *memoryVaultRepository) lastWithdrawalShares() decimal.Decimal {
+	for i := len(r.transactions) - 1; i >= 0; i-- {
+		txn := r.transactions[i]
+		if txn.Type != "withdrawal" {
+			continue
+		}
+		if txn.SharesMintedOrBurned == nil {
+			return decimal.Zero
+		}
+		return *txn.SharesMintedOrBurned
+	}
+	return decimal.Zero
+}
+
 func (r *memoryVaultRepository) CreateVault(_ context.Context, model vault.Vault) (vault.Vault, error) {
 	if _, ok := r.users[model.UserID]; !ok {
 		return vault.Vault{}, vault.ErrUserNotFound
@@ -439,6 +466,18 @@ func (r *memoryVaultRepository) RecordWithdrawal(_ context.Context, id uuid.UUID
 	}
 	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
+	}
+	if record.TransactionHash != "" {
+		for _, txn := range r.transactions {
+			if txn.TransactionHash == record.TransactionHash {
+				return vault.ErrDuplicateTransaction
+			}
+		}
+	}
+	// Mirrors the Postgres repository: the sufficiency check re-runs under
+	// the row lock at write time (nester#1084).
+	if model.CurrentBalance.LessThan(record.Amount) {
+		return vault.ErrWithdrawalExceedsPosition
 	}
 
 	model.CurrentBalance = model.CurrentBalance.Sub(record.Amount)

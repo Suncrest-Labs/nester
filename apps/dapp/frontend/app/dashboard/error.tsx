@@ -1,14 +1,20 @@
 "use client";
 
-import { RecoverableError } from "@/components/recoverable-error";
+import { RouteErrorFallback } from "@/components/ui/error-boundary/route-error-fallback";
 
-export default function RouteError({
+export default function DashboardError({
   error,
   reset,
 }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  return <RecoverableError error={error} reset={reset} route="/dashboard" />;
+  return (
+    <RouteErrorFallback
+      error={error}
+      reset={reset}
+      boundary="dashboard"
+      section="Dashboard"
+    />
+  );
 }
-

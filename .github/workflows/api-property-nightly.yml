@@ -1,0 +1,32 @@
+name: Nightly API property tests
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  share-accounting:
+    name: Randomized share accounting
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - uses: actions/setup-go@0a12ed9d6470b8847fe87a30f6be17367a786d20 # v5.0.1
+        with:
+          go-version-file: apps/api/go.mod
+          cache: true
+
+      # Deliberately omit RAPID_SEED: each nightly run explores a new set of
+      # sequences, while ci.yml supplies the reproducible merge gate.
+      - name: Run randomized share-accounting properties
+        env:
+          RAPID_CHECKS: "256"
+        run: go test -timeout 120s -run PropertyBased -v ./internal/domain/vault

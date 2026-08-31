@@ -28,6 +28,7 @@ import {
     type NotificationChannel,
 } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
+import { NotificationsListSkeleton } from "@/components/skeletons/notifications-skeleton";
 
 function formatDateLocale(timestamp: string) {
     try {
@@ -283,11 +284,8 @@ export default function NotificationsPage() {
                         <div className="overflow-hidden rounded-3xl border border-border bg-white dark:bg-[#100F0F]">
                             {/* Loading State */}
                             {isLoading ? (
-                                <div className="flex flex-col items-center justify-center p-12 text-center" aria-live="polite">
-                                    <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground mb-3" />
-                                    <p className="text-sm font-medium text-foreground/80">
-                                        Loading notification stream...
-                                    </p>
+                                <div className="p-6">
+                                    <NotificationsListSkeleton />
                                 </div>
                             ) : error ? (
                                 /* Error State */
@@ -303,7 +301,7 @@ export default function NotificationsPage() {
                                 </div>
                             ) : filteredNotifications.length === 0 ? (
                                 /* Empty State */
-                                <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
+                                <div data-testid="notifications-empty-state" className="flex flex-col items-center justify-center px-6 py-20 text-center">
                                     <div className="mb-4 rounded-2xl bg-secondary p-4">
                                         <Bell className="h-8 w-8 text-muted-foreground" />
                                     </div>

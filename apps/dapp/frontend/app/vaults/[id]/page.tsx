@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useWallet } from "@/components/wallet-provider";
 import { AppShell } from "@/components/app-shell";
+import { VaultDetailSkeleton } from "@/components/skeletons/page-skeletons";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -95,7 +96,7 @@ export default function VaultDetailPage() {
     }, [isConnected, isLoading, vault, router]);
 
     if (!isConnected) return null;
-    if (isLoading) return <AppShell><div className="p-8 text-center text-sm text-black/50 dark:text-white/50">Loading...</div></AppShell>;
+    if (isLoading) return <AppShell><VaultDetailSkeleton /></AppShell>;
     if (!vault) return null;
 
     const canHarvest =

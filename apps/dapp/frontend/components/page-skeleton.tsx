@@ -1,6 +1,6 @@
 "use client";
 
-import { Skeleton, SkeletonLine, SkeletonCard, SkeletonTable } from "@/components/ui/skeleton/skeleton";
+import { SkeletonLine, SkeletonCard, SkeletonTable } from "@/components/ui/skeleton/skeleton";
 
 /**
  * Generic page skeleton shown while a route's async data loads.

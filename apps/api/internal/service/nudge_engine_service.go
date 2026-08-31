@@ -20,7 +20,7 @@ import (
 // generated it ("template" or "llm") so effectiveness tracking and the
 // dispatch log reflect what was really sent, not just what was requested.
 type NudgeCopyGenerator interface {
-	Generate(nudgeType nudge.NudgeType, facts nudge.Facts, segment usersignal.Segment) (title, body, source string, err error)
+	Generate(ctx context.Context, nudgeType nudge.NudgeType, facts nudge.Facts, segment usersignal.Segment) (title, body, source string, err error)
 }
 
 type NudgeEngineService struct {
@@ -148,7 +148,7 @@ func (s *NudgeEngineService) evaluate(ctx context.Context, userID uuid.UUID, hin
 		return nil
 	}
 
-	title, body, copySource, err := s.copyGen.Generate(best.Candidate.Type, best.Candidate.Facts, segment)
+	title, body, copySource, err := s.copyGen.Generate(ctx, best.Candidate.Type, best.Candidate.Facts, segment)
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,10 @@ type NudgeEngineGoalMilestoneNotifier struct {
 	NudgeEngine *NudgeEngineService
 }
 
-func (n NudgeEngineGoalMilestoneNotifier) SendGoalMilestone(ctx context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int) {
+// SendGoalMilestone ignores dedupeKey: the nudge engine's own history table
+// already decides whether a nudge for this user is due, so a redelivered
+// milestone re-enters that decision rather than bypassing it.
+func (n NudgeEngineGoalMilestoneNotifier) SendGoalMilestone(ctx context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int, _ string) {
 	hint := nudge.Candidate{
 		Type: nudge.NudgeTypeMilestone,
 		Facts: nudge.Facts{

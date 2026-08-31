@@ -285,6 +285,8 @@ type SavingsGoal struct {
 	// registration against the savings_goal contract succeeds.
 	OnchainGoalID *string `json:"onchain_goal_id,omitempty"`
 	OnchainStatus *string `json:"onchain_status,omitempty"`
+	// Notes persists session summaries / coaching notes back to the savings goal (#929).
+	Notes string `json:"notes,omitempty"`
 	// MinContribution/MaxContribution are optional per-contribution limits
 	// (#922), useful for merchants/employers seeding structured savings
 	// plans (e.g. "at least $50 per deposit" or "no more than $500 per
@@ -369,6 +371,8 @@ type Repository interface {
 	// UpdateOnchainLink persists the result of asynchronously registering the
 	// goal against the savings_goal contract (#807).
 	UpdateOnchainLink(ctx context.Context, goalID uuid.UUID, onchainGoalID, onchainStatus string) error
+	// UpdateNotes updates the notes column on a savings goal (#929).
+	UpdateNotes(ctx context.Context, goalID uuid.UUID, notes string) error
 	// Restore clears deleted_at, undoing a soft delete (#924). Returns
 	// ErrGoalNotFound if no matching row exists for id/userID at all (deleted
 	// or not); callers should have already validated the recovery window.

@@ -1,14 +1,20 @@
 "use client";
 
-import { RecoverableError } from "@/components/recoverable-error";
+import { RouteErrorFallback } from "@/components/ui/error-boundary/route-error-fallback";
 
-export default function RouteError({
+export default function YieldsError({
   error,
   reset,
 }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  return <RecoverableError error={error} reset={reset} route="/yields" />;
+  return (
+    <RouteErrorFallback
+      error={error}
+      reset={reset}
+      boundary="yields"
+      section="Yields"
+    />
+  );
 }
-

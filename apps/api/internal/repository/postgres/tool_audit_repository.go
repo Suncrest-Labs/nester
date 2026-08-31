@@ -89,5 +89,8 @@ func (r *ToolAuditRepository) InsertChained(ctx context.Context, inv toolaudit.T
 func userLockKey(userID string) int64 {
 	h := fnv.New64a()
 	_, _ = fmt.Fprint(h, userID)
-	return int64(h.Sum64()) //nolint:gosec // deterministic bucketing, not security-sensitive
+	// Wraparound is harmless: pg_advisory_xact_lock needs a deterministic
+	// bigint, and any stable mapping from user ID to key serves. The value
+	// carries no meaning beyond identifying a lock bucket (nester#1035, G115).
+	return int64(h.Sum64()) // #nosec G115 -- deterministic advisory-lock bucketing; wraparound is harmless
 }

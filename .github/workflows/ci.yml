@@ -25,6 +25,7 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       contracts: ${{ steps.filter.outputs.contracts }}
       shared: ${{ steps.filter.outputs.shared }}
+      slo: ${{ steps.filter.outputs.slo }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +52,12 @@ jobs:
               - 'apps/dapp/**'
             api:
               - 'apps/api/**'
+            slo:
+              - 'docker/prometheus/**'
+              - 'docker/alertmanager/**'
+              - 'docker/grafana/**'
+              - 'scripts/build_slo_dashboards.py'
+              - 'tests/probes/**'
             contracts:
               - 'packages/contracts/**'
               - 'scripts/contract-audit.sh'
@@ -79,7 +86,6 @@ jobs:
 
       - name: Lint website
         run: pnpm --filter @nester/website lint
-
 
   intelligence:
     name: Intelligence (Python)
@@ -110,7 +116,6 @@ jobs:
       - name: Test
         run: pytest
 
-
   dapp-frontend:
     name: Dapp Frontend (Next.js)
     needs: changes
@@ -129,9 +134,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # Gates on the security ruleset, which is what the step name promises
+      # and what nester#1236 asked for. Pointing it at the full `lint` surface
+      # made it fail on 47 pre-existing style and react-hooks errors in files
+      # no security change had touched — a gate that red-lines every unrelated
+      # PR gets switched back off, which is how it ended up non-blocking in
+      # the first place.
       - name: Lint (security rules)
-        run: pnpm --filter @nester/dapp run lint
+        run: pnpm --filter @nester/dapp run lint:security
+
+      # The full ruleset still runs and still reports; tightening the 47
+      # pre-existing errors is separate work, so it does not block a merge yet.
+      - name: Lint (full, non-blocking)
         continue-on-error: true
+        run: pnpm --filter @nester/dapp run lint
 
       - name: Build
         run: pnpm --filter @nester/dapp run build
@@ -151,6 +167,112 @@ jobs:
 
       - name: Report non-blocking JS advisories (dapp)
         run: pnpm audit --audit-level=moderate || true
+
+  # Browser-level tests for the dapp. Split from dapp-frontend because it needs
+  # a browser download and boots a dev server, so it is materially slower than
+  # the Vitest job and there is no reason to make unit-test feedback wait on it.
+  #
+  # These specs force their failure modes with route interception (a blocked
+  # WebSocket, a stalled API response) rather than by pointing the app at a real
+  # backend, so they need nothing but the dev server. smoke.spec.ts is excluded
+  # by playwright.config.ts — it is full-stack and runs post-deploy against
+  # staging in deploy-staging.yml.
+  dapp-e2e:
+    name: Dapp E2E (Playwright)
+    needs: changes
+    if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @nester/dapp exec playwright install chromium --with-deps
+
+      # playwright.config.ts starts `next dev` on :3001 and sets the harness
+      # env vars it needs, so there is no separate server step here.
+      - name: Run E2E tests
+        run: pnpm --filter @nester/dapp run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/dapp/frontend/playwright-report/
+          retention-days: 7
+
+  # SLO rules (nester#1056). Validates the recording and alerting rules and
+  # runs the burn-rate unit tests against the same files Prometheus loads, so
+  # a threshold edited without updating its arithmetic fails the build rather
+  # than being discovered during an incident.
+  slo:
+    name: SLO rules
+    needs: changes
+    if: needs.changes.outputs.slo == 'true' || needs.changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install promtool and amtool
+        run: |
+          set -euo pipefail
+          PROM_VERSION=3.1.0
+          AM_VERSION=0.28.0
+          curl -sSfL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"             | tar xz --strip-components=1 -C /usr/local/bin "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+          curl -sSfL "https://github.com/prometheus/alertmanager/releases/download/v${AM_VERSION}/alertmanager-${AM_VERSION}.linux-amd64.tar.gz"             | tar xz --strip-components=1 -C /usr/local/bin "alertmanager-${AM_VERSION}.linux-amd64/amtool"
+          promtool --version
+          amtool --version
+
+      - name: Check Prometheus config and rules
+        run: promtool check config docker/prometheus/prometheus.yml
+
+      - name: Check Alertmanager config
+        run: amtool check-config docker/alertmanager/alertmanager.yml
+
+      # The substance: proves the fast-burn alert fires on an induced burst,
+      # the slow-burn alert tickets without paging, a healthy system stays
+      # quiet, and the thresholds behave at the boundary.
+      - name: Run burn-rate alert tests
+        working-directory: docker/prometheus/rules
+        run: promtool test rules slo_alerts_test.yml slo_probe_alerts_test.yml slo_money_path_alerts_test.yml
+
+      # The dashboards are generated from scripts/build_slo_dashboards.py so
+      # the panels and thresholds stay consistent across four files. Committing
+      # the output means Grafana loads exactly what is reviewed; this step
+      # stops the two drifting apart.
+      # The probes create real staging transactions, so their safety guards
+      # (no default target, production-name and production-URL refusal,
+      # mutations opt-in) are the part that must never regress.
+      - name: Run synthetic probe tests
+        working-directory: tests/probes
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest -q
+
+      - name: Check SLO dashboards are up to date
+        run: |
+          set -euo pipefail
+          python3 scripts/build_slo_dashboards.py
+          if ! git diff --quiet -- docker/grafana/dashboards; then
+            echo "::error::Generated dashboards differ from the committed ones."
+            echo "Run: python scripts/build_slo_dashboards.py, then commit the result."
+            git diff --stat -- docker/grafana/dashboards
+            exit 1
+          fi
 
   security:
     name: Security Scanning
@@ -190,7 +312,12 @@ jobs:
 
       - name: Install govulncheck
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # Pinned (#1221): see security-scanner-versions.env for why and the
+        # update cadence. Keep this in sync with security.yml's install step
+        # — both source the same file so they can't drift apart.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
       - name: Audit Go dependencies
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
@@ -219,20 +346,22 @@ jobs:
 
       - name: Install gosec
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        # Pinned (#1221): see security-scanner-versions.env for why and the
+        # update cadence.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
 
-      # TODO(#1035): drop continue-on-error once the gosec backlog is cleared.
-      # Enforcing this gate surfaced 27 pre-existing findings across 8 rule
-      # classes, including two G704 SSRF (HIGH confidence and severity) in
-      # intelligence_proxy.go, two G202 SQL concatenations, and twelve G115
-      # integer-overflow conversions on chain-facing paths. Those need real
-      # review rather than a blanket suppression; #1035 closes by removing
-      # this line.
+      # Enforcing gate (#1035). The backlog this previously tolerated is
+      # cleared: gosec -severity medium reports zero issues. Findings that were
+      # genuine defects are fixed; the remainder are annotated per-rule at the
+      # single line each applies to, with the reasoning stated in place. No rule
+      # is globally disabled and no suppression is unscoped, so a new finding
+      # fails the build rather than accumulating.
       - name: Run gosec
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
         run: gosec -severity medium ./...
         working-directory: apps/api
-        continue-on-error: true
 
       - uses: pnpm/action-setup@v4
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
@@ -272,7 +401,57 @@ jobs:
 
       - name: Audit Python dependencies
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-        run: pip-audit -r requirements.txt
+        run: |
+          set +e
+          pip-audit -r requirements.txt --format json --output pip-audit-report.json
+          EXIT_CODE=$?
+          set -e
+
+          if [ ! -f pip-audit-report.json ]; then
+            echo "::error::pip-audit report missing"
+            exit 1
+          fi
+
+          # pip-audit exits 1 on findings and 2 on its own failure. Only the
+          # first is a result we can parse; the second means the scan never
+          # ran, and without this check a crashed scan reads as a clean one.
+          if [ "$EXIT_CODE" -gt 1 ]; then
+            echo "::error::pip-audit failed to run (exit $EXIT_CODE); treating as a failed scan"
+            exit "$EXIT_CODE"
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = Path("pip-audit-report.json")
+          findings = json.loads(report.read_text() or "[]")
+          # pip-audit --format json emits {"dependencies": [{"name":..,
+          # "vulns": [...]}, ...]}, not a flat list of vulnerabilities. Reading
+          # it as a list made len() count the dict's *keys* — reporting "Found
+          # 2 Python vulnerabilities" on a clean scan — and then iterating it
+          # yielded strings, so .get() raised AttributeError and failed the
+          # job unconditionally. Older pip-audit versions did return a list,
+          # so both shapes are accepted.
+          dependencies = findings.get("dependencies", []) if isinstance(findings, dict) else findings
+
+          vulns = []
+          for dep in dependencies:
+              if not isinstance(dep, dict):
+                  continue
+              for vuln in dep.get("vulns", []):
+                  vulns.append((dep.get("name", "unknown"), vuln))
+
+          if vulns:
+              print(f"::error::Found {len(vulns)} Python vulnerabilities")
+              for name, vuln in vulns:
+                  vid = vuln.get("id", "unknown")
+                  desc = str(vuln.get("description", ""))[:120]
+                  print(f"  {name} {vid}: {desc}")
+              raise SystemExit(1)
+
+          print("✓ No Python vulnerabilities detected")
+          PY
         working-directory: apps/intelligence
 
       - name: Run bandit
@@ -280,17 +459,31 @@ jobs:
         run: bandit -r app -ll
         working-directory: apps/intelligence
 
+      # semgrep/semgrep-action is archived, and the SHA this was pinned to
+      # does not exist upstream — the job aborted at "Set up job" with
+      # "unable to resolve action". Run the maintained CLI directly instead,
+      # pinned to a released version, which keeps the reproducibility this
+      # PR was after without depending on a dead action.
       - name: Semgrep SAST (TypeScript/Next.js)
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: >-
-            p/typescript
-            p/react
-            p/nextjs
-            p/secrets
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          pip install "semgrep==1.175.0"
+          semgrep scan --error --quiet --config p/typescript --config p/react --config p/nextjs --config p/secrets apps/dapp/frontend
+
+      - name: Check Semgrep cloud token status
+        if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          if [ -z "$SEMGREP_APP_TOKEN" ]; then
+            echo "::warning::SEMGREP_APP_TOKEN is not configured. Semgrep will run with reduced capabilities (local rules only, no cloud findings)."
+            echo "To enable cloud scanning, set SEMGREP_APP_TOKEN in GitHub repository settings."
+            echo "See docs/ci/secrets.md for details."
+          else
+            echo "✓ Semgrep cloud scanning enabled"
+          fi
 
   api:
     name: API (Go)
@@ -358,16 +551,43 @@ jobs:
             echo "OK: No migration prefix collisions."
           fi
 
+      # Collision checking above proves the chain is well-named, not that it
+      # works. This applies every migration from scratch, seeds the result, then
+      # rolls the whole chain back down — reversibility breaks against data, not
+      # against an empty schema (issue #1123). A migration that cannot make the
+      # round trip fails the build; one that is deliberately irreversible has to
+      # say so with a `migration:irreversible` marker in its .down.sql.
+      - name: Check migration safety (up, seed, down)
+        env:
+          DATABASE_URL: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
+        run: go run -tags migrationsafety ./scripts/verify_migrations.go -dir migrations
+
       - name: Build
         run: go build ./...
 
       - name: Test (unit)
         run: go test -race -timeout 120s -count=1 -short ./...
 
-      - name: Test (integration)
-        run: go test -race -timeout 120s -count=1 -run Integration ./...
-        continue-on-error: true
+      # Database-backed tests gate on TEST_DATABASE_DSN (the convention in
+      # internal/db and internal/repository/postgres), not DATABASE_URL, so
+      # without this variable every one of them silently skipped — and the
+      # step was continue-on-error, so it never gated a merge either. Scoped
+      # to this step so the unit run above stays DB-free and parallel.
+      #
+      # -p 1: the tests share one database and each wipes the public schema
+      # before applying the full migration chain, so packages must not run
+      # concurrently. No -run filter: DB-gated tests whose names lack
+      # "Integration" (internal/audit, internal/stellar backfill) must run too.
+      - name: Test (database integration)
+        env:
+          TEST_DATABASE_DSN: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
+        run: go test -race -timeout 900s -count=1 -p 1 ./...
 
+      - name: Test (property-based vault arithmetic)
+        env:
+          RAPID_CHECKS: "32"
+          RAPID_SEED: "29062026"
+        run: go test -timeout 60s -run PropertyBased -v ./internal/domain/vault
 
   contracts:
     name: Contracts (Rust)
@@ -387,7 +607,6 @@ jobs:
       - name: Add wasm32-unknown-unknown target
         run: rustup target add wasm32-unknown-unknown
 
-
       - name: Build yield_registry WASM
         run: cargo build --release --target wasm32-unknown-unknown -p yield-registry-contract
 
@@ -404,7 +623,15 @@ jobs:
         run: test -f target/wasm32-unknown-unknown/release/vault_token.wasm
 
       - name: Test contracts
+        env:
+          PROPTEST_RNG_SEED: "29062026"
         run: cargo test --lib
+
+      - name: Run deterministic share-accounting properties
+        env:
+          PROPTEST_CASES: "32"
+          PROPTEST_RNG_SEED: "29062026"
+        run: cargo test -p nester-integration-tests property_tests
 
       # The vault contract's integration tests link against the pre-compiled
       # vault_token.wasm artifact built above. Run them explicitly and fail the
@@ -426,4 +653,3 @@ jobs:
             echo "ERROR: No vault-contract tests ran — possible missing WASM artifact"
             exit 1
           fi
-

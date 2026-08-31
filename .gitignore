@@ -28,6 +28,19 @@ Thumbs.db
 CLAUDE.md
 .claude/
 
+# Agent worktrees
+.issue-worktrees/
+
+# Local scratch and planning artifacts (see #1039)
+/cleanup.txt
+/AUDIT_*.md
+/*_AUDIT.md
+/*_REPORT.md
+# Guard against accidentally shell-quoted / pasted-command filenames
+*ExecutionPolicy*
+*Activate.ps1*
+*(&*
+
 # Debug logs
 npm-debug.log*
 yarn-debug.log*

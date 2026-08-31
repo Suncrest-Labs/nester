@@ -26,21 +26,21 @@ const (
 )
 
 type User struct {
-	ID                 uuid.UUID  `json:"id"`
-	WalletAddress      string     `json:"wallet_address"`
-	DisplayName        string     `json:"display_name"`
-	KYCStatus          KYCStatus  `json:"kyc_status"`
-	Tier               string     `json:"tier"`
-	KYCSubmittedAt     *time.Time `json:"kyc_submitted_at,omitempty"`
-	KYCReviewedAt      *time.Time `json:"kyc_reviewed_at,omitempty"`
-	KYCRejectionReason *string    `json:"kyc_rejection_reason,omitempty"`
-  RiskProfile         *RiskProfile `json:"risk_profile,omitempty"`
-	SavingsGoal         *string     `json:"savings_goal,omitempty"`
-	OnboardingCompleted bool        `json:"onboarding_completed"`
-	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
-	Timezone           string     `json:"timezone"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                  uuid.UUID    `json:"id"`
+	WalletAddress       string       `json:"wallet_address"`
+	DisplayName         string       `json:"display_name"`
+	KYCStatus           KYCStatus    `json:"kyc_status"`
+	Tier                string       `json:"tier"`
+	KYCSubmittedAt      *time.Time   `json:"kyc_submitted_at,omitempty"`
+	KYCReviewedAt       *time.Time   `json:"kyc_reviewed_at,omitempty"`
+	KYCRejectionReason  *string      `json:"kyc_rejection_reason,omitempty"`
+	RiskProfile         *RiskProfile `json:"risk_profile,omitempty"`
+	SavingsGoal         *string      `json:"savings_goal,omitempty"`
+	OnboardingCompleted bool         `json:"onboarding_completed"`
+	LastLoginAt         *time.Time   `json:"last_login_at,omitempty"`
+	Timezone            string       `json:"timezone"`
+	CreatedAt           time.Time    `json:"created_at"`
+	UpdatedAt           time.Time    `json:"updated_at"`
 }
 
 type KYCDocument struct {
@@ -50,13 +50,20 @@ type KYCDocument struct {
 	IDNumber       string    `json:"id_number"`
 	FrontObjectKey string    `json:"front_object_key"`
 	BackObjectKey  *string   `json:"back_object_key,omitempty"`
-	SubmittedAt    time.Time `json:"submitted_at"`
+	// FullName, DateOfBirth, and Country are the identity fields the
+	// submission form carries alongside the ID document. Previously read
+	// from the request and silently discarded rather than persisted
+	// (nester#1190).
+	FullName    string    `json:"full_name"`
+	DateOfBirth time.Time `json:"date_of_birth"`
+	Country     string    `json:"country"`
+	SubmittedAt time.Time `json:"submitted_at"`
 }
 
 var (
-	ErrUserNotFound      = errors.New("user not found")
-	ErrDuplicateWallet   = errors.New("wallet address already registered")
-	ErrInvalidWallet     = errors.New("invalid wallet address")
+	ErrUserNotFound    = errors.New("user not found")
+	ErrDuplicateWallet = errors.New("wallet address already registered")
+	ErrInvalidWallet   = errors.New("invalid wallet address")
 )
 
 // EncryptedKYCDoc holds the ciphertext and key version for each encrypted KYC
