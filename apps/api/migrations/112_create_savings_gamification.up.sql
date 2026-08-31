@@ -1,5 +1,3 @@
-ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
-
 CREATE TABLE IF NOT EXISTS savings_gamification_state (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     current_streak_days INTEGER NOT NULL DEFAULT 0,
