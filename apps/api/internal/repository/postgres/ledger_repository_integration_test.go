@@ -34,7 +34,12 @@ func applyLedgerMigrations(t *testing.T, db *sql.DB) {
 		"005_create_allocations_table.up.sql",
 		// 014 alters settlements, so the table has to exist first.
 		"006_create_settlements_table.up.sql",
+		// resetIntegrationTables truncates settlements, allocations,
+		// vault_transactions, yield_harvests, vaults and users, so every one
+		// of them has to be created here or the TRUNCATE fails outright.
+		"008_add_vault_transactions.up.sql",
 		"014_add_missing_columns.up.sql",
+		"042_create_yield_harvests.up.sql",
 		"113_create_ledger_accounts.up.sql",
 		"114_create_ledger_entries.up.sql",
 		"115_create_ledger_balances.up.sql",
