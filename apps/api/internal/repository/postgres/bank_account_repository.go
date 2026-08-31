@@ -94,8 +94,14 @@ func (r *BankAccountRepository) ListByUser(ctx context.Context, userID uuid.UUID
 		); err != nil {
 			return nil, err
 		}
-		parsedID, _ := uuid.Parse(id)
-		parsedUser, _ := uuid.Parse(uid)
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return nil, fmt.Errorf("bank account repository: parse id %q: %w", id, err)
+		}
+		parsedUser, err := uuid.Parse(uid)
+		if err != nil {
+			return nil, fmt.Errorf("bank account repository: parse user id %q: %w", uid, err)
+		}
 		var verified *time.Time
 		if verifiedAt.Valid {
 			verified = &verifiedAt.Time
@@ -138,7 +144,11 @@ func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bank
 	if err != nil {
 		return bankaccount.BankAccount{}, nil, "", mapBankAccountError(err)
 	}
-	parsedUser, _ := uuid.Parse(uid)
+	parsedUser, err := uuid.Parse(uid)
+	if err != nil {
+		return bankaccount.BankAccount{}, nil, "", fmt.Errorf(
+			"bank account repository: parse user id %q: %w", uid, err)
+	}
 	var verified *time.Time
 	if verifiedAt.Valid {
 		verified = &verifiedAt.Time

@@ -26,7 +26,6 @@
 //! | `accept_admin` | `accept_admin_rejects_wrong_successor`, `accept_admin_requires_successor_signature` | `admin_transfer_wrappers_enforce_authorization` / n/a |
 //! | `report_yield` | `manager_entrypoints_reject_outsider`, `manager_entrypoints_require_signature` | `manager_entrypoints_accept_then_reject_revoked_manager` |
 //! | `harvest` | `harvest_without_user_signature_is_rejected` | `test_harvest_basic` / n/a |
-//! | `harvest_vault` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
 //! | `rebalance` | `admin_entrypoints_reject_outsider`, `operator_entrypoints_require_signature` | `operator_entrypoints_accept_then_reject_revoked_operator` |
 //! | `record_source_allocation` | same as `rebalance` | same as `rebalance` |
 //! | `collect_fees` | `manager_entrypoints_reject_outsider`, `manager_entrypoints_require_signature` | `manager_entrypoints_accept_then_reject_revoked_manager` |
@@ -1474,42 +1473,74 @@ fn test_harvest_zero_yield() {
 }
 
 #[test]
-fn test_harvest_vault() {
-    // report_yield, then harvest_vault collects fees, transfers to treasury, resets counter
+fn per_user_harvest_does_not_dilute_holders_who_did_not_harvest() {
+    // Regression test for #1159. The admin-level harvest_vault entrypoint used
+    // to charge an aggregate performance fee by reducing TotalAssets while
+    // leaving share supply untouched, so a holder who never harvested watched
+    // their share price fall. It was removed; this pins the property that made
+    // removing it safe -- one user harvesting does not move another holder's
+    // share price.
+    let (env, admin, token, vault, _treasury) = setup();
+    let harvester = Address::generate(&env);
+    let passive = Address::generate(&env);
+
+    let deposit = 1_000 * XLM;
+    mint(&token, &harvester, deposit);
+    mint(&token, &passive, deposit);
+    vault.deposit(&harvester, &deposit, &0);
+    vault.deposit(&passive, &deposit, &0);
+
+    // Fund the vault so the fee transfer to the treasury can settle.
+    mint(&token, &vault.address, 500 * XLM);
+
+    vault.grant_role(&admin, &harvester, &Role::Manager);
+    vault.report_yield(&harvester, &(500 * XLM));
+
+    let passive_value_before = vault.share_price() * vault.get_shares(&passive);
+
+    vault.harvest(&harvester);
+
+    let passive_value_after = vault.share_price() * vault.get_shares(&passive);
+
+    assert_eq!(
+        passive_value_after, passive_value_before,
+        "a holder who did not harvest must not lose value when another user harvests"
+    );
+}
+
+#[test]
+fn per_user_harvest_pays_the_treasury_the_full_fee() {
+    // The aggregate entrypoint was removed in #1159, so the per-user path is
+    // now the only route by which the treasury is paid. This asserts it still
+    // collects the whole configured fee, which is what made removal safe
+    // rather than a revenue loss.
     let (env, admin, token, vault, treasury) = setup();
     let user = Address::generate(&env);
     let deposit = 1_000 * XLM;
     mint(&token, &user, deposit);
     vault.deposit(&user, &deposit, &0);
 
-    // Mint extra tokens into vault so the treasury transfer can succeed.
     mint(&token, &vault.address, 500 * XLM);
 
-    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.grant_role(&admin, &user, &Role::Manager);
     let yield_amount = 500 * XLM;
-    vault.report_yield(&admin, &yield_amount);
+    vault.report_yield(&user, &yield_amount);
 
-    let result = vault.harvest_vault(&admin);
-
-    assert_eq!(result.total_gross_yield, yield_amount);
-    // 10% performance fee
-    assert_eq!(result.total_fee_collected, 50 * XLM);
-    assert_eq!(result.total_net_yield, 450 * XLM);
-    assert_eq!(result.positions_harvested, 1);
-
-    // Fee must be at treasury, not sitting in accrued fees
     let treasury_token = token::Client::new(&env, &token.address);
-    let treasury_balance = treasury_token.balance(&treasury);
-    assert!(
-        treasury_balance >= 50 * XLM,
-        "treasury should have received harvest_vault fee"
-    );
+    let before = treasury_token.balance(&treasury);
 
-    // Counter should be reset: a second harvest_vault returns zeros
-    let second = vault.harvest_vault(&admin);
-    assert_eq!(second.total_gross_yield, 0);
-    assert_eq!(second.total_fee_collected, 0);
-    assert_eq!(second.positions_harvested, 0);
+    let result = vault.harvest(&user);
+
+    let collected = treasury_token.balance(&treasury) - before;
+
+    assert_eq!(
+        collected, result.performance_fee,
+        "treasury must receive exactly the fee the harvest reported"
+    );
+    assert!(
+        collected > 0,
+        "a positive yield must still produce a treasury fee"
+    );
 }
 
 #[test]
@@ -2084,7 +2115,6 @@ fn admin_entrypoints_reject_outsider() {
         vault.try_transfer_admin(&outsider, &successor),
         "transfer_admin"
     );
-    assert_rejected!(vault.try_harvest_vault(&outsider), "harvest_vault");
     assert_rejected!(vault.try_rebalance(&outsider), "rebalance");
     assert_rejected!(
         vault.try_record_source_allocation(&outsider, &source_id, &(1_000 * XLM)),
@@ -2156,7 +2186,6 @@ fn admin_entrypoints_require_admin_signature() {
         vault.try_transfer_admin(&admin, &successor),
         "transfer_admin"
     );
-    assert_rejected!(vault.try_harvest_vault(&admin), "harvest_vault");
     assert_rejected!(vault.try_rebalance(&admin), "rebalance");
     assert_rejected!(
         vault.try_record_source_allocation(&admin, &source_id, &(1_000 * XLM)),
@@ -2189,7 +2218,6 @@ fn admin_entrypoints_accept_then_reject_revoked_admin() {
     vault.set_emergency_fee(&delegated_admin, &100);
     bind_strategy(&vault, &delegated_admin, &strategy_id);
     vault.set_rebalance_cooldown(&delegated_admin, &0);
-    vault.harvest_vault(&delegated_admin);
     vault.record_source_allocation(&delegated_admin, &source_id, &(1_000 * XLM));
     vault.rebalance(&delegated_admin);
     vault.collect_fees(&delegated_admin);
@@ -2268,10 +2296,6 @@ fn admin_entrypoints_accept_then_reject_revoked_admin() {
     assert_rejected!(
         vault.try_transfer_admin(&delegated_admin, &successor),
         "transfer_admin after Admin revoke"
-    );
-    assert_rejected!(
-        vault.try_harvest_vault(&delegated_admin),
-        "harvest_vault after Admin revoke"
     );
     assert_rejected!(
         vault.try_rebalance(&delegated_admin),

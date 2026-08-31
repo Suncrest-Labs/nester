@@ -9,6 +9,7 @@ import {
 } from "@stellar/stellar-sdk";
 
 import { getCurrentNetwork } from "@/lib/stellar/transaction";
+import type { WizardVaultData } from "@/lib/types/vault-wizard";
 
 // Deliberately re-use the signer's resolver rather than reading
 // NEXT_PUBLIC_NETWORK here. The wallet signs against
@@ -38,8 +39,34 @@ export interface VaultDeploymentResponse {
 }
 
 /**
+ * Validate that the wizard data has the required fields for vault creation.
+ * Throws descriptive errors if validation fails before any contract interaction.
+ */
+function validateWizardData(data: WizardVaultData): void {
+  if (!data || typeof data !== "object") {
+    throw new Error("Invalid vault data: expected an object");
+  }
+
+  if (typeof data.name !== "string" || !data.name.trim()) {
+    throw new Error(
+      "Invalid vault name: must be a non-empty string. Did you rename the wizard field?",
+    );
+  }
+
+  if (data.description !== undefined && typeof data.description !== "string") {
+    throw new Error("Invalid vault description: must be a string or undefined");
+  }
+
+  // name is trimmed to reject whitespace-only names
+  const trimmedName = data.name.trim();
+  if (trimmedName.length === 0) {
+    throw new Error("Vault name cannot be empty or whitespace only");
+  }
+}
+
+/**
  * Create a new vault by invoking the factory contract on Soroban.
- * 
+ *
  * Flow:
  * 1. Validate factory contract ID is configured
  * 2. Fetch account sequence number
@@ -50,20 +77,16 @@ export interface VaultDeploymentResponse {
  * 7. Extract contract address from return value
  */
 export async function createVault(
-  params: CreateVaultParams
+  params: CreateVaultParams,
 ): Promise<CreateVaultResult> {
   // Evaluate at runtime so tests can set environment variables
-  const FACTORY_CONTRACT_ID =
-    process.env.NEXT_PUBLIC_VAULT_FACTORY_CONTRACT_ID;
+  const FACTORY_CONTRACT_ID = process.env.NEXT_PUBLIC_VAULT_FACTORY_CONTRACT_ID;
   const NETWORK = getCurrentNetwork();
   const NETWORK_PASSPHRASE = NETWORK.networkPassphrase;
-  const RPC_URL =
-    process.env.NEXT_PUBLIC_STELLAR_RPC_URL || NETWORK.rpcUrl;
+  const RPC_URL = process.env.NEXT_PUBLIC_STELLAR_RPC_URL || NETWORK.rpcUrl;
 
   if (!FACTORY_CONTRACT_ID) {
-    throw new Error(
-      "NEXT_PUBLIC_VAULT_FACTORY_CONTRACT_ID is not configured"
-    );
+    throw new Error("NEXT_PUBLIC_VAULT_FACTORY_CONTRACT_ID is not configured");
   }
 
   const server = new SorobanRpc.Server(RPC_URL);
@@ -81,8 +104,8 @@ export async function createVault(
       contract.call(
         "create_vault",
         nativeToScVal(params.name, { type: "string" }),
-        new Address(params.ownerAddress).toScVal()
-      )
+        new Address(params.ownerAddress).toScVal(),
+      ),
     )
     .setTimeout(30)
     .build();
@@ -92,12 +115,15 @@ export async function createVault(
 
   if (SorobanRpc.Api.isSimulationError(simResult)) {
     throw new Error(
-      `Simulation failed: ${(simResult as SorobanRpc.Api.SimulateTransactionErrorResponse).error}`
+      `Simulation failed: ${(simResult as SorobanRpc.Api.SimulateTransactionErrorResponse).error}`,
     );
   }
 
   // Prepare transaction with simulation results
-  const preparedTx = SorobanRpc.assembleTransaction(transaction, simResult).build();
+  const preparedTx = SorobanRpc.assembleTransaction(
+    transaction,
+    simResult,
+  ).build();
   const preparedXdr = preparedTx.toXDR();
 
   // Sign via wallet
@@ -105,12 +131,12 @@ export async function createVault(
 
   // Submit transaction
   const submitResult = await server.sendTransaction(
-    new Transaction(signedXdr, NETWORK_PASSPHRASE)
+    new Transaction(signedXdr, NETWORK_PASSPHRASE),
   );
 
   if (submitResult.status === "ERROR") {
     throw new Error(
-      `Transaction failed: ${submitResult.errorResult?.toXDR("base64") ?? "unknown error"}`
+      `Transaction failed: ${submitResult.errorResult?.toXDR("base64") ?? "unknown error"}`,
     );
   }
 
@@ -131,9 +157,7 @@ export async function createVault(
   }
 
   if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-    throw new Error(
-      `Transaction failed on-chain: ${hash}`
-    );
+    throw new Error(`Transaction failed on-chain: ${hash}`);
   }
 
   if (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
@@ -161,26 +185,35 @@ export async function createVault(
  */
 export class VaultFactory {
   /**
-   * Create a vault from wizard data
+   * Create a vault from typed wizard data.
+   *
+   * Validates all required fields before making any contract calls. A malformed
+   * payload is rejected immediately with a clear error message rather than
+   * failing mid-deployment.
    */
   static async createVault(
-    data: any, // WizardVaultData
+    data: WizardVaultData,
     onProgress?: (status: string) => void,
     params?: {
       ownerAddress: string;
       signTransaction: (xdr: string) => Promise<string>;
-    }
+    },
   ): Promise<VaultDeploymentResponse> {
     try {
       if (!params) {
-        throw new Error("Missing required parameters: ownerAddress and signTransaction");
+        throw new Error(
+          "Missing required parameters: ownerAddress and signTransaction",
+        );
       }
+
+      // Validate data before making any contract calls
+      validateWizardData(data);
 
       if (onProgress) onProgress("Preparing transaction...");
 
       const result = await createVault({
-        name: data.name,
-        description: data.description,
+        name: data.name.trim(),
+        description: data.description?.trim() || undefined,
         ownerAddress: params.ownerAddress,
         signTransaction: params.signTransaction,
       });

@@ -9,23 +9,11 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 )
 
-// authzMatrixRules mirrors the production route table from main.go so the
-// matrix test stays in sync with real deployments.
-var authzMatrixRules = []RouteRule{
-	{PathPrefix: "/health", Public: true},
-	{PathPrefix: "/healthz", Public: true},
-	{PathPrefix: "/readyz", Public: true},
-	{PathPrefix: "/ws", Public: true},
-	{Method: http.MethodPost, PathPrefix: "/api/v1/auth/challenge", Public: true},
-	{Method: http.MethodPost, PathPrefix: "/api/v1/auth/verify", Public: true},
-	{Method: http.MethodPost, PathPrefix: "/api/v1/auth/refresh", Public: true},
-	{PathPrefix: "/api/v1/banks/", Public: true},
-	{PathPrefix: "/api/v1/yields/", Public: true},
-	{PathPrefix: "/api/v1/savings-goals/shared/", Public: true},
-	{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
-	{PathPrefix: "/api/v1/internal/", Role: "service"},
-	{PathPrefix: "/api/v1/", Public: false},
-}
+// authzMatrixRules is the production route table itself, not a copy of it.
+// A copy proves only that the copy is self-consistent: production could make
+// a route public and the test would stay green describing a policy nobody
+// deploys.
+var authzMatrixRules = ProductionAuthRules()
 
 // authzMatrixHandler wraps ok200 with Authenticate using authzMatrixRules.
 func authzMatrixHandler() http.Handler {
@@ -73,7 +61,6 @@ var authzMatrix = []AuthzRoute{
 	// ── Vaults ───────────────────────────────────────────────────────────
 	{Method: "POST", Path: "/api/v1/vaults"},
 	{Method: "GET", Path: "/api/v1/vaults"},
-	{Method: "GET", Path: "/api/v1/vaults/all"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000"},
 	{Method: "POST", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/deposit"},
 	{Method: "POST", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/withdraw"},
@@ -131,6 +118,15 @@ var authzMatrix = []AuthzRoute{
 	// exact path "/api/v1/yields" (no slash) falls through to protected.
 	{Method: "GET", Path: "/api/v1/yields/", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/00000000-0000-0000-0000-000000000000", Public: true},
+
+	// ── KYC for the authenticated user (#1231) ─────────────────────────
+	{Method: "POST", Path: "/api/v1/users/me/kyc"},
+	{Method: "GET", Path: "/api/v1/users/me/kyc"},
+
+	// ── Money-path pause switches (#1120) ──────────────────────────────
+	{Method: "GET", Path: "/api/v1/admin/money-path/switches", RequireRole: "admin"},
+	{Method: "PUT", Path: "/api/v1/admin/money-path/switches/deposit", RequireRole: "admin"},
+	{Method: "GET", Path: "/api/v1/money-path/status", Public: true},
 
 	// ── Routes recovered from the handler registrations ────────────────
 	// Added when the coverage guard showed the original matrix exercised
@@ -249,6 +245,7 @@ var authzMatrix = []AuthzRoute{
 	{Method: "POST", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/share"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/deposit"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/from-template"},
+	{Method: "GET", Path: "/api/v1/users/savings-gamification/progress"},
 	{Method: "POST", Path: "/api/v1/users/watchlist"},
 
 	// vaults

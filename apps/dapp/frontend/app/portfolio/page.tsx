@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
+import { readNetworkId } from "@/lib/storageKeys";
 import { TransferModal } from "@/components/vault-action-modals";
 import { WithdrawModal } from "@/components/vault-action-modals";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
@@ -35,11 +36,12 @@ import { PositionsSkeleton, ActivitySkeleton } from "@/components/skeletons/page
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function getHorizonUrl(): string {
-    if (typeof window !== "undefined") {
-        const saved = localStorage.getItem("nester_network_id");
-        if (saved === "mainnet") return NETWORKS.mainnet.horizonUrl;
-        if (saved === "testnet") return NETWORKS.testnet.horizonUrl;
-    }
+    // #1233: readNetworkId routes through safeStorage, so a throwing
+    // accessor (private browsing, full quota) falls back to
+    // DEFAULT_NETWORK's horizonUrl rather than an unguarded read crashing
+    // the page.
+    const saved = readNetworkId();
+    if (saved) return NETWORKS[saved].horizonUrl;
     return DEFAULT_NETWORK.horizonUrl;
 }
 

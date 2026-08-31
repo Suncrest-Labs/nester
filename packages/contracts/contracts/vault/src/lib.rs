@@ -121,7 +121,6 @@ const REBALANCE: Symbol = symbol_short!("REBAL");
 /// Emitted when a rebalance skips a source because its adapter failed.
 const SOURCE_SKIPPED: Symbol = symbol_short!("SRC_SKIP");
 const HARVEST: Symbol = symbol_short!("HARVEST");
-const HARVEST_VLT: Symbol = symbol_short!("HARV_VLT");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
 const DEFAULT_REBALANCE_COOLDOWN: u64 = 3600;
 /// Default rebalance slippage tolerance: 50 bps (0.5%) — issue #638.
@@ -332,15 +331,6 @@ pub struct HarvestResult {
     pub compounded: bool, // true if net_yield was reinvested into vault shares
     pub new_share_balance: i128, // user's vault-token balance after harvest
     pub user: Address,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct VaultHarvestResult {
-    pub total_gross_yield: i128,
-    pub total_fee_collected: i128,
-    pub total_net_yield: i128,
-    pub positions_harvested: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -2283,84 +2273,32 @@ impl VaultContract {
         result
     }
 
-    /// Admin-level vault-wide harvest: reads the aggregate yield reported since
-    /// the last vault harvest, extracts the performance fee portion, transfers
-    /// it to the treasury, and resets the `TotalReportedYield` counter to zero.
-    /// Suitable for periodic treasury collection without enumerating individual
-    /// user positions on-chain (Soroban does not support unbounded iteration).
-    pub fn harvest_vault(env: Env, admin: Address) -> VaultHarvestResult {
-        with_reentrancy_guard(env, |env| Self::harvest_vault_internal(env, admin))
-    }
-
-    fn harvest_vault_internal(env: Env, admin: Address) -> VaultHarvestResult {
-        require_initialized(&env);
-        require_active(&env);
-        admin.require_auth();
-        AccessControl::require_role(&env, &admin, Role::Admin);
-
-        let total_gross_yield = get_total_reported_yield(&env);
-
-        if total_gross_yield == 0 {
-            return VaultHarvestResult {
-                total_gross_yield: 0,
-                total_fee_collected: 0,
-                total_net_yield: 0,
-                positions_harvested: 0,
-            };
-        }
-
-        let config = get_fee_config(&env);
-        let total_fee_collected = nester_common::fees::calculate_performance_fee(
-            total_gross_yield,
-            config.performance_fee_bps,
-        )
-        .unwrap_or_else(|e| panic_with_error!(&env, e));
-
-        let total_net_yield = total_gross_yield
-            .checked_sub(total_fee_collected)
-            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
-
-        // Transfer performance fee to treasury.
-        if total_fee_collected > 0 {
-            let token_address = self::VaultContract::get_token(env.clone());
-            transfer_tokens(
-                &env,
-                &token_address,
-                &env.current_contract_address(),
-                &config.treasury_address,
-                &total_fee_collected,
-            );
-            invoke_allowed::<()>(
-                &env,
-                &config.treasury_address,
-                &Symbol::new(&env, "receive_fees"),
-                (total_fee_collected,).into_val(&env),
-            );
-            // Reduce TotalAssets by the fee sent to treasury.
-            let total_assets = get_total_assets(&env);
-            let post_fee_assets = total_assets
-                .checked_sub(total_fee_collected)
-                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
-            set_total_assets(&env, post_fee_assets);
-            sync_vault_token_total_assets(&env);
-        }
-
-        // Reset aggregate yield counter; per-user UserYield entries are left
-        // in place — they are swept individually by each user's own harvest() call.
-        set_total_reported_yield(&env, 0);
-
-        // positions_harvested reflects the aggregate sweep (one vault-wide sweep).
-        let result = VaultHarvestResult {
-            total_gross_yield,
-            total_fee_collected,
-            total_net_yield,
-            positions_harvested: 1,
-        };
-
-        emit_event(&env, VAULT, HARVEST_VLT, admin, result.clone());
-
-        result
-    }
+    // harvest_vault (admin-level aggregate harvest) was removed in #1159.
+    //
+    // It charged a performance fee on TotalReportedYield and transferred it to
+    // the treasury, then reduced TotalAssets by that fee while leaving total
+    // share supply untouched. Every holder's share price fell by the fee
+    // amount -- the same dilution #1078 removed from the per-user path.
+    //
+    // It was not replaced, because the fee it collected was a *second* charge
+    // on yield the per-user path already bills. harvest() derives gross yield
+    // from share value against recorded principal, and since #1157 it settles
+    // the fee by burning the harvesting user's own shares: assets and supply
+    // fall together, the treasury is paid in full, and no other holder moves.
+    // Running both paths took roughly twice the configured rate on the same
+    // yield, with the extra half taken from holders who never harvested.
+    //
+    // Minting fee-equivalent shares to the treasury was considered and
+    // rejected. A new claim on a fixed pool of assets has to come from
+    // somewhere: minting while the fee leaves the vault lowers the share price
+    // further than the present bug does, and minting while the fee is retained
+    // still moves the price. No share-accounting arrangement lets an aggregate
+    // fee be collected a second time without some holder paying it.
+    //
+    // Nothing outside the contract's own tests called this entrypoint. Treasury
+    // collection continues through per-user harvest(), which needs no unbounded
+    // iteration -- the constraint that motivated an aggregate entrypoint in the
+    // first place.
 
     /// Read-only check: does the live allocation drift exceed the strategy's
     /// `rebalance_threshold_bps`? Returns false when no strategy is set or the

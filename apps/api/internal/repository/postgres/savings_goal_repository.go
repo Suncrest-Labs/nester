@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/outbox"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
@@ -88,7 +89,7 @@ func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals WHERE share_token = $1 AND deleted_at IS NULL
 	`, token)
 	g, err := scanSavingsGoalWithShare(row)
@@ -109,7 +110,7 @@ func (r *SavingsGoalRepository) GetByVaultID(ctx context.Context, vaultID uuid.U
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals WHERE vault_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at ASC
 		LIMIT 1
@@ -148,7 +149,7 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals
 		WHERE user_id = $1 AND deleted_at IS NULL
 	`
@@ -193,7 +194,7 @@ func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*sav
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals WHERE id = $1 AND deleted_at IS NULL
 	`, id)
 	g, err := scanSavingsGoalWithShare(row)
@@ -216,7 +217,7 @@ func (r *SavingsGoalRepository) GetByIDIncludingDeleted(ctx context.Context, id 
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals WHERE id = $1
 	`, id)
 	g, err := scanSavingsGoalWithShare(row)
@@ -352,6 +353,57 @@ func (r *SavingsGoalRepository) SumVaultBalance(ctx context.Context, userID uuid
 		return decimal.Zero, nil
 	}
 	return decimal.NewFromString(total.String)
+}
+
+// UpdateMilestonesWithOutbox marks milestones as notified and records the
+// side effects that follow from them in one transaction (#1049).
+//
+// This is the whole point of the outbox, in one method. Before it, the
+// milestone update committed and a goroutine then tried to notify: kill the
+// process in between and the goal is permanently marked "already told them"
+// for a notification that never happened — the user's progress changed and
+// nobody ever will tell them, because the flag says it was done. Writing
+// both facts in one transaction makes that window not exist.
+//
+// It is the outbox writer's Insert (rather than raw SQL here) that keeps the
+// row shape in one place; what this method contributes is the transaction
+// both writes share.
+func (r *SavingsGoalRepository) UpdateMilestonesWithOutbox(
+	ctx context.Context,
+	goalID uuid.UUID,
+	milestones []int,
+	events []outbox.Event,
+) error {
+	if milestones == nil {
+		milestones = []int{}
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET notified_milestones = $1, updated_at = NOW()
+		WHERE id = $2
+	`, pq.Array(milestones), goalID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+
+	writer := outbox.NewWriter(NewOutboxRepository(r.db))
+	for _, e := range events {
+		// tx, not r.db: passing the pool here would insert the row outside
+		// this transaction and silently give up every guarantee above.
+		if err := writer.Insert(ctx, tx, e); err != nil {
+			return fmt.Errorf("record outbox event %s: %w", e.DedupeKey, err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (r *SavingsGoalRepository) UpdateMilestones(ctx context.Context, goalID uuid.UUID, milestones []int) error {
@@ -634,6 +686,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		deletedAt                                 sql.NullTime
 		autoCompound                              bool
 		yieldBalanceStr                           string
+		notes                                     sql.NullString
 	)
 	if err := row.Scan(
 		&id, &userID, &vaultID, &targetStr, &currency, &deadline, &description, &category,
@@ -641,7 +694,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		&status, &completedAt, &completionAction, &name, &emoji,
 		&shareToken, &shareEnabledAt, &onchainGoalID, &onchainStatus,
 		&minContribution, &maxContribution, &deletedAt,
-		&autoCompound, &yieldBalanceStr,
+		&autoCompound, &yieldBalanceStr, &notes,
 	); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -739,7 +792,25 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		DeletedAt:             deletedAtPtr,
 		AutoCompound:          autoCompound,
 		YieldBalance:          yieldBalance,
+		Notes:                 notes.String,
 	}, nil
+}
+
+// UpdateNotes updates the notes column on a savings goal (#929).
+func (r *SavingsGoalRepository) UpdateNotes(ctx context.Context, goalID uuid.UUID, notes string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET notes = $1, updated_at = NOW()
+		WHERE id = $2
+	`, nullSQLString(notes), goalID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
 }
 
 func nullSQLString(s string) sql.NullString {

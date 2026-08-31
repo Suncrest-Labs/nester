@@ -87,14 +87,14 @@ func TestActivityHandler_List_MapsToFrontendContract(t *testing.T) {
 
 	var body struct {
 		Data []struct {
-			ID        string  `json:"id"`
-			Timestamp string  `json:"timestamp"`
-			Type      string  `json:"type"`
-			VaultName string  `json:"vaultName"`
-			Amount    float64 `json:"amount"`
-			Asset     string  `json:"asset"`
-			Status    string  `json:"status"`
-			TxHash    string  `json:"txHash"`
+			ID        string `json:"id"`
+			Timestamp string `json:"timestamp"`
+			Type      string `json:"type"`
+			VaultName string `json:"vaultName"`
+			Amount    string `json:"amount"`
+			Asset     string `json:"asset"`
+			Status    string `json:"status"`
+			TxHash    string `json:"txHash"`
 		} `json:"data"`
 		NextCursor string `json:"nextCursor"`
 		PrevCursor string `json:"prevCursor"`
@@ -113,8 +113,8 @@ func TestActivityHandler_List_MapsToFrontendContract(t *testing.T) {
 	if got.Status != "Confirmed" {
 		t.Fatalf("Status = %q, want %q", got.Status, "Confirmed")
 	}
-	if got.Amount != 123.45 {
-		t.Fatalf("Amount = %v, want 123.45", got.Amount)
+	if got.Amount != "123.45" {
+		t.Fatalf("Amount = %v, want %q", got.Amount, "123.45")
 	}
 	if got.VaultName != "USDC Vault" || got.Asset != "USDC" || got.TxHash != "txhash-1" {
 		t.Fatalf("unexpected item shape: %+v", got)
@@ -128,6 +128,59 @@ func TestActivityHandler_List_MapsToFrontendContract(t *testing.T) {
 	}
 	if stub.gotFilter.Status != activity.StatusCompleted {
 		t.Fatalf("status filter = %q, want %q", stub.gotFilter.Status, activity.StatusCompleted)
+	}
+}
+
+// TestActivityHandler_List_AmountSurvivesFloat64Precision is the regression
+// test for #1223: amount used to leave the API as float64
+// (it.Amount.Float64()), which silently rounds a value with more significant
+// digits than float64 can hold exactly. "1234567890123.456789" is such a
+// value — converting it through float64 and back yields
+// "1234567890123.4568" instead. The DTO now carries decimal.Decimal end to
+// end, which marshals to the exact decimal string.
+func TestActivityHandler_List_AmountSurvivesFloat64Precision(t *testing.T) {
+	userID := uuid.New()
+	const preciseAmount = "1234567890123.456789"
+
+	stub := &stubActivityLister{
+		items: []activity.Item{
+			{
+				ID:        uuid.New(),
+				Type:      activity.EventDeposit,
+				Amount:    decimal.RequireFromString(preciseAmount),
+				Currency:  "USDC",
+				Status:    activity.StatusCompleted,
+				CreatedAt: time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC),
+				VaultID:   uuid.New(),
+				VaultName: "USDC Vault",
+			},
+		},
+	}
+	h := NewActivityHandler(stub)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(withAuthUser(mux, userID))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/v1/activity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Data []struct {
+			Amount string `json:"amount"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data) != 1 {
+		t.Fatalf("got %d items, want 1", len(body.Data))
+	}
+	if body.Data[0].Amount != preciseAmount {
+		t.Fatalf("Amount = %q, want %q (exact, not float64-rounded)", body.Data[0].Amount, preciseAmount)
 	}
 }
 

@@ -28,6 +28,7 @@ const MIN_DEPOSIT: i128 = 10_000_000;
 enum VaultOp {
     Deposit { user_idx: usize, amount: i128 },
     Withdraw { user_idx: usize, share_bps: u32 },
+    Harvest { user_idx: usize },          // Per-user harvest triggers performance fee (issue #1029)
     ReportYield { yield_bps: u32 },
     ReportLoss { loss_bps: u32 },
     CollectFees,
@@ -50,6 +51,8 @@ fn op_strategy(num_users: usize) -> impl Strategy<Value = VaultOp> {
             .prop_map(|(user_idx, amount)| VaultOp::Deposit { user_idx, amount }),
         4 => (0..num_users, 1_u32..=10_000_u32)
             .prop_map(|(user_idx, share_bps)| VaultOp::Withdraw { user_idx, share_bps }),
+        2 => (0..num_users)
+            .prop_map(|user_idx| VaultOp::Harvest { user_idx }),  // Exposes #1029 if not fixed
         2 => (1_u32..=2_000_u32)
             .prop_map(|yield_bps| VaultOp::ReportYield { yield_bps }),
         1 => (1_u32..=1_000_u32)
@@ -233,6 +236,16 @@ proptest! {
                         .max(1)
                         .min(owned);
                     h.vault().withdraw(&users[user_idx], &shares, &0);
+                }
+                VaultOp::Harvest { user_idx } => {
+                    let shares = h.token().balance(&users[user_idx]);
+                    if shares == 0 {
+                        continue;
+                    }
+                    h.vault().harvest(&users[user_idx]);
+                    // NOTE: Per-user harvest does NOT reduce share price for other holders.
+                    // The fee is paid by burning the harvesting user's own shares (fixed in #1157).
+                    // Therefore, this is NOT a loss_event.
                 }
                 VaultOp::ReportYield { yield_bps } => {
                     let total_assets = h.vault().total_assets();
@@ -431,4 +444,91 @@ fn regression_collect_fees_with_exhausted_reserves_does_not_panic() {
     assert!(fees_before > 0);
     h.vault().collect_fees(&h.admin);
     assert_eq!(h.vault().get_accrued_fees(), fees_before);
+}
+
+// Regression for issue #1029: per-user harvest must not dilute other holders.
+// The performance fee is paid by burning the harvesting user's own shares (fixed in #1157),
+// so the share price for passive holders must remain unchanged.
+#[test]
+fn regression_1029_harvest_does_not_dilute_passive_holders() {
+    let (h, users) = setup_harness_with_users(2);
+    configure_invariant_harness(&h);
+
+    // User 0 deposits and generates yield
+    let deposit_amount = 1_000 * XLM;
+    h.vault().deposit(&users[0], &deposit_amount, &0);
+
+    let yield_amount = deposit_amount * 20 / 100; // 20% yield
+    h.mint_deposit_tokens(&h.vault_id, yield_amount);
+    h.vault().report_yield(&h.admin, &yield_amount);
+
+    // User 1 deposits after yield (becomes passive holder)
+    h.vault().deposit(&users[1], &deposit_amount, &0);
+
+    // Record passive holder's share price before harvest
+    let price_before = h.vault().share_price();
+    let passive_shares_before = h.token().balance(&users[1]);
+
+    // User 0 harvests their gains
+    h.vault().harvest(&users[0]);
+
+    // Passive holder's share price must not decrease
+    let price_after = h.vault().share_price();
+    let passive_shares_after = h.token().balance(&users[1]);
+
+    assert_eq!(
+        passive_shares_after, passive_shares_before,
+        "Passive holder's shares changed during another user's harvest"
+    );
+    assert!(
+        price_after >= price_before,
+        "Share price decreased for passive holder: {} -> {} (regression of #1029)",
+        price_before,
+        price_after
+    );
+}
+
+// Regression for issue #1029: verify treasury receives the correct fee amount.
+// When a user harvests, the performance fee should reach the treasury in full,
+// paid by burning the harvesting user's shares.
+#[test]
+fn regression_1029_harvest_pays_treasury_correctly() {
+    let (h, users) = setup_harness_with_users(1);
+    configure_invariant_harness(&h);
+
+    // Deposit and generate yield
+    let deposit_amount = 1_000 * XLM;
+    h.vault().deposit(&users[0], &deposit_amount, &0);
+
+    let yield_amount = deposit_amount * 50 / 100; // 50% yield
+    h.mint_deposit_tokens(&h.vault_id, yield_amount);
+    h.vault().report_yield(&h.admin, &yield_amount);
+
+    // Get treasury address from fee config
+    let fee_config = h.vault().get_fee_config();
+    let treasury_address = fee_config.treasury_address;
+
+    // Create deposit token client to check treasury balance
+    let deposit_token = soroban_sdk::token::TokenClient::new(&h.env, &h.deposit_token_id);
+
+    // Record treasury balance before harvest
+    let treasury_balance_before = deposit_token.balance(&treasury_address);
+
+    // Harvest
+    let result = h.vault().harvest(&users[0]);
+    let reported_fee = result.performance_fee;
+
+    // Treasury balance should increase by the reported fee
+    let treasury_balance_after = deposit_token.balance(&treasury_address);
+    let treasury_delta = treasury_balance_after - treasury_balance_before;
+
+    assert_eq!(
+        treasury_delta, reported_fee,
+        "Treasury balance delta ({}) does not match reported performance fee ({})",
+        treasury_delta, reported_fee
+    );
+    assert!(
+        reported_fee > 0,
+        "Performance fee should be positive for yield above principal"
+    );
 }

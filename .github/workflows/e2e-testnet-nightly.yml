@@ -70,7 +70,20 @@ jobs:
           VAULT_ID: ${{ vars.VAULT_ID }}
           STAGING_URL: ${{ inputs.staging_url || vars.STAGING_URL }}
           CI: "true"
-        run: pnpm test:e2e:testnet
+        run: |
+          # Skip rather than fail. This runs on a nightly schedule, so a
+          # hard failure means a red build every night until someone
+          # provisions testnet credentials — which trains people to ignore
+          # the notification rather than act on it. A notice is visible in
+          # the run summary without being a false alarm, and matches the
+          # spec's own skip guard.
+          if [ -z "$TESTNET_WALLET_ADDRESS" ]; then
+            echo "::notice::TESTNET_WALLET_ADDRESS is not configured; skipping the testnet E2E run."
+            echo "Set it under Settings → Secrets and variables → Actions. See docs/ci/secrets.md."
+            exit 0
+          fi
+
+          pnpm test:e2e:testnet
 
       # Uploaded on failure only: the trace and screenshots are what identify
       # which step of the journey broke, per the issue's acceptance criteria.

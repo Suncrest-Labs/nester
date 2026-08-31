@@ -20,6 +20,8 @@ import {
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { TransactionAnnouncer } from "@/components/vault/transactionAnnouncer";
 import {
   executeVaultWithdraw,
   UserRejectedError,
@@ -70,6 +72,15 @@ function ModalShell({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const titleId = 'withdraw-modal-title';
+  const subtitleId = 'withdraw-modal-subtitle';
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Escape must cancel without submitting, and focus must return to the
+  // trigger on close (nester#1128). Both live in the hook so the deposit and
+  // withdraw shells cannot drift apart.
+  useFocusTrap(dialogRef, open, { onEscape: onClose });
+
   return (
     <AnimatePresence>
       {open && (
@@ -81,6 +92,12 @@ function ModalShell({
         >
           <div className="flex min-h-full items-center justify-center">
             <motion.div
+              ref={dialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              aria-describedby={subtitleId}
+              tabIndex={-1}
               initial={{ opacity: 0, y: 24, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
@@ -92,13 +109,15 @@ function ModalShell({
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
                     Vault Action
                   </p>
-                  <h2 className="mt-2 font-heading text-2xl font-light text-foreground">
+                  <h2 id={titleId} className="mt-2 font-heading text-2xl font-light text-foreground">
                     {title}
                   </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+                  <p id={subtitleId} className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
                 </div>
                 <button
+                  type="button"
                   onClick={onClose}
+                  aria-label="Close dialog"
                   className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
@@ -236,6 +255,14 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
       title={`Withdraw from ${position?.vaultName ?? "Vault"}`}
       subtitle="Review shares, lock period, and net proceeds before signing."
     >
+      <TransactionAnnouncer
+        phase={state}
+        errorMessage={errorMsg}
+        amountLabel={
+          amount > 0 ? `${formatCurrency(amount)} ${position?.asset ?? "USDC"}` : undefined
+        }
+        action="Withdrawal"
+      />
       {position && (
         <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
           {/* ── Left: position summary + amount ── */}

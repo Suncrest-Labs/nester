@@ -16,10 +16,33 @@ anything stuck in flight.**
 | Alert | Meaning |
 |---|---|
 | `ReconciliationDivergence` | Our records and the chain disagree. A balance somewhere is wrong. |
-| `ReconciliationStalled` | The reconciler has not completed a pass. **A zero divergence count right now means nothing.** |
-| `ReconciliationFailing` | The loop is ticking but every pass aborts before inspecting anything. Same trap as above, narrower cause. |
+| `ReconciliationStalled` | The transaction poller has not completed a pass. **A zero divergence count right now means nothing.** |
+| `ReconciliationFailing` | A reconciliation loop is ticking but every pass aborts before completing. Same trap as above, narrower cause. |
+| `BalanceReconciliationStalled` | The vault-balance reconciler (#1082) has not completed a sweep. Balance divergence silence is unknown, not clean. |
+| `BalanceReconciliationMetricsAbsent` | The balance reconciler's liveness series is gone — disabled, leaderless, or dead. The balance safety net is off. |
 | `PendingSubmissionsBacklogged` | A submission has been in flight far too long. Someone's money is in limbo. |
 | `MoneyPathMetricsAbsent` | The series these alerts read are gone. Money-path monitoring is dark. |
+
+Two loops feed this group. The **transaction poller** (#1108) reconciles
+pending transaction *statuses* against Horizon every 15s. The **vault-balance
+reconciler** (#1082) sweeps every active vault every 5 minutes
+(`RECONCILE_INTERVAL`), reads the authoritative `total_assets` from the vault
+contract, and compares it against `vaults.current_balance` **in raw stroops**
+— the unit the event indexer stores (migration 103). Each divergence is
+written to `reconciliation_findings`, logged, and counted on the shared
+divergence metric; it is **never auto-corrected**. Each loop has its own
+liveness alert because the shared age gauge is reset every 15s by the poller —
+one loop's health must not vouch for the other's.
+`RECONCILE_DRY_RUN=true` rehearses a sweep against production data: findings
+go to the log only, nothing is written or counted, and liveness still emits.
+
+**First rollout warning:** the balance comparison is exact and in stroops. A
+deployment whose vault balances were ever written by the pre-#1082 service
+paths (which store display USDC rather than stroops) will diverge on its
+first live sweep — those ARE real record-vs-chain disagreements, but they
+will page all at once. Run the first sweep on an existing deployment with
+`RECONCILE_DRY_RUN=true`, triage the logged findings, reconcile the rows, and
+only then go live.
 
 **The trap, and it is the important part of this runbook:** three of these
 alerts exist only because "no divergences reported" is ambiguous. It means
@@ -95,13 +118,21 @@ The reconciler ran and found real disagreement.
 **Do not restart anything.** A restart clears no divergence and destroys the
 in-memory context of what was mid-flight.
 
-1. Identify the affected transactions from the poller logs — the divergence
-   metric is deliberately unlabelled by user or hash (cardinality policy in
+1. Identify the affected records from the logs — the divergence metric is
+   deliberately unlabelled by user, vault, or hash (cardinality policy in
    `docs/observability/metrics.md`), so the logs are the join key:
 
    ```
+   # stuck transactions (poller):
    grep "transaction poller" <api logs> | grep -v "status reconciled"
+   # balance mismatches (balance reconciler) — carries vault id, both values,
+   # and the difference:
+   grep "reconciliation divergence" <api logs>
    ```
+
+   Balance findings are also durable rows: query `reconciliation_findings`
+   (joined to `reconciliation_runs`) for entity ids, recorded vs on-chain
+   values, severity, and resolution state.
 
 2. For each affected transaction, treat **the chain as authoritative**. Confirm
    the on-chain state via Horizon before changing any record.
@@ -147,18 +178,28 @@ against a 15s interval.
 
 ## Cause C — passes failing
 
-`ReconciliationFailing`: the loop ticks, but each pass aborts while listing
-pending transactions and inspects nothing.
+`ReconciliationFailing`: a loop ticks, but its passes abort before completing.
+Both loops feed this series — the transaction poller (a pass that cannot list
+pending transactions) and the balance reconciler (a pass that cannot list
+vaults, or whose chain reads all failed).
 
-Almost always a database error on the list-pending query. Check:
+Usually a database error. Check:
 
 - Connection pool exhaustion (`nester_db_pool_acquired_connections` against
   `nester_db_pool_max_connections`).
-- Statement timeouts on the pending-transaction query as the table grows.
+- Statement timeouts on the pending-transaction or vault listing queries as
+  the tables grow.
 - Replica lag if the query is routed to a read replica.
+- For the balance loop: the Soroban RPC circuit breaker — every chain read
+  failing fails the pass by design, so an RPC outage cannot read as "all
+  vaults agree".
 
-This tickets rather than pages because `ReconciliationStalled` pages if the
-loop stops entirely. The divergence count is equally false-clean in both cases.
+This tickets rather than pages because the stall alerts page if a loop stops
+entirely — and the balance reconciler's liveness anchor only advances on
+*successful* passes, so its persistent failure also climbs
+`reconcile:balance:last_run_age_seconds` and pages via
+`BalanceReconciliationStalled`. The divergence count is equally false-clean
+in every one of these cases.
 
 ---
 
@@ -173,6 +214,32 @@ reconciliation and pending-submission monitoring are both dark.
 2. Is the scrape working? Check the `nester-api` target in Prometheus.
 3. Did the poller ever start? `TX_POLLER_ENABLED` unset means these series are
    never produced and this alert is the only thing that will tell you.
+
+---
+
+## Cause E — balance reconciler stalled or absent
+
+`BalanceReconciliationStalled` (`reconcile:balance:last_run_age_seconds >
+1800`) or `BalanceReconciliationMetricsAbsent` (the series is gone). Either
+way, nothing is confirming vault balances against the chain.
+
+1. **Absent:** the age series is emitted only by the elected leader while the
+   reconciler runs. Check, in order: `RECONCILE_ENABLED=false` (disabling the
+   safety net pages by design), scheduler leadership (no replica holding the
+   advisory lock means no replica emits), and whether the API booted at all.
+2. **Stalled:** the leader holds the series but passes are not completing
+   successfully — the age anchor advances only on success, so a hanging
+   sweep and a persistently failing one both land here. A full sweep reads
+   `total_assets` once per active vault; check
+   `nester_reconcile_runs_total{outcome="failed"}` (failing, not hanging →
+   see [Cause C](#cause-c--passes-failing)), the Soroban RPC circuit
+   breaker, and whether the vault count has outgrown the interval. A vault
+   whose individual chain read fails is logged and skipped, never fatal —
+   only every read failing fails the pass. `RECONCILE_INTERVAL` raises the
+   cadence; the 1800s alert threshold must move with it if it exceeds 30
+   minutes.
+3. Once it recovers, the first completed pass is the first honest reading of
+   balance divergence — same recovery rule as Cause B.
 
 ---
 

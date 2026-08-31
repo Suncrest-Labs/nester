@@ -290,6 +290,23 @@ func (m *Metrics) RecordReconcileRun(outcome ReconcileOutcome) {
 	m.slo.reconcileLastRunAge.Set(0)
 }
 
+// RecordBalanceReconcileRun records one pass of the vault-balance reconciler
+// (nester#1082) on the shared runs counter.
+//
+// It deliberately does NOT reset nester_reconcile_last_run_age_seconds: that
+// gauge is the transaction poller's liveness signal, and a balance pass
+// resetting it would let a dead poller hide behind a healthy balance
+// reconciler (and vice versa). The balance reconciler's liveness is a
+// separate scrape-time series — see RegisterBalanceReconcileAge — so each
+// loop's death is visible on its own.
+func (m *Metrics) RecordBalanceReconcileRun(outcome ReconcileOutcome) {
+	if m == nil {
+		return
+	}
+
+	m.slo.reconcileRunsTotal.WithLabelValues(string(outcome)).Inc()
+}
+
 // RecordReconcileDivergence counts one finding where our record and the chain
 // disagree. Call it once per finding, not once per pass, so the counter
 // reflects how much disagreement exists rather than how often any was seen.

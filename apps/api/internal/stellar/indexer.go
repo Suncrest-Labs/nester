@@ -199,6 +199,12 @@ type indexedEvent struct {
 	EventType  string
 	Ledger     uint64
 	Data       map[string]any
+	// TxHash is the Stellar transaction that emitted the event. It is the
+	// shared idempotency key between the indexer and the API write path: both
+	// claim it in vault_transactions before moving a balance, so a deposit
+	// made through the API and later observed on-chain is credited exactly
+	// once (nester#1147). Empty for events from an RPC that did not report it.
+	TxHash string
 }
 
 // applyIndexedEvent applies one event in its own transaction, without
@@ -262,11 +268,22 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 			return err
 		}
 	case "deposit":
-		amount, ok := extractEventAmount(event)
+		amount, ok := extractEventAmountUnits(event)
 		if !ok {
 			return fmt.Errorf("deposit event missing parseable amount")
 		}
-		_, err := tx.ExecContext(
+		// The API write path may already have credited this exact transaction
+		// (see the ownership model documented at the top of this file). Claim
+		// the hash first; if it is already claimed, the credit has happened and
+		// this event must not apply a second one (nester#1147).
+		claimed, err := claimBalanceTxHash(ctx, tx, event, "deposit", amount)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return nil
+		}
+		_, err = tx.ExecContext(
 			ctx,
 			`UPDATE vaults
 			 SET total_deposited = total_deposited + $1::numeric,
@@ -280,11 +297,18 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 			return err
 		}
 	case "withdraw", "withdrawal":
-		amount, ok := extractEventAmount(event)
+		amount, ok := extractEventAmountUnits(event)
 		if !ok {
 			return fmt.Errorf("withdraw event missing parseable amount")
 		}
-		_, err := tx.ExecContext(
+		claimed, err := claimBalanceTxHash(ctx, tx, event, "withdrawal", amount)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return nil
+		}
+		_, err = tx.ExecContext(
 			ctx,
 			`UPDATE vaults
 			 SET current_balance = current_balance - $1::numeric,
@@ -301,7 +325,7 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 	// without changing total_deposited: the principal the user paid in is
 	// unchanged, only the earned yield and the spendable balance grow.
 	case "harvest", "harvested", "yield_harvest":
-		amount, ok := extractEventAmount(event)
+		amount, ok := extractEventAmountUnits(event)
 		if !ok {
 			return fmt.Errorf("harvest event missing parseable amount")
 		}
@@ -361,7 +385,13 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 	return nil
 }
 
-func extractEventAmount(event indexedEvent) (decimal.Decimal, bool) {
+// extractEventAmountStroops reads the raw amount out of an event's data map.
+//
+// The value is in STROOPS, exactly as the Soroban contract emitted it. Callers
+// that write a vault balance column must not use this directly — use
+// extractEventAmountUnits, which applies the stroop -> asset-unit conversion
+// (nester#1146).
+func extractEventAmountStroops(event indexedEvent) (decimal.Decimal, bool) {
 	if event.Data == nil {
 		return decimal.Zero, false
 	}
@@ -407,9 +437,24 @@ func extractEventAmount(event indexedEvent) (decimal.Decimal, bool) {
 	return decimal.Zero, false
 }
 
+// extractEventAmountUnits reads an event amount and converts it from the
+// stroops the contract emitted into the asset units the vault ledger stores.
+//
+// Every balance-writing branch of applyEventMutation goes through this, so an
+// indexed 1 USDC deposit credits 1 and not 10_000_000 (nester#1146). The
+// conversion itself lives in StroopsToAssetUnits, shared with the transaction
+// chain-event verifier.
+func extractEventAmountUnits(event indexedEvent) (decimal.Decimal, bool) {
+	stroops, ok := extractEventAmountStroops(event)
+	if !ok {
+		return decimal.Zero, false
+	}
+	return StroopsToAssetUnits(stroops), true
+}
+
 // extractEventField reads an arbitrary numeric field (not just "amount"/
 // "value") from an event's data map, using the same tolerant type handling
-// as extractEventAmount.
+// as extractEventAmountStroops.
 func extractEventField(event indexedEvent, key string) (decimal.Decimal, bool) {
 	if event.Data == nil {
 		return decimal.Zero, false
@@ -698,6 +743,7 @@ func fetchSorobanEvents(
 				ID         string         `json:"id"`
 				ContractID string         `json:"contractId"`
 				Ledger     uint64         `json:"ledger"`
+				TxHash     string         `json:"txHash"`
 				Topic      []interface{}  `json:"topic"`
 				Value      map[string]any `json:"value"`
 			} `json:"events"`
@@ -731,6 +777,7 @@ func fetchSorobanEvents(
 			EventType:  eventType,
 			Ledger:     raw.Ledger,
 			Data:       raw.Value,
+			TxHash:     raw.TxHash,
 		})
 	}
 

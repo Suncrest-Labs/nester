@@ -20,7 +20,7 @@ Nester smart contracts have not yet undergone professional security audit. This 
 - [ ] All **Critical** and **High** findings must be resolved before mainnet deployment
 - [ ] All **Medium** findings must have documented risk acceptance or remediation
 - [ ] Publish audit report (or redacted version) in `SECURITY.md` or linked from `docs/audits/`
-- [ ] Add audit report link and completion date to `LAUNCH_READINESS_REGISTER.md` [SC-14] Evidence field
+- [ ] Add audit report link and completion date to `docs/launch-readiness-register.md` [SC-14] Evidence field
 
 ## Implementation Notes
 

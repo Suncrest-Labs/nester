@@ -179,14 +179,47 @@ describe("getJitteredReconnectDelay", () => {
 describe("useWebSocket wire protocol", () => {
     const baseOpts = {
         url: WS_URL,
-        token: "jwt-123",
+        getToken: () => "jwt-123",
         channels: ["user:abc", "vaults:global"],
         onEvent: () => {},
     };
 
-    it("authenticates via the upgrade URL query string", () => {
+    it("authenticates via the upgrade URL query string using the token getter", () => {
         renderHook(() => useWebSocket(baseOpts));
         expect(MockWebSocket.last().url).toBe(`${WS_URL}?token=jwt-123`);
+    });
+
+    it("calls the token getter before each connection attempt", () => {
+        const getToken = vi.fn().mockReturnValue("jwt-initial");
+        renderHook(() => useWebSocket({ ...baseOpts, getToken }));
+        expect(getToken).toHaveBeenCalled();
+        const initialCalls = getToken.mock.calls.length;
+
+        act(() => MockWebSocket.last().close());
+        act(() => vi.advanceTimersByTime(1000));
+        expect(getToken.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
+
+    it("reconnects when the token getter returns a different token", () => {
+        let currentToken = "jwt-initial";
+        const getToken = () => currentToken;
+        const { rerender } = renderHook(() => useWebSocket({ ...baseOpts, getToken }));
+        act(() => MockWebSocket.last().open());
+        const before = MockWebSocket.instances.length;
+
+        // Simulate token refresh by changing what the getter returns
+        currentToken = "jwt-refreshed";
+        rerender();
+
+        // Should reconnect with the new token
+        expect(MockWebSocket.instances.length).toBeGreaterThan(before);
+        expect(MockWebSocket.last().url).toBe(`${WS_URL}?token=jwt-refreshed`);
+    });
+
+    it("uses stale token on offline without socket", () => {
+        renderHook(() => useWebSocket({ ...baseOpts, url: "" }));
+        // No socket should be created when url is empty
+        expect(MockWebSocket.instances.length).toBe(0);
     });
 
     it("subscribes with the hub's {action, channels} frame", () => {
@@ -247,20 +280,6 @@ describe("useWebSocket wire protocol", () => {
         expect(unsubs).toHaveLength(1);
         expect(unsubs[0].channels).toEqual(["vaults:global"]);
     });
-
-    it("reconnects when the token changes, since it is part of the URL", () => {
-        const { rerender } = renderHook(
-            ({ token }) => useWebSocket({ ...baseOpts, token }),
-            { initialProps: { token: "" } }
-        );
-        act(() => MockWebSocket.last().open());
-        const before = MockWebSocket.instances.length;
-
-        act(() => rerender({ token: "jwt-new" }));
-
-        expect(MockWebSocket.instances.length).toBe(before + 1);
-        expect(MockWebSocket.last().url).toBe(`${WS_URL}?token=jwt-new`);
-    });
 });
 
 // ---------------------------------------------------------------------------
@@ -270,7 +289,7 @@ describe("useWebSocket wire protocol", () => {
 describe("useWebSocket state transitions", () => {
     const baseOpts = {
         url: WS_URL,
-        token: "jwt",
+        getToken: () => "jwt",
         channels: ["user:abc", "vaults:global"],
         onEvent: () => {},
     };
@@ -370,7 +389,7 @@ describe("useWebSocket state transitions", () => {
 describe("useWebSocket heartbeat", () => {
     const baseOpts = {
         url: WS_URL,
-        token: "jwt",
+        getToken: () => "jwt",
         channels: ["user:abc"],
         onEvent: () => {},
     };
@@ -437,7 +456,7 @@ describe("useWebSocket heartbeat", () => {
 describe("useWebSocket reconciliation", () => {
     const baseOpts = {
         url: WS_URL,
-        token: "jwt",
+        getToken: () => "jwt",
         channels: ["user:abc"],
         onEvent: () => {},
     };
@@ -502,7 +521,7 @@ describe("useWebSocket reconciliation", () => {
 describe("useWebSocket in a hidden tab", () => {
     const baseOpts = {
         url: WS_URL,
-        token: "jwt",
+        getToken: () => "jwt",
         channels: ["user:abc"],
         onEvent: () => {},
     };

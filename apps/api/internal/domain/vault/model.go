@@ -61,6 +61,26 @@ var (
 	// recurring-deposit job queue handler, #846) can treat this as "already
 	// recorded" and safely no-op rather than fail.
 	ErrDuplicateTransaction = errors.New("transaction already recorded")
+	// ErrContractAddressRegistered is returned when a vault is created for a
+	// contract address another live vault already claims. The database
+	// enforces this with the uq_vaults_contract_address_live partial unique
+	// index (migration 104); without a distinct error the collision would
+	// surface as an opaque 500.
+	//
+	// It matters beyond tidiness: the event indexer keys balance mutations on
+	// contract_address, so a second vault pointing at someone else's contract
+	// would have that victim's on-chain deposits credited to it as well
+	// (nester#1148).
+	ErrContractAddressRegistered = errors.New("a vault is already registered for this contract address")
+	// ErrInvalidSharePrice is returned when a vault's share price is zero or
+	// negative, which makes an asset/share conversion meaningless. It signals
+	// corrupted balances rather than bad user input.
+	ErrInvalidSharePrice = errors.New("vault share price is not positive")
+	// ErrOperatorFundedDepositRefused is returned when a deposit would have
+	// to be funded from the shared operator account and policy forbids it.
+	// The caller's remedy is to sign and submit the deposit from their own
+	// wallet and supply the resulting tx_hash (nester#1152).
+	ErrOperatorFundedDepositRefused = errors.New("deposits must be signed and funded by your own wallet: submit the transaction and supply its tx_hash")
 	ErrCapacityExceeded     = errors.New("deposit would exceed vault capacity limit")
 	// ErrUserCancelled is returned when a user declines the wallet signature
 	// or abandons an attempt before submission. It exists to keep that case

@@ -55,8 +55,10 @@ type Config struct {
 	bankAccountCipherKey  string
 	accountCipher         AccountCipherConfig
 	transactionPoller     TransactionPollerConfig
+	reconciliation        ReconciliationConfig
 	recurringDeposit      RecurringDepositConfig
 	jobQueue              JobQueueConfig
+	outbox                OutboxConfig
 	harvest               HarvestConfig
 	rebalancer            RebalancerConfig
 	schedulerLeadership   SchedulerLeadershipConfig
@@ -174,6 +176,16 @@ type TransactionPollerConfig struct {
 	minAge   time.Duration
 }
 
+// ReconciliationConfig governs the scheduled vault-balance reconciliation job
+// (nester#1082, see internal/reconciliation.Runner): it reads authoritative
+// balances from the vault contract and compares them to the database,
+// recording — never correcting — any divergence.
+type ReconciliationConfig struct {
+	enabled  bool
+	interval time.Duration
+	dryRun   bool
+}
+
 // StartupConfig governs one-shot work performed before the server begins
 // accepting traffic (migrations, dependency reachability checks).
 type StartupConfig struct {
@@ -231,6 +243,17 @@ type StellarConfig struct {
 	allocationStrategyAddress string
 	withdrawalSlippageBps     int
 	harvestDefaultCompound    bool
+	// operatorFundedDepositsEnabled allows the API to fund deposits from the
+	// shared operator account when the user did not sign one themselves.
+	// Off by default: the supported path is a wallet-signed deposit, and
+	// leaving this on makes the deposit endpoint a value transfer bounded
+	// only by the operator balance (nester#1152).
+	operatorFundedDepositsEnabled bool
+	// operatorFundedDepositVaults is the comma-separated allowlist of vault
+	// IDs permitted to use operator funds. Empty means none.
+	operatorFundedDepositVaults string
+	// operatorFundedDepositMaxAmount caps a single operator-funded deposit.
+	operatorFundedDepositMaxAmount string
 }
 
 type AllocationConfig struct {
@@ -253,19 +276,26 @@ type AuthConfig struct {
 }
 
 type RateLimitConfig struct {
-	globalLimit       int
-	globalWindow      time.Duration
-	writeLimit        int
-	writeWindow       time.Duration
-	walletLimit       int
-	walletWindow      time.Duration
-	rebalanceLimit    int
-	rebalanceWindow   time.Duration
-	authLimit         int
-	authWindow        time.Duration
-	settlementLimit   int
-	settlementWindow  time.Duration
-	trustedProxyCount int
+	globalLimit     int
+	globalWindow    time.Duration
+	writeLimit      int
+	writeWindow     time.Duration
+	walletLimit     int
+	walletWindow    time.Duration
+	rebalanceLimit  int
+	rebalanceWindow time.Duration
+	authLimit       int
+	authWindow      time.Duration
+	// Auth-failure lockout (nester#1104). Distinct from authLimit/authWindow,
+	// which bound request *rate*; these bound repeated *failures* and escalate
+	// a backoff the attacker cannot outrun by slowing down.
+	authFailureThreshold int
+	authFailureWindow    time.Duration
+	authLockoutBase      time.Duration
+	authLockoutMax       time.Duration
+	settlementLimit      int
+	settlementWindow     time.Duration
+	trustedProxyCount    int
 
 	// Cost-weighted quota (see middleware.CostQuota). This meters downstream
 	// work per user rather than request count, so an expensive route can be
@@ -324,17 +354,20 @@ func Load() (*Config, error) {
 			connectionTimeout: loader.durationDefault("DATABASE_CONNECTION_TIMEOUT", 5*time.Second),
 		},
 		stellar: StellarConfig{
-			networkPassphrase:         loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
-			rpcURL:                    loader.requiredURL("STELLAR_RPC_URL"),
-			horizonURL:                loader.requiredURL("STELLAR_HORIZON_URL"),
-			operatorSecret:            loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
-			operatorAddress:           loader.stringDefault("STELLAR_OPERATOR_ADDRESS", ""),
-			signerSocketPath:          loader.stringDefault("SIGNER_SOCKET_PATH", ""),
-			stellarUSDCIssuer:         loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
-			yieldRegistryContract:     loader.stringDefault("YIELD_REGISTRY_CONTRACT", ""),
-			allocationStrategyAddress: loader.stringDefault("STELLAR_ALLOCATION_STRATEGY_ADDRESS", ""),
-			withdrawalSlippageBps:     loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
-			harvestDefaultCompound:    loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
+			networkPassphrase:              loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
+			rpcURL:                         loader.requiredURL("STELLAR_RPC_URL"),
+			horizonURL:                     loader.requiredURL("STELLAR_HORIZON_URL"),
+			operatorSecret:                 loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
+			operatorFundedDepositsEnabled:  loader.boolDefault("STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED", false),
+			operatorFundedDepositVaults:    loader.stringDefault("STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS", ""),
+			operatorFundedDepositMaxAmount: loader.stringDefault("STELLAR_OPERATOR_FUNDED_DEPOSIT_MAX_AMOUNT", "0"),
+			operatorAddress:                loader.stringDefault("STELLAR_OPERATOR_ADDRESS", ""),
+			signerSocketPath:               loader.stringDefault("SIGNER_SOCKET_PATH", ""),
+			stellarUSDCIssuer:              loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+			yieldRegistryContract:          loader.stringDefault("YIELD_REGISTRY_CONTRACT", ""),
+			allocationStrategyAddress:      loader.stringDefault("STELLAR_ALLOCATION_STRATEGY_ADDRESS", ""),
+			withdrawalSlippageBps:          loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
+			harvestDefaultCompound:         loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
 		},
 		intelligence: IntelligenceConfig{
 			baseURL:       loader.stringDefault("INTELLIGENCE_BASE_URL", loader.stringDefault("INTELLIGENCE_SERVICE_URL", "http://localhost:8000")),
@@ -366,16 +399,26 @@ func Load() (*Config, error) {
 			challengeExpiry:         loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
 		},
 		rateLimit: RateLimitConfig{
-			globalLimit:       loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
-			globalWindow:      loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
-			writeLimit:        loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
-			writeWindow:       loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
-			walletLimit:       loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
-			walletWindow:      loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
-			rebalanceLimit:    loader.intDefault("RATELIMIT_REBALANCE_LIMIT", 3),
-			rebalanceWindow:   loader.durationDefault("RATELIMIT_REBALANCE_WINDOW", 1*time.Hour),
-			authLimit:         loader.intDefault("RATELIMIT_AUTH_LIMIT", 10),
-			authWindow:        loader.durationDefault("RATELIMIT_AUTH_WINDOW", 1*time.Minute),
+			globalLimit:     loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
+			globalWindow:    loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
+			writeLimit:      loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
+			writeWindow:     loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
+			walletLimit:     loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
+			walletWindow:    loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
+			rebalanceLimit:  loader.intDefault("RATELIMIT_REBALANCE_LIMIT", 3),
+			rebalanceWindow: loader.durationDefault("RATELIMIT_REBALANCE_WINDOW", 1*time.Hour),
+			authLimit:       loader.intDefault("RATELIMIT_AUTH_LIMIT", 10),
+			authWindow:      loader.durationDefault("RATELIMIT_AUTH_WINDOW", 1*time.Minute),
+			// 5 failures in 15 minutes starts the backoff. A legitimate user
+			// retrying a flaky wallet signature stays well under it; a
+			// signature brute-force does not.
+			authFailureThreshold: loader.intDefault("AUTH_FAILURE_THRESHOLD", 5),
+			authFailureWindow:    loader.durationDefault("AUTH_FAILURE_WINDOW", 15*time.Minute),
+			// Doubling from 30s, capped at 15m: the 6th failure locks for 30s,
+			// the 7th for 1m, and so on. The cap keeps a wallet from being
+			// locked out indefinitely by someone else spamming its address.
+			authLockoutBase:   loader.durationDefault("AUTH_LOCKOUT_BASE", 30*time.Second),
+			authLockoutMax:    loader.durationDefault("AUTH_LOCKOUT_MAX", 15*time.Minute),
 			settlementLimit:   loader.intDefault("RATELIMIT_SETTLEMENT_LIMIT", 5),
 			settlementWindow:  loader.durationDefault("RATELIMIT_SETTLEMENT_WINDOW", 1*time.Minute),
 			trustedProxyCount: loader.intDefault("RATELIMIT_TRUSTED_PROXY_COUNT", 0),
@@ -420,6 +463,12 @@ func Load() (*Config, error) {
 			interval: loader.durationDefault("TX_POLLER_INTERVAL", 15*time.Second),
 			minAge:   loader.durationDefault("TX_POLLER_MIN_AGE", 30*time.Second),
 		},
+		reconciliation: ReconciliationConfig{
+			enabled: loader.boolDefault("RECONCILE_ENABLED", true),
+			// Default matches reconciliation.DefaultCadenceConfig().Balance.
+			interval: loader.durationDefault("RECONCILE_INTERVAL", 5*time.Minute),
+			dryRun:   loader.boolDefault("RECONCILE_DRY_RUN", false),
+		},
 		recurringDeposit: RecurringDepositConfig{
 			enabled:    loader.boolDefault("RECURRING_DEPOSIT_ENABLED", true),
 			interval:   loader.durationDefault("RECURRING_DEPOSIT_INTERVAL", time.Hour),
@@ -443,6 +492,23 @@ func Load() (*Config, error) {
 			backoffMax:         loader.durationDefault("JOB_QUEUE_BACKOFF_MAX", 5*time.Minute),
 			statsInterval:      loader.durationDefault("JOB_QUEUE_STATS_INTERVAL", 30*time.Second),
 			drainTimeout:       loader.durationDefault("JOB_QUEUE_DRAIN_TIMEOUT", 25*time.Second),
+		},
+		outbox: OutboxConfig{
+			enabled:      loader.boolDefault("OUTBOX_RELAY_ENABLED", true),
+			pollInterval: loader.durationDefault("OUTBOX_RELAY_POLL_INTERVAL", time.Second),
+			batchSize:    loader.intDefault("OUTBOX_RELAY_BATCH_SIZE", 100),
+			lease:        loader.durationDefault("OUTBOX_RELAY_LEASE", 30*time.Second),
+			// Hand-off backoff only. Delivery retry belongs to the job
+			// queue (JOB_QUEUE_BACKOFF_*), and configuring a second budget
+			// for it here is exactly the duplication #1049 avoids.
+			backoff:             loader.durationDefault("OUTBOX_RELAY_BACKOFF", 5*time.Second),
+			statsInterval:       loader.durationDefault("OUTBOX_RELAY_STATS_INTERVAL", 30*time.Second),
+			retentionInterval:   loader.durationDefault("OUTBOX_RETENTION_INTERVAL", 24*time.Hour),
+			dispatchedRetention: loader.durationDefault("OUTBOX_DISPATCHED_RETENTION", 7*24*time.Hour),
+			// Dead rows outlive delivered ones by a wide margin: a delivered
+			// event is history, a dead one is the evidence someone needs to
+			// work out which side effect never happened and why.
+			deadRetention: loader.durationDefault("OUTBOX_DEAD_RETENTION", 30*24*time.Hour),
 		},
 		rebalancer: RebalancerConfig{
 			enabled:       loader.boolDefault("REBALANCER_ENABLED", true),
@@ -741,6 +807,22 @@ func (c Config) TransactionPoller() TransactionPollerConfig {
 	return c.transactionPoller
 }
 
+func (c Config) Reconciliation() ReconciliationConfig {
+	return c.reconciliation
+}
+
+func (r ReconciliationConfig) Enabled() bool {
+	return r.enabled
+}
+
+func (r ReconciliationConfig) Interval() time.Duration {
+	return r.interval
+}
+
+func (r ReconciliationConfig) DryRun() bool {
+	return r.dryRun
+}
+
 func (t TransactionPollerConfig) Enabled() bool {
 	return t.enabled
 }
@@ -789,6 +871,31 @@ type JobQueueConfig struct {
 	statsInterval      time.Duration
 	drainTimeout       time.Duration
 }
+
+// OutboxConfig governs the transactional outbox relay and its retention
+// sweep (#1049).
+type OutboxConfig struct {
+	enabled             bool
+	pollInterval        time.Duration
+	batchSize           int
+	lease               time.Duration
+	backoff             time.Duration
+	statsInterval       time.Duration
+	retentionInterval   time.Duration
+	dispatchedRetention time.Duration
+	deadRetention       time.Duration
+}
+
+func (c Config) Outbox() OutboxConfig                     { return c.outbox }
+func (o OutboxConfig) Enabled() bool                      { return o.enabled }
+func (o OutboxConfig) PollInterval() time.Duration        { return o.pollInterval }
+func (o OutboxConfig) BatchSize() int                     { return o.batchSize }
+func (o OutboxConfig) Lease() time.Duration               { return o.lease }
+func (o OutboxConfig) Backoff() time.Duration             { return o.backoff }
+func (o OutboxConfig) StatsInterval() time.Duration       { return o.statsInterval }
+func (o OutboxConfig) RetentionInterval() time.Duration   { return o.retentionInterval }
+func (o OutboxConfig) DispatchedRetention() time.Duration { return o.dispatchedRetention }
+func (o OutboxConfig) DeadRetention() time.Duration       { return o.deadRetention }
 
 // HarvestConfig governs the yield-harvest orchestration engine (#845).
 type HarvestConfig struct {
@@ -961,6 +1068,30 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("AUTH_JWT_SECRET has insufficient entropy: use at least 8 distinct characters")
 	}
 
+	// NESTER_SERVICE_API_KEY authenticates service-to-service callers and is
+	// shared between them, so a weak value is a shared weak value. It stays
+	// optional, but a key that is set must be a real one (nester#1149).
+	//
+	// Absence is not treated as a failure: an empty key disables service auth
+	// outright (the middleware's `serviceAPIKey != ""` guard), which is the
+	// safest configuration rather than a weak one. Requiring the key to exist
+	// would force every deployment that does not use service-to-service auth
+	// to invent a secret it never uses. A key that IS set, however, must be a
+	// real one in every environment — a weak shared key is weak everywhere.
+	if serviceKey := strings.TrimSpace(c.auth.serviceAPIKey); serviceKey != "" {
+		if len(serviceKey) < 32 {
+			loader.addError("NESTER_SERVICE_API_KEY must be at least 32 characters")
+		}
+		if !jwtSecretHasAdequateEntropy(serviceKey) {
+			loader.addError("NESTER_SERVICE_API_KEY has insufficient entropy: use at least 8 distinct characters")
+		}
+		// Reusing the JWT secret would let any holder of the service key mint
+		// arbitrary user tokens outright, making every other control moot.
+		if serviceKey == strings.TrimSpace(c.auth.secret) {
+			loader.addError("NESTER_SERVICE_API_KEY must not reuse AUTH_JWT_SECRET")
+		}
+	}
+
 	if c.auth.accessTokenExpiry <= 0 {
 		loader.addError("AUTH_ACCESS_TOKEN_EXPIRY must be greater than 0")
 	}
@@ -1022,6 +1153,18 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("RATELIMIT_AUTH_WINDOW must be greater than 0")
 	} else if c.rateLimit.authWindow < time.Millisecond {
 		loader.addError("RATELIMIT_AUTH_WINDOW must be at least 1ms")
+	}
+	if c.rateLimit.authFailureThreshold <= 0 {
+		loader.addError("AUTH_FAILURE_THRESHOLD must be greater than 0")
+	}
+	if c.rateLimit.authFailureWindow <= 0 {
+		loader.addError("AUTH_FAILURE_WINDOW must be greater than 0")
+	}
+	if c.rateLimit.authLockoutBase <= 0 {
+		loader.addError("AUTH_LOCKOUT_BASE must be greater than 0")
+	}
+	if c.rateLimit.authLockoutMax < c.rateLimit.authLockoutBase {
+		loader.addError("AUTH_LOCKOUT_MAX must be at least AUTH_LOCKOUT_BASE")
 	}
 	if c.rateLimit.settlementLimit <= 0 {
 		loader.addError("RATELIMIT_SETTLEMENT_LIMIT must be greater than 0")
@@ -1119,12 +1262,8 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("MIN_ALLOCATION_WEIGHT must be between 1 and 100")
 	}
 
-	// Require at least one payment provider key in production/staging so
-	// offramp features (bank list, account resolution) work at deploy time
-	// rather than failing silently when a user first triggers them.
-	if (c.environment == "production" || c.environment == "staging") &&
-		c.bank.paystackKey == "" && c.bank.flutterwaveKey == "" {
-		loader.addError("at least one of PAYSTACK_SECRET_KEY or FLUTTERWAVE_SECRET_KEY must be set in production")
+	if c.tracing.sampleRatio < 0 || c.tracing.sampleRatio > 1 {
+		loader.addError("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1")
 	}
 }
 
@@ -1211,6 +1350,22 @@ func (s StellarConfig) HorizonURL() string {
 
 func (s StellarConfig) OperatorSecret() string {
 	return s.operatorSecret
+}
+
+// OperatorFundedDepositsEnabled reports whether the API may spend operator
+// funds on a user's behalf. Off unless explicitly enabled (nester#1152).
+func (s StellarConfig) OperatorFundedDepositsEnabled() bool {
+	return s.operatorFundedDepositsEnabled
+}
+
+// OperatorFundedDepositVaults is the raw comma-separated vault allowlist.
+func (s StellarConfig) OperatorFundedDepositVaults() string {
+	return s.operatorFundedDepositVaults
+}
+
+// OperatorFundedDepositMaxAmount caps a single operator-funded deposit.
+func (s StellarConfig) OperatorFundedDepositMaxAmount() string {
+	return s.operatorFundedDepositMaxAmount
 }
 
 // OperatorAddress returns the operator's public Stellar address. It is public
@@ -1321,6 +1476,28 @@ func (r RateLimitConfig) AuthLimit() int {
 
 func (r RateLimitConfig) AuthWindow() time.Duration {
 	return r.authWindow
+}
+
+// AuthFailureThreshold is how many failures inside AuthFailureWindow are
+// tolerated before lockouts begin (nester#1104).
+func (r RateLimitConfig) AuthFailureThreshold() int {
+	return r.authFailureThreshold
+}
+
+// AuthFailureWindow is the sliding period over which auth failures accumulate.
+func (r RateLimitConfig) AuthFailureWindow() time.Duration {
+	return r.authFailureWindow
+}
+
+// AuthLockoutBase is the first lockout duration; it doubles per failure beyond
+// the threshold.
+func (r RateLimitConfig) AuthLockoutBase() time.Duration {
+	return r.authLockoutBase
+}
+
+// AuthLockoutMax caps the progressive backoff.
+func (r RateLimitConfig) AuthLockoutMax() time.Duration {
+	return r.authLockoutMax
 }
 
 func (r RateLimitConfig) SettlementLimit() int {

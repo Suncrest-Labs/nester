@@ -41,6 +41,7 @@ import {
 } from "@/lib/stellar/transaction";
 import { cn } from "@/lib/utils";
 import { type VaultContract as VaultDefinition, type SupportedAsset, vaultContracts as vaultDefinitions, getVaultContractById as getVaultById } from "@/lib/vault-contracts";
+import { requireContractId } from "@/lib/contracts";
 import { useWallet } from "@/components/wallet-provider";
 import { useNetwork } from "@/hooks/useNetwork";
 
@@ -185,6 +186,10 @@ export function DepositModal({
             selectedAsset === "XLM"
                 ? vault.contractXlmAddress || vault.contractAddress
                 : vault.contractAddress;
+        // An unconfigured vault has no address to estimate against (#1094).
+        // Previously this passed "" and the estimate failed inside the SDK
+        // with nothing pointing at the missing environment variable.
+        if (!contractId) return null;
         return { walletAddress: address, contractId, amount };
     }, [vault, address, amount, selectedAsset]);
 
@@ -226,9 +231,15 @@ export function DepositModal({
         setShowLargeWarning(false);
 
         try {
-            const contractId = selectedAsset === "XLM"
-                ? (vault.contractXlmAddress || vault.contractAddress)
-                : vault.contractAddress;
+            // Refuse to build a deposit against an unconfigured vault (#1094).
+            // requireContractId throws naming the exact environment variable,
+            // and the catch below surfaces that message — previously this
+            // passed "" straight into the transaction builder.
+            const contractId =
+                (selectedAsset === "XLM"
+                    ? vault.contractXlmAddress || vault.contractAddress
+                    : vault.contractAddress) ??
+                requireContractId(selectedAsset === "XLM" ? "vaultXlm" : "vault");
 
             const { xdr } = await buildDepositTransaction({
                 walletAddress: address,

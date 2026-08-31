@@ -1066,10 +1066,10 @@ func TestJWTSecretHasAdequateEntropy(t *testing.T) {
 		secret string
 		want   bool
 	}{
-		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},           // single distinct byte
-		{"abababababababababababababababab", false},             // only 2 distinct bytes
-		{"abcdefg" + strings.Repeat("a", 25), false},          // 7 distinct bytes
-		{"abcdefgh" + strings.Repeat("a", 24), true},          // exactly 8 distinct bytes
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},  // single distinct byte
+		{"abababababababababababababababab", false},  // only 2 distinct bytes
+		{"abcdefg" + strings.Repeat("a", 25), false}, // 7 distinct bytes
+		{"abcdefgh" + strings.Repeat("a", 24), true}, // exactly 8 distinct bytes
 		{"this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes", true},
 	}
 	for _, tc := range cases {
@@ -1112,92 +1112,68 @@ func TestLoadAllowedOriginsRejectsMalformed(t *testing.T) {
 	}
 }
 
-// TestLoadPaymentProviderKeysValidation verifies that production/staging requires
-// at least one payment provider key, while development does not.
-func TestLoadPaymentProviderKeysValidation(t *testing.T) {
-	t.Run("production fails when both keys are empty", func(t *testing.T) {
-		baseEnv(t)
-		requiredEnv(t)
-		t.Setenv("APP_ENV", "production")
-		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+// TestLoadPaymentProviderKeysOptional verifies that no environment requires a
+// fiat payment provider key. The offramp feature the keys served was dropped
+// (#1154); requiring them only blocked staging deploys behind dummy
+// credentials, or pushed operators to set a wrong APP_ENV -- which would also
+// silently disable the JWT-default and CORS-origin guards.
+func TestLoadPaymentProviderKeysOptional(t *testing.T) {
+	for _, env := range []string{"production", "staging", "development", "test"} {
+		t.Run(env+" succeeds with no provider key", func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", env)
+			if env == "production" || env == "staging" {
+				t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+			}
 
-		chdir(t, t.TempDir())
+			chdir(t, t.TempDir())
 
-		_, err := Load()
-		if err == nil {
-			t.Fatal("expected Load() to fail when both provider keys are empty in production")
-		}
-		if !strings.Contains(err.Error(), "PAYSTACK_SECRET_KEY") {
-			t.Fatalf("expected error to mention PAYSTACK_SECRET_KEY, got %q", err.Error())
-		}
-	})
+			if _, err := Load(); err != nil {
+				t.Fatalf("Load() error = %v (no environment should require a fiat provider key)", err)
+			}
+		})
+	}
+}
 
-	t.Run("staging fails when both keys are empty", func(t *testing.T) {
+// TestStagingGuardsSurviveProviderKeyRemoval pins the guards that dropping the
+// fiat requirement must not weaken: staging still rejects the development JWT
+// default and still demands an explicit CORS origin list. These are the guards
+// an operator would have lost by setting a wrong APP_ENV to work around the
+// provider requirement, so they are asserted here alongside its removal.
+func TestStagingGuardsSurviveProviderKeyRemoval(t *testing.T) {
+	t.Run("staging still rejects the development JWT default", func(t *testing.T) {
 		baseEnv(t)
 		requiredEnv(t)
 		t.Setenv("APP_ENV", "staging")
 		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+		t.Setenv("AUTH_JWT_SECRET", defaultDevJWTSecret)
 
 		chdir(t, t.TempDir())
 
 		_, err := Load()
 		if err == nil {
-			t.Fatal("expected Load() to fail when both provider keys are empty in staging")
+			t.Fatal("expected Load() to reject the development JWT default in staging")
 		}
-		if !strings.Contains(err.Error(), "PAYSTACK_SECRET_KEY") {
-			t.Fatalf("expected error to mention PAYSTACK_SECRET_KEY, got %q", err.Error())
-		}
-	})
-
-	t.Run("production succeeds with paystack key set", func(t *testing.T) {
-		baseEnv(t)
-		requiredEnv(t)
-		t.Setenv("APP_ENV", "production")
-		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
-		t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
-
-		chdir(t, t.TempDir())
-
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v", err)
+		if !strings.Contains(err.Error(), "AUTH_JWT_SECRET") {
+			t.Fatalf("expected error to mention AUTH_JWT_SECRET, got %q", err.Error())
 		}
 	})
 
-	t.Run("production succeeds with flutterwave key set", func(t *testing.T) {
+	t.Run("staging still requires an explicit CORS origin list", func(t *testing.T) {
 		baseEnv(t)
 		requiredEnv(t)
-		t.Setenv("APP_ENV", "production")
-		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
-		t.Setenv("FLUTTERWAVE_SECRET_KEY", "FLWSECK_TEST-dummy")
+		t.Setenv("APP_ENV", "staging")
+		t.Setenv("ALLOWED_ORIGINS", "")
 
 		chdir(t, t.TempDir())
 
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v", err)
+		_, err := Load()
+		if err == nil {
+			t.Fatal("expected Load() to require ALLOWED_ORIGINS in staging")
 		}
-	})
-
-	t.Run("development succeeds without any provider key", func(t *testing.T) {
-		baseEnv(t)
-		requiredEnv(t)
-		t.Setenv("APP_ENV", "development")
-
-		chdir(t, t.TempDir())
-
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v (dev should not require provider keys)", err)
-		}
-	})
-
-	t.Run("test env succeeds without any provider key", func(t *testing.T) {
-		baseEnv(t)
-		requiredEnv(t)
-		t.Setenv("APP_ENV", "test")
-
-		chdir(t, t.TempDir())
-
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v (test env should not require provider keys)", err)
+		if !strings.Contains(err.Error(), "ALLOWED_ORIGINS") {
+			t.Fatalf("expected error to mention ALLOWED_ORIGINS, got %q", err.Error())
 		}
 	})
 }

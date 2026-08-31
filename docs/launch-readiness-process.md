@@ -1,12 +1,12 @@
 # Launch Readiness Process
 
-> **How to maintain the LAUNCH_READINESS_REGISTER.md and keep PRD claims verified**
+> **How to maintain the docs/launch-readiness-register.md and keep PRD claims verified**
 
 ---
 
 ## Overview
 
-The `LAUNCH_READINESS_REGISTER.md` is a living document that tracks the implementation status of all Nester product requirements. Unlike the stale `PRD.md`, the register is kept current through a simple discipline: every code change, merged PR, or deployment must be reflected in the register with evidence references.
+The `docs/launch-readiness-register.md` is a living document that tracks the implementation status of all Nester product requirements. Unlike the stale `PRD.md`, the register is kept current through a simple discipline: every code change, merged PR, or deployment must be reflected in the register with evidence references.
 
 This document describes:
 1. **Who updates the register** (everyone on core team)
@@ -60,7 +60,7 @@ This is the core discipline. No claim is considered done until it's backed by:
 
 If your PR resolves or partially implements a PRD claim (i.e., an entry in the register):
 
-1. **Find the entry** in `LAUNCH_READINESS_REGISTER.md` (e.g., `[API-05] Auth — challenge/verify`)
+1. **Find the entry** in `docs/launch-readiness-register.md` (e.g., `[API-05] Auth — challenge/verify`)
 2. **Add evidence reference**:
    - If tests: `test: path/to/file.test.ts::TestName`
    - If code: `file: path/to/file.ts#L10-L50`
@@ -77,7 +77,7 @@ chore: update register for [API-05] auth challenge implementation
 Evidence: test: apps/api/internal/service/auth_service_test.go::TestAuthService_GenerateChallenge
 Status: Resolved
 
-See LAUNCH_READINESS_REGISTER.md [API-05]
+See docs/launch-readiness-register.md [API-05]
 ```
 
 ### On Design Changes
@@ -410,7 +410,7 @@ Every quarter (or before major release), re-verify all entries:
 | Find code line | Use VS Code "Go to Definition" or `grep -n` |
 | List migrations | `ls apps/api/migrations/` |
 | List workflows | `ls .github/workflows/` |
-| View register | `cat LAUNCH_READINESS_REGISTER.md` |
+| View register | `cat docs/launch-readiness-register.md` |
 | Create issue | `vim docs/backlog/<slug>.md` |
 
 ---
@@ -426,7 +426,7 @@ Every quarter (or before major release), re-verify all entries:
 
 ## See Also
 
-- `LAUNCH_READINESS_REGISTER.md` — The register itself
+- `docs/launch-readiness-register.md` — The register itself
 - `scripts/verify-prd-refs.js` — Automated verification
 - `tests/prd-register.test.js` — Test suite
 - `PRD.md` — Original product requirements (now superseded by register)

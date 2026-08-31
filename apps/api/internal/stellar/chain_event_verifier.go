@@ -18,8 +18,6 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
-const stroopsPerUnit int64 = 10_000_000
-
 // VerifiedVaultEvent is a vault contract event taken from a confirmed
 // on-chain transaction. Amount is in display units (stroops / 1e7), matching
 // the vault ledger — never the client-supplied request body (nester#1076).
@@ -295,8 +293,11 @@ func i128PartsToDecimal(parts xdr.Int128Parts) (decimal.Decimal, bool) {
 	return hi.Mul(shift).Add(lo), true
 }
 
+// stroopsToDisplay converts a raw stroop event amount into the asset units the
+// vault ledger stores. It delegates to StroopsToAssetUnits so this path and the
+// event indexer share one conversion (nester#1146).
 func stroopsToDisplay(stroops decimal.Decimal) decimal.Decimal {
-	return stroops.Div(decimal.NewFromInt(stroopsPerUnit))
+	return StroopsToAssetUnits(stroops)
 }
 
 func normalizeEventType(eventType string) string {

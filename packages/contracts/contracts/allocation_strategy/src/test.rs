@@ -1198,9 +1198,12 @@ fn set_allocations_role_lifecycle() {
     let apys = valid_apys(&env);
 
     // Admin is intentionally not an implicit Operator for this entrypoint.
-    assert!(client
-        .try_set_allocations(&admin, &1_000_i128, &apys)
-        .is_err());
+    assert_eq!(
+        client.try_set_allocations(&admin, &1_000_i128, &apys),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::Unauthorized as u32,
+        ))),
+    );
 
     client.grant_role(&admin, &operator, &Role::Operator);
     client.set_allocations(&operator, &1_000_i128, &apys);
@@ -1210,9 +1213,12 @@ fn set_allocations_role_lifecycle() {
     assert_eq!(allocated, 1_000);
 
     client.revoke_role(&admin, &operator, &Role::Operator);
-    assert!(client
-        .try_set_allocations(&operator, &1_000_i128, &apys)
-        .is_err());
+    assert_eq!(
+        client.try_set_allocations(&operator, &1_000_i128, &apys),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::Unauthorized as u32,
+        ))),
+    );
 }
 
 // AllocationStrategy.set_allocations requires operator role — unauthorized callers are rejected.
@@ -1226,9 +1232,15 @@ fn test_set_allocations_unauthorized_is_rejected() {
     assert!(!env.as_contract(&strategy_id, || {
         nester_access_control::AccessControl::has_role(&env, &attacker, Role::Operator)
     }));
-    assert!(client
-        .try_set_allocations(&attacker, &1_000_i128, &apys)
-        .is_err());
+    // The refusal must be the typed Unauthorized contract error, not a bare
+    // host panic (issue #1200): a caller has to be able to tell "you are not
+    // an operator" apart from "the contract broke".
+    assert_eq!(
+        client.try_set_allocations(&attacker, &1_000_i128, &apys),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::Unauthorized as u32,
+        ))),
+    );
 }
 
 #[test]

@@ -10,7 +10,17 @@ import { test, expect, type Page, type WebSocketRoute } from '@playwright/test';
  * user can actually see.
  */
 
-const WS_URL = 'ws://localhost:3001/ws';
+/**
+ * Match the harness socket regardless of its query string.
+ *
+ * The client authenticates during the upgrade by appending `?token=…` (the
+ * browser WebSocket API cannot set headers), so the URL is not a fixed
+ * string. An exact-match pattern silently stops intercepting the moment a
+ * token is present: the route never fires, the page talks to a `/ws` that
+ * nothing is serving, and every assertion here reports "offline" instead of
+ * the reconnection behaviour under test.
+ */
+const WS_URL = /^ws:\/\/localhost:3001\/ws(\?.*)?$/;
 const HARNESS = '/e2e/connection';
 
 interface FakeHub {
@@ -31,6 +41,23 @@ interface FakeHub {
  * ordinary messages — see apps/api/internal/ws/client.go).
  */
 async function installFakeHub(page: Page): Promise<FakeHub> {
+    // Seed a session token before the app boots. useWebSocket refuses to open
+    // a socket without one — it sets status "offline" and falls back to
+    // polling — so with no token the badge never reaches "connected" and every
+    // assertion in this file times out.
+    //
+    // This became necessary when the provider stopped forging
+    // `mock_jwt_${address}` (nester#1230) and started reading the real token
+    // store. The forged value was always truthy, which is why the harness got
+    // away with never authenticating.
+    await page.addInitScript(() => {
+        try {
+            window.localStorage.setItem('nester_auth_token', 'e2e-harness-token');
+        } catch {
+            // Storage unavailable — the assertions below will surface it.
+        }
+    });
+
     const hub: FakeHub = {
         sockets: [],
         frames: [],

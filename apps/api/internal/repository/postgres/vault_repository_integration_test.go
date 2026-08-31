@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,6 +206,163 @@ func TestVaultRepositoryIntegrationRecordDepositConcurrent(t *testing.T) {
 	}
 	if !fetched.CurrentBalance.Equal(decimal.RequireFromString("20")) {
 		t.Fatalf("expected current balance 20, got %s", fetched.CurrentBalance)
+	}
+}
+
+// TestVaultRepositoryIntegrationRecordWithdrawalConcurrent is the acceptance
+// test for nester#1084: N concurrent withdrawals of the full balance must
+// yield exactly one success. Without the FOR UPDATE re-check every goroutine
+// reads the same pre-withdrawal balance, all pass, and the position goes
+// negative.
+func TestVaultRepositoryIntegrationRecordWithdrawalConcurrent(t *testing.T) {
+	db := openIntegrationDB(t)
+	applyIntegrationMigrations(t, db)
+	resetIntegrationTables(t, db)
+
+	repository := NewVaultRepository(db)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, db)
+
+	fullBalance := decimal.RequireFromString("100")
+	created, err := repository.CreateVault(ctx, vault.Vault{
+		ID:              uuid.New(),
+		UserID:          userID,
+		ContractAddress: "CA-INT-WD-RACE",
+		TotalDeposited:  fullBalance,
+		CurrentBalance:  fullBalance,
+		Currency:        "USDC",
+		Status:          vault.StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	const n = 8
+	results := make(chan error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			results <- repository.RecordWithdrawal(ctx, created.ID, vault.TransactionRecord{
+				UserID:               userID,
+				Amount:               fullBalance,
+				SharesMintedOrBurned: fullBalance,
+				SharePriceAtTime:     decimal.NewFromInt(1),
+			})
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var successes, insufficient int
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, vault.ErrWithdrawalExceedsPosition):
+			insufficient++
+		default:
+			t.Errorf("RecordWithdrawal() unexpected error = %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 successful withdrawal, got %d", successes)
+	}
+	if insufficient != n-1 {
+		t.Fatalf("expected %d ErrWithdrawalExceedsPosition, got %d", n-1, insufficient)
+	}
+
+	fetched, err := repository.GetVault(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetVault() error = %v", err)
+	}
+	if !fetched.CurrentBalance.Equal(decimal.Zero) {
+		t.Fatalf("expected current balance 0, got %s", fetched.CurrentBalance)
+	}
+
+	var ledgerRows int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM vault_transactions WHERE vault_id = $1 AND type = 'withdrawal'`,
+		created.ID.String(),
+	).Scan(&ledgerRows); err != nil {
+		t.Fatalf("count ledger rows: %v", err)
+	}
+	if ledgerRows != 1 {
+		t.Fatalf("expected exactly 1 withdrawal ledger row, got %d", ledgerRows)
+	}
+}
+
+// TestVaultRepositoryIntegrationDepositWithdrawalInterleaved exercises the
+// documented lock ordering (nester#1084): deposits and withdrawals on the
+// same position queue on one row lock in the same order, so an interleaved
+// mix must complete without deadlock and land on the exact expected balance.
+func TestVaultRepositoryIntegrationDepositWithdrawalInterleaved(t *testing.T) {
+	db := openIntegrationDB(t)
+	applyIntegrationMigrations(t, db)
+	resetIntegrationTables(t, db)
+
+	repository := NewVaultRepository(db)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, db)
+
+	start := decimal.RequireFromString("100")
+	created, err := repository.CreateVault(ctx, vault.Vault{
+		ID:              uuid.New(),
+		UserID:          userID,
+		ContractAddress: "CA-INT-MIXED",
+		TotalDeposited:  start,
+		CurrentBalance:  start,
+		Currency:        "USDC",
+		Status:          vault.StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	// 5 deposits of 10 and 5 withdrawals of 10. Worst-case ordering (all
+	// withdrawals first) still only draws down 50 of the initial 100, so
+	// every operation must succeed regardless of interleaving.
+	const each = 5
+	amount := decimal.RequireFromString("10")
+	var wg sync.WaitGroup
+	wg.Add(each * 2)
+	errs := make(chan error, each*2)
+	for range each {
+		go func() {
+			defer wg.Done()
+			errs <- repository.RecordDeposit(ctx, created.ID, vault.TransactionRecord{
+				UserID:               userID,
+				Amount:               amount,
+				SharesMintedOrBurned: amount,
+				SharePriceAtTime:     decimal.NewFromInt(1),
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			errs <- repository.RecordWithdrawal(ctx, created.ID, vault.TransactionRecord{
+				UserID:               userID,
+				Amount:               amount,
+				SharesMintedOrBurned: amount,
+				SharePriceAtTime:     decimal.NewFromInt(1),
+			})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent money-path write error = %v", err)
+		}
+	}
+
+	fetched, err := repository.GetVault(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetVault() error = %v", err)
+	}
+	if !fetched.CurrentBalance.Equal(start) {
+		t.Fatalf("expected current balance %s, got %s", start, fetched.CurrentBalance)
 	}
 }
 
