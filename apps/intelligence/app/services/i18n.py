@@ -310,7 +310,7 @@ def format_amount(
     # The sign leads the whole amount: "-$42.50" (prefix symbols) and
     # "-42,50 $" (suffix symbols) both render the sign first.
     if fmt.symbol_prefix:
-        body = f"{symbol}{number}" if not fmt.symbol_space else f"{symbol} {number}"
+        body = f"{symbol} {number}" if fmt.symbol_space else f"{symbol}{number}"
     else:
         body = f"{number} {symbol}" if fmt.symbol_space else f"{number}{symbol}"
     return f"{sign}{body}"
@@ -365,6 +365,7 @@ def format_date(value: "_dt.date | _dt.datetime | str", language: str) -> str:
     Accepts a date/datetime or an ISO-8601 string (as commonly stored on
     savings goals / deadlines). Falls back to the raw string if parsing fails.
     """
+    parsed: "_dt.date | _dt.datetime"
     if isinstance(value, str):
         try:
             parsed: _dt.date = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))

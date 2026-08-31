@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/analytics"
 	perfdom "github.com/suncrestlabs/nester/apps/api/internal/domain/performance"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/analytics"
 )
 
 // VaultLister is the subset of the vault repo we need. Defined locally so
@@ -171,7 +172,6 @@ func (s *Service) GetAPYHistory(
 	}, nil
 }
 
-
 // CalculateRealizedAPY annualizes the return between two snapshots.
 //
 //	APY = ((current_balance / total_deposited) ^ (365 / days_elapsed) - 1) * 100
@@ -217,51 +217,207 @@ type BalanceProvider interface {
 	VaultBalance(ctx context.Context, contractAddress string) (decimal.Decimal, error)
 }
 
-// GetUserAnalytics returns aggregated analytics data for a user's vaults
+// GetUserAnalytics returns aggregated analytics data for a user's vaults.
+//
+// The 1000-vault ceiling below is bounded by vault count (how many a user
+// can plausibly create through the product UI), same reasoning as
+// portfolio_service.go's 10,000 ceiling — not by transaction volume that
+// grows with usage, which is what made the pending-deposit ceiling in
+// valuation/adapters.go unsafe (nester#1193). This handler does sum
+// vault.CurrentBalance across the page below into totalBalance for display,
+// so if vault creation ever becomes bulk/programmatic this reasoning stops
+// holding and needs real pagination, same as that fix.
+// aggregateDailySnapshots folds every vault's snapshot history into one daily
+// portfolio series.
+//
+// Snapshots are written per vault and are not aligned to a common schedule, so
+// a day where one vault happened not to be snapshotted must not drop that
+// vault's balance out of the portfolio total — that would read as a sudden
+// loss. Each vault therefore carries its most recent snapshot forward across
+// days it has none, which is the same reading a user gets from the vault's own
+// performance view.
+//
+// The series runs from the first day any vault has a snapshot through the last
+// such day, bounded by toTime when that is set (a zero toTime means no upper
+// bound). Days before a vault's first snapshot contribute nothing: that vault
+// did not exist yet as far as the data is concerned.
+func aggregateDailySnapshots(
+	vaults []vault.Vault,
+	histories map[uuid.UUID][]perfdom.Snapshot,
+	toTime time.Time,
+) []analytics.DailySnapshot {
+	// Latest snapshot per vault per day, in UTC calendar days.
+	perVaultDay := make(map[uuid.UUID]map[string]perfdom.Snapshot, len(vaults))
+	days := make(map[string]struct{})
+
+	for _, v := range vaults {
+		byDay := make(map[string]perfdom.Snapshot)
+		for _, snap := range histories[v.ID] {
+			if !toTime.IsZero() && snap.SnapshotAt.After(toTime) {
+				continue
+			}
+			day := snap.SnapshotAt.UTC().Format("2006-01-02")
+			// Keep the last snapshot of the day: it is the day's closing state.
+			if prev, ok := byDay[day]; ok && prev.SnapshotAt.After(snap.SnapshotAt) {
+				continue
+			}
+			byDay[day] = snap
+			days[day] = struct{}{}
+		}
+		perVaultDay[v.ID] = byDay
+	}
+
+	if len(days) == 0 {
+		return []analytics.DailySnapshot{}
+	}
+
+	ordered := make([]string, 0, len(days))
+	for day := range days {
+		ordered = append(ordered, day)
+	}
+	sort.Strings(ordered)
+
+	// Walk every calendar day in the covered range so gaps are filled by the
+	// carry-forward below rather than collapsing the series.
+	first, err := time.Parse("2006-01-02", ordered[0])
+	if err != nil {
+		return []analytics.DailySnapshot{}
+	}
+	last, err := time.Parse("2006-01-02", ordered[len(ordered)-1])
+	if err != nil {
+		return []analytics.DailySnapshot{}
+	}
+
+	carried := make(map[uuid.UUID]perfdom.Snapshot, len(vaults))
+	out := make([]analytics.DailySnapshot, 0, int(last.Sub(first).Hours()/24)+1)
+
+	for day := first; !day.After(last); day = day.AddDate(0, 0, 1) {
+		key := day.Format("2006-01-02")
+		var balance, yield decimal.Decimal
+		var seen bool
+
+		for _, v := range vaults {
+			if snap, ok := perVaultDay[v.ID][key]; ok {
+				carried[v.ID] = snap
+			}
+			snap, ok := carried[v.ID]
+			if !ok {
+				// This vault has no snapshot on or before this day.
+				continue
+			}
+			seen = true
+			balance = balance.Add(snap.TotalBalance)
+			yield = yield.Add(snap.TotalYieldEarned)
+		}
+
+		if !seen {
+			continue
+		}
+		out = append(out, analytics.DailySnapshot{
+			Date:            key,
+			TotalBalanceUSD: balance,
+			YieldEarnedUSD:  yield,
+		})
+	}
+
+	return out
+}
+
+// buildVaultMonthlyYield reports each vault's yield earned within each calendar
+// month, rather than leaving the field empty in every response.
+//
+// TotalYieldEarned on a snapshot is cumulative since the vault opened, so a
+// month's yield is the growth over that month: the last snapshot of the month
+// minus the last snapshot of the previous month. The first month a vault
+// appears in has no prior snapshot to subtract, so its cumulative total to date
+// is what was earned within the window being reported.
+func buildVaultMonthlyYield(
+	vaults []vault.Vault,
+	histories map[uuid.UUID][]perfdom.Snapshot,
+	toTime time.Time,
+) []analytics.VaultMonthlyYield {
+	out := []analytics.VaultMonthlyYield{}
+
+	for _, v := range vaults {
+		lastOfMonth := make(map[string]perfdom.Snapshot)
+		for _, snap := range histories[v.ID] {
+			if !toTime.IsZero() && snap.SnapshotAt.After(toTime) {
+				continue
+			}
+			month := snap.SnapshotAt.UTC().Format("2006-01")
+			if prev, ok := lastOfMonth[month]; ok && prev.SnapshotAt.After(snap.SnapshotAt) {
+				continue
+			}
+			lastOfMonth[month] = snap
+		}
+		if len(lastOfMonth) == 0 {
+			continue
+		}
+
+		months := make([]string, 0, len(lastOfMonth))
+		for month := range lastOfMonth {
+			months = append(months, month)
+		}
+		sort.Strings(months)
+
+		name := v.ContractAddress
+		if name == "" {
+			name = v.ID.String()
+		}
+
+		var prevCumulative decimal.Decimal
+		for _, month := range months {
+			cumulative := lastOfMonth[month].TotalYieldEarned
+			out = append(out, analytics.VaultMonthlyYield{
+				VaultID:   v.ID.String(),
+				VaultName: name,
+				Month:     month,
+				YieldUSD:  cumulative.Sub(prevCumulative),
+			})
+			prevCumulative = cumulative
+		}
+	}
+
+	return out
+}
+
 func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTime, toTime time.Time) (*analytics.AnalyticsResponse, error) {
-	// Get user's vaults
+	// Get user's vaults. A 1,000-vault ceiling is safe here the same way
+	// portfolio_service.go's GetUserPortfolioSummary reasons about its own
+	// 10,000 ceiling (nester#1193/#1225): this is ListUserVaults (bounded by
+	// how many vaults one person can plausibly create through the product
+	// UI), not a cross-user or transaction-volume-scaled list. If vault
+	// creation ever becomes bulk/programmatic this stops holding.
 	userVaults, _, err := s.vaultRepo.ListUserVaults(ctx, userID, vault.UserListFilter{Page: 1, PerPage: 1000})
 	if err != nil {
 		return &analytics.AnalyticsResponse{}, fmt.Errorf("failed to get user vaults: %w", err)
 	}
 
 	if len(userVaults) == 0 {
-	// Return empty response if user has no vaults
-	return &analytics.AnalyticsResponse{
-		DailySnapshots:      []analytics.DailySnapshot{},
-		VaultMonthlyYield:   []analytics.VaultMonthlyYield{},
-		CurrentAllocation:   []analytics.CurrentAllocation{},
-		PerformanceMetrics:  analytics.PerformanceMetrics{},
-		Vaults:              []analytics.VaultInfo{},
-	}, nil
+		// Return empty response if user has no vaults
+		return &analytics.AnalyticsResponse{
+			DailySnapshots:     []analytics.DailySnapshot{},
+			VaultMonthlyYield:  []analytics.VaultMonthlyYield{},
+			CurrentAllocation:  []analytics.CurrentAllocation{},
+			PerformanceMetrics: analytics.PerformanceMetrics{},
+			Vaults:             []analytics.VaultInfo{},
+		}, nil
 	}
 
-	// Get daily snapshots for the user (aggregated across all vaults)
-	// For now, we'll use the latest snapshot as a placeholder
-	// In a real implementation, this would query a user-level analytics table or aggregate vault snapshots
-	var dailySnapshots []analytics.DailySnapshot
-	if len(userVaults) > 0 {
-		// For simplicity, we're generating a simple time series based on the first vault's history
-		// In production, this should come from a dedicated analytics table or service
-		firstVaultID := userVaults[0].ID
-		snapshots, err := s.repo.HistoryForVault(ctx, firstVaultID, fromTime)
+	// Read every vault's history once. Both the daily series and the monthly
+	// per-vault yield below are built from this, so a multi-vault user is
+	// never shown one vault's numbers labelled as their portfolio (#1195).
+	histories := make(map[uuid.UUID][]perfdom.Snapshot, len(userVaults))
+	for _, v := range userVaults {
+		snapshots, err := s.repo.HistoryForVault(ctx, v.ID, fromTime)
 		if err != nil && !errors.Is(err, perfdom.ErrSnapshotNotFound) {
 			return &analytics.AnalyticsResponse{}, fmt.Errorf("failed to get vault history: %w", err)
 		}
-
-		for _, snap := range snapshots {
-			dailySnapshots = append(dailySnapshots, analytics.DailySnapshot{
-				Date:          snap.SnapshotAt.Format("2006-01-02"),
-				TotalBalanceUSD: snap.TotalBalance.InexactFloat64(),
-				YieldEarnedUSD:  snap.TotalYieldEarned.InexactFloat64(),
-			})
-		}
+		histories[v.ID] = snapshots
 	}
 
-	// Get vault monthly yield (aggregated yield per vault per month)
-	var vaultMonthlyYield []analytics.VaultMonthlyYield
-	// This would typically come from a separate aggregation table
-	// For now, we'll leave it empty and let the frontend handle empty state
+	dailySnapshots := aggregateDailySnapshots(userVaults, histories, toTime)
+	vaultMonthlyYield := buildVaultMonthlyYield(userVaults, histories, toTime)
 
 	// Get current allocation across all vaults
 	var currentAllocation []analytics.CurrentAllocation
@@ -288,7 +444,7 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 			currentAllocation = append(currentAllocation, analytics.CurrentAllocation{
 				Protocol:      protocol,
 				AllocationPCT: allocationPCT,
-				BalanceUSD:    amount.InexactFloat64(),
+				Balance:       amount,
 				APY:           avgAPY,
 			})
 		}
@@ -355,28 +511,28 @@ func (s *Service) GetUserAnalytics(ctx context.Context, userID uuid.UUID, fromTi
 		lockPeriodDays = 0 // placeholder
 
 		vaultsInfo = append(vaultsInfo, analytics.VaultInfo{
-			ID:            vault.ID.String(),
-			Name:          vault.ContractAddress,
-			BalanceUSD:    vault.CurrentBalance.InexactFloat64(),
-			APY:           0, // placeholder - would calculate from allocations
-			YieldEarned:   vault.YieldEarned.InexactFloat64(),
+			ID:             vault.ID.String(),
+			Name:           vault.ContractAddress,
+			Balance:        vault.CurrentBalance,
+			APY:            0, // placeholder - would calculate from allocations
+			YieldEarned:    vault.YieldEarned,
 			LockPeriodDays: lockPeriodDays,
 		})
 	}
 
 	return &analytics.AnalyticsResponse{
-		DailySnapshots:      dailySnapshots,
-		VaultMonthlyYield:   vaultMonthlyYield,
-		CurrentAllocation:   currentAllocation,
+		DailySnapshots:    dailySnapshots,
+		VaultMonthlyYield: vaultMonthlyYield,
+		CurrentAllocation: currentAllocation,
 		PerformanceMetrics: analytics.PerformanceMetrics{
-			TotalYieldEarned: totalYieldEarned.InexactFloat64(),
+			TotalYieldEarned: totalYieldEarned,
 			YieldChangePCT:   yieldChangePCT,
 			BestVaultName:    bestVaultName,
 			BestVaultAPY:     bestVaultAPY,
 			AverageAPY:       averageAPY,
-			TotalDeposited:   totalDeposited.InexactFloat64(),
-			TotalWithdrawn:   totalWithdrawn.InexactFloat64(),
-			NetPosition:      netPosition.InexactFloat64(),
+			TotalDeposited:   totalDeposited,
+			TotalWithdrawn:   totalWithdrawn,
+			NetPosition:      netPosition,
 		},
 		Vaults: vaultsInfo,
 	}, nil

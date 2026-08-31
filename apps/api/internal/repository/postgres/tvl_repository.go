@@ -112,11 +112,11 @@ type tvlScanner interface {
 
 func scanTVLSnapshot(row tvlScanner) (tvldom.Snapshot, error) {
 	var (
-		idStr    string
-		vaultStr string
-		tvlStr   string
+		idStr      string
+		vaultStr   string
+		tvlStr     string
 		depositors int
-		at       time.Time
+		at         time.Time
 	)
 	if err := row.Scan(&idStr, &vaultStr, &tvlStr, &depositors, &at); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

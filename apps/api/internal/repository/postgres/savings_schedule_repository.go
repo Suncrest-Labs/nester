@@ -222,10 +222,10 @@ type savingsScheduleScanner interface {
 func scanSavingsSchedule(row savingsScheduleScanner) (savingsschedule.SavingsSchedule, error) {
 	var (
 		id, userID, goalID, vaultID, amountStr, currency, frequency string
-		nextRunAt, createdAt, updatedAt                            time.Time
-		lastRunAt                                                  sql.NullTime
-		onchainMandateID                                           sql.NullInt64
-		isActive                                                   bool
+		nextRunAt, createdAt, updatedAt                             time.Time
+		lastRunAt                                                   sql.NullTime
+		onchainMandateID                                            sql.NullInt64
+		isActive                                                    bool
 	)
 	if err := row.Scan(
 		&id, &userID, &goalID, &vaultID, &amountStr, &currency, &frequency,

@@ -12,8 +12,6 @@ jobs:
   soak:
     name: k6 soak (staging)
     runs-on: ubuntu-latest
-    # A missing secret must never cause a test to fall back to localhost or production.
-    if: ${{ secrets.STAGING_LOAD_API_BASE_URL != '' }}
     environment: staging
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -21,7 +19,25 @@ jobs:
           # The checked-out workspace is mounted into the k6 container; do not
           # leave the default GITHUB_TOKEN in .git/config for test code to read.
           persist-credentials: false
+
+      # A missing secret must never cause a test to fall back to localhost or
+      # production. The `secrets` context is not available in a job-level `if`,
+      # so the guard has to live in a step: this sets configured=true/false and
+      # every later step keys off it.
+      - name: Check staging target is configured
+        id: guard
+        env:
+          API_BASE_URL: ${{ secrets.STAGING_LOAD_API_BASE_URL }}
+        run: |
+          if [ -z "$API_BASE_URL" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::STAGING_LOAD_API_BASE_URL is not set — skipping the soak run."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run isolated staging soak
+        if: steps.guard.outputs.configured == 'true'
         env:
           API_BASE_URL: ${{ secrets.STAGING_LOAD_API_BASE_URL }}
           INTELLIGENCE_BASE_URL: ${{ secrets.STAGING_LOAD_INTELLIGENCE_BASE_URL }}

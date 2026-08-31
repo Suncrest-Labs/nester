@@ -1,5 +1,7 @@
 """Pydantic models for conversation rating and feedback capture (#926)."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -14,9 +16,8 @@ class FeedbackRequest(BaseModel):
             composite turn key).
     """
 
-    rating: str = Field(
+    rating: Literal["thumbs_up", "thumbs_down"] = Field(
         ...,
-        pattern=r"^(thumbs_up|thumbs_down)$",
         description="thumbs_up or thumbs_down",
     )
     comment: str = Field(

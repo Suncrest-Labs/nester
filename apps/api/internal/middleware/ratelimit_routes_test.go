@@ -200,6 +200,26 @@ func TestSensitiveUserRouteLimiterPerUser(t *testing.T) {
 	}
 }
 
+func TestMatchPathPatternWildcard(t *testing.T) {
+	routes := []RouteMatch{{Method: http.MethodPost, Path: "/api/v1/vaults/{id}/deposit"}}
+	match := func(method, path string) bool {
+		req := httptest.NewRequest(method, path, nil)
+		return matchesRoute(routes, req)
+	}
+	if !match(http.MethodPost, "/api/v1/vaults/11111111-1111-1111-1111-111111111111/deposit") {
+		t.Fatal("expected wildcard path to match a vault deposit")
+	}
+	if match(http.MethodPost, "/api/v1/vaults/11111111-1111-1111-1111-111111111111/withdraw") {
+		t.Fatal("deposit pattern must not match withdraw")
+	}
+	if match(http.MethodGet, "/api/v1/vaults/11111111-1111-1111-1111-111111111111/deposit") {
+		t.Fatal("POST pattern must not match GET")
+	}
+	if match(http.MethodPost, "/api/v1/vaults") {
+		t.Fatal("must not match a shorter path")
+	}
+}
+
 // --- Proxy-aware client IP keying ---
 
 func TestClientIPUsesForwardedForBehindTrustedProxies(t *testing.T) {

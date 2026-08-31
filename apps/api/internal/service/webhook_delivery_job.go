@@ -259,16 +259,25 @@ func (h *WebhookDeliveryJobHandler) attemptDelivery(
 		return rec, errors.New(rec.Error)
 	}
 
+	// The body sent on the wire is what gets signed, so the dedupe key is
+	// injected before signing rather than after. Recipients that verify the
+	// signature over the raw body they received therefore still verify.
+	signedBody := withDedupeKey(p.Payload, p.DedupeKey)
+	rec.Payload = signedBody
+
 	timestamp := time.Now().Unix()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, wh.URL, bytes.NewReader(p.Payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, wh.URL, bytes.NewReader(signedBody))
 	if err != nil {
 		rec.Error = err.Error()
 		return rec, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Nester-Signature", NewWebhookSignatureHeader([]byte(secret), timestamp, p.Payload))
+	req.Header.Set("X-Nester-Signature", NewWebhookSignatureHeader([]byte(secret), timestamp, signedBody))
 	req.Header.Set("X-Nester-Delivery-Id", p.DeliveryID.String())
 	req.Header.Set("X-Nester-Event", p.EventType)
+	if p.DedupeKey != "" {
+		req.Header.Set("X-Nester-Dedupe-Key", p.DedupeKey)
+	}
 
 	start := time.Now()
 	resp, err := h.httpClient.Do(req)
@@ -289,4 +298,36 @@ func (h *WebhookDeliveryJobHandler) attemptDelivery(
 	}
 	rec.Error = fmt.Sprintf("non-2xx response: %d", status)
 	return rec, errors.New(rec.Error)
+}
+
+// withDedupeKey returns payload with a top-level "dedupe_key" field added, so
+// a recipient can dedupe from the body alone without reading headers — a
+// queue consumer that only ever sees the persisted body has no headers left
+// to read (#1049 asks for the key in both places for exactly that reason).
+//
+// It is deliberately conservative: a payload that is not a JSON object, or
+// that already carries the field, is returned untouched. Silently rewriting
+// a body we do not understand would be worse than omitting the field, since
+// the header carries it either way.
+func withDedupeKey(payload []byte, dedupeKey string) []byte {
+	if dedupeKey == "" || len(payload) == 0 {
+		return payload
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &obj); err != nil || obj == nil {
+		return payload
+	}
+	if _, exists := obj["dedupe_key"]; exists {
+		return payload
+	}
+	encoded, err := json.Marshal(dedupeKey)
+	if err != nil {
+		return payload
+	}
+	obj["dedupe_key"] = encoded
+	merged, err := json.Marshal(obj)
+	if err != nil {
+		return payload
+	}
+	return merged
 }

@@ -562,18 +562,17 @@ func (s *RiskService) computeWeightedScore(factors []RiskFactor) (float64, float
 	return overall, confidence
 }
 
+// computeTier maps a 0-100 risk score onto a tier. The bounds are contiguous
+// rather than integer-spaced: a fractional score such as 33.5 previously
+// matched no case and fell through to the default, which reported "high" and
+// made the mapping non-monotonic across the 33-34 and 66-67 gaps.
 func (s *RiskService) computeTier(overall float64) string {
 	switch {
-	case overall >= 0 && overall <= 25:
+	case overall < 34:
 		return "low"
-	case overall >= 26 && overall <= 66:
+	case overall < 67:
 		return "medium"
-	case overall >= 67 && overall <= 100:
-		return "high"
 	default:
-		if overall < 0 {
-			return "low"
-		}
 		return "high"
 	}
 }

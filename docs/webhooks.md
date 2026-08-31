@@ -14,11 +14,16 @@ rebinding), so the second check is the one that actually matters.
 
 ## Verifying a delivery
 
-Every delivery carries three headers:
+Every delivery carries these headers:
 
 - `X-Nester-Signature`: `t={unix_timestamp},v1={hex hmac}`
 - `X-Nester-Delivery-Id`: a UUID, stable across retries of the same delivery
 - `X-Nester-Event`: the event type, e.g. `goal.milestone.50`
+- `X-Nester-Dedupe-Key`: the originating event's dedupe key. Present on
+  deliveries produced by a domain event; absent on a manual redelivery. Also
+  included in the JSON body as `dedupe_key`, so a consumer that queues the
+  raw body and processes it later — with the headers long gone — can still
+  dedupe.
 
 The signature is `HMAC-SHA256(secret, "{timestamp}.{raw_body}")`, hex-encoded.
 Recompute it yourself and compare in constant time — do not compare with `==`.
@@ -37,15 +42,42 @@ The `v1=` prefix is a scheme version, not a secret version — it lets a future
 signing scheme change add a new prefix without breaking existing
 integrations.
 
-## Delivery is at-least-once
+## Delivery is at-least-once — your handler must be idempotent
 
-A delivery may arrive more than once for the same event — retries, and
-manual redelivery, both reuse the event but are still separate HTTP requests.
-**Dedupe on `X-Nester-Delivery-Id`.** A manual redelivery (triggered by the
-subscription owner from the delivery log) intentionally uses a *new* delivery
-id, since it is a new attempt chain the owner asked for, not a retry of the
-original — if you already processed the original, you are expected to still
-process a manual redelivery as a fresh event.
+**This is a requirement, not a caveat.** A delivery may arrive more than
+once for the same event: a retry after a timeout, a redelivery after our
+process restarted mid-dispatch, or a manual redelivery. If your handler
+treats a webhook as a trigger for something with an effect — a payout, a
+ledger entry, an email — and is not idempotent, it *will* eventually do that
+thing twice. We cannot prevent that from our side; only your handler can.
+
+**Dedupe on `X-Nester-Delivery-Id`** (equivalently, on `dedupe_key` in the
+body if you prefer to work from the payload alone). Both are stable across
+every redelivery of the same logical event, in this process and in the one
+that picks the event up after a restart — they are derived from the event,
+not generated per attempt. Record the id when you finish processing, and
+discard a delivery whose id you have already recorded.
+
+A manual redelivery (triggered by the subscription owner from the delivery
+log) intentionally uses a *new* delivery id, since it is a new attempt chain
+the owner asked for, not a retry of the original — if you already processed
+the original, you are expected to still process a manual redelivery as a
+fresh event.
+
+## Ordering
+
+Ordering is guaranteed **per aggregate** — per savings goal, per vault — and
+is explicitly **not** guaranteed globally. Events about one goal arrive in
+the order they happened (25% before 50% before 75%); events about different
+goals, or about different users, race freely and may arrive in any order.
+
+Do not infer ordering across aggregates, and do not assume a gap means an
+event was dropped: an event for another aggregate simply overtook it.
+
+If an event for one aggregate cannot be delivered at all — your endpoint
+rejects it permanently — it is dead-lettered after a bounded number of
+attempts and the events behind it for that aggregate resume. A permanently
+broken event stalls its own goal's stream briefly, never anyone else's.
 
 ## Retry, dead-lettering, and suspension
 

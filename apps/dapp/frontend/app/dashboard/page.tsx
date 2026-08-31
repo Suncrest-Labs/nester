@@ -24,14 +24,17 @@ import { WithdrawModal } from "@/components/vault-action-modals";
 import { cn } from "@/lib/utils";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
 import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
+import { TestnetSetupStepper } from "@/components/onboarding/TestnetSetupStepper";
 import { RebalanceSuggestionCard } from "@/components/dashboard/RebalanceSuggestionCard";
 import { profileApi } from "@/lib/api/profile";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
 import { AppShell } from "@/components/app-shell";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { LiveValue } from "@/components/live-value";
+import { useWebSocketContext } from "@/components/websocket-provider";
+import { useRelativeAge } from "@/hooks/useRelativeAge";
 import { useLocale, useTranslations } from "@/context/locale-context";
-import { formatDistanceToNow } from "date-fns";
 import { useVaults, type VaultWithPerf } from "@/hooks/useVaults";
 import { useSettlements } from "@/hooks/useSettlements";
 import { useVaultHistory } from "@/hooks/useVaultHistory";
@@ -459,6 +462,21 @@ export default function Dashboard() {
     const [chartPeriod, setChartPeriod] = useState<ChartPeriod>("1M");
     const [onboardingOpen, setOnboardingOpen] = useState(false);
     const { isOffline, lastSynced } = useOfflineStatus();
+    const { lastUpdatedAt: wsLastUpdatedAt } = useWebSocketContext();
+
+    // Prefer the socket's own freshness stamp — it is set by the events and
+    // HTTP reconciles that actually produced these numbers. useOfflineStatus
+    // only knows about browser connectivity, which can look fine while the
+    // socket is blackholed.
+    const balanceAsOf = useMemo(
+        () => (wsLastUpdatedAt !== null ? wsLastUpdatedAt : lastSynced?.getTime() ?? null),
+        [wsLastUpdatedAt, lastSynced]
+    );
+
+    // Ticks on a timer rather than formatting during render. Without it the
+    // line freezes at whatever it said when the socket dropped — which is the
+    // one moment it needs to be accurate.
+    const balanceAge = useRelativeAge(balanceAsOf, true, 30_000);
 
     // Live data
     const { vaults, isLoading: vaultsLoading } = useVaults(userId);
@@ -564,6 +582,13 @@ export default function Dashboard() {
                 </div>
             </motion.div>
 
+            {/* First-run testnet setup (#1127). Renders nothing once the user
+                is set up or has dismissed it, so it costs returning users
+                nothing. */}
+            <div className="mb-4">
+                <TestnetSetupStepper />
+            </div>
+
             {/* Sign-in nudge when wallet connected but not yet signed in */}
             {isConnected && !isAuthenticated && (
                 <SignInBanner onSignIn={signIn} isLoading={isSigningIn} />
@@ -586,12 +611,14 @@ export default function Dashboard() {
                     ) : (
                         <div>
                             <p className="text-[42px] font-light leading-none text-black dark:text-white tracking-[-0.02em]" aria-live="polite">
-                                {formatCurrency(totalBalanceUsd, "USD")}
+                                <LiveValue label={t("dashboard.totalBalance")}>
+                                    {formatCurrency(totalBalanceUsd, "USD")}
+                                </LiveValue>
                             </p>
                             <p className="mt-2 text-[12px] text-black/35 dark:text-white/35 tracking-wide">{t("dashboard.totalBalance")}</p>
-                            {lastSynced && (
-                                <p className="mt-1.5 text-[11px] text-black/25 dark:text-white/25">
-                                    Last updated {formatDistanceToNow(lastSynced)} ago
+                            {balanceAge && (
+                                <p className="mt-1.5 text-[11px] text-black/25 dark:text-white/25" data-testid="balance-last-updated">
+                                    Last updated {balanceAge}
                                 </p>
                             )}
                         </div>

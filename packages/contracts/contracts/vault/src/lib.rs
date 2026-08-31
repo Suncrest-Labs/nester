@@ -121,7 +121,6 @@ const REBALANCE: Symbol = symbol_short!("REBAL");
 /// Emitted when a rebalance skips a source because its adapter failed.
 const SOURCE_SKIPPED: Symbol = symbol_short!("SRC_SKIP");
 const HARVEST: Symbol = symbol_short!("HARVEST");
-const HARVEST_VLT: Symbol = symbol_short!("HARV_VLT");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
 const DEFAULT_REBALANCE_COOLDOWN: u64 = 3600;
 /// Default rebalance slippage tolerance: 50 bps (0.5%) — issue #638.
@@ -332,15 +331,6 @@ pub struct HarvestResult {
     pub compounded: bool, // true if net_yield was reinvested into vault shares
     pub new_share_balance: i128, // user's vault-token balance after harvest
     pub user: Address,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct VaultHarvestResult {
-    pub total_gross_yield: i128,
-    pub total_fee_collected: i128,
-    pub total_net_yield: i128,
-    pub positions_harvested: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -2158,9 +2148,9 @@ impl VaultContract {
     /// Steps (issue #518):
     ///  1. Calculate accrued yield since last harvest.
     ///  2. Deduct performance fee — only on net positive yield, never on impairment.
-    ///  3. Send the fee portion to the treasury contract.
-    ///  4. Compound the net yield: mint new vault-token shares at the current price
-    ///     and credit them to `user`, then increase TotalAssets accordingly.
+    ///  3. Burn fee-equivalent shares from `user` and send that value to the
+    ///     treasury, preserving the exchange rate for every other holder.
+    ///  4. Leave the net yield compounded in `user`'s remaining shares.
     ///  5. Update `LastHarvestAt` timestamp for `user`.
     ///
     /// Returns a zero-filled `HarvestResult` with `compounded: false` when the
@@ -2211,8 +2201,23 @@ impl VaultContract {
             .checked_sub(performance_fee)
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
-        // Transfer performance fee to treasury.
+        // Charge the performance fee against the harvesting user only. Yield
+        // is already reflected in TotalAssets and therefore in the value of
+        // the user's existing shares. Minting more shares for that same yield,
+        // or reducing assets without reducing supply, would dilute passive
+        // holders. Burning enough of the user's shares to cover the fee before
+        // transferring it reduces assets and supply together. Rounding the
+        // share charge up assigns any dust to the fee payer, never to holders
+        // who did not harvest.
         if performance_fee > 0 {
+            let fee_shares = conversion::assets_to_shares_up(
+                performance_fee,
+                get_net_total_assets(&env),
+                vault_token_client(&env).total_supply(),
+            )
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+            let _ = vault_token_client(&env).burn_for_withdrawal(&user, &fee_shares);
+
             let token_address = self::VaultContract::get_token(env.clone());
             transfer_tokens(
                 &env,
@@ -2243,20 +2248,6 @@ impl VaultContract {
             notify_referral_of_fee(&env, &user, performance_fee, principal);
         }
 
-        // Compound net yield: mint new shares for the user at the current price.
-        // The gross yield was already added to TotalAssets by report_yield, so
-        // only the fee reduction above affects TotalAssets here.
-        let new_shares = if net_yield > 0 {
-            let s = vault_token_client(&env).mint_for_deposit(&user, &net_yield);
-            // mint_for_deposit increments vault token's total_assets by net_yield, but
-            // that amount was already tracked by report_yield — sync back to the correct value.
-            sync_vault_token_total_assets(&env);
-            s
-        } else {
-            0
-        };
-        let _ = new_shares; // shares minted internally; user balance updated by vault token
-
         // Reset per-user pending yield to zero and record harvest timestamp.
         set_user_yield(&env, &user, 0);
         set_last_harvest_at(&env, &user, now);
@@ -2282,84 +2273,32 @@ impl VaultContract {
         result
     }
 
-    /// Admin-level vault-wide harvest: reads the aggregate yield reported since
-    /// the last vault harvest, extracts the performance fee portion, transfers
-    /// it to the treasury, and resets the `TotalReportedYield` counter to zero.
-    /// Suitable for periodic treasury collection without enumerating individual
-    /// user positions on-chain (Soroban does not support unbounded iteration).
-    pub fn harvest_vault(env: Env, admin: Address) -> VaultHarvestResult {
-        with_reentrancy_guard(env, |env| Self::harvest_vault_internal(env, admin))
-    }
-
-    fn harvest_vault_internal(env: Env, admin: Address) -> VaultHarvestResult {
-        require_initialized(&env);
-        require_active(&env);
-        admin.require_auth();
-        AccessControl::require_role(&env, &admin, Role::Admin);
-
-        let total_gross_yield = get_total_reported_yield(&env);
-
-        if total_gross_yield == 0 {
-            return VaultHarvestResult {
-                total_gross_yield: 0,
-                total_fee_collected: 0,
-                total_net_yield: 0,
-                positions_harvested: 0,
-            };
-        }
-
-        let config = get_fee_config(&env);
-        let total_fee_collected = nester_common::fees::calculate_performance_fee(
-            total_gross_yield,
-            config.performance_fee_bps,
-        )
-        .unwrap_or_else(|e| panic_with_error!(&env, e));
-
-        let total_net_yield = total_gross_yield
-            .checked_sub(total_fee_collected)
-            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
-
-        // Transfer performance fee to treasury.
-        if total_fee_collected > 0 {
-            let token_address = self::VaultContract::get_token(env.clone());
-            transfer_tokens(
-                &env,
-                &token_address,
-                &env.current_contract_address(),
-                &config.treasury_address,
-                &total_fee_collected,
-            );
-            invoke_allowed::<()>(
-                &env,
-                &config.treasury_address,
-                &Symbol::new(&env, "receive_fees"),
-                (total_fee_collected,).into_val(&env),
-            );
-            // Reduce TotalAssets by the fee sent to treasury.
-            let total_assets = get_total_assets(&env);
-            let post_fee_assets = total_assets
-                .checked_sub(total_fee_collected)
-                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
-            set_total_assets(&env, post_fee_assets);
-            sync_vault_token_total_assets(&env);
-        }
-
-        // Reset aggregate yield counter; per-user UserYield entries are left
-        // in place — they are swept individually by each user's own harvest() call.
-        set_total_reported_yield(&env, 0);
-
-        // positions_harvested reflects the aggregate sweep (one vault-wide sweep).
-        let result = VaultHarvestResult {
-            total_gross_yield,
-            total_fee_collected,
-            total_net_yield,
-            positions_harvested: 1,
-        };
-
-        emit_event(&env, VAULT, HARVEST_VLT, admin, result.clone());
-
-        result
-    }
+    // harvest_vault (admin-level aggregate harvest) was removed in #1159.
+    //
+    // It charged a performance fee on TotalReportedYield and transferred it to
+    // the treasury, then reduced TotalAssets by that fee while leaving total
+    // share supply untouched. Every holder's share price fell by the fee
+    // amount -- the same dilution #1078 removed from the per-user path.
+    //
+    // It was not replaced, because the fee it collected was a *second* charge
+    // on yield the per-user path already bills. harvest() derives gross yield
+    // from share value against recorded principal, and since #1157 it settles
+    // the fee by burning the harvesting user's own shares: assets and supply
+    // fall together, the treasury is paid in full, and no other holder moves.
+    // Running both paths took roughly twice the configured rate on the same
+    // yield, with the extra half taken from holders who never harvested.
+    //
+    // Minting fee-equivalent shares to the treasury was considered and
+    // rejected. A new claim on a fixed pool of assets has to come from
+    // somewhere: minting while the fee leaves the vault lowers the share price
+    // further than the present bug does, and minting while the fee is retained
+    // still moves the price. No share-accounting arrangement lets an aggregate
+    // fee be collected a second time without some holder paying it.
+    //
+    // Nothing outside the contract's own tests called this entrypoint. Treasury
+    // collection continues through per-user harvest(), which needs no unbounded
+    // iteration -- the constraint that motivated an aggregate entrypoint in the
+    // first place.
 
     /// Read-only check: does the live allocation drift exceed the strategy's
     /// `rebalance_threshold_bps`? Returns false when no strategy is set or the
@@ -2870,7 +2809,10 @@ impl VaultContract {
             // that are owed to queued withdrawal requests.
             let current_reserves = get_vault_liquid_reserves(&env);
             let reserved = get_liquid_reserved(&env);
-            let available = current_reserves.saturating_sub(reserved);
+            // Signed saturating subtraction can still produce a negative value.
+            // Clamp exhausted reserves to zero so fee collection is a no-op
+            // instead of attempting an invalid negative token transfer.
+            let available = current_reserves.saturating_sub(reserved).max(0);
             let collectable = fees.min(available);
 
             if collectable == 0 {

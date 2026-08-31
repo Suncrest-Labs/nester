@@ -75,6 +75,10 @@ export interface HarvestResult {
   tx_hash?: string;
 }
 
+function newIdempotencyKey(): string {
+  return crypto.randomUUID();
+}
+
 export const vaultsApi = {
   getProjection: (vaultId: string) =>
     apiRequest<Projection>(`/vaults/${vaultId}/projection`),
@@ -101,12 +105,14 @@ export const vaultsApi = {
   harvest: (vaultId: string, compound: boolean) =>
     apiRequest<HarvestResult>(`/vaults/${vaultId}/harvest`, {
       method: "POST",
+      headers: { "Idempotency-Key": newIdempotencyKey() },
       body: JSON.stringify({ compound }),
     }),
 
   applyRebalance: (vaultId: string, allocations: AllocationPct[]) =>
     apiRequest<unknown>(`/vaults/${vaultId}/rebalance`, {
       method: "POST",
+      headers: { "Idempotency-Key": newIdempotencyKey() },
       body: JSON.stringify({ allocations }),
     }),
 }

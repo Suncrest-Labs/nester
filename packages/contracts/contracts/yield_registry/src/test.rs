@@ -419,9 +419,7 @@ fn test_apy_update_exceeds_threshold_rejected() {
     client.update_apy(&admin, &aave_id(&env), &1_000);
 
     // +6000 bps exceeds the 5000-bps threshold and must be rejected.
-    assert!(client
-        .try_update_apy(&admin, &aave_id(&env), &7_000)
-        .is_err());
+    client.update_apy(&admin, &aave_id(&env), &7_000);
 
     // The rejected update must not have mutated stored state.
     assert_eq!(
@@ -430,6 +428,7 @@ fn test_apy_update_exceeds_threshold_rejected() {
             .current_apy_bps,
         1_000
     );
+    assert_eq!(client.get_source_failure_count(&aave_id(&env)), 1);
 }
 
 #[test]
@@ -460,9 +459,13 @@ fn test_admin_can_override_deviation_guard() {
     client.update_apy(&admin, &aave_id(&env), &1_000);
 
     // Sanity: the guarded path rejects this jump (dev 7000 > 5000).
-    assert!(client
-        .try_update_apy(&admin, &aave_id(&env), &8_000)
-        .is_err());
+    client.update_apy(&admin, &aave_id(&env), &8_000);
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        1_000
+    );
 
     // The admin emergency override bypasses the guard.
     client.update_apy_override(&admin, &aave_id(&env), &8_000);
@@ -500,9 +503,7 @@ fn test_apy_update_at_exact_threshold_boundary() {
     client.update_apy(&admin, &aave_id(&env), &1_000);
 
     // One bps PAST the threshold (dev 5001) is rejected — leaves state at 1000.
-    assert!(client
-        .try_update_apy(&admin, &aave_id(&env), &6_001)
-        .is_err());
+    client.update_apy(&admin, &aave_id(&env), &6_001);
     assert_eq!(
         client
             .get_source_performance(&aave_id(&env))
@@ -539,9 +540,7 @@ fn test_threshold_is_configurable_from_storage() {
     assert_eq!(client.get_apy_deviation_threshold(), 1_000);
 
     // A +1500 jump passed under the default 5000 but now exceeds the new 1000.
-    assert!(client
-        .try_update_apy(&admin, &aave_id(&env), &2_500)
-        .is_err());
+    client.update_apy(&admin, &aave_id(&env), &2_500);
     assert_eq!(
         client
             .get_source_performance(&aave_id(&env))
@@ -580,6 +579,39 @@ fn test_set_threshold_above_max_apy_rejected() {
 
     // Threshold cannot exceed the absolute APY ceiling (MAX_APY_BPS = 10000).
     client.set_apy_deviation_threshold(&admin, &10_001);
+}
+
+#[test]
+fn consecutive_deviation_rejections_require_explicit_recovery() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let id = aave_id(&env);
+    register_default(&client, &env, &admin, &id);
+
+    client.set_apy_deviation_threshold(&admin, &100);
+    client.set_failure_threshold(&admin, &2);
+    client.update_apy(&admin, &id, &500);
+
+    // The configured threshold is the tolerated failure count, so the next
+    // failure crosses it and degrades the source.
+    for expected_count in 1..=3 {
+        client.update_apy(&admin, &id, &900);
+        assert_eq!(client.get_source_failure_count(&id), expected_count);
+    }
+
+    assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+    assert_eq!(client.get_active_sources().len(), 0);
+    assert_eq!(client.get_source_performance(&id).current_apy_bps, 500);
+
+    // A subsequent valid reading may update performance, but must not make
+    // the source eligible for allocation again without an admin decision.
+    client.update_apy(&admin, &id, &550);
+    assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+    assert_eq!(client.get_active_sources().len(), 0);
+
+    client.recover_source(&admin, &id);
+    assert_eq!(client.get_source_status(&id), SourceStatus::Active);
+    assert_eq!(client.get_active_sources().len(), 1);
 }
 
 #[test]

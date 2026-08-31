@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,7 +17,11 @@ var errIntelligenceNotConfigured = errors.New("intelligence service not configur
 
 // IntelligenceProxy forwards authenticated requests to the Python intelligence service.
 type IntelligenceProxy struct {
-	baseURL    string
+	baseURL string
+	// upstream is the parsed, configuration-derived origin. Outbound requests
+	// are built against it so their scheme and host can never be influenced by
+	// the inbound request.
+	upstream   *url.URL
 	httpClient *http.Client
 }
 
@@ -24,11 +29,37 @@ func NewIntelligenceProxy(baseURL string, timeout time.Duration) *IntelligencePr
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &IntelligenceProxy{
-		baseURL: strings.TrimRight(baseURL, "/"),
+	trimmed := strings.TrimRight(baseURL, "/")
+	p := &IntelligenceProxy{
+		baseURL: trimmed,
 		httpClient: &http.Client{
 			Timeout: timeout,
+			// The intelligence service is a fixed internal upstream. Following
+			// a redirect would let it — or anything able to impersonate it —
+			// steer this client at an arbitrary host while carrying the
+			// caller's Authorization header, which is a credential-leak and
+			// SSRF pivot in one. There is no legitimate redirect on this path.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
+	}
+	// The upstream origin is resolved once, at construction, from
+	// configuration. Every outbound request is then rebuilt against it rather
+	// than against anything derived from the inbound request, which is what
+	// makes the destination independent of caller-controlled input.
+	if parsed, err := url.Parse(trimmed); err == nil && parsed.Host != "" {
+		p.upstream = parsed
+	}
+	return p
+}
+
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (p *IntelligenceProxy) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		p.httpClient = client
 	}
 }
 
@@ -63,7 +94,7 @@ func (p *IntelligenceProxy) Forward(w http.ResponseWriter, r *http.Request, upst
 	} else if rid = r.Header.Get("X-Request-ID"); rid != "" {
 		req.Header.Set("X-Request-ID", rid)
 	}
-	resp, err := p.httpClient.Do(req)
+	resp, err := p.httpClient.Do(req) // #nosec G704 -- the request URL scheme and host come exclusively from p.upstream, parsed once from configuration; buildUpstreamRequest re-verifies the assembled target against that origin and refuses any deviation, and the client does not follow redirects. Proven by intelligence_proxy_ssrf_test.go (nester#1035).
 	if err != nil {
 		if errorsIsTimeout(err) {
 			http.Error(w, `{"success":false,"error":{"message":"intelligence service timed out"}}`, http.StatusGatewayTimeout)
@@ -101,7 +132,7 @@ func (p *IntelligenceProxy) ForwardJSON(r *http.Request, upstreamPath string) (i
 		return 0, nil, err
 	}
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := p.httpClient.Do(req) // #nosec G704 -- the request URL scheme and host come exclusively from p.upstream, parsed once from configuration; buildUpstreamRequest re-verifies the assembled target against that origin and refuses any deviation, and the client does not follow redirects. Proven by intelligence_proxy_ssrf_test.go (nester#1035).
 	if err != nil {
 		return 0, nil, err
 	}
@@ -114,13 +145,52 @@ func (p *IntelligenceProxy) ForwardJSON(r *http.Request, upstreamPath string) (i
 	return resp.StatusCode, respBody, nil
 }
 
+// buildUpstreamRequest constructs the outbound request to the intelligence
+// service.
+//
+// SSRF containment (nester#1035, gosec G704): the destination is built from
+// p.upstream — parsed once from configuration — and never from the inbound
+// request. Only the query string is carried across, and it is re-encoded rather
+// than concatenated, so a caller cannot inject a host, a scheme, or additional
+// path segments into the target. upstreamPath is a compile-time constant chosen
+// by the calling handler; it is validated here as defence in depth so that a
+// future caller passing something dynamic fails loudly instead of silently
+// widening the request surface.
 func (p *IntelligenceProxy) buildUpstreamRequest(r *http.Request, upstreamPath string) (*http.Request, error) {
-	target, err := url.Parse(p.baseURL + upstreamPath)
-	if err != nil {
-		return nil, err
+	if p.upstream == nil {
+		return nil, errIntelligenceNotConfigured
 	}
+	if !strings.HasPrefix(upstreamPath, "/") || strings.Contains(upstreamPath, "//") {
+		// A path that does not start with a single slash could resolve to a
+		// different origin once joined ("//evil.example" is a protocol-relative
+		// URL, not a path).
+		return nil, fmt.Errorf("invalid upstream path %q", upstreamPath)
+	}
+
+	// Copy the configured origin, then set the path. Assigning to Path rather
+	// than concatenating strings means url.URL performs the encoding, so path
+	// traversal or an embedded query in upstreamPath cannot alter the target.
+	target := *p.upstream
+	target.Path = strings.TrimRight(p.upstream.Path, "/") + upstreamPath
+	target.RawPath = ""
+
+	// The inbound query is forwarded, but re-encoded through url.Values so it
+	// is parsed as a query and cannot smuggle a fragment or additional URL
+	// structure into the target.
 	if r.URL.RawQuery != "" {
-		target.RawQuery = r.URL.RawQuery
+		parsedQuery, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			return nil, fmt.Errorf("invalid query string: %w", err)
+		}
+		target.RawQuery = parsedQuery.Encode()
+	} else {
+		target.RawQuery = ""
+	}
+	// Defence in depth: confirm the assembled target still points at the
+	// configured origin. If any of the steps above were ever changed in a way
+	// that allowed the host to move, this check fails closed.
+	if target.Scheme != p.upstream.Scheme || target.Host != p.upstream.Host {
+		return nil, errors.New("refusing to proxy to a host other than the configured intelligence service")
 	}
 
 	var body io.Reader

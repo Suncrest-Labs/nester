@@ -244,22 +244,46 @@ func TestGetOrCompute_Redis_TTLIsJittered(t *testing.T) {
 	ctx := context.Background()
 	ns := "it-jitter"
 
-	base := 10 * time.Second
+	// The jitter window is ±10% of the base, so TTLs are drawn from
+	// [9s, 11s] at sub-second resolution. Sample with PTTL (milliseconds)
+	// rather than TTL (whole seconds) — second-resolution rounding collapses
+	// that window onto {9s, 10s, 11s} and makes identical samples common
+	// enough to flake.
+	const (
+		base           = 10 * time.Second
+		jitterFraction = 0.10
+		samples        = 20
+	)
+	minTTL := time.Duration(float64(base) * (1 - jitterFraction))
+	maxTTL := time.Duration(float64(base) * (1 + jitterFraction))
+
 	seen := map[time.Duration]bool{}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < samples; i++ {
 		id := uniqueID(t)
 		_, err := cache.GetOrCompute(ctx, c, cache.Options{Namespace: ns, ID: id, HardTTL: base},
 			func(context.Context) (int, error) { return 1, nil })
 		require.NoError(t, err)
 
-		ttl := rc.TTL(ctx, "cache:v1:"+ns+":"+id).Val()
+		ttl := rc.PTTL(ctx, "cache:v1:"+ns+":"+id).Val()
 		_ = c.Invalidate(context.Background(), ns, id)
-		seen[ttl.Round(time.Second)] = true
+
+		// Every TTL must land inside the jitter window (allowing a small
+		// slack for the round-trip elapsed between SET and PTTL).
+		assert.GreaterOrEqual(t, ttl, minTTL-time.Second,
+			"TTL %v below the jitter window [%v, %v]", ttl, minTTL, maxTTL)
+		assert.LessOrEqual(t, ttl, maxTTL,
+			"TTL %v above the jitter window [%v, %v]", ttl, minTTL, maxTTL)
+
+		seen[ttl] = true
 	}
-	// Not a strict proof of randomness, but across 5 runs with a ±10% jitter
-	// window we expect at least one distinct TTL bucket, i.e. it isn't a
-	// hardcoded constant.
-	assert.Greater(t, len(seen), 1, "expected jittered TTLs to vary across calls, got identical TTL every time: %v", seen)
+
+	// A constant (unjittered) TTL yields a single distinct value. With 20
+	// samples drawn from a continuous 2s-wide window at ms resolution, a
+	// working jitter yields many; requiring well over half guards against a
+	// hardcoded TTL without being sensitive to occasional ms-level collisions.
+	assert.Greater(t, len(seen), samples/2,
+		"expected jittered TTLs to vary across calls, got %d distinct values in %d samples: %v",
+		len(seen), samples, seen)
 }
 
 func TestGetOrCompute_Redis_ServesStaleWhileRevalidating(t *testing.T) {

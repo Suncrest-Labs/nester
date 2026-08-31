@@ -1,15 +1,17 @@
 """Core Prometheus AI logic — system prompt, streaming chat, and structured analysis."""
 
+import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional, cast
 
 import aiohttp
 import anthropic
 
+from app import metrics
 from app.config import settings
 from app.models.coaching import CoachingRequest, CoachingResponse
 from app.models.explainability import DocumentUsed, ExplainabilityTrace, ToolInvocation
@@ -27,7 +29,7 @@ from app.models.recommendation import (
     VaultRecommendationRequest,
     VaultRecommendationResponse,
 )
-from app.services import guardrails
+from app.services import grounding, guardrails
 from app.services.claude import apply_tone_preferences, build_system_prompt
 from app.services.coingecko import get_client as get_coingecko_client
 from app.services.conversation_store import store as conversation_store
@@ -46,6 +48,7 @@ from app.services.retrieval_source import ApiDataSource
 from app.services.source_citation import RetrievalSource, now_utc
 from app.services.summarization import needs_summarization, summarize_history
 from app.services.vault_context import VaultContextFetcher
+from app.telemetry_llm import async_model_call_span, record_tool_status, tool_round_span
 
 logger = logging.getLogger(__name__)
 
@@ -379,7 +382,106 @@ async def stream_chat(
     request_id: str = "",
     preferences: ResponsePreferences | None = None,
     language: str | None = None,
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str, None]:
+    """Instrumented wrapper around the chat stream (nester#1056).
+
+    Wrapping the generator rather than instrumenting inside ``_stream_chat``
+    means every exit path is measured — a normal completion, a refusal, an
+    upstream error, and a client disconnecting mid-stream all pass through
+    here — without a recording call on each of the dozen ``yield`` sites in
+    the body, where a newly added early return would silently stop being
+    counted.
+
+    Both callers (the SSE route and the WebSocket route) consume this
+    wrapper, so the SLI covers the whole surface rather than one transport.
+    """
+    started = time.perf_counter()
+    first_token_seen = False
+    outcome = metrics.OUTCOME_ANSWERED
+    refusal_reason = metrics.REFUSAL_GUARDRAIL
+
+    try:
+        async for chunk in _stream_chat(
+            user_id,
+            message,
+            request_id=request_id,
+            preferences=preferences,
+            language=language,
+        ):
+            if not first_token_seen and _is_content_chunk(chunk):
+                first_token_seen = True
+                metrics.record_first_token(time.perf_counter() - started)
+
+            # A refusal is a 200 carrying a polite sentence, so no transport
+            # metric can see it. Detected here on the emitted text, which is
+            # the same string the user receives.
+            reason = _refusal_reason(chunk)
+            if reason is not None:
+                outcome = metrics.OUTCOME_REFUSED
+                refusal_reason = reason
+
+            yield chunk
+
+    except (GeneratorExit, asyncio.CancelledError):
+        # The client went away mid-stream. Not an availability failure: the
+        # service was not given the chance to succeed or fail, so this is
+        # excluded from the SLI denominator rather than counted against the
+        # error budget. Re-raised so generator finalisation is unchanged.
+        outcome = metrics.OUTCOME_CANCELLED
+        raise
+
+    except Exception:
+        outcome = metrics.OUTCOME_ERROR
+        raise
+
+    finally:
+        # In a finally block so an exception on the way out is still counted;
+        # a failure mode that stops recording itself is the one an SLI cannot
+        # survive.
+        metrics.record_request(outcome, time.perf_counter() - started)
+        if outcome == metrics.OUTCOME_REFUSED:
+            metrics.record_refusal(refusal_reason)
+
+
+def _is_content_chunk(chunk: str) -> bool:
+    """Whether an SSE chunk carries model text rather than protocol framing.
+
+    The terminator and the named events (``event: explainability`` and
+    friends) are not tokens; counting one of them as the first token would
+    report a TTFT of roughly the whole request duration for a stream that had
+    in fact started promptly.
+    """
+    if not chunk.startswith("data: "):
+        return False
+
+    return chunk.strip() != "data: [DONE]"
+
+
+def _refusal_reason(chunk: str) -> str | None:
+    """The refusal reason an emitted chunk carries, or None if it is not one.
+
+    Matched on the emitted text because that is the one point both refusal
+    mechanisms converge; a flag threaded out of each refusal site would miss
+    any site added later. The result is returned rather than stored on the
+    module, because concurrent streams share module state and would race to
+    mislabel each other's reason.
+    """
+    if guardrails.REFUSAL_MESSAGE in chunk:
+        return metrics.REFUSAL_GUARDRAIL
+
+    if grounding.REFUSAL_MARKER in chunk:
+        return metrics.REFUSAL_GROUNDING
+
+    return None
+
+
+async def _stream_chat(
+    user_id: str,
+    message: str,
+    request_id: str = "",
+    preferences: ResponsePreferences | None = None,
+    language: str | None = None,
+) -> AsyncGenerator[str, None]:
     """Yield SSE-formatted data strings for a streaming Claude response.
 
     Each yielded string is formatted as `data: <text>\\n\\n`.
@@ -524,8 +626,19 @@ async def stream_chat(
                 # still send matched tool_results for both.
                 kwargs["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
 
-            async with client.messages.stream(**kwargs) as stream:
+            # The model span wraps the stream in the same `async with` so the
+            # streaming body is unchanged and the span closes on every exit
+            # path, including a client disconnecting mid-stream.
+            async with async_model_call_span(
+                settings.anthropic_model,
+                streaming=True,
+                max_tokens=CHAT_MAX_TOKENS,
+                round_index=rounds,
+            ) as _call, client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
+                    # Time to first token determines perceived
+                    # responsiveness. Idempotent, so it is safe per chunk.
+                    _call.record_first_token()
                     full_response += text
                     pending += text
                     if len(pending) >= _FLUSH_CHARS + _LEAK_OVERLAP:
@@ -544,6 +657,8 @@ async def stream_chat(
                     yield f"data: {safe_chunk}\n\n"
 
                 final_msg = await stream.get_final_message()
+                _call.record_usage(final_msg)
+                _call.mark_completed()
                 if gov:
                     gov.record_usage(
                         user_id,
@@ -580,7 +695,7 @@ async def stream_chat(
                                 continue
 
                             try:
-                                args = tool.args_model(**block.input)
+                                args = tool.args_model(**cast(dict[str, Any], block.input))
                             except ValidationError as e:
                                 await _audit(
                                     user_id=user_id,
@@ -609,7 +724,17 @@ async def stream_chat(
 
                             if not tool.consequential:
                                 try:
-                                    res = await tool.handler(ctx, **args.model_dump())
+                                    # One child span per executed tool, so the
+                                    # trace reads model call -> tool -> result
+                                    # -> next model call. Only the registered
+                                    # tool name is recorded: arguments and
+                                    # results carry account numbers and
+                                    # amounts and are never exported.
+                                    with tool_round_span(
+                                        tool.name, rounds, consequential=False
+                                    ) as _tool_span:
+                                        res = await tool.handler(ctx, **args.model_dump())
+                                        record_tool_status("executed", _tool_span)
                                     await _audit(
                                         user_id=user_id,
                                         request_id=request_id,
@@ -660,6 +785,19 @@ async def stream_chat(
                                         "content": str(e)
                                     })
                             else:
+                                # The proposal path terminates the turn and
+                                # returns to the user for confirmation, so it
+                                # is the round an operator most needs to see
+                                # in a waterfall. Emitted as a point-in-time
+                                # span rather than wrapping the branch, since
+                                # the branch returns out of this generator and
+                                # wrapping it would change control flow. Only
+                                # the tool name and status are recorded.
+                                with tool_round_span(
+                                    tool.name, rounds, consequential=True
+                                ) as _proposal_span:
+                                    record_tool_status("proposed", _proposal_span)
+
                                 proposal_id = str(uuid.uuid4())
                                 if tool.confirmation_template:
                                     confirmation_text = tool.confirmation_template(

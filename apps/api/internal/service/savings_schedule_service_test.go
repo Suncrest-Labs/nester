@@ -209,6 +209,16 @@ func (m *memoryGoalRepo) UpdateOnchainLink(_ context.Context, goalID uuid.UUID, 
 	return nil
 }
 
+func (m *memoryGoalRepo) UpdateNotes(_ context.Context, goalID uuid.UUID, notes string) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.Notes = notes
+	m.goals[goalID] = g
+	return nil
+}
+
 type memoryVaultRepo struct {
 	vaults map[uuid.UUID]vault.Vault
 }
