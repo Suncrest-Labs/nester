@@ -20,6 +20,7 @@ import {
   type HarvestResult,
   vaultsApi,
 } from "@/lib/api/vaults";
+import { useYieldHarvests } from "@/hooks/useYieldHarvests";
 import { cn } from "@/lib/utils";
 import { getExplorerTxUrl } from "@/utils/explorer";
 
@@ -34,8 +35,14 @@ interface HarvestModalProps {
 type Step = "preview" | "confirm";
 type ExecutionState = "idle" | "submitting" | "success" | "error";
 
-function formatUsdc(value: string | undefined) {
-  const amount = Number.parseFloat(value ?? "0");
+type PreviewWithGas = HarvestPreview & {
+  gas_cost_usdc?: string;
+  estimated_gas_cost_usdc?: string;
+  net_yield_after_gas_usdc?: string;
+};
+
+function formatUsdc(value: string | number | undefined) {
+  const amount = Number.parseFloat(String(value ?? "0"));
   if (!Number.isFinite(amount)) return `${value ?? "0"} USDC`;
 
   return `${amount.toLocaleString("en-US", {
@@ -50,6 +57,17 @@ function formatBps(bps: number) {
     minimumFractionDigits: percentage % 1 === 0 ? 0 : 2,
     maximumFractionDigits: 2,
   })}%`;
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function harvestableYieldIsZero(preview: HarvestPreview | null) {
@@ -114,7 +132,7 @@ function ModalShell({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
+                  className="rounded-full border border-border bg-white p-2 text-muted-foreground transition-colors hover:text-foreground dark:bg-[#100F0F]"
                   aria-label="Close harvest modal"
                 >
                   <X className="h-4 w-4" />
@@ -177,19 +195,32 @@ export function HarvestModal({
     queryFn: () => vaultsApi.previewHarvest(vaultId, compound),
   });
 
+  const historyQuery = useYieldHarvests(50);
   const preview = previewQuery.data ?? null;
+  const previewWithGas = preview as PreviewWithGas | null;
   const previewLoading =
     previewQuery.isLoading || (previewQuery.isFetching && !preview);
   const previewError = previewQuery.error
     ? errorMessage(previewQuery.error)
     : "";
 
-  const resetFlow = () => {
-    setStep("preview");
-    setExecutionState("idle");
-    setExecuteError("");
-    setResult(null);
-  };
+  const vaultHarvests = useMemo(() => {
+    return (
+      historyQuery.data?.pages
+        .flatMap((page) => page.items)
+        .filter((harvest) => harvest.vault_id === vaultId)
+        .slice(0, 5) ?? []
+    );
+  }, [historyQuery.data, vaultId]);
+
+  const estimatedGasCost = useMemo(() => {
+    const value =
+      previewWithGas?.gas_cost_usdc ??
+      previewWithGas?.estimated_gas_cost_usdc ??
+      "0";
+    const amount = Number.parseFloat(value);
+    return Number.isFinite(amount) && amount >= 0 ? amount : 0;
+  }, [previewWithGas]);
 
   const hasNoHarvestableYield = useMemo(
     () => harvestableYieldIsZero(preview),
@@ -204,6 +235,13 @@ export function HarvestModal({
     !hasNoHarvestableYield &&
     executionState !== "submitting" &&
     executionState !== "success";
+
+  const resetFlow = () => {
+    setStep("preview");
+    setExecutionState("idle");
+    setExecuteError("");
+    setResult(null);
+  };
 
   const resetAndClose = () => {
     if (isSubmitting) return;
@@ -223,6 +261,7 @@ export function HarvestModal({
       setExecutionState("success");
       onSuccess?.(harvestResult);
       await queryClient.invalidateQueries({ queryKey: ["vault", vaultId] });
+      await queryClient.invalidateQueries({ queryKey: ["yieldHarvests"] });
     } catch (error) {
       setExecuteError(errorMessage(error));
       setExecutionState("error");
@@ -238,7 +277,7 @@ export function HarvestModal({
     >
       <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
         <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
-          <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
+          <div className="rounded-3xl border border-border bg-white p-5 dark:bg-[#100F0F]">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
@@ -315,7 +354,7 @@ export function HarvestModal({
                   <button
                     type="button"
                     onClick={() => previewQuery.refetch()}
-                    className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
+                    className="rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:bg-[#100F0F] dark:hover:border-white/15"
                   >
                     Retry Preview
                   </button>
@@ -335,8 +374,21 @@ export function HarvestModal({
                     value={formatUsdc(preview.performance_fee_usdc)}
                   />
                   <AmountRow
-                    label="Net Yield"
-                    value={formatUsdc(preview.net_yield_usdc)}
+                    label="Network Gas"
+                    value={formatUsdc(estimatedGasCost.toString())}
+                  />
+                  <AmountRow
+                    label="Net Yield After Gas"
+                    value={formatUsdc(
+                      previewWithGas?.net_yield_after_gas_usdc ??
+                        String(
+                          Math.max(
+                            0,
+                            Number.parseFloat(preview.net_yield_usdc) -
+                              estimatedGasCost
+                          )
+                        )
+                    )}
                     highlight
                   />
                   {compound && preview.estimated_new_shares && (
@@ -365,10 +417,116 @@ export function HarvestModal({
               </div>
             )}
           </div>
+
+          <div className="mt-5 rounded-3xl border border-border bg-white p-5 dark:bg-[#100F0F]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                  Vault History
+                </p>
+                <h3 className="mt-2 font-heading text-xl font-light text-foreground">
+                  Past Harvests
+                </h3>
+              </div>
+              <Link
+                href="/yields/history"
+                className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                View all
+              </Link>
+            </div>
+
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Net after gas uses the current estimated network cost, so you can
+              compare harvesting with today&apos;s gas prices.
+            </p>
+
+            <div className="mt-4 space-y-3">
+              {historyQuery.isLoading && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading harvest history
+                </div>
+              )}
+
+              {!historyQuery.isLoading && historyQuery.isError && (
+                <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  Unable to load harvest history.
+                </div>
+              )}
+
+              {!historyQuery.isLoading &&
+                !historyQuery.isError &&
+                vaultHarvests.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    No harvests have been recorded for this vault yet.
+                  </p>
+                )}
+
+              {vaultHarvests.map((harvest) => {
+                const amount = Number.parseFloat(harvest.amount);
+                const netAfterGas = Math.max(0, amount - estimatedGasCost);
+
+                return (
+                  <div
+                    key={harvest.id}
+                    className="rounded-2xl border border-border bg-secondary/20 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium text-foreground">
+                          {formatDate(harvest.harvested_at)}
+                        </p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          {harvest.protocol || "Vault harvest"}
+                        </p>
+                      </div>
+                      {harvest.tx_hash && (
+                        <a
+                          href={getExplorerTxUrl(harvest.tx_hash)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                          aria-label={`View harvest transaction ${truncateTxHash(
+                            harvest.tx_hash
+                          )}`}
+                        >
+                          {truncateTxHash(harvest.tx_hash)}
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <p className="text-muted-foreground">Harvested</p>
+                        <p className="mt-1 font-medium text-foreground">
+                          {formatUsdc(harvest.amount)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Net after gas</p>
+                        <p
+                          className={cn(
+                            "mt-1 font-medium",
+                            netAfterGas > 0
+                              ? "text-emerald-600"
+                              : "text-amber-600"
+                          )}
+                        >
+                          {formatUsdc(netAfterGas.toString())}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <div className="p-6">
-          <div className="rounded-3xl border border-border bg-white dark:bg-[#100F0F] p-5">
+          <div className="rounded-3xl border border-border bg-white p-5 dark:bg-[#100F0F]">
             {step === "preview" && (
               <>
                 <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
@@ -378,8 +536,8 @@ export function HarvestModal({
                   Preview
                 </h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  Review the gross yield, performance fee, and net yield before
-                  moving to confirmation.
+                  Review the gross yield, performance fee, gas cost, and net
+                  yield after gas before moving to confirmation.
                 </p>
               </>
             )}
@@ -408,8 +566,9 @@ export function HarvestModal({
                 {executionState === "idle" && preview && (
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                     Confirm this harvest to submit the transaction. You will
-                    receive {formatUsdc(preview.net_yield_usdc)}{" "}
-                    {compound ? "as compounded vault shares" : "to your wallet"}.
+                    receive {formatUsdc(preview.net_yield_usdc)} {compound
+                      ? "as compounded vault shares"
+                      : "to your wallet"}.
                   </p>
                 )}
 
@@ -442,72 +601,47 @@ export function HarvestModal({
                       <p className="text-sm font-medium">Harvest confirmed</p>
                     </div>
                     <p className="mt-2 text-sm text-emerald-800/80">
-                      You received {formatUsdc(result.net_yield_usdc)}{" "}
-                      {result.compounded
+                      You received {formatUsdc(result.net_yield_usdc)} {result.compounded
                         ? "as compounded vault yield."
                         : "to your wallet."}
                     </p>
                     {result.tx_hash && (
-                      <>
-                        <p className="mt-2 font-mono text-[11px] text-emerald-800/60">
-                          {truncateTxHash(result.tx_hash)}
-                        </p>
-                        <div className="mt-3">
-                          <Link
-                            href={getExplorerTxUrl(result.tx_hash)}
-                            target="_blank"
-                            className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:shadow"
-                          >
-                            View on Stellar Explorer
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </Link>
-                        </div>
-                      </>
+                      <a
+                        href={getExplorerTxUrl(result.tx_hash)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:text-emerald-900"
+                      >
+                        View transaction
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
                     )}
                   </div>
+                )}
+
+                {executionState !== "success" && (
+                  <button
+                    type="button"
+                    onClick={handleConfirm}
+                    disabled={!canSubmit}
+                    className="mt-6 w-full rounded-full bg-foreground px-4 py-3 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {isSubmitting ? "Submitting..." : "Confirm Harvest"}
+                  </button>
                 )}
               </>
             )}
 
-            <div className="mt-6 flex gap-3">
+            {step === "preview" && (
               <button
                 type="button"
-                onClick={resetAndClose}
-                disabled={isSubmitting}
-                className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
+                onClick={() => setStep("confirm")}
+                disabled={!canContinue}
+                className="mt-6 w-full rounded-full bg-foreground px-4 py-3 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {executionState === "success" ? "Close" : "Cancel"}
+                Continue to Confirmation
               </button>
-
-              {step === "preview" && (
-                <button
-                  type="button"
-                  onClick={() => setStep("confirm")}
-                  disabled={!canContinue}
-                  className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Harvest
-                </button>
-              )}
-
-              {step === "confirm" && executionState !== "success" && (
-                <button
-                  type="button"
-                  onClick={handleConfirm}
-                  disabled={!canSubmit}
-                  className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {executionState === "submitting" && (
-                    <span className="inline-flex items-center justify-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Submitting
-                    </span>
-                  )}
-                  {executionState === "error" && "Retry Harvest"}
-                  {executionState === "idle" && "Confirm Harvest"}
-                </button>
-              )}
-            </div>
+            )}
           </div>
         </div>
       </div>
