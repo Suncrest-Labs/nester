@@ -14,16 +14,23 @@ import {
     Tooltip,
     Legend
 } from "recharts";
-import { 
-    VaultPosition, 
-    mockPerformanceHistory 
-} from "@/lib/mock-data";
+import { VaultPosition } from "@/lib/types";
 import { subDays, parseISO, isAfter } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/context/settings-context";
 
+/** A single point in the performance history series. */
+export interface PerformanceHistoryPoint {
+    date: string;
+    balance: number;
+    yield: number;
+    benchmark: number;
+}
+
 interface PortfolioChartsProps {
     positions: VaultPosition[];
+    /** Real performance history from the user's account. Omit or pass [] for empty state. */
+    performanceHistory?: PerformanceHistoryPoint[];
 }
 
 const CHART_COLORS = [
@@ -34,7 +41,7 @@ const CHART_COLORS = [
     "#f43f5e",
 ];
 
-export function PortfolioCharts({ positions }: PortfolioChartsProps) {
+export function PortfolioCharts({ positions, performanceHistory = [] }: PortfolioChartsProps) {
     const { formatValue, exchangeRate, currency } = useSettings();
     const [timeframe, setTimeframe] = useState<"7D" | "1M" | "3M" | "ALL">("1M");
 
@@ -49,7 +56,7 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
 
     // Filter Performance Data based on timeframe
     const filteredHistory = useMemo(() => {
-        const history = mockPerformanceHistory.map(d => ({
+        const history = performanceHistory.map(d => ({
             ...d,
             balance: d.balance * exchangeRate,
             yield: d.yield * exchangeRate,
@@ -62,7 +69,7 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
         const startDate = subDays(new Date(), days);
         
         return history.filter(d => isAfter(parseISO(d.date), startDate));
-    }, [timeframe, exchangeRate]);
+    }, [timeframe, exchangeRate, performanceHistory]);
 
     const totalBalanceValue = useMemo(() => {
         return positions.reduce((acc, p) => acc + p.balance, 0) * exchangeRate;
@@ -145,63 +152,72 @@ export function PortfolioCharts({ positions }: PortfolioChartsProps) {
                 </div>
 
                 <div className="flex-1 w-full min-h-[250px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={filteredHistory} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                            <defs>
-                                <linearGradient id="colorYield" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.1}/>
-                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                                </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f1f1" />
-                            <XAxis 
-                                dataKey="date" 
-                                axisLine={false} 
-                                tickLine={false} 
-                                tick={{ fontSize: 9, fill: '#94a3b8' }}
-                                tickFormatter={(val) => new Date(val).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                                minTickGap={30}
-                            />
-                            <YAxis 
-                                hide={false}
-                                axisLine={false} 
-                                tickLine={false} 
-                                tick={{ fontSize: 9, fill: '#94a3b8' }}
-                                tickFormatter={(val) => currency === "USD" ? `$${(val / 1000).toFixed(0)}k` : `${(val / 1000).toFixed(0)}k`}
-                            />
-                            <Tooltip 
-                                labelStyle={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '4px' }}
-                                itemStyle={{ fontSize: '11px' }}
-                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
-                                formatter={(value) => formatValue(Number(value) / exchangeRate)}
-                            />
-                            <Legend 
-                                verticalAlign="top" 
-                                align="right" 
-                                iconType="circle" 
-                                iconSize={6}
-                                wrapperStyle={{ fontSize: '10px', paddingTop: '0', top: -35 }}
-                            />
-                            <Area 
-                                name="Portfolio"
-                                type="monotone" 
-                                dataKey="balance" 
-                                stroke="#10b981" 
-                                strokeWidth={2}
-                                fillOpacity={1} 
-                                fill="url(#colorYield)" 
-                            />
-                            <Area 
-                                name="Benchmark (Idle)"
-                                type="monotone" 
-                                dataKey="benchmark" 
-                                stroke="#94a3b8" 
-                                strokeWidth={1}
-                                strokeDasharray="5 5"
-                                fillOpacity={0} 
-                            />
-                        </AreaChart>
-                    </ResponsiveContainer>
+                    {filteredHistory.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={filteredHistory} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                                <defs>
+                                    <linearGradient id="colorYield" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.1}/>
+                                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f1f1" />
+                                <XAxis 
+                                    dataKey="date" 
+                                    axisLine={false} 
+                                    tickLine={false} 
+                                    tick={{ fontSize: 9, fill: '#94a3b8' }}
+                                    tickFormatter={(val) => new Date(val).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                    minTickGap={30}
+                                />
+                                <YAxis 
+                                    hide={false}
+                                    axisLine={false} 
+                                    tickLine={false} 
+                                    tick={{ fontSize: 9, fill: '#94a3b8' }}
+                                    tickFormatter={(val) => currency === "USD" ? `$${(val / 1000).toFixed(0)}k` : `${(val / 1000).toFixed(0)}k`}
+                                />
+                                <Tooltip 
+                                    labelStyle={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '4px' }}
+                                    itemStyle={{ fontSize: '11px' }}
+                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+                                    formatter={(value) => formatValue(Number(value) / exchangeRate)}
+                                />
+                                <Legend 
+                                    verticalAlign="top" 
+                                    align="right" 
+                                    iconType="circle" 
+                                    iconSize={6}
+                                    wrapperStyle={{ fontSize: '10px', paddingTop: '0', top: -35 }}
+                                />
+                                <Area 
+                                    name="Portfolio"
+                                    type="monotone" 
+                                    dataKey="balance" 
+                                    stroke="#10b981" 
+                                    strokeWidth={2}
+                                    fillOpacity={1} 
+                                    fill="url(#colorYield)" 
+                                />
+                                <Area 
+                                    name="Benchmark (Idle)"
+                                    type="monotone" 
+                                    dataKey="benchmark" 
+                                    stroke="#94a3b8" 
+                                    strokeWidth={1}
+                                    strokeDasharray="5 5"
+                                    fillOpacity={0} 
+                                />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center h-full min-h-[250px] text-center">
+                            <p className="text-sm text-muted-foreground">No performance history yet</p>
+                            <p className="mt-1.5 text-xs text-muted-foreground/70">
+                                Your yield history will appear here once you have active positions.
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

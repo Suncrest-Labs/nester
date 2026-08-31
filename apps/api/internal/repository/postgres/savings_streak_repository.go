@@ -31,10 +31,10 @@ func (r *SavingsStreakRepository) Get(ctx context.Context, userID uuid.UUID) (*s
 	`, userID)
 
 	var (
-		uid             string
-		current, longest int
-		lastWeek        string
-		milestones      pq.Int32Array
+		uid                  string
+		current, longest     int
+		lastWeek             string
+		milestones           pq.Int32Array
 		createdAt, updatedAt interface{}
 	)
 	if err := row.Scan(&uid, &current, &longest, &lastWeek, &milestones, &createdAt, &updatedAt); err != nil {
@@ -63,7 +63,10 @@ func (r *SavingsStreakRepository) Get(ctx context.Context, userID uuid.UUID) (*s
 func (r *SavingsStreakRepository) Upsert(ctx context.Context, streak *savingsstreak.SavingsStreak) error {
 	milestones := make(pq.Int32Array, len(streak.NotifiedMilestones))
 	for i, m := range streak.NotifiedMilestones {
-		milestones[i] = int32(m)
+		// Milestones are small streak-week counts (7, 30, 90...), set by the
+		// application rather than user input, so the narrowing is exact
+		// (nester#1035, G115).
+		milestones[i] = int32(m) // #nosec G115 -- application-defined streak milestones, far below int32 range
 	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO savings_streaks

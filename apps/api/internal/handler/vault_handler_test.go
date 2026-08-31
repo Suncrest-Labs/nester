@@ -179,6 +179,14 @@ func (r *handlerRepository) CreateVault(_ context.Context, model vault.Vault) (v
 	if _, ok := r.users[model.UserID]; !ok {
 		return vault.Vault{}, vault.ErrUserNotFound
 	}
+	// Mirrors uq_vaults_contract_address_live (migration 104), scoped to live
+	// rows exactly as the partial index is, so the handler's conflict branch
+	// is exercised against the same rule the database enforces (#1148).
+	for _, existing := range r.vaults {
+		if existing.DeletedAt == nil && existing.ContractAddress == model.ContractAddress {
+			return vault.Vault{}, vault.ErrContractAddressRegistered
+		}
+	}
 	now := time.Now().UTC()
 	model.CreatedAt = now
 	model.UpdatedAt = now
@@ -331,6 +339,13 @@ func (r *handlerRepository) RecordWithdrawal(_ context.Context, id uuid.UUID, re
 	}
 	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
+	}
+	if record.TransactionHash != "" {
+		for _, txn := range r.transactions {
+			if txn.TransactionHash == record.TransactionHash {
+				return vault.ErrDuplicateTransaction
+			}
+		}
 	}
 
 	model.CurrentBalance = model.CurrentBalance.Sub(record.Amount)

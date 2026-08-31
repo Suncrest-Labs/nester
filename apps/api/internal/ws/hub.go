@@ -173,6 +173,13 @@ func (h *Hub) Run(ctx context.Context) {
 			// shutdown requirement, coordinated with issue #786).
 			h.mu.Lock()
 			for client := range h.clients {
+				// Remove before closing, so that "registered in h.clients"
+				// and "send channel still open" mean the same thing under
+				// h.mu. sendToClient relies on that equivalence to answer a
+				// ping without racing this loop; leaving a client in the map
+				// with a closed channel would hand it a panic.
+				delete(h.clients, client)
+				h.connectedClients.Add(-1)
 				close(client.send)
 				client.conn.Close()
 				h.clearPresence(client.userID)
@@ -285,6 +292,33 @@ func (h *Hub) consumeRedis(ctx context.Context) {
 			}
 			h.deliverLocally(we.Event)
 		}
+	}
+}
+
+// sendToClient delivers evt to one client's send buffer, without blocking and
+// without racing the hub's own teardown.
+//
+// The hub closes client.send under h.mu, immediately after removing the client
+// from h.clients, so while this holds the read lock a registered client's
+// channel cannot be closed underneath it. Sending on a closed channel panics
+// and takes the process down with it, which is not a theoretical concern here:
+// graceful shutdown closes every client's channel at once while their 30s
+// heartbeats are still in flight.
+//
+// Reports whether the event was queued. A full buffer means the client is not
+// keeping up; for a pong, withholding it lets the client's own heartbeat
+// timeout tear the link down and reconnect, which is the outcome we want.
+func (h *Hub) sendToClient(c *Client, evt Event) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if !h.clients[c] {
+		return false
+	}
+	select {
+	case c.send <- evt:
+		return true
+	default:
+		return false
 	}
 }
 

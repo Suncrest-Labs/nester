@@ -52,7 +52,7 @@ func NewAuthHandler(authService service.AuthService, secureCookies bool, userSvc
 }
 
 func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, token string, maxAge time.Duration) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is config-driven (secureCookies) and enabled in production; HttpOnly and SameSite are set unconditionally below
 		Name:     refreshCookieName,
 		Value:    token,
 		Path:     refreshCookiePath,
@@ -64,7 +64,7 @@ func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, token string, maxA
 }
 
 func (h *AuthHandler) clearRefreshCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is config-driven (secureCookies) and enabled in production; HttpOnly and SameSite are set unconditionally below
 		Name:     refreshCookieName,
 		Value:    "",
 		Path:     refreshCookiePath,

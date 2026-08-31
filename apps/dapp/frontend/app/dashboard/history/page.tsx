@@ -25,7 +25,7 @@ interface Transaction {
   timestamp: string;
   type: "Deposit" | "Withdrawal" | "Rebalance" | "Settlement" | "Yield Earned";
   vaultName: string;
-  amount: number;
+  amount: string; // exact decimal string from the API, e.g. "123.45" (#1223)
   asset: string;
   status: "Confirmed" | "Pending" | "Failed";
   txHash?: string;
@@ -103,7 +103,7 @@ export default function HistoryPage() {
     const term = filters.searchTerm.toLowerCase();
     return transactions.filter((tx) => {
       const hashMatch = tx.txHash?.toLowerCase().includes(term) ?? false;
-      const amountMatch = tx.amount.toString().includes(term);
+      const amountMatch = tx.amount.includes(term);
       return hashMatch || amountMatch;
     });
   }, [transactions, filters.searchTerm]);
@@ -111,13 +111,13 @@ export default function HistoryPage() {
   const summary = useMemo(() => {
     const totalDeposited = transactions
       .filter((t) => t.type === "Deposit")
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + Number(t.amount), 0);
     const totalWithdrawn = transactions
       .filter((t) => t.type === "Withdrawal")
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + Number(t.amount), 0);
     const totalYield = transactions
       .filter((t) => t.type === "Yield Earned")
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + Number(t.amount), 0);
     return { totalDeposited, totalWithdrawn, totalYield };
   }, [transactions]);
 
@@ -126,7 +126,7 @@ export default function HistoryPage() {
       date: tx.timestamp,
       type: tx.type,
       vault: tx.vaultName,
-      amount: tx.amount.toFixed(2),
+      amount: Number(tx.amount).toFixed(2),
       status: tx.status,
       txHash: tx.txHash,
     }));

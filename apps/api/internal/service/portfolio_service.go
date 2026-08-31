@@ -42,10 +42,17 @@ type LedgerBalanceProvider interface {
 // Balances are read from the ledger when a ledger repo is configured — the ledger is the source of truth.
 // Fallback to vault table aggregates if ledger is unavailable (e.g., old tests or migration window).
 func (s *PortfolioService) GetUserPortfolioSummary(ctx context.Context, userID uuid.UUID) (portfolio.Summary, error) {
-	// Fetch all vaults for the user with minimal pagination
+	// Fetch all vaults for the user with minimal pagination.
+	//
+	// A 10,000-vault ceiling is safe here in a way the pending-deposit and
+	// reconciliation ceilings were not (nester#1193): vault count is bounded
+	// by how many a person can plausibly create through the product UI, not
+	// by transaction volume that grows with usage over time. If vault
+	// creation ever becomes bulk/programmatic this reasoning stops holding
+	// and this call needs real pagination.
 	vaults, _, err := s.vaultRepository.ListUserVaults(ctx, userID, vault.UserListFilter{
 		Page:    1,
-		PerPage: 10000, // Reasonable upper limit for number of vaults per user
+		PerPage: 10000,
 	})
 	if err != nil {
 		return portfolio.Summary{}, err

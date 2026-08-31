@@ -13,7 +13,7 @@ response quality over time and feeding into evaluation datasets.
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Dict, List, Literal, Optional, Protocol, TypedDict, Union
+from typing import Dict, List, Literal, Optional, Protocol, TypedDict, Union, cast
 
 from app.config import settings
 
@@ -34,6 +34,10 @@ class FeedbackEntryDict(TypedDict):
     conversation_id: str
     user_id: str
     created_at: str
+
+
+# Derived from the TypedDict so it cannot drift if a field is added.
+_FEEDBACK_KEYS = frozenset(FeedbackEntryDict.__annotations__)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +73,16 @@ class _RedisFeedbackStore:
             if not raw:
                 return []
             data = list(json.loads(raw))
-            return [FeedbackEntryDict(**item) for item in data]
+            # Redis holds whatever a previous version of this service wrote, so
+            # the payload is not guaranteed to match FeedbackEntryDict. Drop
+            # entries that are missing keys rather than constructing a dict
+            # that claims a shape it does not have.
+            return [
+                cast(FeedbackEntryDict, item)
+                for item in data
+                if isinstance(item, dict)
+                and _FEEDBACK_KEYS.issubset(item.keys())
+            ]
         except Exception as exc:
             logger.warning("Failed to read feedback from Redis: %s", exc)
             self._available = False

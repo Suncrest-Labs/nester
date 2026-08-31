@@ -18,11 +18,21 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
 
+// asyncNotifyTimeout bounds detached notification goroutines fired from this
+// service (streak and goal milestones). It is generous enough for a slow
+// notifier but finite, so a wedged downstream cannot accumulate goroutines
+// without limit (nester#1198).
+const asyncNotifyTimeout = 30 * time.Second
+
 // VaultReader exposes the single read the savings goal service needs from the
 // vault store: looking up a vault to validate ownership/currency at link time
 // and to read its live balance when computing goal progress.
 type VaultReader interface {
 	GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error)
+}
+
+type SavingsGamificationRecorder interface {
+	ProcessConfirmedDeposit(ctx context.Context, event savingsstreak.SavingEvent) (savingsstreak.Progress, error)
 }
 
 type OutcomeRecorder interface {
@@ -36,6 +46,7 @@ type SavingsGoalService struct {
 	notifier       GoalMilestoneNotifier
 	streakRepo     savingsstreak.Repository
 	streakNotifier StreakMilestoneNotifier
+	gamification   SavingsGamificationRecorder
 	outcomeRec     OutcomeRecorder
 }
 
@@ -74,6 +85,11 @@ func (s *SavingsGoalService) SetStreakNotifier(n StreakMilestoneNotifier) {
 		return
 	}
 	s.streakNotifier = n
+}
+
+// SetGamificationRecorder attaches the daily savings gamification engine.
+func (s *SavingsGoalService) SetGamificationRecorder(recorder SavingsGamificationRecorder) {
+	s.gamification = recorder
 }
 
 type CreateSavingsGoalInput struct {
@@ -454,6 +470,21 @@ func (s *SavingsGoalService) Update(ctx context.Context, userID, goalID uuid.UUI
 	return s.EnrichProgress(ctx, *goal)
 }
 
+func (s *SavingsGoalService) UpdateNotes(ctx context.Context, userID, goalID uuid.UUID, notes string) (savingsgoal.SavingsGoal, error) {
+	goal, err := s.repo.GetByID(ctx, goalID)
+	if err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	if goal.UserID != userID {
+		return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+	}
+	if err := s.repo.UpdateNotes(ctx, goalID, notes); err != nil {
+		return savingsgoal.SavingsGoal{}, err
+	}
+	goal.Notes = notes
+	return s.EnrichProgress(ctx, *goal)
+}
+
 // Delete soft-deletes the goal (#924): it stamps deleted_at rather than
 // destroying the row, leaving a SavingsGoalRecoveryWindow-long window during
 // which Restore can undo it before the scheduled purge job hard-deletes it.
@@ -575,7 +606,11 @@ func (s *SavingsGoalService) validateGoalVault(ctx context.Context, userID, vaul
 	v, err := s.vaultRepo.GetVault(ctx, vaultID)
 	if err != nil {
 		if errors.Is(err, vault.ErrVaultNotFound) {
-			return fmt.Errorf("%w: vault not found", savingsgoal.ErrInvalidGoal)
+			// Same error as a vault owned by someone else, so the two cases
+			// are indistinguishable to the caller (#1101). Reporting "not
+			// found" here and "unauthorized" below would let a caller probe
+			// which vault IDs exist.
+			return savingsgoal.ErrUnauthorized
 		}
 		return err
 	}
@@ -937,8 +972,15 @@ func (s *SavingsGoalService) updateStreak(ctx context.Context, userID uuid.UUID)
 		streak.NotifiedMilestones = append(streak.NotifiedMilestones, milestone)
 		_ = s.streakRepo.Upsert(ctx, streak)
 		uid := userID
-		go func() {
-			s.streakNotifier.SendStreakMilestone(context.Background(), uid, milestone)
+		// Deliberately detached from the request context: the caller's context
+		// is cancelled as soon as the HTTP response is written, and inheriting
+		// it would cancel the notification before it is sent (nester#1035,
+		// G118). It is bounded by its own timeout so a wedged notifier cannot
+		// leak the goroutine indefinitely.
+		go func() { // #nosec G118 -- intentionally detached background work, bounded by its own timeout
+			nctx, cancel := context.WithTimeout(context.Background(), asyncNotifyTimeout)
+			defer cancel()
+			s.streakNotifier.SendStreakMilestone(nctx, uid, milestone)
 		}()
 	}
 
@@ -949,8 +991,16 @@ func (s *SavingsGoalService) notifyMilestonesAsync(goal savingsgoal.SavingsGoal,
 	for _, milestone := range milestones {
 		m := milestone
 		goalCopy := goal
-		go func() {
-			s.notifier.SendGoalMilestone(context.Background(), goalCopy.UserID, goalCopy, m)
+		// Deliberately detached from the request context (same reasoning as
+		// the streak-milestone goroutine above): the caller's context is
+		// cancelled once the HTTP response is written, and inheriting it
+		// would cancel the notification before it is sent. Bounded by its
+		// own timeout so a wedged notifier cannot leak the goroutine
+		// indefinitely (nester#1198).
+		go func() { // #nosec G118 -- intentionally detached background work, bounded by its own timeout
+			nctx, cancel := context.WithTimeout(context.Background(), asyncNotifyTimeout)
+			defer cancel()
+			s.notifier.SendGoalMilestone(nctx, goalCopy.UserID, goalCopy, m)
 		}()
 	}
 }
@@ -1133,12 +1183,43 @@ func (s *SavingsGoalService) DepositSplit(ctx context.Context, userID uuid.UUID,
 			ProgressPct:   pct,
 		}
 	}
+	s.recordGamificationDeposit(ctx, userID, in.TotalAmount, deposits, completedGoals(goals, results))
 
 	return SplitDepositResult{
 		TotalDeposited: in.TotalAmount,
 		Currency:       currency,
 		Goals:          results,
 	}, nil
+}
+
+func (s *SavingsGoalService) recordGamificationDeposit(ctx context.Context, userID uuid.UUID, amount decimal.Decimal, deposits []savingsgoal.GoalDeposit, goalsCompleted int) {
+	if s.gamification == nil || len(deposits) == 0 {
+		return
+	}
+	eventID := "goal-deposit:" + deposits[0].ID.String()
+	if len(deposits) > 1 {
+		eventID = "goal-deposit-split:" + deposits[0].ID.String()
+	}
+	_, _ = s.gamification.ProcessConfirmedDeposit(ctx, savingsstreak.SavingEvent{
+		EventID:             eventID,
+		UserID:              userID,
+		Type:                "deposit_confirmed",
+		Amount:              amount,
+		NetAmount:           amount,
+		OccurredAt:          time.Now().UTC(),
+		UserTimezone:        "UTC",
+		GoalsCompletedDelta: goalsCompleted,
+	})
+}
+
+func completedGoals(goals []*savingsgoal.SavingsGoal, results []GoalDepositResult) int {
+	count := 0
+	for i, result := range results {
+		if i < len(goals) && goals[i] != nil && goals[i].TargetAmount.IsPositive() && result.CurrentAmount.GreaterThanOrEqual(goals[i].TargetAmount) {
+			count++
+		}
+	}
+	return count
 }
 
 // MinDeadlineLeadTime is the minimum distance into the future a new goal's

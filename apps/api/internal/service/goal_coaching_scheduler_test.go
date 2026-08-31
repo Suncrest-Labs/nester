@@ -15,15 +15,24 @@ import (
 )
 
 type fakeGoalCoachingRepo struct {
-	goals []savingsgoal.SavingsGoal
-	err   error
+	goals         []savingsgoal.SavingsGoal
+	err           error
+	updatedNotes  map[uuid.UUID]string
 }
 
-func (f fakeGoalCoachingRepo) ListActiveApproachingDeadline(_ context.Context, _ int) ([]savingsgoal.SavingsGoal, error) {
+func (f *fakeGoalCoachingRepo) ListActiveApproachingDeadline(_ context.Context, _ int) ([]savingsgoal.SavingsGoal, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.goals, nil
+}
+
+func (f *fakeGoalCoachingRepo) UpdateNotes(_ context.Context, goalID uuid.UUID, notes string) error {
+	if f.updatedNotes == nil {
+		f.updatedNotes = make(map[uuid.UUID]string)
+	}
+	f.updatedNotes[goalID] = notes
+	return nil
 }
 
 type fakeGoalCoachingClient struct {
@@ -88,8 +97,9 @@ func TestGoalCoachingScheduler_TickSendsOnePerActiveGoal(t *testing.T) {
 	channel := &recordingChannel{}
 	dispatcher := notifications.New([]notifications.Channel{channel}, fakePreferenceStore{}, nil)
 
+	repo := &fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}}
 	scheduler := NewGoalCoachingScheduler(
-		fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
+		repo,
 		fakeGoalCoachingClient{resp: &intelligence.CoachingResponse{
 			ProgressAssessment: "You're 34% toward your goal.",
 			Nudges:             []string{"Keep going!"},
@@ -117,6 +127,9 @@ func TestGoalCoachingScheduler_TickSendsOnePerActiveGoal(t *testing.T) {
 	if delivered[0].Payload["goal_id"] != goal.ID.String() {
 		t.Errorf("Payload[goal_id] = %v, want %s", delivered[0].Payload["goal_id"], goal.ID.String())
 	}
+	if repo.updatedNotes[goal.ID] != "You're 34% toward your goal." {
+		t.Errorf("updatedNotes = %q, want %q", repo.updatedNotes[goal.ID], "You're 34% toward your goal.")
+	}
 }
 
 func TestGoalCoachingScheduler_TickSkipsGoalOnCoachingError(t *testing.T) {
@@ -127,7 +140,7 @@ func TestGoalCoachingScheduler_TickSkipsGoalOnCoachingError(t *testing.T) {
 	dispatcher := notifications.New([]notifications.Channel{channel}, fakePreferenceStore{}, nil)
 
 	scheduler := NewGoalCoachingScheduler(
-		fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
+		&fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
 		fakeGoalCoachingClient{err: context.DeadlineExceeded},
 		dispatcher,
 		nil,
@@ -155,7 +168,7 @@ func TestGoalCoachingScheduler_SkipsGoalWhenUserOptedOut(t *testing.T) {
 	client := &fakeGoalCoachingClient{resp: &intelligence.CoachingResponse{ProgressAssessment: "should not be sent"}}
 
 	scheduler := NewGoalCoachingScheduler(
-		fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
+		&fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
 		client,
 		dispatcher,
 		nil,
@@ -180,7 +193,7 @@ func TestGoalCoachingScheduler_PassesOptOutFlagThroughToIntelligenceRequest(t *t
 	}
 
 	scheduler := NewGoalCoachingScheduler(
-		fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
+		&fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
 		client,
 		dispatcher,
 		nil,

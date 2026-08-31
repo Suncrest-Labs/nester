@@ -1,13 +1,11 @@
 package stellar
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -20,15 +18,85 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/systemstate"
 )
 
-func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, rpcURL string) {
-	if strings.TrimSpace(rpcURL) == "" {
+// IndexerPollInterval is how often the indexer polls for new events.
+//
+// Ledgers close roughly every 5s, so polling slightly slower than that keeps
+// the indexer within a ledger or two of the tip without spending an RPC round
+// trip on ledgers that have not closed yet. The staleness budget in
+// internal/freshness is set an order of magnitude above it.
+const IndexerPollInterval = 6 * time.Second
+
+// IndexerRequestTimeout bounds a single RPC call made by the indexer loop. It
+// sits above the poll interval so a slow-but-working RPC still completes, and
+// well below the point where polls would queue indefinitely. Exported so
+// startup can build the indexer's client with the same bound rather than
+// restating it.
+const IndexerRequestTimeout = 8 * time.Second
+
+// FreshnessRecorder receives balance-freshness samples from the event indexer
+// (nester#1056, nester#1088). Implemented by *freshness.Tracker; declared as
+// an interface here so the stellar package does not depend on it, and a nil
+// recorder disables sampling without a branch at every call site.
+type FreshnessRecorder interface {
+	// Observe reports a successful sample of the indexer's position.
+	Observe(indexedLedger, networkLedger uint64)
+	// ObserveFailure reports a sample that could not be taken.
+	ObserveFailure()
+}
+
+// IndexerOptions configures the long-running event indexer.
+//
+// A struct rather than more parameters: the indexer has accumulated a client,
+// a retry policy, and a freshness recorder alongside its URL, and a
+// seven-argument call at the wiring site is unreadable and easy to transpose.
+// Every field is optional except RPCURL.
+type IndexerOptions struct {
+	// RPCURL is the Soroban endpoint. Empty disables the indexer.
+	RPCURL string
+
+	// HTTPClient carries the metrics and circuit-breaker transports. Nil
+	// falls back to a plain client with IndexerRequestTimeout. Startup passes
+	// an instrumented, circuit-broken one: the indexer is by far the heaviest
+	// Soroban caller — a request every IndexerPollInterval, forever — so it is
+	// the traffic most worth shedding when the RPC degrades (nester#1087).
+	HTTPClient *http.Client
+
+	// RPCOptions carries the shared retry policy (nester#1086). Both of the
+	// indexer's calls are reads, so both are retried.
+	RPCOptions RPCOptions
+
+	// Recorder receives balance-freshness samples. Nil disables sampling and
+	// the indexer behaves exactly as before: telemetry must never be able to
+	// stop the indexer from indexing.
+	Recorder FreshnessRecorder
+}
+
+// StartEventIndexer launches the long-running event indexer.
+func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, opts IndexerOptions) {
+	if strings.TrimSpace(opts.RPCURL) == "" {
 		logger.Warn("event indexer disabled: STELLAR_RPC_URL is empty")
 		return
 	}
 
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: IndexerRequestTimeout}
+	}
+	recorder := opts.Recorder
+
+	// The long-running loop owns scheduling and telemetry only. All indexing
+	// behaviour — cursor resolution, cold start, ordering, idempotency, and
+	// the atomic cursor/balance commit — lives in EventPoller, which is the
+	// unit the deterministic replay harness exercises (issue #1051).
+	poller := &EventPoller{
+		DB:      db,
+		SysRepo: sysRepo,
+		Fetcher: NewRPCEventFetcherWithOptions(httpClient, opts.RPCURL, opts.RPCOptions),
+		Logger:  logger,
+	}
+
 	go func() {
-		client := &http.Client{Timeout: 8 * time.Second}
-		ticker := time.NewTicker(6 * time.Second)
+		ticker := time.NewTicker(IndexerPollInterval)
 		defer ticker.Stop()
 
 		for {
@@ -36,44 +104,69 @@ func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sys
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				startLedger, err := getLastIndexedLedger(ctx, sysRepo)
-				if err != nil {
-					logger.Error("event indexer failed to load cursor", "error", err)
-					continue
-				}
+				// Sampled before polling, and independently of whether the
+				// poll succeeds. A failing poll does not invalidate a
+				// successful position read — the cursor genuinely is where it
+				// says, and it is genuinely not advancing — so publishing the
+				// sample is what makes the lag visibly climb during a stall
+				// instead of going quiet.
+				sampleFreshness(ctx, sysRepo, poller.Fetcher, recorder)
 
-				contractIDs, err := loadVaultContractIDs(ctx, db)
-				if err != nil {
-					logger.Error("event indexer failed to load vault contracts", "error", err)
-					continue
-				}
-				if len(contractIDs) == 0 {
-					continue
-				}
-
-				events, latestLedger, err := fetchSorobanEvents(ctx, client, rpcURL, contractIDs, startLedger)
-				if err != nil {
-					logger.Error("event indexer fetch failed", "error", err)
-					continue
-				}
-
-				for _, event := range events {
-					processed, err := applyIndexedEvent(ctx, db, event)
-					if err != nil {
-						logger.Error("event indexer failed to apply event", "event_id", event.ID, "contract_id", event.ContractID, "event_type", event.EventType, "error", err)
-						continue
-					}
-					if !processed {
-						logger.Debug("event indexer skipped duplicate event", "event_id", event.ID)
-					}
-				}
-
-				if err := setLastIndexedLedger(ctx, sysRepo, latestLedger); err != nil {
-					logger.Error("event indexer failed to persist cursor", "ledger", latestLedger, "error", err)
+				if _, err := poller.PollEvents(ctx); err != nil {
+					logger.Error("event indexer poll failed", "error", err)
 				}
 			}
 		}
 	}()
+}
+
+// sampleFreshness publishes one balance-freshness sample, or records that it
+// could not be taken. A nil recorder makes it a no-op.
+func sampleFreshness(ctx context.Context, sysRepo systemstate.Repository, fetcher EventFetcher, recorder FreshnessRecorder) {
+	if recorder == nil {
+		return
+	}
+
+	indexed, tip, err := readIndexerPosition(ctx, sysRepo, fetcher)
+	if err != nil {
+		recorder.ObserveFailure()
+		return
+	}
+
+	recorder.Observe(indexed, tip)
+}
+
+// readIndexerPosition returns the persisted cursor and the current network
+// tip.
+//
+// It returns an error when the cursor has never been set, because position is
+// undefined before the first successful index and reporting ledger 0 would
+// make the lag the entire ledger history. The caller records the failure
+// instead, which ages the freshness signal — the honest signal for "this
+// indexer has never run".
+func readIndexerPosition(ctx context.Context, sysRepo systemstate.Repository, fetcher EventFetcher) (indexed uint64, tip uint64, err error) {
+	indexed, err = getLastIndexedLedger(ctx, sysRepo)
+	if err != nil {
+		return 0, 0, err
+	}
+	if indexed == 0 {
+		return 0, 0, fmt.Errorf("indexer cursor not yet initialised")
+	}
+
+	tip, err = fetcher.LatestLedger(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	// A tip of 0 is a broken RPC, not a real position. Publishing it would
+	// compute zero lag against any cursor and reset the sample age, reporting
+	// the indexer as perfectly fresh while the network position is in fact
+	// unknown — a false negative on exactly the signal this exists to raise.
+	// resolveStartLedger refuses a zero tip for the same reason.
+	if tip == 0 {
+		return 0, 0, fmt.Errorf("rpc reported latest ledger 0")
+	}
+
+	return indexed, tip, nil
 }
 
 func loadVaultContractIDs(ctx context.Context, db *sql.DB) ([]string, error) {
@@ -106,8 +199,21 @@ type indexedEvent struct {
 	EventType  string
 	Ledger     uint64
 	Data       map[string]any
+	// TxHash is the Stellar transaction that emitted the event. It is the
+	// shared idempotency key between the indexer and the API write path: both
+	// claim it in vault_transactions before moving a balance, so a deposit
+	// made through the API and later observed on-chain is credited exactly
+	// once (nester#1147). Empty for events from an RPC that did not report it.
+	TxHash string
 }
 
+// applyIndexedEvent applies one event in its own transaction, without
+// touching the indexer cursor.
+//
+// It remains the entry point for callers that manage cursor advancement
+// separately (the admin one-shot sync). The long-running poller uses
+// applyIndexedEventWithCursor instead, which commits the cursor alongside the
+// mutation; see poller.go for why that distinction matters.
 func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (bool, error) {
 	if strings.TrimSpace(event.ID) == "" {
 		return false, fmt.Errorf("event id is required")
@@ -127,6 +233,21 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 		return false, tx.Commit()
 	}
 
+	if err := applyEventMutation(ctx, tx, event); err != nil {
+		return false, err
+	}
+
+	return true, tx.Commit()
+}
+
+// applyEventMutation performs the state change for a single event inside the
+// caller's transaction.
+//
+// Split out of applyIndexedEvent so that the cursor-advancing poller path and
+// the admin sync path apply events through the exact same code. Duplicating
+// this switch would let the two paths drift, and the replay harness would then
+// be proving the wrong one correct.
+func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
 	switch strings.ToLower(strings.TrimSpace(event.EventType)) {
 	case "pause":
 		_, err := tx.ExecContext(
@@ -135,7 +256,7 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 			event.ContractID,
 		)
 		if err != nil {
-			return false, err
+			return err
 		}
 	case "unpause":
 		_, err := tx.ExecContext(
@@ -144,14 +265,25 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 			event.ContractID,
 		)
 		if err != nil {
-			return false, err
+			return err
 		}
 	case "deposit":
-		amount, ok := extractEventAmount(event)
+		amount, ok := extractEventAmountUnits(event)
 		if !ok {
-			return false, fmt.Errorf("deposit event missing parseable amount")
+			return fmt.Errorf("deposit event missing parseable amount")
 		}
-		_, err := tx.ExecContext(
+		// The API write path may already have credited this exact transaction
+		// (see the ownership model documented at the top of this file). Claim
+		// the hash first; if it is already claimed, the credit has happened and
+		// this event must not apply a second one (nester#1147).
+		claimed, err := claimBalanceTxHash(ctx, tx, event, "deposit", amount)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return nil
+		}
+		_, err = tx.ExecContext(
 			ctx,
 			`UPDATE vaults
 			 SET total_deposited = total_deposited + $1::numeric,
@@ -162,14 +294,21 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 			event.ContractID,
 		)
 		if err != nil {
-			return false, err
+			return err
 		}
 	case "withdraw", "withdrawal":
-		amount, ok := extractEventAmount(event)
+		amount, ok := extractEventAmountUnits(event)
 		if !ok {
-			return false, fmt.Errorf("withdraw event missing parseable amount")
+			return fmt.Errorf("withdraw event missing parseable amount")
 		}
-		_, err := tx.ExecContext(
+		claimed, err := claimBalanceTxHash(ctx, tx, event, "withdrawal", amount)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return nil
+		}
+		_, err = tx.ExecContext(
 			ctx,
 			`UPDATE vaults
 			 SET current_balance = current_balance - $1::numeric,
@@ -179,51 +318,80 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 			event.ContractID,
 		)
 		if err != nil {
-			return false, err
+			return err
+		}
+
+	// Yield harvest (issue #1051). A harvest credits yield to the vault
+	// without changing total_deposited: the principal the user paid in is
+	// unchanged, only the earned yield and the spendable balance grow.
+	case "harvest", "harvested", "yield_harvest":
+		amount, ok := extractEventAmountUnits(event)
+		if !ok {
+			return fmt.Errorf("harvest event missing parseable amount")
+		}
+		_, err := tx.ExecContext(
+			ctx,
+			`UPDATE vaults
+			 SET yield_earned      = yield_earned + $1::numeric,
+			     current_balance   = current_balance + $1::numeric,
+			     last_harvested_at = NOW(),
+			     updated_at        = NOW()
+			 WHERE contract_address = $2 AND deleted_at IS NULL`,
+			amount.String(),
+			event.ContractID,
+		)
+		if err != nil {
+			return err
 		}
 
 	// Fair-ordering emergency withdrawal queue (issue #814).
 	case "emrg_reqd":
 		if err := applyEmergencyQueueRequested(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 	case "emrg_fill":
 		if err := applyEmergencyQueueFilled(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 	case "emrg_canc":
 		if err := applyEmergencyQueueCancelled(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 
 	// Early-exit penalty escrow (issue #805).
 	case "pnlty_chg":
 		if err := applyPenaltyCharged(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 	case "pnlty_dst":
 		if err := applyPenaltyDistributed(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 
 	// Slippage-safe multi-hop rebalance (issue #810).
 	case "rebal_leg":
 		if err := applyRebalanceLegExecuted(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 	case "rebal_cmp":
 		if err := applyRebalanceCompleted(ctx, tx, event); err != nil {
-			return false, err
+			return err
 		}
 
 	default:
 		// Keep cursor continuity even for unsupported events.
 	}
 
-	return true, tx.Commit()
+	return nil
 }
 
-func extractEventAmount(event indexedEvent) (decimal.Decimal, bool) {
+// extractEventAmountStroops reads the raw amount out of an event's data map.
+//
+// The value is in STROOPS, exactly as the Soroban contract emitted it. Callers
+// that write a vault balance column must not use this directly — use
+// extractEventAmountUnits, which applies the stroop -> asset-unit conversion
+// (nester#1146).
+func extractEventAmountStroops(event indexedEvent) (decimal.Decimal, bool) {
 	if event.Data == nil {
 		return decimal.Zero, false
 	}
@@ -269,9 +437,24 @@ func extractEventAmount(event indexedEvent) (decimal.Decimal, bool) {
 	return decimal.Zero, false
 }
 
+// extractEventAmountUnits reads an event amount and converts it from the
+// stroops the contract emitted into the asset units the vault ledger stores.
+//
+// Every balance-writing branch of applyEventMutation goes through this, so an
+// indexed 1 USDC deposit credits 1 and not 10_000_000 (nester#1146). The
+// conversion itself lives in StroopsToAssetUnits, shared with the transaction
+// chain-event verifier.
+func extractEventAmountUnits(event indexedEvent) (decimal.Decimal, bool) {
+	stroops, ok := extractEventAmountStroops(event)
+	if !ok {
+		return decimal.Zero, false
+	}
+	return StroopsToAssetUnits(stroops), true
+}
+
 // extractEventField reads an arbitrary numeric field (not just "amount"/
 // "value") from an event's data map, using the same tolerant type handling
-// as extractEventAmount.
+// as extractEventAmountStroops.
 func extractEventField(event indexedEvent, key string) (decimal.Decimal, bool) {
 	if event.Data == nil {
 		return decimal.Zero, false
@@ -531,47 +714,26 @@ VALUES ($1, $2, $3, $4, $5)`,
 	return err
 }
 
+// sorobanEventPageLimit is the getEvents pagination limit. It is also the
+// signal for a truncated batch: a full page means more events may exist beyond
+// the last one returned, so the cursor must not jump past them to the tip.
+const sorobanEventPageLimit = 200
+
 func fetchSorobanEvents(
 	ctx context.Context,
-	client *http.Client,
-	rpcURL string,
+	rpc *rpcClient,
 	contractIDs []string,
 	startLedger uint64,
 ) ([]indexedEvent, uint64, error) {
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      "nester-indexer",
-		"method":  "getEvents",
-		"params": map[string]any{
-			"startLedger": startLedger,
-			"filters": []map[string]any{
-				{
-					"type":        "contract",
-					"contractIds": contractIDs,
-				},
+	params := map[string]any{
+		"startLedger": startLedger,
+		"filters": []map[string]any{
+			{
+				"type":        "contract",
+				"contractIds": contractIDs,
 			},
-			"pagination": map[string]any{"limit": 200},
 		},
-	})
-	if err != nil {
-		return nil, 0, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, 0, fmt.Errorf("rpc returned %d: %s", resp.StatusCode, string(payload))
+		"pagination": map[string]any{"limit": sorobanEventPageLimit},
 	}
 
 	var rpcResp struct {
@@ -581,6 +743,7 @@ func fetchSorobanEvents(
 				ID         string         `json:"id"`
 				ContractID string         `json:"contractId"`
 				Ledger     uint64         `json:"ledger"`
+				TxHash     string         `json:"txHash"`
 				Topic      []interface{}  `json:"topic"`
 				Value      map[string]any `json:"value"`
 			} `json:"events"`
@@ -590,9 +753,7 @@ func fetchSorobanEvents(
 		} `json:"error"`
 	}
 
-	decoder := json.NewDecoder(resp.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(&rpcResp); err != nil {
+	if err := rpc.call(ctx, "getEvents", params, &rpcResp); err != nil {
 		return nil, 0, err
 	}
 	if rpcResp.Error != nil {
@@ -616,6 +777,7 @@ func fetchSorobanEvents(
 			EventType:  eventType,
 			Ledger:     raw.Ledger,
 			Data:       raw.Value,
+			TxHash:     raw.TxHash,
 		})
 	}
 
@@ -678,6 +840,10 @@ type EventSyncer struct {
 	SysRepo systemstate.Repository
 	RPCURL  string
 	Logger  *slog.Logger
+
+	// RPCOptions carries the shared retry policy. Zero means package
+	// defaults, which is what an EventSyncer built outside startup gets.
+	RPCOptions RPCOptions
 }
 
 func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
@@ -694,8 +860,8 @@ func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	events, latestLedger, err := fetchSorobanEvents(ctx, client, s.RPCURL, contractIDs, startLedger)
+	rpc := newRPCClient(s.RPCURL, &http.Client{Timeout: defaultRPCTimeout}, s.RPCOptions, false)
+	events, latestLedger, err := fetchSorobanEvents(ctx, rpc, contractIDs, startLedger)
 	if err != nil {
 		return 0, fmt.Errorf("fetch events: %w", err)
 	}

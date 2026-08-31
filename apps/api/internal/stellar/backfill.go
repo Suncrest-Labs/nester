@@ -1,12 +1,9 @@
 package stellar
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -80,10 +77,15 @@ type resettableEventType struct {
 // Exported for the admin handler to surface a clear pre-flight error rather
 // than let Run fail mid-way.
 func NonResettableEventTypesInRange(ctx context.Context, client *http.Client, rpcURL string, contractIDs []string, from, to uint64) ([]string, error) {
+	// A pre-flight read on the admin path, so it takes the package's default
+	// retry policy rather than threading the configured one through the admin
+	// handler's signature for a call that runs once per operator action.
+	rpc := newRPCClient(rpcURL, client, RPCOptions{}, false)
+
 	found := map[string]bool{}
 	cursor := from
 	for cursor <= to {
-		page, err := fetchSorobanEventsRange(ctx, client, rpcURL, contractIDs, cursor, to)
+		page, err := fetchSorobanEventsRange(ctx, rpc, contractIDs, cursor, to)
 		if err != nil {
 			return nil, err
 		}
@@ -115,6 +117,10 @@ type Runner struct {
 	Client *http.Client
 	RPCURL string
 	Logger *slog.Logger
+
+	// RPCOptions carries the shared retry policy (nester#1086). Every call a
+	// backfill makes is getEvents, so all of it is retryable.
+	RPCOptions RPCOptions
 
 	// throttle is the pause between batches, giving live indexing priority
 	// for database/RPC capacity (#840's non-interference requirement).
@@ -217,7 +223,7 @@ func (r *Runner) Resume(ctx context.Context, runID uuid.UUID) (*backfill.Run, er
 // execute drives one run (fresh or resumed) from run.ResumeFrom() through
 // run.ToLedger, checkpointing after every batch.
 func (r *Runner) execute(ctx context.Context, run *backfill.Run) error {
-	client := r.httpClient()
+	rpc := r.rpcClient()
 
 	if run.Mode == backfill.ModeRebuild && run.ResumeFrom() == run.FromLedger {
 		// Reset scope is applied once, at the very start of a fresh run —
@@ -235,7 +241,7 @@ func (r *Runner) execute(ctx context.Context, run *backfill.Run) error {
 	skipped := run.EventsSkippedDuplicate
 
 	for cursor <= run.ToLedger {
-		headroomLedger, err := r.headLedgerMinusMargin(ctx, client, run.ContractIDs)
+		headroomLedger, err := r.headLedgerMinusMargin(ctx, rpc, run.ContractIDs)
 		if err != nil {
 			return fmt.Errorf("check chain head: %w", err)
 		}
@@ -244,7 +250,7 @@ func (r *Runner) execute(ctx context.Context, run *backfill.Run) error {
 			return fmt.Errorf("%w (requested up to ledger %d, safety margin currently allows up to %d)", ErrTooCloseToHead, run.ToLedger, headroomLedger)
 		}
 
-		page, err := fetchSorobanEventsRange(ctx, client, r.RPCURL, run.ContractIDs, cursor, batchEnd)
+		page, err := fetchSorobanEventsRange(ctx, rpc, run.ContractIDs, cursor, batchEnd)
 		if err != nil {
 			return fmt.Errorf("fetch events [%d,%d]: %w", cursor, batchEnd, err)
 		}
@@ -330,11 +336,11 @@ func (r *Runner) resetScope(ctx context.Context, run *backfill.Run) error {
 	return tx.Commit()
 }
 
-func (r *Runner) headLedgerMinusMargin(ctx context.Context, client *http.Client, contractIDs []string) (uint64, error) {
+func (r *Runner) headLedgerMinusMargin(ctx context.Context, rpc *rpcClient, contractIDs []string) (uint64, error) {
 	// A cheap, zero-event probe: getEvents at the current chain tip always
 	// returns latestLedger, which is used purely as a head proxy — no event
 	// data from this call is applied.
-	page, err := fetchSorobanEventsRange(ctx, client, r.RPCURL, contractIDs, 0, 0)
+	page, err := fetchSorobanEventsRange(ctx, rpc, contractIDs, 0, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -359,7 +365,15 @@ func (r *Runner) httpClient() *http.Client {
 	if r.Client != nil {
 		return r.Client
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{Timeout: defaultRPCTimeout}
+}
+
+// rpcClient builds the shared Soroban caller for this run. Untraced: a
+// backfill issues thousands of identical getEvents calls, and a span per page
+// would swamp the trace store without telling an operator anything the run's
+// own progress record does not.
+func (r *Runner) rpcClient() *rpcClient {
+	return newRPCClient(r.RPCURL, r.httpClient(), r.RPCOptions, false)
 }
 
 func (r *Runner) logger() *slog.Logger {
@@ -389,8 +403,7 @@ type eventsPage struct {
 // support an endLedger filter — only startLedger + pagination.
 func fetchSorobanEventsRange(
 	ctx context.Context,
-	client *http.Client,
-	rpcURL string,
+	rpc *rpcClient,
 	contractIDs []string,
 	fromLedger, toLedger uint64,
 ) (eventsPage, error) {
@@ -400,37 +413,12 @@ func fetchSorobanEventsRange(
 		return eventsPage{}, nil
 	}
 
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      "nester-backfill",
-		"method":  "getEvents",
-		"params": map[string]any{
-			"startLedger": fromLedger,
-			"filters": []map[string]any{
-				{"type": "contract", "contractIds": contractIDs},
-			},
-			"pagination": map[string]any{"limit": 200},
+	params := map[string]any{
+		"startLedger": fromLedger,
+		"filters": []map[string]any{
+			{"type": "contract", "contractIds": contractIDs},
 		},
-	})
-	if err != nil {
-		return eventsPage{}, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
-	if err != nil {
-		return eventsPage{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return eventsPage{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return eventsPage{}, fmt.Errorf("rpc returned %d: %s", resp.StatusCode, string(payload))
+		"pagination": map[string]any{"limit": 200},
 	}
 
 	var rpcResp struct {
@@ -440,6 +428,7 @@ func fetchSorobanEventsRange(
 				ID         string         `json:"id"`
 				ContractID string         `json:"contractId"`
 				Ledger     uint64         `json:"ledger"`
+				TxHash     string         `json:"txHash"`
 				Topic      []interface{}  `json:"topic"`
 				Value      map[string]any `json:"value"`
 			} `json:"events"`
@@ -449,9 +438,7 @@ func fetchSorobanEventsRange(
 		} `json:"error"`
 	}
 
-	decoder := json.NewDecoder(resp.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(&rpcResp); err != nil {
+	if err := rpc.call(ctx, "getEvents", params, &rpcResp); err != nil {
 		return eventsPage{}, err
 	}
 	if rpcResp.Error != nil {
@@ -480,6 +467,7 @@ func fetchSorobanEventsRange(
 			EventType:  eventType,
 			Ledger:     raw.Ledger,
 			Data:       raw.Value,
+			TxHash:     raw.TxHash,
 		})
 		if raw.Ledger > maxLedgerSeen {
 			maxLedgerSeen = raw.Ledger

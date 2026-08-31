@@ -181,7 +181,12 @@ func (s *auditService) LogAction(
 		return nil, err
 	}
 
-	now := time.Now().UTC()
+	// Truncated to microseconds before it is hashed: created_at is a
+	// timestamptz, which stores microsecond precision, and VerifyChain
+	// recomputes the hash from the value read back. Hashing the nanosecond
+	// value would make every entry fail verification as soon as it was
+	// written, which is exactly what happened.
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	serialData := CanonicalSerialize(nextSeq, now, actor, action, target, detailHash, prevHash)
 	entryHash := HashData(serialData)
 
@@ -309,12 +314,33 @@ func (s *auditService) VerifyChain(ctx context.Context, fromSeq, toSeq int64) (b
 }
 
 func (s *auditService) RedactEntry(ctx context.Context, seq int64, redactKeys []string) error {
+	redacted, err := s.redactDetail(ctx, seq, redactKeys)
+	if err != nil || !redacted {
+		return err
+	}
+
+	// Logged only after redactDetail has returned and released s.mu:
+	// LogAction takes the same mutex, and sync.Mutex is not reentrant, so
+	// calling it while still holding the lock deadlocked every redaction
+	// and, because the lock was never released, every audit write after it.
+	_, _ = s.LogAction(ctx, nil, "system", "redaction", fmt.Sprintf("audit_logs:sequence:%d", seq), map[string]any{
+		"target_sequence": seq,
+		"redacted_fields": redactKeys,
+	}, nil, nil, nil)
+
+	return nil
+}
+
+// redactDetail performs the redaction under the service mutex and commits it.
+// It reports whether anything was actually redacted so the caller can skip
+// the follow-up audit entry when nothing changed.
+func (s *auditService) redactDetail(ctx context.Context, seq int64, redactKeys []string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return false, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -330,15 +356,15 @@ func (s *auditService) RedactEntry(ctx context.Context, seq int64, redactKeys []
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("audit log entry not found: sequence %d", seq)
+			return false, fmt.Errorf("audit log entry not found: sequence %d", seq)
 		}
-		return fmt.Errorf("query audit log entry: %w", err)
+		return false, fmt.Errorf("query audit log entry: %w", err)
 	}
 
 	// 2. Parse the detail map
 	var detailMap map[string]any
 	if err := json.Unmarshal(detailJSON, &detailMap); err != nil {
-		return fmt.Errorf("unmarshal detail for redaction: %w", err)
+		return false, fmt.Errorf("unmarshal detail for redaction: %w", err)
 	}
 
 	// 3. Redact the fields
@@ -352,13 +378,13 @@ func (s *auditService) RedactEntry(ctx context.Context, seq int64, redactKeys []
 
 	if !redactedAny {
 		// Nothing to redact, complete successfully
-		return nil
+		return false, nil
 	}
 
 	// 4. Serialize the redacted detail (keys sorted automatically by Go JSON marshal)
 	newDetailBytes, err := json.Marshal(detailMap)
 	if err != nil {
-		return fmt.Errorf("marshal redacted detail: %w", err)
+		return false, fmt.Errorf("marshal redacted detail: %w", err)
 	}
 
 	// 5. Update DB row: replace detail payload, flag as redacted, but KEEP the original detail_hash!
@@ -368,24 +394,16 @@ func (s *auditService) RedactEntry(ctx context.Context, seq int64, redactKeys []
 		WHERE sequence = $2
 	`, json.RawMessage(newDetailBytes), seq)
 	if err != nil {
-		return fmt.Errorf("update redacted audit log entry: %w", err)
+		return false, fmt.Errorf("update redacted audit log entry: %w", err)
 	}
 
-	// 6. Log the redaction action itself as a new audit entry to make it auditable
-	// Note: to avoid infinite recursion or lock deadlock, we insert it directly in this txn.
-	// But wait, the audit trail of the redaction needs a sequence number!
-	// It's cleaner to commit this transaction first, and then log the redaction as a new audit action.
+	// 6. Commit here; the redaction is recorded as its own audit entry by
+	// the caller once this function has released the mutex.
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit redaction: %w", err)
+		return false, fmt.Errorf("commit redaction: %w", err)
 	}
 
-	// Log the redaction action separately (acquires mu/lock and logs normally)
-	_, _ = s.LogAction(ctx, nil, "system", "redaction", fmt.Sprintf("audit_logs:sequence:%d", seq), map[string]any{
-		"target_sequence": seq,
-		"redacted_fields": redactKeys,
-	}, nil, nil, nil)
-
-	return nil
+	return true, nil
 }
 
 func (s *auditService) AnchorLatestEntry(ctx context.Context) (string, error) {
@@ -409,13 +427,20 @@ func (s *auditService) AnchorLatestEntry(ctx context.Context) (string, error) {
 	// Write to external append-only log file (file anchor)
 	anchorRecord := fmt.Sprintf("[%s] SEQ:%d HASH:%s\n", time.Now().UTC().Format(time.RFC3339), seq, entryHash)
 
-	// Ensure directory exists
+	// Ensure directory exists.
+	//
+	// Permissions are restrictive because this file is the root of the audit
+	// chain's tamper-evidence: it is the external record against which a
+	// rewritten in-database chain is detected (nester#1035, G301/G302). A
+	// world-readable anchor log leaks the audit sequence to any local process,
+	// and a world-writable one would let an attacker forge the very anchors
+	// that are supposed to catch them.
 	dir := filepath.Dir(s.anchorConfig.FilePath)
 	if dir != "." && dir != "/" {
-		_ = os.MkdirAll(dir, 0755)
+		_ = os.MkdirAll(dir, 0o700)
 	}
 
-	f, err := os.OpenFile(s.anchorConfig.FilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(s.anchorConfig.FilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("open anchor log file: %w", err)
 	}

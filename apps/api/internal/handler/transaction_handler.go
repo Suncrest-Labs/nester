@@ -56,7 +56,7 @@ type transactionView struct {
 }
 
 type listTransactionsData struct {
-	Data       []transactionView    `json:"data"`
+	Data       []transactionView     `json:"data"`
 	Pagination transactionPagination `json:"pagination"`
 }
 
@@ -209,7 +209,9 @@ func (h *TransactionHandler) createTransaction(w http.ResponseWriter, r *http.Re
 			return
 		}
 		if v.UserID.String() != user.ID {
-			response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+			// 404, not 403 — see #1101. Answering 403 confirms the vault
+			// exists to a caller who does not own it.
+			response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 			return
 		}
 	}
@@ -276,7 +278,9 @@ func (h *TransactionHandler) getTransactionByHash(w http.ResponseWriter, r *http
 			return
 		}
 		if v.UserID.String() != user.ID {
-			response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "FORBIDDEN", "forbidden"))
+			// 404, not 403 — see #1101. Answering 403 confirms the vault
+			// exists to a caller who does not own it.
+			response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 			return
 		}
 	}
@@ -292,6 +296,12 @@ func (h *TransactionHandler) writeDomainError(w http.ResponseWriter, r *http.Req
 		errors.Is(err, transaction.ErrInvalidStatus),
 		errors.Is(err, transaction.ErrInvalidType):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	// Confirming a transaction reaches Horizon through the breaker-wrapped
+	// client, so an upstream outage surfaces here. Without this it fell to
+	// the default and answered 500, which reads as "the API is broken" for
+	// what is a retriable upstream condition (#1086).
+	case isUpstreamUnavailable(err):
+		writeUpstreamUnavailable(w, err)
 	default:
 		logpkg.FromContext(r.Context()).Error("transaction handler failed", "error", err.Error())
 		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))

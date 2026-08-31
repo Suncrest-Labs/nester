@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { ChevronDown, ChevronUp, Sparkles, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { type PortfolioInsight } from '@/lib/api/intelligence'
+import { safeStorage } from '@/lib/storage'
 
 export const INSIGHT_DISMISSAL_KEY_PREFIX = 'nester_ai_insight_dismissed_'
 
@@ -34,18 +35,23 @@ export function InsightCard({
   const storageKey = getInsightDismissKey(id, title)
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const isDismissed = localStorage.getItem(storageKey) === 'true'
-      if (isDismissed) {
-        setDismissed(true)
-      }
+    // #1233: safeStorage never throws — a throwing accessor (private
+    // browsing, full quota) falls back to the in-memory map instead of
+    // crashing this component on mount.
+    const isDismissed = safeStorage.get<boolean>(storageKey, false)
+    if (isDismissed) {
+      // Deferred (react-hooks/set-state-in-effect): a synchronous setState
+      // here caused cascading renders — matching the setTimeout(…, 0)
+      // pattern already used by NetworkProvider/settings-context for the
+      // same reason. Pre-existing on this line before #1233 touched it;
+      // fixed in passing since this file was already being edited here.
+      const timer = setTimeout(() => setDismissed(true), 0)
+      return () => clearTimeout(timer)
     }
   }, [storageKey])
 
   const handleDismiss = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(storageKey, 'true')
-    }
+    safeStorage.set(storageKey, true)
     setDismissed(true)
     onDismiss?.()
   }

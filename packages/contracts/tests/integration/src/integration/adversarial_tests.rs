@@ -178,12 +178,14 @@ fn setup_rebalance_ready_vault(h: &NesterHarness) {
         &h.admin,
         &aave,
         &h.create_user(),
+        &None,
         &nester_common::ProtocolType::Lending,
     );
     h.registry().register_source(
         &h.admin,
         &blend,
         &h.create_user(),
+        &None,
         &nester_common::ProtocolType::Lending,
     );
     h.strategy()

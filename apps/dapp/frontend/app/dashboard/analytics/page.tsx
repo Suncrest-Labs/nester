@@ -8,6 +8,9 @@ import { BenchmarkCard } from "@/components/analytics/BenchmarkCard";
 import { AllocationPieChart } from "@/components/analytics/AllocationPieChart";
 import { YieldBreakdownChart } from "@/components/analytics/YieldBreakdownChart";
 import { PerformanceMetricsCards } from "@/components/analytics/PerformanceMetricsCards";
+import { AnalyticsSkeleton } from "@/components/skeletons/page-skeletons";
+import { EmptyState } from "@/components/ui/empty-state/empty-state";
+import { BarChart3 } from "lucide-react";
 
 interface AnalyticsData {
   daily_snapshots: {
@@ -74,9 +77,23 @@ export default function AnalyticsPage() {
     fetchData();
   }, [address, timeRange]);
 
-  if (loading) return <div className="flex h-[600px] items-center justify-center">Loading...</div>;
-  if (error) return <div className="flex h-[600px] items-center justify-center text-red-500">{error}</div>;
-  if (!analyticsData) return <div className="flex h-[600px] items-center justify-center">No data</div>;
+  // Loading, error and empty are three distinct states: a skeleton while the
+  // request is in flight, the route boundary for a failure, and an empty state
+  // only once we know the response carried no snapshots.
+  if (loading) return <AnalyticsSkeleton />;
+  if (error) throw new Error(error);
+  if (!analyticsData || analyticsData.daily_snapshots.length === 0) {
+    return (
+      <div data-testid="analytics-empty-state" className="p-6">
+        <EmptyState
+          icon={BarChart3}
+          title="No analytics yet"
+          description="Once you supply assets to a market we will chart your performance here."
+          size="lg"
+        />
+      </div>
+    );
+  }
 
   const portfolioSnapshots = analyticsData.daily_snapshots.map((snapshot) => ({
     date: snapshot.date,

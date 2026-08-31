@@ -115,6 +115,7 @@ async def yield_recommendation(
 async def analyze(
     request: Request,
     body: AnalyzeRequest,
+    language: str | None = Query(None, description="Preferred response language"),
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> Recommendation:
     """Return a confidence-annotated recommendation for a user prompt.
@@ -129,7 +130,6 @@ async def analyze(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required"
         )
-    language = body.get("language")
     return await analyze_recommendation(
         prompt,
         claims.get("sub", ""),

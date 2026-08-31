@@ -287,6 +287,22 @@ func (r *VaultRepository) UpdateVaultBalances(ctx context.Context, id uuid.UUID,
 	return nil
 }
 
+// RecordDeposit credits a vault for a deposit recorded through the API and
+// writes the matching ledger row.
+//
+// The ledger insert is ON CONFLICT (transaction_hash) DO NOTHING and, when the
+// hash is already claimed, the whole call becomes a no-op: the event indexer
+// claims the same key before crediting the same on-chain movement, so a deposit
+// observed by both writers is credited exactly once (nester#1147). See
+// internal/stellar/balance_ownership.go for the ownership model.
+//
+// A record with no transaction hash keeps the previous behaviour — it cannot
+// collide, because NULLs stay distinct under the unique index, and nothing else
+// will credit it.
+//
+// Lock ordering is unchanged (see RecordWithdrawal): the vaults row is updated
+// first, the ledger row inserted second. The claim is therefore detected after
+// the UPDATE, and a lost claim rolls the UPDATE back with the transaction.
 func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, record vault.TransactionRecord) error {
 	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
@@ -320,12 +336,13 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, recor
 		return vault.ErrVaultNotFound
 	}
 
-	if _, err := tx.ExecContext(
+	ledgerRow, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO vault_transactions (
 			vault_id, user_id, type, amount, transaction_hash,
 			shares_minted_or_burned, share_price_at_time, fee_charged
-		) VALUES ($1, $2, 'deposit', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
+		) VALUES ($1, $2, 'deposit', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)
+		ON CONFLICT (transaction_hash) DO NOTHING`,
 		id.String(),
 		record.UserID.String(),
 		record.Amount.String(),
@@ -333,12 +350,26 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, recor
 		record.SharesMintedOrBurned.String(),
 		record.SharePriceAtTime.String(),
 		record.FeeCharged.String(),
-	); err != nil {
+	)
+	if err != nil {
 		return mapRepositoryError(err)
+	}
+
+	inserted, err := ledgerRow.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
+		// The hash was already claimed, so this deposit has already been
+		// credited (by the indexer, or by an earlier retry of this call).
+		// Roll the UPDATE back rather than committing a second credit.
+		return vault.ErrDuplicateTransaction
 	}
 
 	// --- Ledger: post balanced double-entry within same DB transaction ---
 	// This makes the ledger and domain tables atomic — the core invariant.
+	// Runs only after the duplicate-transaction guard above, so a replayed
+	// hash cannot produce a second set of postings.
 	if err := r.postDepositLedgerTx(ctx, tx, id, record.UserID, record.Amount, record.TransactionHash); err != nil {
 		// If ledger tables don't exist (old tests), skip; otherwise fail.
 		if !isLedgerTableMissing(err) {
@@ -448,6 +479,22 @@ func (r *VaultRepository) UpdateHarvestFrequency(ctx context.Context, id uuid.UU
 
 // RecordWithdrawal decrements current_balance atomically and writes a ledger
 // entry. It does NOT touch total_deposited (deposits are never reversed).
+//
+// Serialisation (nester#1084): the position row is locked with
+// SELECT ... FOR UPDATE and the sufficient-funds check re-runs under that
+// lock. Two concurrent withdrawals therefore cannot both read the same
+// pre-withdrawal balance and both pass — the second waits on the row lock and
+// re-checks against the post-withdrawal balance. The service-layer check
+// stays as a fast-fail before any on-chain submit; this one is authoritative.
+//
+// Lock ordering (deadlock safety): every money-path write — RecordDeposit,
+// RecordWithdrawal, RecordHarvest, applyConfirmedBalanceChange — locks
+// exactly one vaults row first (the deposit path's single atomic UPDATE takes
+// the same row lock, an equivalent serialisation) and only then inserts into
+// vault_transactions. No money path locks a second vaults row or takes the
+// two in the other order, so deposit and withdrawal cannot deadlock; they
+// queue on the same row lock. The lock spans only the statements below — no
+// network or chain I/O happens inside the transaction.
 func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, record vault.TransactionRecord) error {
 	if record.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.ErrInvalidAmount
@@ -459,7 +506,27 @@ func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, re
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	result, err := tx.ExecContext(
+	var rawBalance string
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT current_balance FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		id.String(),
+	).Scan(&rawBalance); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return vault.ErrVaultNotFound
+		}
+		return mapRepositoryError(err)
+	}
+
+	balance, err := decimal.NewFromString(rawBalance)
+	if err != nil {
+		return fmt.Errorf("parse current balance: %w", err)
+	}
+	if balance.LessThan(record.Amount) {
+		return vault.ErrWithdrawalExceedsPosition
+	}
+
+	if _, err := tx.ExecContext(
 		ctx,
 		`UPDATE vaults
 		 SET current_balance = current_balance - $2::numeric,
@@ -467,17 +534,8 @@ func (r *VaultRepository) RecordWithdrawal(ctx context.Context, id uuid.UUID, re
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id.String(),
 		record.Amount.String(),
-	)
-	if err != nil {
+	); err != nil {
 		return mapRepositoryError(err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
-		return vault.ErrVaultNotFound
 	}
 
 	if _, err := tx.ExecContext(
@@ -1024,16 +1082,16 @@ func scanVault(row scanner) (vault.Vault, error) {
 
 func scanVaultTransaction(row scanner) (vault.VaultTransaction, error) {
 	var (
-		id        string
-		vaultID   string
-		userID    sql.NullString
-		txType    string
-		amount    string
-		txHash    string
-		shares    sql.NullString
+		id         string
+		vaultID    string
+		userID     sql.NullString
+		txType     string
+		amount     string
+		txHash     string
+		shares     sql.NullString
 		sharePrice sql.NullString
-		fee       sql.NullString
-		createdAt time.Time
+		fee        sql.NullString
+		createdAt  time.Time
 	)
 
 	if err := row.Scan(&id, &vaultID, &userID, &txType, &amount, &txHash, &shares, &sharePrice, &fee, &createdAt); err != nil {
@@ -1547,6 +1605,12 @@ func mapRepositoryError(err error) error {
 		}
 		if pgErr.Code == "23505" && strings.Contains(pgErr.ConstraintName, "transaction_hash") {
 			return vault.ErrDuplicateTransaction
+		}
+		// uq_vaults_contract_address_live (migration 104). Checked before the
+		// generic 23505 fallthrough so a duplicate registration is a clear
+		// client error rather than an opaque 500 (nester#1148).
+		if pgErr.Code == "23505" && strings.Contains(pgErr.ConstraintName, "vaults_contract_address") {
+			return vault.ErrContractAddressRegistered
 		}
 	}
 

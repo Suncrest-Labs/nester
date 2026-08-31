@@ -117,6 +117,7 @@ pub struct SourceMigrationEventData {
     pub migration_completed_at: u64,
 }
 
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -462,7 +463,9 @@ impl YieldRegistryContract {
     ///   successful call still clears the failure counter: an adapter that
     ///   answers "I don't know" is alive, just uninformative.
     /// * Adapter reports a value → stored, history appended, deviation guard
-    ///   applied exactly as in [`Self::update_apy`].
+    ///   applied exactly as in [`Self::update_apy`]. Only an accepted reading
+    ///   clears the failure counter; a rejected one records a failure, so an
+    ///   adapter pinning a garbage value still degrades its source.
     ///
     /// The deviation guard is deliberately kept on this path: a compromised
     /// or malfunctioning adapter must not be able to move a source's APY
@@ -495,13 +498,11 @@ impl YieldRegistryContract {
             }
         };
 
-        // The adapter answered, so it is alive: clear the failure streak.
-        source.failure_count = 0;
-
         match reading.confidence {
             ApyConfidence::Unavailable => {
                 // Unknown is not zero. Keep the last value, flag it unknown,
                 // and let consumers decide (allocation logic must ignore it).
+                source.failure_count = 0;
                 source.apy_confidence = ApyConfidence::Unavailable;
                 touch_source(&env, &mut source);
                 save_source(&env, &id, &source);
@@ -535,6 +536,7 @@ impl YieldRegistryContract {
                     };
                 }
 
+                source.failure_count = 0;
                 source.apy_confidence = reading.confidence.clone();
                 commit_apy_update(&env, &id, &mut source, reading.apy_bps);
             }
@@ -634,12 +636,15 @@ impl YieldRegistryContract {
         let mut source = get_source_or_panic(&env, &id);
 
         // Deviation guard: reject single-update jumps that are implausible.
-        // Threshold is read from storage so it can be tuned by an admin.
+        // Threshold is read from storage so it can be tuned by an admin. Do
+        // not panic here: a panic would roll back the failure accounting and
+        // let a source report rejected values indefinitely without degrading.
         let last_apy = source.current_apy_bps;
         if last_apy != 0 {
             let deviation = new_apy_bps.abs_diff(last_apy);
             if deviation > apy_deviation_threshold(&env) {
-                panic_with_error!(env, ContractError::InvalidOperation);
+                record_failure(&env, &id, &mut source, &caller);
+                return;
             }
         }
 
@@ -1058,7 +1063,6 @@ impl YieldRegistryContract {
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Private helpers

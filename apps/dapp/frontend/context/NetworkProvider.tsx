@@ -2,6 +2,8 @@
 
 import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { NETWORKS, NetworkConfig, DEFAULT_NETWORK } from "@/lib/networks";
+import { safeStorage } from "@/lib/storage";
+import { PORTFOLIO_CACHE_PREFIX, readNetworkId, writeNetworkId } from "@/lib/storageKeys";
 
 interface NetworkContextType {
   currentNetwork: NetworkConfig;
@@ -22,8 +24,12 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
     const timer = setTimeout(() => {
       if (isMounted) setMounted(true);
     }, 0);
-    const savedNetwork = localStorage.getItem("nester_network_id");
-    if (savedNetwork && (savedNetwork === "testnet" || savedNetwork === "mainnet")) {
+    // safeStorage never throws (#1233) — a throwing accessor (private
+    // browsing, full quota) falls back to the in-memory map, so this always
+    // resolves to either the saved network or the safe DEFAULT_NETWORK
+    // already set as initial state, never an undefined/crashed provider.
+    const savedNetwork = readNetworkId();
+    if (savedNetwork) {
       const timer2 = setTimeout(() => {
         if (isMounted) setCurrentNetworkState(NETWORKS[savedNetwork]);
       }, 0);
@@ -35,17 +41,18 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
   const setNetwork = (networkId: 'testnet' | 'mainnet') => {
     const newNetwork = NETWORKS[networkId];
     if (newNetwork && newNetwork.id !== currentNetwork.id) {
+      // Persist FIRST, then update React state (#1233): writeNetworkId
+      // never throws — a failing localStorage write falls back to the
+      // in-memory map instead — so by the time state changes, a subsequent
+      // readNetworkId() call is guaranteed to agree with it, whether that
+      // read lands on localStorage or the in-memory fallback. Doing this in
+      // the opposite order (state first) is what could previously leave
+      // React on the new network while persistence never happened at all.
+      writeNetworkId(networkId);
+      safeStorage.removeByPrefix(PORTFOLIO_CACHE_PREFIX);
       setCurrentNetworkState(newNetwork);
-      localStorage.setItem("nester_network_id", networkId);
-      
-      // Clear cached data based on requirements
-      Object.keys(localStorage).forEach(key => {
-        if (key.startsWith("nester_portfolio_v1:")) {
-          localStorage.removeItem(key);
-        }
-      });
-      
-      // The wallet disconnection and confirmation will be handled 
+
+      // The wallet disconnection and confirmation will be handled
       // where the switch is triggered or by a wrapper component,
       // but the state change itself happens here.
     }

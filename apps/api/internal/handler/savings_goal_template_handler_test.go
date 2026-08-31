@@ -117,6 +117,17 @@ func (m *mockGoalTemplateService) CreateFromTemplate(ctx context.Context, userID
 	return goal, nil
 }
 
+func (m *mockGoalTemplateService) UpdateNotes(_ context.Context, userID, goalID uuid.UUID, notes string) (savingsgoal.SavingsGoal, error) {
+	for i, g := range m.Goals {
+		if g.ID == goalID && g.UserID == userID {
+			g.Notes = notes
+			m.Goals[i] = g
+			return g, nil
+		}
+	}
+	return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
+}
+
 func TestGoalTemplateHandler(t *testing.T) {
 	userID := uuid.New()
 	templateID := uuid.New()

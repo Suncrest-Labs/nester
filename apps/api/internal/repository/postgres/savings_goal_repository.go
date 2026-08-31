@@ -88,7 +88,7 @@ func (r *SavingsGoalRepository) GetByShareToken(ctx context.Context, token uuid.
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals WHERE share_token = $1 AND deleted_at IS NULL
 	`, token)
 	g, err := scanSavingsGoalWithShare(row)
@@ -109,7 +109,7 @@ func (r *SavingsGoalRepository) GetByVaultID(ctx context.Context, vaultID uuid.U
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals WHERE vault_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at ASC
 		LIMIT 1
@@ -148,18 +148,24 @@ func (r *SavingsGoalRepository) ListByUser(ctx context.Context, userID uuid.UUID
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals
 		WHERE user_id = $1 AND deleted_at IS NULL
 	`
+	// The filters below append to the statement, but what is appended is a
+	// placeholder index derived from len(args) -- an integer produced by this
+	// function -- never caller data. category and search travel as bound
+	// parameters through QueryContext, so the database receives them separately
+	// from the statement text and never parses them as SQL.
+	// Proven by savings_goal_sqli_test.go (nester#1035).
 	args := []any{userID}
 	if category != "" {
 		args = append(args, category)
-		query += fmt.Sprintf(` AND category = $%d`, len(args))
+		query += fmt.Sprintf(` AND category = $%d`, len(args)) // #nosec G202 -- only the integer placeholder index is interpolated; the value is bound
 	}
 	if search != "" {
 		args = append(args, search)
-		query += fmt.Sprintf(` AND search_vector @@ plainto_tsquery('english', $%d)`, len(args))
+		query += fmt.Sprintf(` AND search_vector @@ plainto_tsquery('english', $%d)`, len(args)) // #nosec G202 -- only the integer placeholder index is interpolated; the value is bound
 	}
 	query += ` ORDER BY created_at DESC`
 
@@ -187,7 +193,7 @@ func (r *SavingsGoalRepository) GetByID(ctx context.Context, id uuid.UUID) (*sav
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals WHERE id = $1 AND deleted_at IS NULL
 	`, id)
 	g, err := scanSavingsGoalWithShare(row)
@@ -210,7 +216,7 @@ func (r *SavingsGoalRepository) GetByIDIncludingDeleted(ctx context.Context, id 
 		       status, completed_at, completion_action, name, emoji,
 		       share_token, share_enabled_at, onchain_goal_id, onchain_status,
 		       min_contribution, max_contribution, deleted_at,
-		       auto_compound, yield_balance
+		       auto_compound, yield_balance, notes
 		FROM savings_goals WHERE id = $1
 	`, id)
 	g, err := scanSavingsGoalWithShare(row)
@@ -530,7 +536,9 @@ func (r *SavingsGoalRepository) ListContributions(ctx context.Context, goalID, u
 		query += ` AND (vt.created_at < $3 OR (vt.created_at = $3 AND vt.id < $4))`
 		args = append(args, createdAt.UTC(), cursorID)
 	}
-	query += fmt.Sprintf(` ORDER BY vt.created_at DESC, vt.id DESC LIMIT $%d`, len(args)+1)
+	// As above: the appended value is the placeholder index, not caller input.
+	// The page size is bound as a parameter.
+	query += fmt.Sprintf(` ORDER BY vt.created_at DESC, vt.id DESC LIMIT $%d`, len(args)+1) // #nosec G202 -- only the integer placeholder index is interpolated; the value is bound
 	args = append(args, pageParams.PerPage+1)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -626,6 +634,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		deletedAt                                 sql.NullTime
 		autoCompound                              bool
 		yieldBalanceStr                           string
+		notes                                     sql.NullString
 	)
 	if err := row.Scan(
 		&id, &userID, &vaultID, &targetStr, &currency, &deadline, &description, &category,
@@ -633,7 +642,7 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		&status, &completedAt, &completionAction, &name, &emoji,
 		&shareToken, &shareEnabledAt, &onchainGoalID, &onchainStatus,
 		&minContribution, &maxContribution, &deletedAt,
-		&autoCompound, &yieldBalanceStr,
+		&autoCompound, &yieldBalanceStr, &notes,
 	); err != nil {
 		return savingsgoal.SavingsGoal{}, err
 	}
@@ -731,7 +740,25 @@ func scanSavingsGoalWithShare(row savingsGoalScanner) (savingsgoal.SavingsGoal, 
 		DeletedAt:             deletedAtPtr,
 		AutoCompound:          autoCompound,
 		YieldBalance:          yieldBalance,
+		Notes:                 notes.String,
 	}, nil
+}
+
+// UpdateNotes updates the notes column on a savings goal (#929).
+func (r *SavingsGoalRepository) UpdateNotes(ctx context.Context, goalID uuid.UUID, notes string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET notes = $1, updated_at = NOW()
+		WHERE id = $2
+	`, nullSQLString(notes), goalID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+	return nil
 }
 
 func nullSQLString(s string) sql.NullString {
