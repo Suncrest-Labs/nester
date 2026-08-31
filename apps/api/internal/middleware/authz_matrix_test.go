@@ -245,6 +245,7 @@ var authzMatrix = []AuthzRoute{
 	{Method: "POST", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/share"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/deposit"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/from-template"},
+	{Method: "GET", Path: "/api/v1/users/savings-gamification/progress"},
 	{Method: "POST", Path: "/api/v1/users/watchlist"},
 
 	// vaults

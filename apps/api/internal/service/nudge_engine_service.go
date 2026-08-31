@@ -271,7 +271,10 @@ type NudgeEngineGoalMilestoneNotifier struct {
 	NudgeEngine *NudgeEngineService
 }
 
-func (n NudgeEngineGoalMilestoneNotifier) SendGoalMilestone(ctx context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int) {
+// SendGoalMilestone ignores dedupeKey: the nudge engine's own history table
+// already decides whether a nudge for this user is due, so a redelivered
+// milestone re-enters that decision rather than bypassing it.
+func (n NudgeEngineGoalMilestoneNotifier) SendGoalMilestone(ctx context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int, _ string) {
 	hint := nudge.Candidate{
 		Type: nudge.NudgeTypeMilestone,
 		Facts: nudge.Facts{

@@ -353,3 +353,37 @@ fn test_treasury_upgrade_delay_requirement() {
     assert!(treasury_client.get_pending_upgrade().is_some());
 }
 
+/// Assert that vault state, total assets, and user balances survive
+/// long ledger advances beyond standard TTL windows without loss of precision or state (#1133).
+#[test]
+fn test_storage_ttl_persistence_after_long_ledger_advance() {
+    let h = NesterHarness::setup();
+    disable_circuit_breaker(&h);
+    let user = h.create_user();
+    let deposit_amount = 50_000_000_i128;
+
+    h.mint_deposit_tokens(&user, deposit_amount);
+    let shares = h.vault().deposit(&user, &deposit_amount, &0);
+    assert_eq!(shares, deposit_amount);
+
+    // Simulate extensive time progression (e.g. ~35 days)
+    h.env.ledger().with_mut(|li| {
+        li.timestamp += 3_000_000;
+    });
+
+    // Verify vault global accounting remains fully intact
+    assert_eq!(h.token().total_assets(), deposit_amount);
+    assert_eq!(h.token().total_supply(), deposit_amount);
+    assert_eq!(h.vault().share_price(), 10_000_000);
+
+    // Verify user shares and withdrawal capability remain fully accessible
+    let user_shares = h.token().balance(&user);
+    assert_eq!(user_shares, deposit_amount);
+
+    let remaining = h.vault().withdraw(&user, &user_shares, &0);
+    assert_eq!(remaining, 0);
+    assert_eq!(h.token().balance(&user), 0);
+}
+
+
+

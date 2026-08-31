@@ -1,10 +1,42 @@
-// This file tracks known vulnerabilities that are accepted or mitigated
+// This file tracks known vulnerabilities that are accepted or mitigated.
+// It is the enforcement source of truth for the CI vulnerability gate: every
+// vulnerability ID listed here is exempted from blocking CI, provided the
+// waiver carries a justification, a future review date, an owner, and a
+// status. CI fails the build when a waiver is expired, malformed, or
+// ownerless.
+// Review date format: YYYY-MM-DD
 
 // GO-2026-4316: Open redirect vulnerability in github.com/go-chi/chi
-// Justification: 
+// Justification:
 // - RedirectSlashes middleware is not used in our codebase
 // - Dependency is transitive through github.com/stellar/go-stellar-sdk
 // - No fix available yet (Fixed in: N/A)
 // - Code review confirmed middleware is not invoked
-// Status: Waiting for upstream fix
+// Review date: 2027-01-01
+// Owner: security-team
+// Status: Accepted - waiting for upstream fix
 GO-2026-4316
+
+// GO-2026-5037: Inefficient candidate hostname parsing in crypto/x509 (stdlib)
+// Justification:
+// - CPU-exhaustion issue triggered by parsing untrusted certificates; the API
+//   only parses certificates from trusted counterparties, and TLS is handled
+//   by the standard library with default validation
+// - Fixed in Go 1.25.11 / 1.26.4; CI toolchain (go.mod: 1.25.12) is already
+//   patched, waiver retained for older local toolchains pending upgrade
+// Review date: 2026-12-01
+// Owner: security-team
+// Status: Accepted - fixed in Go 1.25.11+; pending toolchain upgrade
+GO-2026-5037
+
+// GO-2026-5039: Arbitrary inputs included in errors without escaping in
+// net/textproto (stdlib)
+// Justification:
+// - Error-message injection in header parsing; affects debug/log output only,
+//   no secret material is echoed and no transport-level impact for our usage
+// - Fixed in Go 1.25.11 / 1.26.4; CI toolchain (go.mod: 1.25.12) is already
+//   patched, waiver retained for older local toolchains pending upgrade
+// Review date: 2026-12-01
+// Owner: security-team
+// Status: Accepted - fixed in Go 1.25.11+; pending toolchain upgrade
+GO-2026-5039

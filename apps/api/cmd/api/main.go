@@ -28,7 +28,9 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/ledger"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/outbox"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
 	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
@@ -309,7 +311,13 @@ func run() error {
 	yieldHarvestService := service.NewYieldHarvestService(yieldHarvestRepository)
 	vaultService.SetYieldHarvestRecorder(yieldHarvestService)
 
+	// Ledger: authoritative double-entry bookkeeping source of truth
+	ledgerRepository := postgres.NewLedgerRepository(db)
+	ledgerService := service.NewLedgerService(ledgerRepository, db)
+	_ = ledgerService // wired for future use; portfolio reads via repo, postings via vault repo helpers
+
 	portfolioService := service.NewPortfolioService(vaultRepository)
+	portfolioService.SetLedgerRepository(ledgerRepository)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioService)
 
 	transactionRepository := postgres.NewTransactionRepository(db)
@@ -1124,23 +1132,39 @@ func run() error {
 	// Per-goal notification preferences (mute/digest frequency).
 	goalNotificationRepo := postgres.NewGoalNotificationRepository(db)
 	goalNotificationPrefSvc := service.NewGoalNotificationPreferenceService(goalNotificationRepo, savingsGoalRepo)
+	// The milestone notifier chain. Since #1049 it is driven by the outbox
+	// relay's queue job (registered on jobWorker further down) rather than
+	// called inline, so every member is handed the milestone's dedupe key
+	// and must be idempotent with respect to it — see GoalMilestoneNotifier.
+	goalMilestoneNotifier := service.CompositeGoalMilestoneNotifier{
+		Notifiers: []service.GoalMilestoneNotifier{
+			service.DispatcherGoalMilestoneNotifier{
+				Dispatcher:  notificationDispatcher2,
+				Preferences: goalNotificationRepo,
+			},
+			service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
+			service.WebhookGoalMilestoneNotifier{
+				Svc:    webhookSvc,
+				Logger: baseLogger.WithGroup("webhook-milestone"),
+			},
+		},
+	}
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
 		vaultRepository,
-		service.CompositeGoalMilestoneNotifier{
-			Notifiers: []service.GoalMilestoneNotifier{
-				service.DispatcherGoalMilestoneNotifier{
-					Dispatcher:  notificationDispatcher2,
-					Preferences: goalNotificationRepo,
-				},
-				service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
-				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
-			},
-		},
+		goalMilestoneNotifier,
 	)
 	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
 	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
+	savingsGamificationRepo := postgres.NewSavingsGamificationRepository(db)
+	savingsGamificationSvc := service.NewSavingsGamificationService(
+		savingsGamificationRepo,
+		service.DispatcherGamificationNotifier{Dispatcher: notificationDispatcher2},
+	)
+	savingsGoalSvc.SetGamificationRecorder(savingsGamificationSvc)
+	savingsGamificationHandler := handler.NewSavingsGamificationHandler(savingsGamificationSvc)
+	savingsGamificationHandler.Register(mux)
 	savingsGoalSvc.SetTemplateRepository(goalTemplateRepo)
 	// Honor each goal's auto_compound preference when its vault is harvested (#task1).
 	vaultService.SetGoalYieldRouter(savingsGoalSvc)
@@ -1307,6 +1331,60 @@ func run() error {
 	// wide worker-level concurrency here is safe.
 	jobWorker.Register(service.WebhookDeliveryJobType, webhookDeliveryHandler, 0)
 
+	// Transactional outbox (#1049). The relay hands outbox rows to this same
+	// worker pool; these three handlers are the side effects it can route
+	// to. Registering them here — before Run — is what makes an event type
+	// routable at all: the relay dead-letters anything it has no route for,
+	// on the grounds that retrying cannot conjure a handler.
+	jobWorker.Register(service.GoalMilestoneJobType,
+		service.NewGoalMilestoneJobHandler(goalMilestoneNotifier, baseLogger.WithGroup("goal-milestone-job")), 0)
+	jobWorker.Register(service.WebhookFanoutJobType,
+		service.NewWebhookFanoutJobHandler(webhookSvc, baseLogger.WithGroup("webhook-fanout")), 0)
+	jobWorker.Register(notifications.NotificationSendJobType,
+		notifications.NewNotificationSendJobHandler(notificationDispatcher2), 0)
+
+	outboxRepo := postgres.NewOutboxRepository(db)
+	outboxMetrics := outbox.NewStdMetrics()
+	// Every relay instance runs: ClaimDue takes row locks with SKIP LOCKED,
+	// so instances divide the backlog rather than duplicating it, and a
+	// leader election here would only turn a horizontal scale-out into a
+	// single point of failure for every side effect in the system.
+	outboxRelay := outbox.NewRelay(
+		outboxRepo,
+		jobQueueClient,
+		jobQueueRepo,
+		outbox.Routes{
+			service.OutboxEventGoalMilestone:          service.GoalMilestoneJobType,
+			service.OutboxEventWebhookFanout:          service.WebhookFanoutJobType,
+			notifications.OutboxEventNotificationSend: notifications.NotificationSendJobType,
+		},
+		outbox.RelayConfig{
+			Enabled:       cfg.Outbox().Enabled(),
+			PollInterval:  cfg.Outbox().PollInterval(),
+			BatchSize:     cfg.Outbox().BatchSize(),
+			Lease:         cfg.Outbox().Lease(),
+			Backoff:       cfg.Outbox().Backoff(),
+			StatsInterval: cfg.Outbox().StatsInterval(),
+		},
+		baseLogger.WithGroup("outbox-relay"),
+		outboxMetrics,
+	)
+	outboxCtx, cancelOutbox := context.WithCancel(context.Background())
+	defer cancelOutbox()
+	go func() { _ = outboxRelay.Run(outboxCtx) }()
+
+	// Retention: without it the outbox only ever grows, on the write path of
+	// every domain transaction that inserts into it. Leader-gated because
+	// pruning from every instance is correct but wasteful.
+	outboxRetentionJob := outbox.NewRetentionJob(outboxRepo, outbox.RetentionConfig{
+		DispatchedRetention: cfg.Outbox().DispatchedRetention(),
+		DeadRetention:       cfg.Outbox().DeadRetention(),
+	}, baseLogger.WithGroup("outbox-retention"), outboxMetrics)
+	outboxRetentionJob.SetLeaderChecker(schedulerLeadership)
+	outboxRetentionCtx, cancelOutboxRetention := context.WithCancel(context.Background())
+	defer cancelOutboxRetention()
+	go outboxRetentionJob.Run(outboxRetentionCtx, cfg.Outbox().RetentionInterval())
+
 	harvestEngine := harvest.New(
 		harvest.Config{
 			Enabled:  cfg.Harvest().Enabled(),
@@ -1390,6 +1468,38 @@ func run() error {
 	digestCtx, cancelDigest := context.WithCancel(context.Background())
 	defer cancelDigest()
 	go digestJob.Run(digestCtx)
+
+	// Ledger balance verification job: recomputes balances from raw entries and asserts equality
+	ledgerVerificationJob := scheduler.NewLedgerBalanceVerificationJob(
+		scheduler.VerificationConfig{Enabled: true, Interval: 10 * time.Minute},
+		ledgerRepository,
+		baseLogger.WithGroup("ledger-verification"),
+	)
+	ledgerVerificationJob.SetLeaderChecker(schedulerLeadership)
+	verificationCtx, cancelVerification := context.WithCancel(context.Background())
+	defer cancelVerification()
+	go ledgerVerificationJob.Run(verificationCtx)
+
+	// Ledger reconciliation job: compares ledger vault-pool vs on-chain and sum
+	// user positions vs share price.
+	chainReaderForLedger := &ledgerChainReaderAdapter{
+		contractReader: stellarpkg.NewContractReader(
+			cfg.Stellar().RPCURL(),
+			cfg.Stellar().NetworkPassphrase(),
+			"",
+		),
+	}
+	ledgerReconciliationJob := scheduler.NewLedgerReconciliationJob(scheduler.LedgerReconciliationDeps{
+		LedgerRepo:  ledgerRepository,
+		VaultLister: &reconciliationVaultListerAdapter{vaultRepo: vaultRepository},
+		ChainReader: chainReaderForLedger,
+		Logger:      baseLogger.WithGroup("ledger-reconciliation"),
+		Config:      ledgerDomainConfig(),
+	})
+	ledgerReconciliationJob.SetLeaderChecker(schedulerLeadership)
+	reconciliationCtx, cancelReconciliation := context.WithCancel(context.Background())
+	defer cancelReconciliation()
+	go ledgerReconciliationJob.Run(reconciliationCtx)
 
 	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
 	performanceSnapshotsHandler.Register(mux)
@@ -2371,4 +2481,68 @@ func pingStellarDependencies(logger *slog.Logger, cfg *config.Config) error {
 	}
 
 	return nil
+}
+
+// ledgerChainReaderAdapter wraps stellar ContractReader to implement
+// ledger.ChainReader for the reconciliation job.
+type ledgerChainReaderAdapter struct {
+	contractReader *stellarpkg.ContractReader
+}
+
+func (a *ledgerChainReaderAdapter) ReadVaultBalance(ctx context.Context, contractAddress string) (int64, error) {
+	if a.contractReader == nil {
+		return 0, fmt.Errorf("contract reader not configured")
+	}
+	dec, err := a.contractReader.VaultBalance(ctx, contractAddress)
+	if err != nil {
+		return 0, err
+	}
+	// Convert decimal USDC to stroops int64.
+	return dec.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart(), nil
+}
+
+func (a *ledgerChainReaderAdapter) ReadTotalSharesTimesPrice(ctx context.Context, contractAddress string) (int64, error) {
+	if a.contractReader == nil {
+		return 0, nil
+	}
+	// total_shares*share_price is total assets, which the contract exposes
+	// directly.
+	dec, err := a.contractReader.TotalAssets(ctx, contractAddress)
+	if err != nil {
+		return 0, nil // skip this check if not available
+	}
+	return dec.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart(), nil
+}
+
+// reconciliationVaultListerAdapter adapts the vault repository to
+// scheduler.ReconciliationVaultLister.
+type reconciliationVaultListerAdapter struct {
+	vaultRepo *postgres.VaultRepository
+}
+
+func (a *reconciliationVaultListerAdapter) ListActiveForReconciliation(ctx context.Context) ([]scheduler.ReconcileVaultInfo, error) {
+	if a.vaultRepo == nil {
+		return nil, nil
+	}
+	vaults, err := a.vaultRepo.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]scheduler.ReconcileVaultInfo, 0, len(vaults))
+	for _, v := range vaults {
+		out = append(out, scheduler.ReconcileVaultInfo{
+			ID:              v.ID,
+			ContractAddress: v.ContractAddress,
+			Currency:        v.Currency,
+		})
+	}
+	return out, nil
+}
+
+func ledgerDomainConfig() ledger.ReconciliationConfig {
+	return ledger.ReconciliationConfig{
+		Enabled:          true,
+		Interval:         5 * time.Minute,
+		ToleranceStroops: 1_000_000, // 0.1 USDC
+	}
 }

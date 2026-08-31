@@ -498,6 +498,12 @@ impl YieldRegistryContract {
             }
         };
 
+        // The adapter answered, so it is alive — but that alone does not clear
+        // the failure streak: a reading that is rejected below (out of range or
+        // beyond the deviation guard) must keep growing the count so a source
+        // pinned to garbage APY eventually degrades instead of staying Active
+        // on a stale value. The streak is cleared only when a reading is
+        // committed.
         match reading.confidence {
             ApyConfidence::Unavailable => {
                 // Unknown is not zero. Keep the last value, flag it unknown,
@@ -536,6 +542,8 @@ impl YieldRegistryContract {
                     };
                 }
 
+                // An acceptable reading means the adapter is healthy again:
+                // clear the streak alongside the committed update.
                 source.failure_count = 0;
                 source.apy_confidence = reading.confidence.clone();
                 commit_apy_update(&env, &id, &mut source, reading.apy_bps);

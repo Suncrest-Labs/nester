@@ -15,9 +15,9 @@ import (
 )
 
 type fakeGoalCoachingRepo struct {
-	goals         []savingsgoal.SavingsGoal
-	err           error
-	updatedNotes  map[uuid.UUID]string
+	goals        []savingsgoal.SavingsGoal
+	err          error
+	updatedNotes map[uuid.UUID]string
 }
 
 func (f *fakeGoalCoachingRepo) ListActiveApproachingDeadline(_ context.Context, _ int) ([]savingsgoal.SavingsGoal, error) {

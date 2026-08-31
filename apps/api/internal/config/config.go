@@ -58,6 +58,7 @@ type Config struct {
 	reconciliation        ReconciliationConfig
 	recurringDeposit      RecurringDepositConfig
 	jobQueue              JobQueueConfig
+	outbox                OutboxConfig
 	harvest               HarvestConfig
 	rebalancer            RebalancerConfig
 	schedulerLeadership   SchedulerLeadershipConfig
@@ -492,6 +493,23 @@ func Load() (*Config, error) {
 			statsInterval:      loader.durationDefault("JOB_QUEUE_STATS_INTERVAL", 30*time.Second),
 			drainTimeout:       loader.durationDefault("JOB_QUEUE_DRAIN_TIMEOUT", 25*time.Second),
 		},
+		outbox: OutboxConfig{
+			enabled:      loader.boolDefault("OUTBOX_RELAY_ENABLED", true),
+			pollInterval: loader.durationDefault("OUTBOX_RELAY_POLL_INTERVAL", time.Second),
+			batchSize:    loader.intDefault("OUTBOX_RELAY_BATCH_SIZE", 100),
+			lease:        loader.durationDefault("OUTBOX_RELAY_LEASE", 30*time.Second),
+			// Hand-off backoff only. Delivery retry belongs to the job
+			// queue (JOB_QUEUE_BACKOFF_*), and configuring a second budget
+			// for it here is exactly the duplication #1049 avoids.
+			backoff:             loader.durationDefault("OUTBOX_RELAY_BACKOFF", 5*time.Second),
+			statsInterval:       loader.durationDefault("OUTBOX_RELAY_STATS_INTERVAL", 30*time.Second),
+			retentionInterval:   loader.durationDefault("OUTBOX_RETENTION_INTERVAL", 24*time.Hour),
+			dispatchedRetention: loader.durationDefault("OUTBOX_DISPATCHED_RETENTION", 7*24*time.Hour),
+			// Dead rows outlive delivered ones by a wide margin: a delivered
+			// event is history, a dead one is the evidence someone needs to
+			// work out which side effect never happened and why.
+			deadRetention: loader.durationDefault("OUTBOX_DEAD_RETENTION", 30*24*time.Hour),
+		},
 		rebalancer: RebalancerConfig{
 			enabled:       loader.boolDefault("REBALANCER_ENABLED", true),
 			interval:      time.Duration(loader.intDefault("REBALANCER_INTERVAL_MINUTES", 15)) * time.Minute,
@@ -853,6 +871,31 @@ type JobQueueConfig struct {
 	statsInterval      time.Duration
 	drainTimeout       time.Duration
 }
+
+// OutboxConfig governs the transactional outbox relay and its retention
+// sweep (#1049).
+type OutboxConfig struct {
+	enabled             bool
+	pollInterval        time.Duration
+	batchSize           int
+	lease               time.Duration
+	backoff             time.Duration
+	statsInterval       time.Duration
+	retentionInterval   time.Duration
+	dispatchedRetention time.Duration
+	deadRetention       time.Duration
+}
+
+func (c Config) Outbox() OutboxConfig                     { return c.outbox }
+func (o OutboxConfig) Enabled() bool                      { return o.enabled }
+func (o OutboxConfig) PollInterval() time.Duration        { return o.pollInterval }
+func (o OutboxConfig) BatchSize() int                     { return o.batchSize }
+func (o OutboxConfig) Lease() time.Duration               { return o.lease }
+func (o OutboxConfig) Backoff() time.Duration             { return o.backoff }
+func (o OutboxConfig) StatsInterval() time.Duration       { return o.statsInterval }
+func (o OutboxConfig) RetentionInterval() time.Duration   { return o.retentionInterval }
+func (o OutboxConfig) DispatchedRetention() time.Duration { return o.dispatchedRetention }
+func (o OutboxConfig) DeadRetention() time.Duration       { return o.deadRetention }
 
 // HarvestConfig governs the yield-harvest orchestration engine (#845).
 type HarvestConfig struct {
@@ -1217,6 +1260,10 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.allocation.minWeightPercent < 1 || c.allocation.minWeightPercent > 100 {
 		loader.addError("MIN_ALLOCATION_WEIGHT must be between 1 and 100")
+	}
+
+	if c.tracing.sampleRatio < 0 || c.tracing.sampleRatio > 1 {
+		loader.addError("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1")
 	}
 }
 
