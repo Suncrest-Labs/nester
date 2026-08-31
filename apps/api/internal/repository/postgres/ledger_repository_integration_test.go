@@ -33,10 +33,10 @@ func applyLedgerMigrations(t *testing.T, db *sql.DB) {
 		"002_create_vaults_table.up.sql",
 		"005_create_allocations_table.up.sql",
 		"014_add_missing_columns.up.sql",
-		"090_create_ledger_accounts.up.sql",
-		"091_create_ledger_entries.up.sql",
-		"092_create_ledger_balances.up.sql",
-		"093_create_ledger_reconciliation.up.sql",
+		"113_create_ledger_accounts.up.sql",
+		"114_create_ledger_entries.up.sql",
+		"115_create_ledger_balances.up.sql",
+		"116_create_ledger_reconciliation.up.sql",
 	}
 	for _, name := range migrations {
 		path := filepath.Join("..", "..", "..", "migrations", name)
