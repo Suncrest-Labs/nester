@@ -31,6 +31,10 @@ type VaultReader interface {
 	GetVault(ctx context.Context, id uuid.UUID) (vault.Vault, error)
 }
 
+type SavingsGamificationRecorder interface {
+	ProcessConfirmedDeposit(ctx context.Context, event savingsstreak.SavingEvent) (savingsstreak.Progress, error)
+}
+
 type OutcomeRecorder interface {
 	RecordGoalCompletion(ctx context.Context, userID uuid.UUID, ts time.Time) error
 }
@@ -42,6 +46,7 @@ type SavingsGoalService struct {
 	notifier       GoalMilestoneNotifier
 	streakRepo     savingsstreak.Repository
 	streakNotifier StreakMilestoneNotifier
+	gamification   SavingsGamificationRecorder
 	outcomeRec     OutcomeRecorder
 }
 
@@ -80,6 +85,11 @@ func (s *SavingsGoalService) SetStreakNotifier(n StreakMilestoneNotifier) {
 		return
 	}
 	s.streakNotifier = n
+}
+
+// SetGamificationRecorder attaches the daily savings gamification engine.
+func (s *SavingsGoalService) SetGamificationRecorder(recorder SavingsGamificationRecorder) {
+	s.gamification = recorder
 }
 
 type CreateSavingsGoalInput struct {
@@ -1173,12 +1183,43 @@ func (s *SavingsGoalService) DepositSplit(ctx context.Context, userID uuid.UUID,
 			ProgressPct:   pct,
 		}
 	}
+	s.recordGamificationDeposit(ctx, userID, in.TotalAmount, deposits, completedGoals(goals, results))
 
 	return SplitDepositResult{
 		TotalDeposited: in.TotalAmount,
 		Currency:       currency,
 		Goals:          results,
 	}, nil
+}
+
+func (s *SavingsGoalService) recordGamificationDeposit(ctx context.Context, userID uuid.UUID, amount decimal.Decimal, deposits []savingsgoal.GoalDeposit, goalsCompleted int) {
+	if s.gamification == nil || len(deposits) == 0 {
+		return
+	}
+	eventID := "goal-deposit:" + deposits[0].ID.String()
+	if len(deposits) > 1 {
+		eventID = "goal-deposit-split:" + deposits[0].ID.String()
+	}
+	_, _ = s.gamification.ProcessConfirmedDeposit(ctx, savingsstreak.SavingEvent{
+		EventID:             eventID,
+		UserID:              userID,
+		Type:                "deposit_confirmed",
+		Amount:              amount,
+		NetAmount:           amount,
+		OccurredAt:          time.Now().UTC(),
+		UserTimezone:        "UTC",
+		GoalsCompletedDelta: goalsCompleted,
+	})
+}
+
+func completedGoals(goals []*savingsgoal.SavingsGoal, results []GoalDepositResult) int {
+	count := 0
+	for i, result := range results {
+		if i < len(goals) && goals[i] != nil && goals[i].TargetAmount.IsPositive() && result.CurrentAmount.GreaterThanOrEqual(goals[i].TargetAmount) {
+			count++
+		}
+	}
+	return count
 }
 
 // MinDeadlineLeadTime is the minimum distance into the future a new goal's

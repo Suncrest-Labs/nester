@@ -1141,6 +1141,14 @@ func run() error {
 	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
 	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
+	savingsGamificationRepo := postgres.NewSavingsGamificationRepository(db)
+	savingsGamificationSvc := service.NewSavingsGamificationService(
+		savingsGamificationRepo,
+		service.DispatcherGamificationNotifier{Dispatcher: notificationDispatcher2},
+	)
+	savingsGoalSvc.SetGamificationRecorder(savingsGamificationSvc)
+	savingsGamificationHandler := handler.NewSavingsGamificationHandler(savingsGamificationSvc)
+	savingsGamificationHandler.Register(mux)
 	savingsGoalSvc.SetTemplateRepository(goalTemplateRepo)
 	// Honor each goal's auto_compound preference when its vault is harvested (#task1).
 	vaultService.SetGoalYieldRouter(savingsGoalSvc)
