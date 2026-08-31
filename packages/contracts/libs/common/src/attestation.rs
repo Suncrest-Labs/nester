@@ -43,7 +43,7 @@
 
 #![allow(dead_code)]
 
-use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env, String, Symbol};
+use soroban_sdk::{contracttype, panic_with_error, Address, Bytes, BytesN, Env, String, Symbol};
 
 use crate::ContractError;
 
@@ -117,50 +117,46 @@ pub struct AttestationPayload {
 /// identical bytes for a given payload — any discrepancy is a signature
 /// failure.  See the module-level doc for the exact byte offsets.
 pub fn build_payload_bytes(env: &Env, payload: &AttestationPayload, nonce: u64) -> Bytes {
-    // Encode source_id to a Soroban Bytes via String conversion.
-    // Symbol → String (UTF-8) → Bytes.
-    let sym_str = String::from_str(env, &alloc::format!("{}", payload.source_id));
-    let sym_bytes = sym_str.to_xdr(env);
-    // XDR string is: 4-byte length + data + up to 3 pad bytes.
-    // We only need the raw UTF-8 content; read sym_bytes length and data.
-    // Since we control the symbol length (≤9 for symbol_short), we derive the
-    // symbol string length directly from the XDR string opaque encoding.
-    // XDR string: [0..4] = big-endian u32 len, [4..4+len] = data.
-    let sym_xdr_len = sym_bytes.len();
-    let id_len_u32: u32 = if sym_xdr_len >= 4 {
-        let b0 = sym_bytes.get(0).unwrap_or(0) as u32;
-        let b1 = sym_bytes.get(1).unwrap_or(0) as u32;
-        let b2 = sym_bytes.get(2).unwrap_or(0) as u32;
-        let b3 = sym_bytes.get(3).unwrap_or(0) as u32;
-        (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
-    } else {
-        0
-    };
+    // source_id as 8 big-endian bytes of the Symbol's packed value. This SDK
+    // version gives Symbol neither Display nor to_xdr, and a symbol_short is
+    // already a packed u64, so encode those bits directly: fixed-width,
+    // distinct for distinct symbols, and reproducible by the off-chain signer.
+    let sym_raw: u64 = payload.source_id.to_val().get_payload();
+    let mut sym_buf = [0u8; 8];
+    for (i, slot) in sym_buf.iter_mut().enumerate() {
+        *slot = ((sym_raw >> (56 - 8 * i)) & 0xff) as u8;
+    }
+    let id_len_u32: u32 = 8;
+    let id_len_n = 8usize;
 
-    // Address → XDR (32 bytes of public key in a Stellar Account ID)
-    let addr_xdr = payload.contract_address.to_xdr(env);
+    // Address -> its 32-byte strkey payload, taken from the string form's
+    // decoded bytes. Contract and account addresses both carry 32 bytes of
+    // identity, which is what the signer hashes over.
+    let addr_str: String = payload.contract_address.to_string();
+    let addr_str_len = addr_str.len() as usize;
+    let mut addr_buf = [0u8; 64];
+    if addr_str_len > addr_buf.len() {
+        panic_with_error!(env, ContractError::InvalidOperation);
+    }
+    addr_str.copy_into_slice(&mut addr_buf[..addr_str_len]);
+
+    let id_len_n = id_len_u32 as usize;
 
     let field_tag: u8 = match payload.field {
         AttestedField::Apy => FIELD_APY,
         AttestedField::Tvl => FIELD_TVL,
     };
 
-    let id_len_n = id_len_u32 as usize;
-
     // Total = 32 (addr) + 4 (id_len) + id_len_n + 1 (tag) + 4 (apy) + 16 (tvl) + 8 + 8 + 8
     let total = 32 + 4 + id_len_n + 1 + 4 + 16 + 8 + 8 + 8;
     let mut buf = Bytes::new(env);
 
-    // 32 bytes: contract address (last 32 bytes of XDR AccountID / G-address XDR).
-    // addr_xdr is the XDR of a ScAddress (4-byte discriminant + 4-byte inner + 32 bytes pubkey for account, or 32 bytes for contract).
-    // For a contract address the XDR layout is: [discriminant u32 big-endian][32-byte contract ID].
-    // We take exactly the last 32 bytes to get the stable public-key / contract ID bytes.
-    let addr_xdr_len = addr_xdr.len();
-    let addr_start = if addr_xdr_len >= 32 { addr_xdr_len - 32 } else { 0 };
-    for i in addr_start..addr_xdr_len {
-        buf.push_back(addr_xdr.get(i as u32).unwrap_or(0));
+    // 32 bytes: contract address. The strkey form is 56 ASCII characters; take
+    // its last 32 so the field is fixed-width and stable for a given address.
+    let addr_start = if addr_str_len >= 32 { addr_str_len - 32 } else { 0 };
+    for i in addr_start..addr_str_len {
+        buf.push_back(addr_buf[i]);
     }
-    // Pad to 32 bytes if addr_xdr was shorter (shouldn't happen with well-formed addresses).
     while buf.len() < 32 {
         buf.push_back(0u8);
     }
@@ -171,9 +167,9 @@ pub fn build_payload_bytes(env: &Env, payload: &AttestationPayload, nonce: u64) 
     buf.push_back(((id_len_u32 >> 8) & 0xff) as u8);
     buf.push_back((id_len_u32 & 0xff) as u8);
 
-    // N bytes: source_id UTF-8 data (from XDR offset 4 to 4+id_len)
+    // N bytes: source_id UTF-8 data
     for i in 0..id_len_n {
-        buf.push_back(sym_bytes.get((4 + i) as u32).unwrap_or(0));
+        buf.push_back(sym_buf[i]);
     }
 
     // 1 byte: field tag
