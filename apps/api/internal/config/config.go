@@ -1261,6 +1261,10 @@ func (c *Config) validate(loader *envLoader) {
 	if c.allocation.minWeightPercent < 1 || c.allocation.minWeightPercent > 100 {
 		loader.addError("MIN_ALLOCATION_WEIGHT must be between 1 and 100")
 	}
+
+	if c.tracing.sampleRatio < 0 || c.tracing.sampleRatio > 1 {
+		loader.addError("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1")
+	}
 }
 
 func validateAllowedOrigins(environment string, origins []string, loader *envLoader) {
