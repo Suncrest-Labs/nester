@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -27,29 +29,29 @@ func applyLedgerMigrations(t *testing.T, db *sql.DB) {
 	`); err != nil {
 		t.Fatalf("drop tables: %v", err)
 	}
-	// Need vaults and users for FKs
-	migrations := []string{
-		"001_create_users_table.up.sql",
-		"002_create_vaults_table.up.sql",
-		"005_create_allocations_table.up.sql",
-		// 014 alters settlements, so the table has to exist first.
-		"006_create_settlements_table.up.sql",
-		// resetIntegrationTables truncates settlements, allocations,
-		// vault_transactions, yield_harvests, vaults and users, so every one
-		// of them has to be created here or the TRUNCATE fails outright.
-		"008_add_vault_transactions.up.sql",
-		"014_add_missing_columns.up.sql",
-		"042_create_yield_harvests.up.sql",
-		"113_create_ledger_accounts.up.sql",
-		"114_create_ledger_entries.up.sql",
-		"115_create_ledger_balances.up.sql",
-		"116_create_ledger_reconciliation.up.sql",
+	// Apply the whole up-chain in order rather than a hand-picked subset.
+	// The subset approach failed three times in a row here — each fix
+	// surfaced the next missing table or column (settlements, then
+	// vault_transactions, then users.display_name) because this file's
+	// helpers touch more schema than the ledger tables alone. Applying
+	// everything is what the migration-safety job does and cannot drift.
+	dir := filepath.Join("..", "..", "..", "migrations")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", dir, err)
 	}
-	for _, name := range migrations {
-		path := filepath.Join("..", "..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".up.sql") {
+			names = append(names, e.Name())
+		}
+	}
+	// Lexical order matches the zero-padded numeric prefix ordering.
+	sort.Strings(names)
+	for _, name := range names {
+		contents, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
+			t.Fatalf("ReadFile(%q) error = %v", name, err)
 		}
 		if _, err := db.Exec(string(contents)); err != nil {
 			t.Fatalf("applying migration %q: %v", name, err)
