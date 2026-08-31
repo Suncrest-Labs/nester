@@ -52,10 +52,10 @@ type APYService struct {
 
 func NewAPYService(repo apysnapshot.Repository) *APYService {
 	return &APYService{
-		repo:            repo,
-		httpClient:      &http.Client{Timeout: 15 * time.Second},
-		defiLlamaURL:    "https://yields.llama.fi/pools",
-		logger:          slog.Default(),
+		repo:         repo,
+		httpClient:   &http.Client{Timeout: 15 * time.Second},
+		defiLlamaURL: "https://yields.llama.fi/pools",
+		logger:       slog.Default(),
 	}
 }
 

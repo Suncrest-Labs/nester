@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/outbox"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
@@ -352,6 +353,57 @@ func (r *SavingsGoalRepository) SumVaultBalance(ctx context.Context, userID uuid
 		return decimal.Zero, nil
 	}
 	return decimal.NewFromString(total.String)
+}
+
+// UpdateMilestonesWithOutbox marks milestones as notified and records the
+// side effects that follow from them in one transaction (#1049).
+//
+// This is the whole point of the outbox, in one method. Before it, the
+// milestone update committed and a goroutine then tried to notify: kill the
+// process in between and the goal is permanently marked "already told them"
+// for a notification that never happened — the user's progress changed and
+// nobody ever will tell them, because the flag says it was done. Writing
+// both facts in one transaction makes that window not exist.
+//
+// It is the outbox writer's Insert (rather than raw SQL here) that keeps the
+// row shape in one place; what this method contributes is the transaction
+// both writes share.
+func (r *SavingsGoalRepository) UpdateMilestonesWithOutbox(
+	ctx context.Context,
+	goalID uuid.UUID,
+	milestones []int,
+	events []outbox.Event,
+) error {
+	if milestones == nil {
+		milestones = []int{}
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE savings_goals
+		SET notified_milestones = $1, updated_at = NOW()
+		WHERE id = $2
+	`, pq.Array(milestones), goalID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return savingsgoal.ErrGoalNotFound
+	}
+
+	writer := outbox.NewWriter(NewOutboxRepository(r.db))
+	for _, e := range events {
+		// tx, not r.db: passing the pool here would insert the row outside
+		// this transaction and silently give up every guarantee above.
+		if err := writer.Insert(ctx, tx, e); err != nil {
+			return fmt.Errorf("record outbox event %s: %w", e.DedupeKey, err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (r *SavingsGoalRepository) UpdateMilestones(ctx context.Context, goalID uuid.UUID, milestones []int) error {

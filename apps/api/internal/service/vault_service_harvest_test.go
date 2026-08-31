@@ -59,8 +59,8 @@ func TestVaultServiceHarvestRecordsTransaction(t *testing.T) {
 
 	compound := false
 	result, err := svc.HarvestVault(context.Background(), HarvestVaultInput{
-		VaultID: created.ID,
-		UserID:  userID,
+		VaultID:  created.ID,
+		UserID:   userID,
 		Compound: &compound,
 	})
 	if err != nil {

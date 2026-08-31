@@ -24,7 +24,8 @@ type GamificationNotifier interface {
 
 type noopGamificationNotifier struct{}
 
-func (noopGamificationNotifier) SendGamificationEvent(context.Context, uuid.UUID, string, string, map[string]any) {}
+func (noopGamificationNotifier) SendGamificationEvent(context.Context, uuid.UUID, string, string, map[string]any) {
+}
 
 type DispatcherGamificationNotifier struct {
 	Dispatcher *notifications.Dispatcher
