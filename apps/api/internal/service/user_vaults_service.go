@@ -11,14 +11,14 @@ import (
 
 // IntelligenceVault is the vault shape expected by the intelligence service.
 type IntelligenceVault struct {
-	ID              string                     `json:"id"`
-	Name            string                     `json:"name"`
-	ContractAddress string                     `json:"contract_address"`
-	TotalBalanceUSD float64                    `json:"total_balance_usd"`
-	YieldEarnedUSD  float64                    `json:"yield_earned_usd"`
-	AverageAPY      float64                    `json:"average_apy"`
-	LockPeriodDays  int                        `json:"lock_period_days"`
-	Allocations     []IntelligenceAllocation   `json:"allocations"`
+	ID              string                   `json:"id"`
+	Name            string                   `json:"name"`
+	ContractAddress string                   `json:"contract_address"`
+	TotalBalanceUSD float64                  `json:"total_balance_usd"`
+	YieldEarnedUSD  float64                  `json:"yield_earned_usd"`
+	AverageAPY      float64                  `json:"average_apy"`
+	LockPeriodDays  int                      `json:"lock_period_days"`
+	Allocations     []IntelligenceAllocation `json:"allocations"`
 }
 
 type IntelligenceAllocation struct {

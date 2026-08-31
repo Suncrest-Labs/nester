@@ -1,4 +1,5 @@
 """Unit tests for CoinGeckoClient with mocked HTTP responses."""
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -90,6 +91,32 @@ async def test_get_prices_returns_empty_on_network_error(client):
 
 
 @pytest.mark.asyncio
+async def test_get_prices_falls_back_to_stale_cache_on_429(client):
+    cache_key = "coingecko:prices:usd-coin"
+    _mem_cache[cache_key] = (_PRICE_RESPONSE, time.monotonic() - 10)
+    mock_resp = _make_mock_response(429, {})
+    with patch("aiohttp.ClientSession", return_value=_make_session(mock_resp)):
+        result = await client.get_prices(["usd-coin"])
+    assert "usd-coin" in result
+    assert abs(result["usd-coin"].usd - 1.0002) < 1e-6
+    assert result["usd-coin"].usd_24h_change == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
+async def test_get_prices_falls_back_to_stale_cache_on_error(client):
+    cache_key = "coingecko:prices:usd-coin"
+    _mem_cache[cache_key] = (_PRICE_RESPONSE, time.monotonic() - 10)
+    session = AsyncMock()
+    session.get = MagicMock(side_effect=Exception("connection refused"))
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    with patch("aiohttp.ClientSession", return_value=session):
+        result = await client.get_prices(["usd-coin"])
+    assert "usd-coin" in result
+    assert abs(result["usd-coin"].usd - 1.0002) < 1e-6
+
+
+@pytest.mark.asyncio
 async def test_get_prices_caches_result(client):
     mock_resp = _make_mock_response(200, _PRICE_RESPONSE)
     with patch("aiohttp.ClientSession", return_value=_make_session(mock_resp)) as mock_session:
@@ -136,6 +163,21 @@ async def test_get_market_sentiment_returns_neutral_on_429(client):
 
 
 @pytest.mark.asyncio
+async def test_get_market_sentiment_falls_back_to_stale_cache_on_429(client):
+    cache_key = "coingecko:defi_global"
+    _mem_cache[cache_key] = (
+        {"signal": "bull", "defi_market_cap_usd": 85e9, "defi_dominance_pct": 4.2},
+        time.monotonic() - 10,
+    )
+    mock_resp = _make_mock_response(429, {})
+    with patch("aiohttp.ClientSession", return_value=_make_session(mock_resp)):
+        result = await client.get_market_sentiment()
+    assert result.signal == "bull"
+    assert result.defi_market_cap_usd == pytest.approx(85e9, rel=1e-3)
+    assert result.defi_dominance_pct == pytest.approx(4.2, rel=1e-3)
+
+
+@pytest.mark.asyncio
 async def test_get_market_sentiment_returns_neutral_on_error(client):
     session = AsyncMock()
     session.get = MagicMock(side_effect=Exception("timeout"))
@@ -144,3 +186,20 @@ async def test_get_market_sentiment_returns_neutral_on_error(client):
     with patch("aiohttp.ClientSession", return_value=session):
         result = await client.get_market_sentiment()
     assert result.signal == "neutral"
+
+
+@pytest.mark.asyncio
+async def test_get_market_sentiment_falls_back_to_stale_cache_on_error(client):
+    cache_key = "coingecko:defi_global"
+    _mem_cache[cache_key] = (
+        {"signal": "bull", "defi_market_cap_usd": 85e9, "defi_dominance_pct": 4.2},
+        time.monotonic() - 10,
+    )
+    session = AsyncMock()
+    session.get = MagicMock(side_effect=Exception("timeout"))
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    with patch("aiohttp.ClientSession", return_value=session):
+        result = await client.get_market_sentiment()
+    assert result.signal == "bull"
+    assert result.defi_market_cap_usd == pytest.approx(85e9, rel=1e-3)

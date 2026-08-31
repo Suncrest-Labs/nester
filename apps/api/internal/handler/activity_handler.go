@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/activity"
@@ -36,18 +37,21 @@ func (h *ActivityHandler) Register(mux *http.ServeMux) {
 }
 
 // activityItemDTO matches the frontend's fixed Transaction contract
-// (apps/dapp/frontend/app/dashboard/history/page.tsx) exactly — Title-Case
-// type/status strings and a plain numeric amount, not the internal
-// activity.Item shape or the shared response.Response envelope.
+// (apps/dapp/frontend/app/dashboard/history/page.tsx) — Title-Case
+// type/status strings, not the internal activity.Item shape or the shared
+// response.Response envelope. Amount is decimal.Decimal (serialises to an
+// exact JSON string, see shopspring/decimal's MarshalJSON) rather than
+// float64: it used to be converted with Float64(), which silently discarded
+// precision on the way out of the API (#1223).
 type activityItemDTO struct {
-	ID        string  `json:"id"`
-	Timestamp string  `json:"timestamp"`
-	Type      string  `json:"type"`
-	VaultName string  `json:"vaultName"`
-	Amount    float64 `json:"amount"`
-	Asset     string  `json:"asset"`
-	Status    string  `json:"status"`
-	TxHash    string  `json:"txHash,omitempty"`
+	ID        string          `json:"id"`
+	Timestamp string          `json:"timestamp"`
+	Type      string          `json:"type"`
+	VaultName string          `json:"vaultName"`
+	Amount    decimal.Decimal `json:"amount"`
+	Asset     string          `json:"asset"`
+	Status    string          `json:"status"`
+	TxHash    string          `json:"txHash,omitempty"`
 }
 
 // activityListResponse is a deliberate, documented exception to the shared
@@ -123,13 +127,12 @@ func (h *ActivityHandler) list(w http.ResponseWriter, r *http.Request) {
 		if !knownStatus {
 			statusLabel = string(it.Status)
 		}
-		amount, _ := it.Amount.Float64()
 		dtos[i] = activityItemDTO{
 			ID:        it.ID.String(),
 			Timestamp: it.CreatedAt.UTC().Format(time.RFC3339),
 			Type:      typeLabel,
 			VaultName: it.VaultName,
-			Amount:    amount,
+			Amount:    it.Amount,
 			Asset:     it.Currency,
 			Status:    statusLabel,
 			TxHash:    it.Ref,

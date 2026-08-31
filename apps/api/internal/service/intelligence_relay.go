@@ -8,9 +8,19 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/telemetry"
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 const (
@@ -127,8 +137,17 @@ func (h *RelayHandler) RelayChat(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), h.cfg.Timeout)
 	defer cancel()
 
+	// Client span covering the hop to the intelligence service. This is the
+	// parent that the Python service's server span attaches to, and it is what
+	// makes the Go and Python halves one trace (#1054).
+	ctx, span := otel.Tracer(telemetry.ScopeName).Start(ctx, "intelligence.relay/chat",
+		trace.WithSpanKind(trace.SpanKindClient),
+	)
+	defer span.End()
+
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.cfg.BaseURL, "/")+"/intelligence/chat", bytes.NewReader(payload))
 	if err != nil {
+		telemetry.RecordError(span, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to prepare relay request"})
 		return
 	}
@@ -138,10 +157,25 @@ func (h *RelayHandler) RelayChat(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.APIKey != "" {
 		upstreamReq.Header.Set("Authorization", "Bearer "+h.cfg.APIKey)
 	}
+	// Propagate the correlation ID so the intelligence service can bind it to
+	// its own structured logs and echo it back in responses.
+	// Prefer the context value (set by the Logging middleware) over the raw
+	// inbound header so the ID is always the canonical one for this request.
+	if rid := logpkg.RequestIDFromContext(r.Context()); rid != "" {
+		upstreamReq.Header.Set("X-Request-ID", rid)
+	} else if rid = r.Header.Get("X-Request-ID"); rid != "" {
+		upstreamReq.Header.Set("X-Request-ID", rid)
+	}
+
+	// Inject W3C traceparent/tracestate so the intelligence service continues
+	// this trace instead of rooting a new one. Additive: the X-Request-ID
+	// handling above is untouched, and the two identifiers coexist.
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(upstreamReq.Header))
 
 	resp, err := h.doer.Do(upstreamReq)
 	if err != nil {
 		h.recordFailure()
+		telemetry.RecordError(span, err)
 		if isTimeoutError(err) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "intelligence service timed out"})
 			return
@@ -154,19 +188,31 @@ func (h *RelayHandler) RelayChat(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		h.recordFailure()
+		telemetry.RecordError(span, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to read intelligence response"})
 		return
 	}
 
 	if !json.Valid(body) {
 		h.recordFailure()
+		telemetry.RecordError(span, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "intelligence service returned invalid JSON"})
 		return
 	}
 
+	// The upstream status is low-cardinality and is the single most useful
+	// attribute on this span when the intelligence service misbehaves.
+	span.SetAttributes(semconv.HTTPResponseStatusCode(resp.StatusCode))
+
 	switch {
 	case resp.StatusCode >= 500:
 		h.recordFailure()
+		// No error value exists here — the call succeeded and the upstream
+		// reported a failure — so the span is marked directly rather than
+		// through RecordError. Retention still applies: a 5xx from the
+		// intelligence service is exactly the trace an incident needs.
+		span.SetStatus(codes.Error, "intelligence service returned "+strconv.Itoa(resp.StatusCode))
+		telemetry.MarkForRetention(span)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "intelligence service failed"})
 		return
 	case resp.StatusCode >= 400:

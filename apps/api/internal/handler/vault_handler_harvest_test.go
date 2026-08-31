@@ -64,7 +64,7 @@ func TestVaultHandlerHarvestReturnsZeroYield(t *testing.T) {
 	}
 }
 
-func TestVaultHandlerHarvestForbiddenForOtherUser(t *testing.T) {
+func TestVaultHandlerHarvestNotFoundForOtherUser(t *testing.T) {
 	ownerID := uuid.New()
 	otherID := uuid.New()
 	repository := newHandlerRepository(ownerID, otherID)
@@ -98,8 +98,9 @@ func TestVaultHandlerHarvestForbiddenForOtherUser(t *testing.T) {
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected status 403, got %d", response.StatusCode)
+	// 404 rather than 403 — a non-owner must not learn the vault exists (#1101).
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", response.StatusCode)
 	}
 }
 
@@ -109,7 +110,7 @@ func TestVaultHandlerHarvestBroadcastsWebSocketEvent(t *testing.T) {
 	vaultService := service.NewVaultService(repository)
 
 	handler := NewVaultHandler(vaultService)
-	hub := ws.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	hub := ws.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil, nil, 0)
 	handler.SetWSHub(hub)
 	go hub.Run(t.Context())
 

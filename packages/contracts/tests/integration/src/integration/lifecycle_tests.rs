@@ -79,7 +79,7 @@ fn test_full_lifecycle_deposit_to_withdraw() {
 
     // 1. Register yield source, configure strategy weights, wire to vault
     h.registry()
-        .register_source(&h.admin, &aave, &h.create_user(), &ProtocolType::Lending);
+        .register_source(&h.admin, &aave, &h.create_user(), &None, &ProtocolType::Lending);
     h.strategy().set_weights(
         &h.admin,
         &vec![

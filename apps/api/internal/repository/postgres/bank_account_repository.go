@@ -94,8 +94,14 @@ func (r *BankAccountRepository) ListByUser(ctx context.Context, userID uuid.UUID
 		); err != nil {
 			return nil, err
 		}
-		parsedID, _ := uuid.Parse(id)
-		parsedUser, _ := uuid.Parse(uid)
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return nil, fmt.Errorf("bank account repository: parse id %q: %w", id, err)
+		}
+		parsedUser, err := uuid.Parse(uid)
+		if err != nil {
+			return nil, fmt.Errorf("bank account repository: parse user id %q: %w", uid, err)
+		}
 		var verified *time.Time
 		if verifiedAt.Valid {
 			verified = &verifiedAt.Time
@@ -119,13 +125,13 @@ func (r *BankAccountRepository) ListByUser(ctx context.Context, userID uuid.UUID
 
 func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bankaccount.BankAccount, []byte, string, error) {
 	var (
-		uid, bankName, bankCode string
-		encrypted               []byte
+		uid, bankName, bankCode        string
+		encrypted                      []byte
 		accountName, currency, country string
-		isDefault               bool
-		verifiedAt              sql.NullTime
-		createdAt               time.Time
-		keyVersion              string
+		isDefault                      bool
+		verifiedAt                     sql.NullTime
+		createdAt                      time.Time
+		keyVersion                     string
 	)
 	err := r.db.QueryRowContext(ctx, `
 		SELECT user_id, bank_name, COALESCE(bank_code, ''), account_number_encrypted,
@@ -138,22 +144,26 @@ func (r *BankAccountRepository) GetByID(ctx context.Context, id uuid.UUID) (bank
 	if err != nil {
 		return bankaccount.BankAccount{}, nil, "", mapBankAccountError(err)
 	}
-	parsedUser, _ := uuid.Parse(uid)
+	parsedUser, err := uuid.Parse(uid)
+	if err != nil {
+		return bankaccount.BankAccount{}, nil, "", fmt.Errorf(
+			"bank account repository: parse user id %q: %w", uid, err)
+	}
 	var verified *time.Time
 	if verifiedAt.Valid {
 		verified = &verifiedAt.Time
 	}
 	return bankaccount.BankAccount{
-		ID:            id,
-		UserID:        parsedUser,
-		BankName:      bankName,
-		BankCode:      bankCode,
-		AccountName:   accountName,
-		Currency:      currency,
-		Country:       country,
-		IsDefault:     isDefault,
-		VerifiedAt:    verified,
-		CreatedAt:     createdAt,
+		ID:          id,
+		UserID:      parsedUser,
+		BankName:    bankName,
+		BankCode:    bankCode,
+		AccountName: accountName,
+		Currency:    currency,
+		Country:     country,
+		IsDefault:   isDefault,
+		VerifiedAt:  verified,
+		CreatedAt:   createdAt,
 	}, encrypted, keyVersion, nil
 }
 

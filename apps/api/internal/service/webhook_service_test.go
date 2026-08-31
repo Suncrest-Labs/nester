@@ -1,115 +1,313 @@
 package service_test
 
 import (
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
+	"context"
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/webhook"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 )
 
-// TestDeliverWebhook_SuccessOnFirstAttempt verifies a 2xx response stops retrying.
-func TestDeliverWebhook_SuccessOnFirstAttempt(t *testing.T) {
-	var count atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		count.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+type recordingEnqueuer struct {
+	mu    sync.Mutex
+	calls []struct {
+		jobType string
+		payload service.WebhookDeliveryJobPayload
+		opts    []jobqueue.EnqueueOption
+	}
+	// err, when set, makes every EnqueueJSON call fail — for testing that a
+	// dropped enqueue error is at least logged (FireForUser has no return
+	// value, so this is the only failure signal a caller could ever see).
+	err error
+}
 
-	payload, _ := service.BuildWebhookPayload("goal.milestone.50", uuid.Nil, uuid.Nil, 50, "50", "100")
-	wh := webhook.Webhook{ID: uuid.New(), UserID: uuid.New(), URL: srv.URL}
-	service.DeliverWebhookForTest(wh, payload)
+func (e *recordingEnqueuer) EnqueueJSON(_ context.Context, jobType string, payload any, opts ...jobqueue.EnqueueOption) (jobqueue.Job, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	p, _ := payload.(service.WebhookDeliveryJobPayload)
+	e.calls = append(e.calls, struct {
+		jobType string
+		payload service.WebhookDeliveryJobPayload
+		opts    []jobqueue.EnqueueOption
+	}{jobType, p, opts})
+	if e.err != nil {
+		return jobqueue.Job{}, e.err
+	}
+	return jobqueue.Job{ID: uuid.New(), Type: jobType}, nil
+}
 
-	if got := int(count.Load()); got != 1 {
-		t.Errorf("expected 1 delivery attempt, got %d", got)
+func (e *recordingEnqueuer) count() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.calls)
+}
+
+func newServiceForTest(t *testing.T, hooks ...webhook.Webhook) (*service.WebhookService, *fakeWebhookRepo, *fakeDeliveryRepo, *recordingEnqueuer) {
+	t.Helper()
+	repo := newFakeWebhookRepo(hooks...)
+	deliveries := &fakeDeliveryRepo{}
+	enqueuer := &recordingEnqueuer{}
+	return service.NewWebhookService(repo, deliveries, testCipher(t), enqueuer), repo, deliveries, enqueuer
+}
+
+func TestWebhookService_Register_RejectsEmptyURL(t *testing.T) {
+	svc, _, _, _ := newServiceForTest(t)
+	_, err := svc.Register(context.Background(), uuid.New(), service.RegisterWebhookInput{URL: "  "})
+	if err == nil {
+		t.Fatal("expected an error for an empty URL")
 	}
 }
 
-// TestDeliverWebhook_RetriesUpTo3Times verifies persistent failure retries exactly 3 times.
-func TestDeliverWebhook_RetriesUpTo3Times(t *testing.T) {
-	var count atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		count.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	payload, _ := service.BuildWebhookPayload("goal.milestone.50", uuid.Nil, uuid.Nil, 50, "50", "100")
-	wh := webhook.Webhook{ID: uuid.New(), UserID: uuid.New(), URL: srv.URL}
-	service.DeliverWebhookForTest(wh, payload)
-
-	if got := int(count.Load()); got != 3 {
-		t.Errorf("expected 3 delivery attempts, got %d", got)
+func TestWebhookService_Register_RejectsNonHTTPS(t *testing.T) {
+	svc, _, _, _ := newServiceForTest(t)
+	_, err := svc.Register(context.Background(), uuid.New(), service.RegisterWebhookInput{URL: "http://example.com/hook"})
+	if err == nil {
+		t.Fatal("expected an error for a non-https URL")
 	}
 }
 
-// TestDeliverWebhook_SucceedsOnSecondAttempt verifies retry stops on first success.
-func TestDeliverWebhook_SucceedsOnSecondAttempt(t *testing.T) {
-	var count atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := count.Add(1)
-		if n >= 2 {
-			w.WriteHeader(http.StatusOK)
-		} else {
-			w.WriteHeader(http.StatusBadGateway)
-		}
-	}))
-	defer srv.Close()
-
-	payload, _ := service.BuildWebhookPayload("goal.milestone.50", uuid.Nil, uuid.Nil, 50, "50", "100")
-	wh := webhook.Webhook{ID: uuid.New(), UserID: uuid.New(), URL: srv.URL}
-	service.DeliverWebhookForTest(wh, payload)
-
-	if got := int(count.Load()); got != 2 {
-		t.Errorf("expected 2 delivery attempts (success on 2nd), got %d", got)
+func TestWebhookService_Register_RejectsPrivateTarget(t *testing.T) {
+	svc, _, _, _ := newServiceForTest(t)
+	_, err := svc.Register(context.Background(), uuid.New(), service.RegisterWebhookInput{URL: "https://169.254.169.254/latest/meta-data"})
+	if err == nil {
+		t.Fatal("expected an error for an SSRF-disallowed target")
 	}
 }
 
-// TestDeliverWebhook_SetsHMACSignatureHeader verifies the X-Nester-Signature header is set.
-func TestDeliverWebhook_SetsHMACSignatureHeader(t *testing.T) {
-	var gotSig string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotSig = r.Header.Get("X-Nester-Signature")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	payload := []byte(`{"event":"goal.milestone.50"}`)
-	wh := webhook.Webhook{ID: uuid.New(), UserID: uuid.New(), URL: srv.URL, Secret: "mysecret"}
-	service.DeliverWebhookForTest(wh, payload)
-
-	if gotSig == "" {
-		t.Fatal("expected X-Nester-Signature header, got empty string")
-	}
-	if len(gotSig) < 7 || gotSig[:7] != "sha256=" {
-		t.Errorf("signature must start with sha256=, got %q", gotSig)
+func TestWebhookService_Register_RejectsWhenCipherNotConfigured(t *testing.T) {
+	repo := newFakeWebhookRepo()
+	svc := service.NewWebhookService(repo, &fakeDeliveryRepo{}, nil, &recordingEnqueuer{})
+	_, err := svc.Register(context.Background(), uuid.New(), service.RegisterWebhookInput{URL: "https://93.184.216.34/hook"})
+	if !errors.Is(err, service.ErrWebhookCipherNotConfigured) {
+		t.Fatalf("got %v, want ErrWebhookCipherNotConfigured", err)
 	}
 }
 
-// TestDeliverWebhook_NoSignatureHeaderWhenNoSecret verifies the header is absent without a secret.
-func TestDeliverWebhook_NoSignatureHeaderWhenNoSecret(t *testing.T) {
-	var gotSig string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotSig = r.Header.Get("X-Nester-Signature")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+func TestWebhookService_Register_ReturnsSecretOnceAndNeverStoresPlaintext(t *testing.T) {
+	svc, repo, _, _ := newServiceForTest(t)
+	userID := uuid.New()
+	wh, err := svc.Register(context.Background(), userID, service.RegisterWebhookInput{URL: "https://93.184.216.34/hook"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if wh.Secret == "" {
+		t.Fatal("expected a generated secret to be returned on registration")
+	}
+	if !strings.HasPrefix(wh.Secret, "whsec_") {
+		t.Errorf("expected a whsec_-prefixed secret, got %q", wh.Secret)
+	}
 
-	payload := []byte(`{"event":"goal.milestone.50"}`)
-	wh := webhook.Webhook{ID: uuid.New(), UserID: uuid.New(), URL: srv.URL}
-	service.DeliverWebhookForTest(wh, payload)
-
-	if gotSig != "" {
-		t.Errorf("expected no X-Nester-Signature when secret is empty, got %q", gotSig)
+	stored, err := repo.GetByID(context.Background(), wh.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.Secret != "" {
+		t.Error("expected the stored webhook's plaintext Secret field to be empty")
+	}
+	if len(stored.SecretCiphertext) == 0 {
+		t.Error("expected the secret to be persisted as ciphertext")
+	}
+	if string(stored.SecretCiphertext) == wh.Secret {
+		t.Error("ciphertext must not equal the plaintext secret")
 	}
 }
 
-// TestBuildWebhookPayload_ContainsRequiredFields verifies the JSON payload shape.
+func TestWebhookService_Register_DefaultsToActiveStatus(t *testing.T) {
+	svc, _, _, _ := newServiceForTest(t)
+	wh, err := svc.Register(context.Background(), uuid.New(), service.RegisterWebhookInput{URL: "https://93.184.216.34/hook"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if wh.Status != webhook.StatusActive {
+		t.Errorf("status = %q, want active", wh.Status)
+	}
+}
+
+func TestWebhookService_FireForUser_EnqueuesOneJobPerActiveSubscribedWebhook(t *testing.T) {
+	userID := uuid.New()
+	subscribed := webhook.Webhook{ID: uuid.New(), UserID: userID, URL: "https://a.example.com/hook", Status: webhook.StatusActive, EventTypes: []string{"goal.milestone.50"}}
+	unrelated := webhook.Webhook{ID: uuid.New(), UserID: userID, URL: "https://b.example.com/hook", Status: webhook.StatusActive, EventTypes: []string{"other.event"}}
+	allEvents := webhook.Webhook{ID: uuid.New(), UserID: userID, URL: "https://c.example.com/hook", Status: webhook.StatusActive} // no filter = all events
+	otherUser := webhook.Webhook{ID: uuid.New(), UserID: uuid.New(), URL: "https://d.example.com/hook", Status: webhook.StatusActive}
+
+	svc, _, _, enqueuer := newServiceForTest(t, subscribed, unrelated, allEvents, otherUser)
+	svc.FireForUser(context.Background(), userID, "goal.milestone.50", []byte(`{}`))
+
+	if enqueuer.count() != 2 {
+		t.Fatalf("expected 2 enqueued deliveries (subscribed + allEvents), got %d", enqueuer.count())
+	}
+	got := map[uuid.UUID]bool{}
+	for _, c := range enqueuer.calls {
+		got[c.payload.WebhookID] = true
+	}
+	if !got[subscribed.ID] || !got[allEvents.ID] {
+		t.Errorf("expected deliveries for %s and %s, got %+v", subscribed.ID, allEvents.ID, got)
+	}
+	if got[unrelated.ID] {
+		t.Error("did not expect a delivery for a subscription filtered to a different event type")
+	}
+	if got[otherUser.ID] {
+		t.Error("did not expect a delivery for another user's webhook")
+	}
+}
+
+func TestWebhookService_FireForUser_SkipsSuspendedSubscriptions(t *testing.T) {
+	userID := uuid.New()
+	suspended := webhook.Webhook{ID: uuid.New(), UserID: userID, URL: "https://a.example.com/hook", Status: webhook.StatusSuspended}
+	svc, _, _, enqueuer := newServiceForTest(t, suspended)
+
+	svc.FireForUser(context.Background(), userID, "any.event", []byte(`{}`))
+
+	if enqueuer.count() != 0 {
+		t.Errorf("expected no delivery for a suspended subscription, got %d", enqueuer.count())
+	}
+}
+
+func TestWebhookService_FireForUser_UsesDeliveryIDAsIdempotencyKey(t *testing.T) {
+	userID := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: userID, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, _, enqueuer := newServiceForTest(t, wh)
+
+	svc.FireForUser(context.Background(), userID, "x", []byte(`{}`))
+
+	if enqueuer.count() != 1 {
+		t.Fatalf("expected 1 enqueue call, got %d", enqueuer.count())
+	}
+	call := enqueuer.calls[0]
+	if call.jobType != service.WebhookDeliveryJobType {
+		t.Errorf("job type = %q, want %q", call.jobType, service.WebhookDeliveryJobType)
+	}
+	if call.payload.DeliveryID == uuid.Nil {
+		t.Error("expected a non-nil delivery id")
+	}
+}
+
+func TestWebhookService_ListDeliveries_RejectsNonOwner(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, deliveries, _ := newServiceForTest(t, wh)
+	_ = deliveries.Log(context.Background(), &webhook.Delivery{WebhookID: wh.ID, DeliveryID: uuid.New(), EventType: "x", Outcome: webhook.DeliverySucceeded})
+
+	_, err := svc.ListDeliveries(context.Background(), uuid.New(), wh.ID, 50)
+	if err == nil {
+		t.Fatal("expected an error when a non-owner requests another user's delivery log")
+	}
+}
+
+func TestWebhookService_ListDeliveries_ReturnsOwnersLog(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, deliveries, _ := newServiceForTest(t, wh)
+	_ = deliveries.Log(context.Background(), &webhook.Delivery{WebhookID: wh.ID, DeliveryID: uuid.New(), EventType: "x", Outcome: webhook.DeliverySucceeded})
+
+	got, err := svc.ListDeliveries(context.Background(), owner, wh.ID, 50)
+	if err != nil {
+		t.Fatalf("ListDeliveries: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delivery, got %d", len(got))
+	}
+}
+
+func TestWebhookService_ListDeliveries_ClampsExcessiveLimit(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, deliveries, _ := newServiceForTest(t, wh)
+
+	if _, err := svc.ListDeliveries(context.Background(), owner, wh.ID, 10_000_000); err != nil {
+		t.Fatalf("ListDeliveries: %v", err)
+	}
+	if deliveries.lastLimit != 200 {
+		t.Errorf("expected an excessive limit to be clamped to 200, repository received %d", deliveries.lastLimit)
+	}
+}
+
+func TestWebhookService_ListDeliveries_ClampsNonPositiveLimitToDefault(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, deliveries, _ := newServiceForTest(t, wh)
+
+	if _, err := svc.ListDeliveries(context.Background(), owner, wh.ID, 0); err != nil {
+		t.Fatalf("ListDeliveries: %v", err)
+	}
+	if deliveries.lastLimit != 200 {
+		t.Errorf("expected a non-positive limit to fall back to the max, repository received %d", deliveries.lastLimit)
+	}
+}
+
+func TestWebhookService_FireForUser_LogsEnqueueFailureWithoutPanicking(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive, EventTypes: []string{"goal.milestone.50"}}
+	svc, _, _, enqueuer := newServiceForTest(t, wh)
+	enqueuer.err = errors.New("job queue unavailable")
+
+	// Must not panic despite the enqueue failure — FireForUser has no
+	// return value for the caller to check, so a dropped error here would
+	// otherwise be completely invisible.
+	svc.FireForUser(context.Background(), owner, "goal.milestone.50", []byte(`{}`))
+
+	if enqueuer.count() != 1 {
+		t.Fatalf("expected the failed enqueue attempt to still be recorded, got %d calls", enqueuer.count())
+	}
+}
+
+func TestWebhookService_Redeliver_EnqueuesWithFreshDeliveryID(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, deliveries, enqueuer := newServiceForTest(t, wh)
+
+	originalDeliveryID := uuid.New()
+	original := &webhook.Delivery{WebhookID: wh.ID, DeliveryID: originalDeliveryID, EventType: "goal.milestone.50", Payload: []byte(`{"a":1}`), Outcome: webhook.DeliveryDeadLetter}
+	_ = deliveries.Log(context.Background(), original)
+
+	if err := svc.Redeliver(context.Background(), owner, original.ID); err != nil {
+		t.Fatalf("Redeliver: %v", err)
+	}
+	if enqueuer.count() != 1 {
+		t.Fatalf("expected 1 enqueue call, got %d", enqueuer.count())
+	}
+	call := enqueuer.calls[0]
+	if call.payload.DeliveryID == originalDeliveryID {
+		t.Error("expected a fresh delivery id for a manual redelivery, not the original's")
+	}
+	if call.payload.EventType != "goal.milestone.50" {
+		t.Errorf("event type = %q, want the original delivery's event type", call.payload.EventType)
+	}
+}
+
+func TestWebhookService_Redeliver_RejectsNonOwner(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusActive}
+	svc, _, deliveries, _ := newServiceForTest(t, wh)
+	original := &webhook.Delivery{WebhookID: wh.ID, DeliveryID: uuid.New(), EventType: "x", Outcome: webhook.DeliveryDeadLetter}
+	_ = deliveries.Log(context.Background(), original)
+
+	if err := svc.Redeliver(context.Background(), uuid.New(), original.ID); err == nil {
+		t.Fatal("expected an error when a non-owner attempts redelivery")
+	}
+}
+
+func TestWebhookService_Redeliver_RejectsSuspendedSubscription(t *testing.T) {
+	owner := uuid.New()
+	wh := webhook.Webhook{ID: uuid.New(), UserID: owner, URL: "https://a.example.com/hook", Status: webhook.StatusSuspended}
+	svc, _, deliveries, enqueuer := newServiceForTest(t, wh)
+	original := &webhook.Delivery{WebhookID: wh.ID, DeliveryID: uuid.New(), EventType: "x", Outcome: webhook.DeliveryDeadLetter}
+	_ = deliveries.Log(context.Background(), original)
+
+	if err := svc.Redeliver(context.Background(), owner, original.ID); err == nil {
+		t.Fatal("expected an error when redelivering to a suspended subscription")
+	}
+	if enqueuer.count() != 0 {
+		t.Error("expected no enqueue for a suspended subscription's redelivery")
+	}
+}
+
 func TestBuildWebhookPayload_ContainsRequiredFields(t *testing.T) {
 	goalID := uuid.New()
 	userID := uuid.New()
@@ -118,25 +316,8 @@ func TestBuildWebhookPayload_ContainsRequiredFields(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, want := range []string{`"event"`, `"goal_id"`, `"user_id"`, `"milestone_pct"`, `"current_amount"`, `"target_amount"`, `"timestamp"`} {
-		if !contains(payload, want) {
+		if !strings.Contains(string(payload), want) {
 			t.Errorf("payload missing field %s: %s", want, payload)
 		}
 	}
-}
-
-func contains(data []byte, sub string) bool {
-	return len(data) > 0 && string(data) != "" && stringContains(string(data), sub)
-}
-
-func stringContains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && findSubstring(s, sub))
-}
-
-func findSubstring(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

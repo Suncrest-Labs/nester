@@ -95,7 +95,7 @@ func (e *Engine) runComparator(ctx context.Context, comparator Comparator, scope
 
 	result, err := comparator.Reconcile(ctx, scope)
 	if err != nil {
-		_ = e.repo.FailRun(ctx, run.ID, err.Error())
+		e.recordFailedRun(ctx, run.ID, err)
 		return Stats{}, fmt.Errorf("reconciliation: %s: %w", comparator.Name(), err)
 	}
 
@@ -112,7 +112,7 @@ func (e *Engine) runComparator(ctx context.Context, comparator Comparator, scope
 
 		stored, err := e.repo.AddFinding(ctx, finding)
 		if err != nil {
-			_ = e.repo.FailRun(ctx, run.ID, err.Error())
+			e.recordFailedRun(ctx, run.ID, err)
 			return stats, fmt.Errorf("reconciliation: store finding: %w", err)
 		}
 		if stored.Severity == SeverityCritical {
@@ -123,10 +123,36 @@ func (e *Engine) runComparator(ctx context.Context, comparator Comparator, scope
 		}
 	}
 
-	if err := e.repo.CompleteRun(ctx, run.ID, stats); err != nil {
+	// Bookkeeping writes survive cancellation (nester#1082): a SIGTERM
+	// mid-pass cancels the comparator's context, and issuing the final
+	// status write on that same context would strand the run row in
+	// status 'running' forever — indistinguishable from a killed process.
+	// The database pool outlives the signal during graceful drain, so the
+	// detached write almost always lands.
+	if err := e.repo.CompleteRun(context.WithoutCancel(ctx), run.ID, stats); err != nil {
 		return stats, fmt.Errorf("reconciliation: complete run: %w", err)
 	}
 	return stats, nil
+}
+
+// recordFailedRun marks a run failed and records the original error that
+// caused it. If the FailRun write itself fails — the error path of the
+// error path — the run would otherwise end with no durable trace: the
+// operator sees a run that started and never reported, indistinguishable
+// from one that was simply killed, and runErr is lost. Logging it here means
+// the cause survives even when the write does not (nester#1194).
+func (e *Engine) recordFailedRun(ctx context.Context, runID uuid.UUID, runErr error) {
+	// Detached from cancellation for the same reason as CompleteRun: when the
+	// failure IS the cancellation (shutdown mid-pass), writing the failure on
+	// the cancelled context would itself fail and strand the run row in
+	// status 'running' (nester#1082).
+	if failErr := e.repo.FailRun(context.WithoutCancel(ctx), runID, runErr.Error()); failErr != nil {
+		e.logger.Error("reconciliation: failed to record run failure",
+			"run_id", runID,
+			"original_error", runErr,
+			"fail_run_error", failErr,
+		)
+	}
 }
 
 func (e *Engine) dispatchAlert(ctx context.Context, finding Finding) error {

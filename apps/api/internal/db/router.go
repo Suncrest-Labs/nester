@@ -145,9 +145,15 @@ func (r *Router) readAny() *sql.DB {
 	if n == 0 {
 		return r.primary
 	}
+	// The round-robin cursor is unsigned and monotonically increasing.
+	// Converting it to a signed int would produce a negative value once it
+	// passes math.MaxInt64, making the modulo negative and panicking on the
+	// index below. Doing the modulo in unsigned arithmetic keeps the result in
+	// range for the counter's whole lifetime (nester#1035, G115).
 	start := r.next.Add(1)
 	for i := 0; i < n; i++ {
-		rep := r.replicas[(int(start)+i)%n]
+		idx := (start + uint64(i)) % uint64(n)
+		rep := r.replicas[idx]
 		if rep.eligible() && rep.db != nil {
 			return rep.db
 		}

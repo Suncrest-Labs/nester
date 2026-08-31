@@ -144,9 +144,35 @@ func TestActivityRepositoryIntegration_FullTextSearchUsesGIN(t *testing.T) {
 		t.Fatalf("search %q got %+v, want exactly the deposit with memo containing 'paycheck'", "paycheck", items)
 	}
 
-	rows, err := db.QueryContext(context.Background(),
-		`EXPLAIN (FORMAT JSON) SELECT id FROM vault_transactions WHERE user_id = $1 AND search_vector @@ plainto_tsquery('english', $2)`,
-		userID.String(), "paycheck",
+	// The index must exist in the real schema.
+	var indexDef string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT indexdef FROM pg_indexes WHERE tablename = 'vault_transactions' AND indexname = 'idx_vault_transactions_search_vector'`,
+	).Scan(&indexDef); err != nil {
+		t.Fatalf("GIN index idx_vault_transactions_search_vector is missing: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(indexDef), "using gin") {
+		t.Fatalf("idx_vault_transactions_search_vector is not a GIN index: %s", indexDef)
+	}
+
+	// And it must be usable for the full-text predicate. The plan is checked
+	// on the search predicate alone with sequential scans disabled for the
+	// transaction: with a handful of fixture rows the planner otherwise
+	// prefers either a seq scan or the (user_id, ...) btree with a filter,
+	// and neither choice says anything about whether the GIN index works.
+	// Only the index's existence and usability are deterministic; which
+	// index wins on a three-row table is a cost estimate, not a contract.
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(context.Background(), `SET LOCAL enable_seqscan = off`); err != nil {
+		t.Fatalf("disable seqscan: %v", err)
+	}
+	rows, err := tx.QueryContext(context.Background(),
+		`EXPLAIN (FORMAT JSON) SELECT id FROM vault_transactions WHERE search_vector @@ plainto_tsquery('english', $1)`,
+		"paycheck",
 	)
 	if err != nil {
 		t.Fatalf("EXPLAIN query failed: %v", err)
@@ -158,7 +184,7 @@ func TestActivityRepositoryIntegration_FullTextSearchUsesGIN(t *testing.T) {
 			t.Fatalf("scan EXPLAIN output: %v", err)
 		}
 	}
-	if !strings.Contains(plan, "idx_vault_transactions_search_vector") && !strings.Contains(strings.ToLower(plan), "bitmap index scan") {
+	if !strings.Contains(plan, "idx_vault_transactions_search_vector") {
 		t.Fatalf("expected the search_vector GIN index to be used, got plan: %s", plan)
 	}
 	var parsed []map[string]any

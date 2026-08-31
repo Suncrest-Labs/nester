@@ -160,7 +160,7 @@ func TestVaultHandlerPreviewHarvestCompoundParam(t *testing.T) {
 	}
 }
 
-func TestVaultHandlerPreviewHarvestForbiddenForOtherUser(t *testing.T) {
+func TestVaultHandlerPreviewHarvestNotFoundForOtherUser(t *testing.T) {
 	ownerID := uuid.New()
 	otherID := uuid.New()
 	repository := newHandlerRepository(ownerID, otherID)
@@ -187,7 +187,8 @@ func TestVaultHandlerPreviewHarvestForbiddenForOtherUser(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected status 403, got %d", resp.StatusCode)
+	// 404 rather than 403 — a non-owner must not learn the vault exists (#1101).
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", resp.StatusCode)
 	}
 }

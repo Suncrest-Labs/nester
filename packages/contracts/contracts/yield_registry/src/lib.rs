@@ -30,6 +30,7 @@ use soroban_sdk::{
 };
 
 use nester_access_control::{AccessControl, Role};
+use nester_common::adapters::{AdapterApy, ApyConfidence};
 use nester_common::{emit_event_with_sym, ContractError, ProtocolType, SourceStatus};
 
 const REGISTRY: Symbol = symbol_short!("REGISTRY");
@@ -38,6 +39,13 @@ const SOURCE_UPDATED: Symbol = symbol_short!("SRC_UPD");
 const SOURCE_REMOVED: Symbol = symbol_short!("SRC_REM");
 const SOURCE_PERF: Symbol = symbol_short!("SRC_PERF");
 const SOURCE_MIGRATION: Symbol = symbol_short!("SRC_MIG");
+const SOURCE_FAILED: Symbol = symbol_short!("SRC_FAIL");
+const SOURCE_DEGRADED: Symbol = symbol_short!("SRC_DEGR");
+const SOURCE_RECOVER: Symbol = symbol_short!("SRC_RECO");
+
+/// Consecutive adapter failures tolerated before a source is flipped to
+/// [`SourceStatus::Degraded`].
+pub const DEFAULT_FAILURE_THRESHOLD: u32 = 3;
 
 const DEFAULT_RISK_RATING: u32 = 5;
 const MAX_RISK_RATING: u32 = 10;
@@ -56,6 +64,7 @@ pub const DEFAULT_APY_DEVIATION_THRESHOLD_BPS: u32 = 5_000;
 #[derive(Clone, Debug)]
 pub struct SourceAddedEventData {
     pub contract_address: Address,
+    pub adapter: Option<Address>,
     pub protocol_type: ProtocolType,
 }
 
@@ -79,11 +88,35 @@ pub struct SourcePerformanceUpdatedEventData {
 
 #[contracttype]
 #[derive(Clone, Debug)]
+pub struct SourceFailureEventData {
+    pub failure_count: u32,
+    pub threshold: u32,
+    pub reporter: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SourceDegradedEventData {
+    pub failure_count: u32,
+    pub previous_status: SourceStatus,
+    pub degraded_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SourceRecoveredEventData {
+    pub recovered_by: Address,
+    pub recovered_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct SourceMigrationEventData {
     pub migration_required: bool,
     pub migration_completed: bool,
     pub migration_completed_at: u64,
 }
+
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -103,13 +136,22 @@ pub struct ApySnapshot {
 pub struct YieldSource {
     pub id: Symbol,
     pub contract_address: Address,
+    /// Adapter contract implementing `nester_common::adapters::YieldAdapter`.
+    /// When set, APY can be pulled permissionlessly via
+    /// [`YieldRegistryContract::refresh_apy_from_adapter`] and the vault routes
+    /// value through it. `None` marks a legacy admin-pushed source.
+    pub adapter: Option<Address>,
     pub protocol_type: ProtocolType,
     pub status: SourceStatus,
     /// Ledger timestamp at registration time.
     pub added_at: u64,
 
-    /// Most recent annualized yield in basis points.
+    /// Most recent annualized yield in basis points. Only meaningful when
+    /// `apy_confidence != Unavailable` — a zero APY and an unknown APY are
+    /// deliberately distinct so noisy derived values never drive rebalancing.
     pub current_apy_bps: u32,
+    /// Confidence in `current_apy_bps`.
+    pub apy_confidence: ApyConfidence,
     /// Rolling history of APY updates (oldest trimmed past MAX_APY_HISTORY).
     pub apy_history: Vec<ApySnapshot>,
     /// Total value locked in this source.
@@ -129,6 +171,12 @@ pub struct YieldSource {
     pub migration_completed: bool,
     /// Timestamp for migration completion, or 0 if incomplete.
     pub migration_completed_at: u64,
+
+    /// Consecutive adapter failures observed since the last success or admin
+    /// recovery. Reset to 0 on any successful adapter interaction.
+    pub failure_count: u32,
+    /// Timestamp of the most recent reported failure, or 0.
+    pub last_failure_at: u64,
 }
 
 /// Query-friendly projection for source performance data.
@@ -136,6 +184,7 @@ pub struct YieldSource {
 #[derive(Clone, Debug)]
 pub struct SourcePerformance {
     pub current_apy_bps: u32,
+    pub apy_confidence: ApyConfidence,
     pub apy_history: Vec<ApySnapshot>,
     pub tvl: i128,
     pub risk_rating: u32,
@@ -160,6 +209,8 @@ enum DataKey {
     SourceList,
     /// Configurable APY single-update deviation threshold, in basis points.
     ApyDeviationThresholdBps,
+    /// Consecutive adapter failures tolerated before flipping to Degraded.
+    FailureThreshold,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +237,9 @@ impl YieldRegistryContract {
             &DataKey::ApyDeviationThresholdBps,
             &DEFAULT_APY_DEVIATION_THRESHOLD_BPS,
         );
+        env.storage()
+            .instance()
+            .set(&DataKey::FailureThreshold, &DEFAULT_FAILURE_THRESHOLD);
     }
 
     // -----------------------------------------------------------------------
@@ -194,6 +248,14 @@ impl YieldRegistryContract {
 
     /// Register a new yield source with default performance metadata.
     ///
+    /// `adapter` is the address of a contract implementing
+    /// `nester_common::adapters::YieldAdapter`. Pass `None` to register a
+    /// legacy admin-pushed source with no adapter backing — such a source
+    /// cannot use the permissionless APY pull.
+    ///
+    /// A newly registered source starts with `ApyConfidence::Unavailable`:
+    /// APY is unknown until an adapter reports one or an admin overrides it.
+    ///
     /// Panics with [`ContractError::InvalidOperation`] if `id` is already
     /// registered.
     pub fn register_source(
@@ -201,6 +263,7 @@ impl YieldRegistryContract {
         caller: Address,
         id: Symbol,
         contract_address: Address,
+        adapter: Option<Address>,
         protocol_type: ProtocolType,
     ) {
         caller.require_auth();
@@ -214,10 +277,12 @@ impl YieldRegistryContract {
         let source = YieldSource {
             id: id.clone(),
             contract_address: contract_address.clone(),
+            adapter: adapter.clone(),
             protocol_type: protocol_type.clone(),
             status: SourceStatus::Active,
             added_at: now,
             current_apy_bps: 0,
+            apy_confidence: ApyConfidence::Unavailable,
             apy_history: Vec::new(&env),
             tvl: 0,
             risk_rating: DEFAULT_RISK_RATING,
@@ -227,6 +292,8 @@ impl YieldRegistryContract {
             migration_required: false,
             migration_completed: false,
             migration_completed_at: 0,
+            failure_count: 0,
+            last_failure_at: 0,
         };
 
         save_source(&env, &id, &source);
@@ -242,7 +309,41 @@ impl YieldRegistryContract {
             id.clone(),
             SourceAddedEventData {
                 contract_address,
+                adapter,
                 protocol_type,
+            },
+        );
+    }
+
+    /// Attach or replace the adapter backing an existing source. Admin only.
+    ///
+    /// Changing the adapter resets the failure counter — the new adapter has
+    /// not failed yet — but does NOT clear a `Degraded` status. Recovery stays
+    /// an explicit `update_status` call so a swap can never silently
+    /// re-activate a source.
+    pub fn set_source_adapter(env: Env, caller: Address, id: Symbol, adapter: Option<Address>) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        let mut source = get_source_or_panic(&env, &id);
+        source.adapter = adapter;
+        source.failure_count = 0;
+        touch_source(&env, &mut source);
+        save_source(&env, &id, &source);
+
+        // Emit the source's new configuration rather than a status transition:
+        // this call changes the adapter, not the status, and a SOURCE_UPDATED
+        // carrying old_status == new_status would be noise for consumers
+        // watching for lifecycle changes.
+        emit_event_with_sym(
+            &env,
+            REGISTRY,
+            SOURCE_ADDED,
+            id,
+            SourceAddedEventData {
+                contract_address: source.contract_address.clone(),
+                adapter: source.adapter.clone(),
+                protocol_type: source.protocol_type.clone(),
             },
         );
     }
@@ -267,6 +368,13 @@ impl YieldRegistryContract {
 
         let old_status = source.status.clone();
         source.status = new_status.clone();
+
+        // Moving a source back to Active is a deliberate recovery: clear the
+        // failure streak so a previously degraded source starts clean.
+        if matches!(new_status, SourceStatus::Active) {
+            source.failure_count = 0;
+            source.last_failure_at = 0;
+        }
 
         // Deprecation or Exploit implies migration is required.
         if matches!(new_status, SourceStatus::Deprecated)
@@ -336,6 +444,186 @@ impl YieldRegistryContract {
     ///
     /// To intentionally apply a change beyond the threshold (e.g. to correct a
     /// stuck APY), an Admin must use [`Self::update_apy_override`].
+    /// Pull APY straight from the source's adapter. **Permissionless** — no
+    /// role required, because the value is read from the adapter rather than
+    /// asserted by the caller. This is the default APY path for
+    /// adapter-backed sources; [`Self::update_apy`] remains for legacy
+    /// admin-pushed sources and [`Self::update_apy_override`] for emergencies.
+    ///
+    /// Behaviour:
+    /// * No adapter configured → panics with `InvalidOperation`.
+    /// * Adapter reverts → records a failure (which may flip the source to
+    ///   `Degraded`) and returns an `Unavailable` reading. It deliberately
+    ///   does **not** panic: Soroban rolls back all storage writes in a
+    ///   panicking invocation, so reverting here would discard the very
+    ///   failure counter this path exists to maintain. The stored APY value
+    ///   is left untouched rather than being zeroed.
+    /// * Adapter reports `Unavailable` → stored confidence becomes
+    ///   `Unavailable` and the APY value is left at its previous reading. A
+    ///   successful call still clears the failure counter: an adapter that
+    ///   answers "I don't know" is alive, just uninformative.
+    /// * Adapter reports a value → stored, history appended, deviation guard
+    ///   applied exactly as in [`Self::update_apy`]. Only an accepted reading
+    ///   clears the failure counter; a rejected one records a failure, so an
+    ///   adapter pinning a garbage value still degrades its source.
+    ///
+    /// The deviation guard is deliberately kept on this path: a compromised
+    /// or malfunctioning adapter must not be able to move a source's APY
+    /// arbitrarily far in one call. Beyond-threshold moves need the admin
+    /// override.
+    pub fn refresh_apy_from_adapter(env: Env, id: Symbol) -> AdapterApy {
+        let mut source = get_source_or_panic(&env, &id);
+
+        let adapter = match source.adapter.clone() {
+            Some(a) => a,
+            None => panic_with_error!(&env, ContractError::InvalidOperation),
+        };
+
+        let no_args: Vec<soroban_sdk::Val> = Vec::new(&env);
+        let reading = match env.try_invoke_contract::<AdapterApy, ContractError>(
+            &adapter,
+            &Symbol::new(&env, "current_apy"),
+            no_args,
+        ) {
+            Ok(Ok(apy)) => apy,
+            // Any failure — revert, wrong return type, missing function —
+            // counts against the source. Blast radius stays at this source,
+            // and the counter must survive, so we return rather than panic.
+            _ => {
+                record_failure(&env, &id, &mut source, &env.current_contract_address());
+                return AdapterApy {
+                    apy_bps: 0,
+                    confidence: ApyConfidence::Unavailable,
+                };
+            }
+        };
+
+        match reading.confidence {
+            ApyConfidence::Unavailable => {
+                // Unknown is not zero. Keep the last value, flag it unknown,
+                // and let consumers decide (allocation logic must ignore it).
+                source.failure_count = 0;
+                source.apy_confidence = ApyConfidence::Unavailable;
+                touch_source(&env, &mut source);
+                save_source(&env, &id, &source);
+                emit_event_with_sym(
+                    &env,
+                    REGISTRY,
+                    SOURCE_PERF,
+                    id,
+                    performance_event_data(&source),
+                );
+            }
+            _ => {
+                // A reading can be rejected two ways: out of range, or beyond
+                // the single-update deviation threshold. Both mean the adapter
+                // handed us something unusable, so both count as failures —
+                // and neither may panic. Panicking would roll back the failure
+                // accounting (see the note above), letting an adapter that
+                // pins a garbage value revert this call forever while its
+                // source stays Active on a stale APY and never degrades.
+                let last_apy = source.current_apy_bps;
+                let rejected = reading.apy_bps > MAX_APY_BPS
+                    || (last_apy != 0
+                        && !matches!(source.apy_confidence, ApyConfidence::Unavailable)
+                        && reading.apy_bps.abs_diff(last_apy) > apy_deviation_threshold(&env));
+
+                if rejected {
+                    record_failure(&env, &id, &mut source, &env.current_contract_address());
+                    return AdapterApy {
+                        apy_bps: 0,
+                        confidence: ApyConfidence::Unavailable,
+                    };
+                }
+
+                source.failure_count = 0;
+                source.apy_confidence = reading.confidence.clone();
+                commit_apy_update(&env, &id, &mut source, reading.apy_bps);
+            }
+        }
+
+        reading
+    }
+
+    /// Record that an adapter interaction failed. Callable by Admin or
+    /// Operator — and by the vault, which reports the failures it observes
+    /// while skipping a reverting source during rebalance.
+    ///
+    /// Once `failure_count` exceeds the configured threshold the source flips
+    /// to [`SourceStatus::Degraded`] and a `SRC_DEGR` event is emitted.
+    /// Recovery is never automatic: an admin must call
+    /// [`Self::recover_source`].
+    pub fn report_source_failure(env: Env, caller: Address, id: Symbol) {
+        caller.require_auth();
+        require_admin_or_operator(&env, &caller);
+
+        let mut source = get_source_or_panic(&env, &id);
+        record_failure(&env, &id, &mut source, &caller);
+    }
+
+    /// Clear a source's failure streak after a confirmed successful
+    /// interaction. Callable by Admin or Operator. Does **not** change a
+    /// `Degraded` status — that needs [`Self::recover_source`].
+    pub fn clear_source_failures(env: Env, caller: Address, id: Symbol) {
+        caller.require_auth();
+        require_admin_or_operator(&env, &caller);
+
+        let mut source = get_source_or_panic(&env, &id);
+        source.failure_count = 0;
+        touch_source(&env, &mut source);
+        save_source(&env, &id, &source);
+    }
+
+    /// Bring a `Degraded` source back to `Active`. **Admin only, explicit —
+    /// there is no silent auto-recovery.** Panics with `InvalidOperation` if
+    /// the source is not currently `Degraded`.
+    pub fn recover_source(env: Env, caller: Address, id: Symbol) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        let mut source = get_source_or_panic(&env, &id);
+        if !matches!(source.status, SourceStatus::Degraded) {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
+
+        source.status = SourceStatus::Active;
+        source.failure_count = 0;
+        source.last_failure_at = 0;
+        touch_source(&env, &mut source);
+        save_source(&env, &id, &source);
+
+        emit_event_with_sym(
+            &env,
+            REGISTRY,
+            SOURCE_RECOVER,
+            id,
+            SourceRecoveredEventData {
+                recovered_by: caller,
+                recovered_at: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    /// Set the consecutive-failure threshold for auto-degradation. Admin only.
+    /// A threshold of 0 degrades a source on its first failure.
+    pub fn set_failure_threshold(env: Env, caller: Address, threshold: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::FailureThreshold, &threshold);
+    }
+
+    /// Return the configured consecutive-failure threshold.
+    pub fn get_failure_threshold(env: Env) -> u32 {
+        failure_threshold(&env)
+    }
+
+    /// Return the current consecutive-failure count for `id`.
+    pub fn get_source_failure_count(env: Env, id: Symbol) -> u32 {
+        get_source_or_panic(&env, &id).failure_count
+    }
+
     pub fn update_apy(env: Env, caller: Address, id: Symbol, new_apy_bps: u32) {
         caller.require_auth();
         require_admin_or_operator(&env, &caller);
@@ -348,15 +636,19 @@ impl YieldRegistryContract {
         let mut source = get_source_or_panic(&env, &id);
 
         // Deviation guard: reject single-update jumps that are implausible.
-        // Threshold is read from storage so it can be tuned by an admin.
+        // Threshold is read from storage so it can be tuned by an admin. Do
+        // not panic here: a panic would roll back the failure accounting and
+        // let a source report rejected values indefinitely without degrading.
         let last_apy = source.current_apy_bps;
         if last_apy != 0 {
             let deviation = new_apy_bps.abs_diff(last_apy);
             if deviation > apy_deviation_threshold(&env) {
-                panic_with_error!(env, ContractError::InvalidOperation);
+                record_failure(&env, &id, &mut source, &caller);
+                return;
             }
         }
 
+        source.apy_confidence = ApyConfidence::ProtocolReported;
         commit_apy_update(&env, &id, &mut source, new_apy_bps);
     }
 
@@ -376,6 +668,8 @@ impl YieldRegistryContract {
         }
 
         let mut source = get_source_or_panic(&env, &id);
+        // An admin asserting a value makes it known, whatever it was before.
+        source.apy_confidence = ApyConfidence::ProtocolReported;
         commit_apy_update(&env, &id, &mut source, new_apy_bps);
     }
 
@@ -553,6 +847,7 @@ impl YieldRegistryContract {
         let source = get_source_or_panic(&env, &id);
         SourcePerformance {
             current_apy_bps: source.current_apy_bps,
+            apy_confidence: source.apy_confidence,
             apy_history: source.apy_history,
             tvl: source.tvl,
             risk_rating: source.risk_rating,
@@ -601,7 +896,32 @@ impl YieldRegistryContract {
         out
     }
 
-    /// Return active sources with APY >= `min_apy_bps`.
+    /// Return every source currently in [`SourceStatus::Degraded`].
+    ///
+    /// Consumed by off-chain monitoring (the protocol health checker) so
+    /// operators see auto-degraded sources without scanning events.
+    pub fn get_degraded_sources(env: Env) -> Vec<YieldSource> {
+        let list = source_list(&env);
+        let mut out = Vec::<YieldSource>::new(&env);
+        for sym in list.iter() {
+            if let Some(s) = env
+                .storage()
+                .instance()
+                .get::<DataKey, YieldSource>(&DataKey::Source(sym))
+            {
+                if matches!(s.status, SourceStatus::Degraded) {
+                    out.push_back(s);
+                }
+            }
+        }
+        out
+    }
+
+    /// Return active sources with a **known** APY >= `min_apy_bps`.
+    ///
+    /// Sources whose APY confidence is `Unavailable` are excluded rather than
+    /// treated as 0 — unknown is not zero, and a noisy or missing reading must
+    /// never be ranked as if it were a real rate.
     pub fn get_sources_above_apy(env: Env, min_apy_bps: u32) -> Vec<YieldSource> {
         let list = source_list(&env);
         let mut out = Vec::<YieldSource>::new(&env);
@@ -611,7 +931,10 @@ impl YieldRegistryContract {
                 .instance()
                 .get::<DataKey, YieldSource>(&DataKey::Source(sym))
             {
-                if matches!(s.status, SourceStatus::Active) && s.current_apy_bps >= min_apy_bps {
+                if matches!(s.status, SourceStatus::Active)
+                    && !matches!(s.apy_confidence, ApyConfidence::Unavailable)
+                    && s.current_apy_bps >= min_apy_bps
+                {
                     out.push_back(s);
                 }
             }
@@ -645,6 +968,12 @@ impl YieldRegistryContract {
     /// Return `true` if a source with `id` is registered (any status).
     pub fn has_source(env: Env, id: Symbol) -> bool {
         env.storage().instance().has(&DataKey::Source(id))
+    }
+
+    /// Return the adapter backing `id`, or `None` for a legacy
+    /// admin-pushed source. Panics if the source does not exist.
+    pub fn get_source_adapter(env: Env, id: Symbol) -> Option<Address> {
+        get_source_or_panic(&env, &id).adapter
     }
 
     /// Return the current [`SourceStatus`] for `id`.
@@ -735,7 +1064,6 @@ impl YieldRegistryContract {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
@@ -776,6 +1104,64 @@ fn apy_deviation_threshold(env: &Env) -> u32 {
 /// Apply a validated APY value: persist it, append a history snapshot, bump the
 /// last-updated timestamp, and emit the performance event. Shared by the
 /// guarded (`update_apy`) and override (`update_apy_override`) paths.
+/// Read the configured consecutive-failure threshold, falling back to the
+/// default for registries initialised before this field existed.
+fn failure_threshold(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::FailureThreshold)
+        .unwrap_or(DEFAULT_FAILURE_THRESHOLD)
+}
+
+/// Increment a source's failure streak, flipping it to `Degraded` once the
+/// threshold is exceeded. Terminal states (`Deprecated`, `Exploit`) are left
+/// alone — they already keep capital away from the source.
+///
+/// Shared by the permissionless refresh path and the vault-reported path.
+fn record_failure(env: &Env, id: &Symbol, source: &mut YieldSource, reporter: &Address) {
+    source.failure_count = source.failure_count.saturating_add(1);
+    source.last_failure_at = env.ledger().timestamp();
+
+    emit_event_with_sym(
+        env,
+        REGISTRY,
+        SOURCE_FAILED,
+        id.clone(),
+        SourceFailureEventData {
+            failure_count: source.failure_count,
+            threshold: failure_threshold(env),
+            reporter: reporter.clone(),
+        },
+    );
+
+    let terminal = matches!(
+        source.status,
+        SourceStatus::Deprecated | SourceStatus::Exploit
+    );
+    if !terminal
+        && !matches!(source.status, SourceStatus::Degraded)
+        && source.failure_count > failure_threshold(env)
+    {
+        let previous_status = source.status.clone();
+        source.status = SourceStatus::Degraded;
+
+        emit_event_with_sym(
+            env,
+            REGISTRY,
+            SOURCE_DEGRADED,
+            id.clone(),
+            SourceDegradedEventData {
+                failure_count: source.failure_count,
+                previous_status,
+                degraded_at: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    touch_source(env, source);
+    save_source(env, id, source);
+}
+
 fn commit_apy_update(env: &Env, id: &Symbol, source: &mut YieldSource, new_apy_bps: u32) {
     source.current_apy_bps = new_apy_bps;
     append_apy_snapshot(env, source, new_apy_bps);

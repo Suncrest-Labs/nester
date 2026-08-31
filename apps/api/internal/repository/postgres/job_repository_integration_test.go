@@ -45,10 +45,15 @@ func TestJobRepository_EnqueueDequeueComplete(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
+	// RunAt is pinned to the same instant the dequeue below uses as its
+	// cursor. Left unset, Enqueue stamps time.Now() a few microseconds after
+	// `now` was captured, and next_run_at <= now is then false on any clock
+	// with sub-millisecond resolution.
 	job, created, err := repo.Enqueue(ctx, jobqueue.EnqueueInput{
 		Type:          "harvest",
 		Payload:       json.RawMessage(`{"vault_id":"v1"}`),
 		CorrelationID: "corr-1",
+		RunAt:         now,
 	})
 	if err != nil || !created {
 		t.Fatalf("enqueue: created=%v err=%v", created, err)
@@ -115,7 +120,7 @@ func TestJobRepository_LeaseExpiryReclaim(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	_, _, err := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "recover"})
+	_, _, err := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "recover", RunAt: now})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -146,7 +151,7 @@ func TestJobRepository_RetryAndDeadLetter(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	job, _, _ := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "flaky", MaxAttempts: 2})
+	job, _, _ := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "flaky", MaxAttempts: 2, RunAt: now})
 	leased, _ := repo.Dequeue(ctx, jobqueue.DequeueParams{Type: "flaky", Limit: 1, Lease: time.Minute, Now: now})
 	if len(leased) != 1 {
 		t.Fatal("expected one leased job")
@@ -185,7 +190,7 @@ func TestJobRepository_HeartbeatExtendsLease(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	job, _, _ := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "long"})
+	job, _, _ := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "long", RunAt: now})
 	leased, _ := repo.Dequeue(ctx, jobqueue.DequeueParams{Type: "long", Limit: 1, Lease: time.Second, Now: now})
 	if len(leased) != 1 {
 		t.Fatal("expected one leased job")

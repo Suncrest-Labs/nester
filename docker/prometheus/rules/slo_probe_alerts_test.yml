@@ -1,0 +1,149 @@
+# promtool unit tests for the synthetic probe alerts (nester#1056).
+
+rule_files:
+  - slo_probe_alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A healthy probe reporting on schedule alerts on nothing.
+  - interval: 1m
+    name: passing probes do not alert
+    input_series:
+      - series: 'nester_probe_success{probe="balance",environment="staging"}'
+        values: '1x40'
+      - series: 'nester_probe_duration_seconds{probe="balance",environment="staging"}'
+        values: '0.4x40'
+      # Timestamp advancing in step with wall clock: the probe keeps running.
+      - series: 'nester_probe_last_run_timestamp_seconds{probe="balance",environment="staging"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: SyntheticProbeFailing
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: SyntheticProbeStale
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: SyntheticProbeMetricsAbsent
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: SyntheticProbeSlow
+        exp_alerts: []
+
+  # A single transient failure must not alert: `for: 10m` exists to absorb
+  # one bad cycle without waking anyone for a network blip.
+  - interval: 1m
+    name: a single transient probe failure is tolerated
+    input_series:
+      - series: 'nester_probe_success{probe="withdrawal",environment="staging"}'
+        values: '1x5 0x4 1x30'
+      - series: 'nester_probe_last_run_timestamp_seconds{probe="withdrawal",environment="staging"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: SyntheticProbeFailing
+        exp_alerts: []
+
+  # A sustained failure does alert. This is the case the probes exist for:
+  # the path is broken and no real traffic is exercising it.
+  - interval: 1m
+    name: a sustained probe failure opens a ticket
+    input_series:
+      - series: 'nester_probe_success{probe="withdrawal",environment="staging"}'
+        values: '0x40'
+      - series: 'nester_probe_last_reason{probe="withdrawal",reason="http_5xx",environment="staging"}'
+        values: '1x40'
+      - series: 'nester_probe_last_run_timestamp_seconds{probe="withdrawal",environment="staging"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SyntheticProbeFailing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: synthetic_probe
+              probe: withdrawal
+              environment: staging
+            exp_annotations:
+              summary: "Synthetic withdrawal probe failing on staging"
+              description: "The withdrawal probe has failed for over 10 minutes on staging. This path is broken regardless of whether real traffic is currently exercising it — which is the entire point of the probe. Reason: http_5xx."
+              dashboard: /d/nester-slo-probes/synthetic-probes
+              runbook: docs/observability/runbooks/synthetic-probes.md
+
+  # The probe runner stopped. The success gauge still reads 1, so
+  # SyntheticProbeFailing cannot see this — the staleness alert is what
+  # distinguishes "passing" from "not running".
+  - interval: 1m
+    name: a stalled probe runner is caught by staleness, not by success
+    input_series:
+      - series: 'nester_probe_success{probe="deposit",environment="staging"}'
+        values: '1x60'
+      # Frozen: the runner is not updating it.
+      - series: 'nester_probe_last_run_timestamp_seconds{probe="deposit",environment="staging"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: SyntheticProbeFailing
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: SyntheticProbeStale
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: synthetic_probe
+              probe: deposit
+              environment: staging
+            exp_annotations:
+              summary: "Synthetic deposit probe has not run for 55m 0s"
+              description: "The deposit probe last reported over 30 minutes ago against a schedule that should run it far more often. The probe runner is failing, not the service under test — check the workflow run rather than the API. Until this clears, the probe's success gauge is stale and must not be read as healthy."
+              dashboard: /d/nester-slo-probes/synthetic-probes
+              runbook: docs/observability/runbooks/synthetic-probes.md
+
+  # No probe series at all: synthetic coverage is zero and that must be said
+  # out loud rather than looking like health.
+  - interval: 1m
+    name: absent probe metrics alert rather than reporting health
+    input_series:
+      - series: 'nester_http_requests_total{route="/x",method="GET",status_class="2xx"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: SyntheticProbeMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: synthetic_probe
+            exp_annotations:
+              summary: Synthetic probe metrics are absent entirely
+              description: "No nester_probe_success series exists. Either the probes have never run, or their results are not reaching Prometheus. Synthetic coverage is currently zero: the flows these probes exercise have no monitoring while real traffic is absent."
+              dashboard: /d/nester-slo-probes/synthetic-probes
+              runbook: docs/observability/runbooks/synthetic-probes.md
+
+  # Succeeding, but slowly enough that the path is degrading.
+  - interval: 1m
+    name: a slow but passing probe opens a ticket
+    input_series:
+      - series: 'nester_probe_success{probe="deposit",environment="staging"}'
+        values: '1x40'
+      - series: 'nester_probe_duration_seconds{probe="deposit",environment="staging"}'
+        values: '95x40'
+      - series: 'nester_probe_last_run_timestamp_seconds{probe="deposit",environment="staging"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SyntheticProbeFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SyntheticProbeSlow
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: synthetic_probe
+              probe: deposit
+              environment: staging
+            exp_annotations:
+              summary: "Synthetic deposit probe taking 1m 35s"
+              description: "The deposit probe is completing but far slower than a healthy path should. Succeeding slowly is how a path degrades before it breaks outright, so this is worth a ticket before it becomes a failure."
+              dashboard: /d/nester-slo-probes/synthetic-probes
+              runbook: docs/observability/runbooks/synthetic-probes.md

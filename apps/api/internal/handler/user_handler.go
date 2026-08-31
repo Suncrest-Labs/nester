@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 
@@ -12,15 +14,17 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
+	"github.com/suncrestlabs/nester/apps/api/internal/objectstorage"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
 type UserHandler struct {
-	service        *service.UserService
-	userVaultsSvc  *service.UserVaultsService
-	validator      *validator.Validate
+	service       *service.UserService
+	userVaultsSvc *service.UserVaultsService
+	validator     *validator.Validate
+	kycStore      objectstorage.Store
 }
 
 func NewUserHandler(service *service.UserService) *UserHandler {
@@ -28,6 +32,15 @@ func NewUserHandler(service *service.UserService) *UserHandler {
 		service:   service,
 		validator: validator.New(validator.WithRequiredStructEnabled()),
 	}
+}
+
+// SetKYCStore wires the object store submitKYC uploads identity documents
+// to. Left unset (nil) in an environment where object storage hasn't been
+// provisioned yet — submitKYC treats that the same as "storage is not
+// ready" and rejects the upload (503) rather than accepting and discarding
+// it (nester#1191).
+func (h *UserHandler) SetKYCStore(store objectstorage.Store) {
+	h.kycStore = store
 }
 
 // SetUserVaultsService wires the intelligence-facing user vaults list.
@@ -45,6 +58,8 @@ func (h *UserHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/users/wallet/{address}", h.getUserByWallet)
 	mux.HandleFunc("POST /api/v1/users/kyc/{id}", h.submitKYC)
 	mux.HandleFunc("GET /api/v1/users/kyc/{id}", h.getKYCStatus)
+	mux.HandleFunc("POST /api/v1/users/me/kyc", h.submitKYCMe)
+	mux.HandleFunc("GET /api/v1/users/me/kyc", h.getKYCStatusMe)
 	mux.HandleFunc("GET /api/v1/users/profile", h.getProfile)
 	mux.HandleFunc("PATCH /api/v1/users/profile", h.updateProfile)
 	mux.HandleFunc("GET /api/v1/user-vaults/{id}", h.listUserVaultsForIntelligence)
@@ -206,6 +221,25 @@ func (h *UserHandler) getUserByWallet(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, http.StatusOK, response.OK(model))
 }
 
+const (
+	// maxKYCUploadBytes caps the entire KYC submission body. Identity documents
+	// are photographs; 12 MB accommodates a high-resolution scan with form
+	// fields alongside it.
+	maxKYCUploadBytes = 12 << 20
+	// kycInMemoryBytes is how much of the multipart form is buffered in memory
+	// before the remainder spills to temporary files.
+	kycInMemoryBytes = 10 << 20
+	// MaxKYCDocumentBytes bounds a single id_front/id_back file, distinct
+	// from maxKYCUploadBytes which bounds the whole multipart body (both
+	// files plus form fields together).
+	MaxKYCDocumentBytes = 8 << 20
+)
+
+// KYCAllowedContentTypes are the only content types submitKYC will store —
+// identity documents are photographs or scans, never an arbitrary file
+// (nester#1191's third acceptance criterion).
+var KYCAllowedContentTypes = []string{"image/jpeg", "image/png", "application/pdf"}
+
 func (h *UserHandler) submitKYC(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	userID, err := uuid.Parse(idStr)
@@ -214,14 +248,38 @@ func (h *UserHandler) submitKYC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(10 << 20); err != nil { // 10 MB limit
+	h.submitKYCFor(w, r, userID)
+}
+
+// submitKYCFor runs the KYC submission for an already-resolved user id.
+// Shared by submitKYC (id from the path) and submitKYCMe (id from the
+// session) so the two routes cannot drift — an earlier copy of this logic
+// on the /users/me/ route still discarded the identity fields and wrote a
+// mock storage key, reintroducing nester#1190 and nester#1191.
+func (h *UserHandler) submitKYCFor(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+
+	if h.kycStore == nil {
+		// Storage is not ready in this environment — reject the upload
+		// rather than accept and discard it (nester#1191's explicit
+		// guidance for this situation).
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "document storage is not available"))
+		return
+	}
+
+	// ParseMultipartForm's argument bounds only how much is held in memory:
+	// anything beyond it spills to temporary files, so on its own it does not
+	// bound the request at all and a large upload can exhaust disk
+	// (nester#1035, G120). MaxBytesReader caps the request body itself, which
+	// is the actual limit.
+	r.Body = http.MaxBytesReader(w, r.Body, maxKYCUploadBytes)
+	if err := r.ParseMultipartForm(kycInMemoryBytes); err != nil { // #nosec G120 -- the request body is bounded by MaxBytesReader on the line above
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("could not parse multipart form"))
 		return
 	}
 
-	fullName := r.FormValue("full_name")
-	dateOfBirth := r.FormValue("date_of_birth") // ignored for now
-	country := r.FormValue("country") // ignored for now
+	fullName := strings.TrimSpace(r.FormValue("full_name"))
+	dateOfBirthRaw := r.FormValue("date_of_birth")
+	country := strings.ToUpper(strings.TrimSpace(r.FormValue("country")))
 	idType := r.FormValue("id_type")
 	idNumber := r.FormValue("id_number")
 
@@ -229,6 +287,20 @@ func (h *UserHandler) submitKYC(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("id_type and id_number are required"))
 		return
 	}
+	if fullName == "" {
+		h.writeDomainError(w, r, user.ErrMissingIdentity)
+		return
+	}
+	dateOfBirth, err := user.ParseDateOfBirth(dateOfBirthRaw)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+	if !user.IsValidCountryCode(country) {
+		h.writeDomainError(w, r, user.ErrInvalidCountry)
+		return
+	}
+	identity := user.KYCIdentity{FullName: fullName, DateOfBirth: dateOfBirth, Country: country}
 
 	idFrontFile, idFrontHeader, err := r.FormFile("id_front")
 	if err != nil {
@@ -237,22 +309,27 @@ func (h *UserHandler) submitKYC(w http.ResponseWriter, r *http.Request) {
 	}
 	defer idFrontFile.Close()
 
-	// In a real implementation we would upload to S3 here.
-	frontKey := "s3://mock-bucket/" + idFrontHeader.Filename
+	frontContentType := idFrontHeader.Header.Get("Content-Type")
+	frontKey, err := h.storeKYCDocument(r.Context(), userID, frontContentType, idFrontFile)
+	if err != nil {
+		h.writeKYCUploadError(w, r, err)
+		return
+	}
 
 	var backKey *string
 	idBackFile, idBackHeader, err := r.FormFile("id_back")
 	if err == nil {
 		defer idBackFile.Close()
-		bk := "s3://mock-bucket/" + idBackHeader.Filename
+		backContentType := idBackHeader.Header.Get("Content-Type")
+		bk, err := h.storeKYCDocument(r.Context(), userID, backContentType, idBackFile)
+		if err != nil {
+			h.writeKYCUploadError(w, r, err)
+			return
+		}
 		backKey = &bk
 	}
 
-	_ = fullName
-	_ = dateOfBirth
-	_ = country
-
-	if err := h.service.SubmitKYC(r.Context(), userID, idType, idNumber, frontKey, backKey); err != nil {
+	if err := h.service.SubmitKYC(r.Context(), userID, identity, idType, idNumber, frontKey, backKey); err != nil {
 		h.writeDomainError(w, r, err)
 		return
 	}
@@ -260,11 +337,88 @@ func (h *UserHandler) submitKYC(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, http.StatusAccepted, response.OK(map[string]string{"status": "pending"}))
 }
 
+// storeKYCDocument uploads one id_front/id_back file to real object
+// storage and returns the server-generated key. The client's filename is
+// never read here at all — it plays no part in the generated key
+// (nester#1191).
+func (h *UserHandler) storeKYCDocument(ctx context.Context, userID uuid.UUID, contentType string, file multipart.File) (string, error) {
+	limited := io.LimitReader(file, MaxKYCDocumentBytes+1)
+	key, err := h.kycStore.Put(ctx, userID.String(), contentType, limited)
+	if err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// writeKYCUploadError maps a storage-layer failure to an HTTP response. A
+// failed upload fails the request rather than persisting a KYC record that
+// points at nothing (nester#1191's fourth acceptance criterion) — the
+// caller in submitKYC returns immediately after calling this and never
+// reaches the SubmitKYC persistence call.
+func (h *UserHandler) writeKYCUploadError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, objectstorage.ErrContentTypeNotAllowed):
+		response.WriteJSON(w, http.StatusUnsupportedMediaType, response.ValidationErr(err.Error()))
+	case errors.Is(err, objectstorage.ErrTooLarge):
+		response.WriteJSON(w, http.StatusRequestEntityTooLarge, response.ValidationErr(err.Error()))
+	default:
+		logpkg.FromContext(r.Context()).Error("kyc document upload failed", "error", err.Error())
+		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "UPLOAD_FAILED", "document upload failed"))
+	}
+}
+
 func (h *UserHandler) getKYCStatus(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	userID, err := uuid.Parse(idStr)
 	if err != nil {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid user ID"))
+		return
+	}
+
+	model, err := h.service.GetUser(r.Context(), userID)
+	if err != nil {
+		h.writeDomainError(w, r, err)
+		return
+	}
+
+	resp := map[string]any{
+		"status": model.KYCStatus,
+	}
+	if model.KYCSubmittedAt != nil {
+		resp["submitted_at"] = model.KYCSubmittedAt
+	}
+	if model.KYCReviewedAt != nil {
+		resp["reviewed_at"] = model.KYCReviewedAt
+	}
+	if model.KYCRejectionReason != nil {
+		resp["rejection_reason"] = model.KYCRejectionReason
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.OK(resp))
+}
+
+// submitKYCMe submits KYC data for the authenticated user (no user ID param needed).
+// submitKYCMe submits KYC for the authenticated user.
+//
+// Delegates to submitKYCFor rather than repeating the parsing and storage
+// logic. The copy that used to live here discarded full_name, date_of_birth
+// and country with `_ =`, and built its storage key by concatenating the
+// client-supplied filename onto "s3://mock-bucket/" — reintroducing both
+// nester#1190 and nester#1191 on a second route after they were fixed on the
+// first.
+func (h *UserHandler) submitKYCMe(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+
+	h.submitKYCFor(w, r, userID)
+}
+
+// getKYCStatusMe retrieves KYC status for the authenticated user.
+func (h *UserHandler) getKYCStatusMe(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.authenticatedUserID(w, r)
+	if !ok {
 		return
 	}
 
@@ -312,6 +466,8 @@ func (h *UserHandler) writeDomainError(w http.ResponseWriter, r *http.Request, e
 	case errors.Is(err, user.ErrDuplicateWallet):
 		response.WriteJSON(w, http.StatusConflict, response.Err(http.StatusConflict, "CONFLICT", err.Error()))
 	case errors.Is(err, user.ErrInvalidWallet):
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	case errors.Is(err, user.ErrInvalidDateOfBirth), errors.Is(err, user.ErrInvalidCountry), errors.Is(err, user.ErrMissingIdentity):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	default:
 		logpkg.FromContext(r.Context()).Error("user handler failed", "error", err.Error())

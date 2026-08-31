@@ -47,6 +47,7 @@ export interface CoachingResponse {
   deposit_schedule: CoachingDepositItem[]
   nudges: string[]
   confidence: string
+  session_summary?: string
 }
 
 export interface CoachingRequest {
@@ -99,6 +100,7 @@ export interface MarketContextSignal {
 }
 
 export interface PortfolioInsight {
+  id?: string
   title: string
   body: string
   confidence: number
