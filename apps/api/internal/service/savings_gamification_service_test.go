@@ -19,7 +19,7 @@ type fakeGamificationRepo struct {
 
 func newFakeGamificationRepo(userID uuid.UUID) *fakeGamificationRepo {
 	return &fakeGamificationRepo{
-		state: savingsstreak.GamificationState{UserID: userID, Timezone: "UTC", CurrentLevel: 1},
+		state:  savingsstreak.GamificationState{UserID: userID, Timezone: "UTC", CurrentLevel: 1},
 		events: map[string]bool{},
 		awards: map[string]bool{},
 	}

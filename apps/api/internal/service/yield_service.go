@@ -87,12 +87,12 @@ type YieldOpportunitiesResponse struct {
 
 // YieldService aggregates DeFiLlama yield pool data for a given chain.
 type YieldService struct {
-	httpClient    *http.Client
-	defiLlamaURL  string
-	cacheMu       sync.Mutex
-	cache         map[string]yieldCacheEntry
-	cacheTTL      time.Duration
-	minTVLUsd     float64
+	httpClient   *http.Client
+	defiLlamaURL string
+	cacheMu      sync.Mutex
+	cache        map[string]yieldCacheEntry
+	cacheTTL     time.Duration
+	minTVLUsd    float64
 }
 
 const defaultYieldCacheTTL = 5 * time.Minute
@@ -144,7 +144,9 @@ type defiLlamaPoolsResponse struct {
 // scores them by risk-adjusted APY, and returns the top `limit` results.
 // Falls back to stale cache (up to 30 minutes old) if upstream is unavailable.
 func (s *YieldService) GetYieldOpportunities(ctx context.Context, chain string, limit int) (*YieldOpportunitiesResponse, error) {
-	if limit > 100 { limit = 100 }
+	if limit > 100 {
+		limit = 100
+	}
 	chain = normalizeChain(chain)
 	cacheKey := fmt.Sprintf("%s:%d", chain, limit)
 

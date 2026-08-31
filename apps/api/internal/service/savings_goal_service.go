@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/outbox"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsstreak"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
@@ -658,10 +659,9 @@ func (s *SavingsGoalService) EnrichProgress(ctx context.Context, goal savingsgoa
 	newMilestones := savingsgoal.DetectNewMilestones(goal.ProgressPct, goal.NotifiedMilestones)
 	if len(newMilestones) > 0 {
 		goal.NotifiedMilestones = append(append([]int(nil), goal.NotifiedMilestones...), newMilestones...)
-		if err := s.repo.UpdateMilestones(ctx, goal.ID, goal.NotifiedMilestones); err != nil {
+		if err := s.recordMilestones(ctx, goal, newMilestones); err != nil {
 			return savingsgoal.SavingsGoal{}, err
 		}
-		s.notifyMilestonesAsync(goal, newMilestones)
 	}
 
 	// Velocity stats (#714): compute from last 30 days of deposits.
@@ -987,6 +987,50 @@ func (s *SavingsGoalService) updateStreak(ctx context.Context, userID uuid.UUID)
 	return streak.CurrentStreak, streak.LongestStreak, nil
 }
 
+// recordMilestones persists goal.NotifiedMilestones and arranges for the
+// milestones to actually be announced.
+//
+// When the repository supports it (Postgres does), both happen in ONE
+// transaction via the outbox: the flag that says "already told them" and the
+// durable intent to tell them commit or roll back together, closing the
+// window where a crash leaves a goal marked notified for a notification that
+// never happened.
+//
+// Repositories that cannot offer a transaction — the in-memory ones used in
+// tests — fall back to the previous behaviour: update, then notify from a
+// detached goroutine. That path is explicitly lossy and is kept only so
+// non-database callers keep working.
+func (s *SavingsGoalService) recordMilestones(ctx context.Context, goal savingsgoal.SavingsGoal, newMilestones []int) error {
+	recorder, ok := s.repo.(MilestoneOutboxRecorder)
+	if !ok {
+		if err := s.repo.UpdateMilestones(ctx, goal.ID, goal.NotifiedMilestones); err != nil {
+			return err
+		}
+		s.notifyMilestonesAsync(goal, newMilestones)
+		return nil
+	}
+
+	events := make([]outbox.Event, 0, len(newMilestones))
+	for _, milestone := range newMilestones {
+		e, err := NewGoalMilestoneEvent(goal.UserID, goal, milestone)
+		if err != nil {
+			// The event is malformed, which means the notification can never
+			// be delivered. Failing here — before the milestone is marked
+			// notified — is what keeps the two facts consistent; recording
+			// it as notified anyway would lose the announcement silently.
+			return fmt.Errorf("build milestone outbox event: %w", err)
+		}
+		events = append(events, e)
+	}
+	return recorder.UpdateMilestonesWithOutbox(ctx, goal.ID, goal.NotifiedMilestones, events)
+}
+
+// notifyMilestonesAsync is the pre-outbox notification path, retained only
+// for repositories that cannot provide a transaction (see recordMilestones).
+// It is lossy by construction: the goroutine dies with the process, so a
+// crash between the milestone update and the notification loses the
+// notification permanently. That is the bug #1049 exists to fix, and the
+// outbox path above is the fix.
 func (s *SavingsGoalService) notifyMilestonesAsync(goal savingsgoal.SavingsGoal, milestones []int) {
 	for _, milestone := range milestones {
 		m := milestone
@@ -1000,7 +1044,8 @@ func (s *SavingsGoalService) notifyMilestonesAsync(goal savingsgoal.SavingsGoal,
 		go func() { // #nosec G118 -- intentionally detached background work, bounded by its own timeout
 			nctx, cancel := context.WithTimeout(context.Background(), asyncNotifyTimeout)
 			defer cancel()
-			s.notifier.SendGoalMilestone(nctx, goalCopy.UserID, goalCopy, m)
+			s.notifier.SendGoalMilestone(nctx, goalCopy.UserID, goalCopy, m,
+				MilestoneDedupeKey(goalCopy.ID, m))
 		}()
 	}
 }

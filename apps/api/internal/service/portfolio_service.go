@@ -117,7 +117,7 @@ func (s *PortfolioService) GetUserPortfolioSummary(ctx context.Context, userID u
 			Deposited:    deposited,
 			CurrentValue: currentBalance,
 			Shares:       decimal.Zero, // Share balance would require additional data from on-chain or DB
-			APY7d:        apy,           // 7-day APY from allocations
+			APY7d:        apy,          // 7-day APY from allocations
 		}
 		summary.Positions = append(summary.Positions, position)
 	}
