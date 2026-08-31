@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertCircle,
@@ -17,6 +17,8 @@ import { usePortfolio } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { TransactionAnnouncer } from "@/components/vault/transactionAnnouncer";
 import type { Vault as VaultDefinition, MarketStrategy } from "@/lib/types/vault";
 import {
   executeVaultDeposit,
@@ -34,6 +36,7 @@ type ActionState =
   | "building"
   | "signing"
   | "submitting"
+  | "pending"
   | "success"
   | "error";
 
@@ -77,6 +80,15 @@ function ModalShell({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const titleId = 'deposit-modal-title';
+  const subtitleId = 'deposit-modal-subtitle';
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Escape must cancel without submitting, and focus must return to the
+  // trigger on close (nester#1128). Both live in the hook so the deposit and
+  // withdraw shells cannot drift apart.
+  useFocusTrap(dialogRef, open, { onEscape: onClose });
+
   return (
     <AnimatePresence>
       {open && (
@@ -88,6 +100,12 @@ function ModalShell({
         >
           <div className="flex min-h-full items-center justify-center">
             <motion.div
+              ref={dialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              aria-describedby={subtitleId}
+              tabIndex={-1}
               initial={{ opacity: 0, y: 24, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
@@ -99,15 +117,17 @@ function ModalShell({
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
                     Vault Action
                   </p>
-                  <h2 className="mt-2 font-heading text-2xl font-light text-foreground">
+                  <h2 id={titleId} className="mt-2 font-heading text-2xl font-light text-foreground">
                     {title}
                   </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
+                  <p id={subtitleId} className="mt-1 text-sm text-muted-foreground">
                     {subtitle}
                   </p>
                 </div>
                 <button
+                  type="button"
                   onClick={onClose}
+                  aria-label="Close dialog"
                   className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
@@ -124,16 +144,32 @@ function ModalShell({
 
 // ── Transaction steps ─────────────────────────────────────────────────────────
 
-const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
+// executeVaultDeposit builds, signs and submits in one call without exposing
+// intermediate stages, so "signing" and "submitting" are never assigned. Keep
+// the steps mapped to states that actually occur; listing unreachable ones
+// leaves the indicator permanently stuck on the first step.
+const TX_STEPS: {
+  label: string;
+  /** States in which this step counts as already done. */
+  activeStates: ActionState[];
+  /** The single state in which this step is the one currently running. */
+  currentState: ActionState;
+}[] = [
   {
-    label: "Build contract call",
-    activeStates: ["building", "signing", "submitting", "success"],
+    label: "Build and sign",
+    activeStates: ["building", "pending", "success"],
+    currentState: "building",
   },
   {
-    label: "Sign with wallet",
-    activeStates: ["signing", "submitting", "success"],
+    label: "Submit to network",
+    activeStates: ["pending", "success"],
+    currentState: "pending",
   },
-  { label: "Submit and confirm", activeStates: ["success"] },
+  {
+    label: "Confirmed on-chain",
+    activeStates: ["success"],
+    currentState: "success",
+  },
 ];
 
 // ── DepositModal ──────────────────────────────────────────────────────────────
@@ -174,7 +210,7 @@ function getVaultMeta(vault: VaultDefinition) {
  */
 export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const { address } = useWallet();
-  const { getAvailableBalance, recordDeposit, refreshBalances } = usePortfolio();
+  const { getAvailableBalance, recordPendingDeposit, confirmPendingDeposit, failPendingDeposit, refreshBalances } = usePortfolio();
   const { isOffline } = useOfflineStatus();
 
   const [amountInput, setAmountInput] = useState("");
@@ -185,6 +221,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const [selectedStrategy, setSelectedStrategy] = useState<MarketStrategy | null>(
     vault?.strategies?.[0] ?? null
   );
+  const submittingRef = useRef(false);
 
   const supportedAssets = (vault?.supportedAssets ?? ["USDC"]) as ("USDC" | "XLM")[];
   const strategies = vault?.strategies ?? [];
@@ -234,17 +271,39 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   };
 
   const handleDeposit = async () => {
-    if (!vault || !address || !canSubmit) return;
+    if (!vault || !address || !canSubmit || submittingRef.current) return;
 
     setErrorMsg("");
 
+    // Validate before claiming the submit flag. Setting it first and then
+    // returning here latches it for the lifetime of the modal, so every
+    // later deposit attempt is silently dropped by the guard above.
     if (!vault.contractAddress || !/^C[A-Z0-9]{55}$/.test(vault.contractAddress)) {
       setErrorMsg("This vault is not yet deployed on testnet. Check back soon.");
       return;
     }
 
+    submittingRef.current = true;
+
+    // Record the pending row and enter the pending state BEFORE awaiting.
+    // Setting them after the await batches them with setState("success") in a
+    // single render, so the "waiting for confirmation" state never paints —
+    // which is the whole point of this change.
+    const pendingTxId = recordPendingDeposit({
+      vault: {
+        id: vault.id,
+        name: vault.name,
+        asset: selectedAsset,
+        apy: meta?.apy || 0,
+        lockDays: meta?.lockDays || 0,
+        earlyWithdrawalPenaltyPct: 0.1,
+      },
+      amount,
+      isOnChain: true,
+    });
+
     try {
-      setState("building");
+      setState("pending");
       const txReceipt = await executeVaultDeposit({
         walletAddress: address,
         vaultId: vault.id,
@@ -253,38 +312,38 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         amount,
       });
 
-      // Record in portfolio state
-      recordDeposit({
-        vault: {
-          id: vault.id,
-          name: vault.name,
-          asset: selectedAsset,
-          apy: meta?.apy || 0,
-          lockDays: meta?.lockDays || 0,
-          earlyWithdrawalPenaltyPct: 0.1,
-        },
-        amount,
-        txHash: txReceipt.txHash,
-        isOnChain: true,
-      });
-
       setReceipt(txReceipt);
+
+      // Confirmation creates the position and deducts the balance. Until the
+      // chain confirms, the user holds no shares and their balance is intact.
+      confirmPendingDeposit(pendingTxId, txReceipt.txHash);
+
       setState("success");
-      // Re-fetch true on-chain balance so UI reflects what actually happened
       refreshBalances();
     } catch (err) {
+      // Without this the pending row is orphaned and persists to
+      // localStorage as "Pending" forever.
+      failPendingDeposit(pendingTxId);
       setErrorMsg(humanizeError(err));
       setState("error");
+    } finally {
+      submittingRef.current = false;
     }
   };
 
   return (
     <ModalShell
       open={open && !!vault}
-      onClose={state === "signing" || state === "submitting" ? () => {} : reset}
+      onClose={state === "signing" || state === "submitting" || state === "pending" ? () => {} : reset}
       title={`Deposit into ${vault?.name ?? "Vault"}`}
       subtitle={`Build and sign a Soroban transaction to deposit ${selectedAsset} into this vault.`}
     >
+      <TransactionAnnouncer
+        phase={state}
+        errorMessage={errorMsg}
+        amountLabel={amount > 0 ? `${formatCurrency(amount)} ${selectedAsset}` : undefined}
+        action="Deposit"
+      />
       {vault && (
         <>
         <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
@@ -466,12 +525,12 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                 Transaction Flow
               </p>
               <div className="mt-4 space-y-3">
-                {TX_STEPS.map(({ label, activeStates }) => {
+                {TX_STEPS.map(({ label, activeStates, currentState }) => {
                   const done = activeStates.includes(state);
-                  const active =
-                    (label === "Build contract call" && state === "building") ||
-                    (label === "Sign with wallet" && state === "signing") ||
-                    (label === "Submit and confirm" && state === "submitting");
+                  // Match on the state, not the label. Comparing against
+                  // label strings silently breaks the moment a label is
+                  // reworded.
+                  const active = state === currentState;
                   return (
                     <div
                       key={label}
@@ -564,7 +623,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
           <div className="flex gap-3">
             <button
               onClick={reset}
-              disabled={state === "signing" || state === "submitting"}
+              disabled={state === "signing" || state === "submitting" || state === "pending"}
               className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
             >
               {state === "success" ? "Close" : "Cancel"}
@@ -581,6 +640,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   state === "building" ||
                   state === "signing" ||
                   state === "submitting" ||
+                  state === "pending" ||
                   (state === "input" && !canSubmit)
                 }
                 className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
@@ -601,6 +661,12 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   <span className="inline-flex items-center justify-center gap-2">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Submitting
+                  </span>
+                )}
+                {state === "pending" && (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Waiting for confirmation
                   </span>
                 )}
                 {state === "error" && "Try Again"}

@@ -204,26 +204,26 @@ func (r *SettlementRepository) UpdateStatus(
 
 func scanSettlement(row scanner) (offramp.Settlement, error) {
 	var (
-		id            string
-		userID        string
-		vaultID       string
-		amount        string
-		currency      string
-		fiatCurrency  string
-		fiatAmount    string
-		exchangeRate  string
-		destType      string
-		destProvider  string
-		destAcctNum   string
-		destAcctName  string
-		destBankCode  string
-		status        string
-		retryCount    int
-		errorMessage  sql.NullString
-		notes         sql.NullString
-		estimatedFee  sql.NullString
-		createdAt     time.Time
-		completedAt   sql.NullTime
+		id           string
+		userID       string
+		vaultID      string
+		amount       string
+		currency     string
+		fiatCurrency string
+		fiatAmount   string
+		exchangeRate string
+		destType     string
+		destProvider string
+		destAcctNum  string
+		destAcctName string
+		destBankCode string
+		status       string
+		retryCount   int
+		errorMessage sql.NullString
+		notes        sql.NullString
+		estimatedFee sql.NullString
+		createdAt    time.Time
+		completedAt  sql.NullTime
 	)
 
 	if err := row.Scan(

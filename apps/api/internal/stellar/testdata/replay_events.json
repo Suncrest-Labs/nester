@@ -1,0 +1,153 @@
+{
+  "jsonrpc": "2.0",
+  "id": "nester-indexer",
+  "result": {
+    "latestLedger": 58130,
+    "events": [
+      {
+        "id": "0000249613220806656-0000000001",
+        "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "ledger": 58101,
+        "ledgerClosedAt": "2026-05-18T09:14:22Z",
+        "type": "contract",
+        "pagingToken": "0000249613220806656-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "b1c4e3f0a29d5647b8e1f0c3d2a5b6e7f8091a2b3c4d5e6f708192a3b4c5d6e7",
+        "topic": ["deposit", "GAKX7VYAJTQOZ4ZKQ7GCTAWOAKCXY6BFCHOEQ4RRWJBTAY3EKQXHTKZL"],
+        "value": {
+          "amount": 25000000000,
+          "user": "GAKX7VYAJTQOZ4ZKQ7GCTAWOAKCXY6BFCHOEQ4RRWJBTAY3EKQXHTKZL"
+        }
+      },
+      {
+        "id": "0000249613220806656-0000000002",
+        "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "ledger": 58101,
+        "ledgerClosedAt": "2026-05-18T09:14:22Z",
+        "type": "contract",
+        "pagingToken": "0000249613220806656-0000000002",
+        "inSuccessfulContractCall": true,
+        "txHash": "b1c4e3f0a29d5647b8e1f0c3d2a5b6e7f8091a2b3c4d5e6f708192a3b4c5d6e7",
+        "topic": ["deposit", "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"],
+        "value": {
+          "amount": 12500000000,
+          "user": "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"
+        }
+      },
+      {
+        "id": "0000249617515773952-0000000001",
+        "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "ledger": 58104,
+        "ledgerClosedAt": "2026-05-18T09:14:37Z",
+        "type": "contract",
+        "pagingToken": "0000249617515773952-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "c2d5f4a1b30e6758c9f2a1d4e3b6c7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+        "topic": ["harvest", "GAKX7VYAJTQOZ4ZKQ7GCTAWOAKCXY6BFCHOEQ4RRWJBTAY3EKQXHTKZL"],
+        "value": {
+          "amount": 375000000,
+          "user": "GAKX7VYAJTQOZ4ZKQ7GCTAWOAKCXY6BFCHOEQ4RRWJBTAY3EKQXHTKZL"
+        }
+      },
+      {
+        "id": "0000249621810741248-0000000001",
+        "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "ledger": 58107,
+        "ledgerClosedAt": "2026-05-18T09:14:52Z",
+        "type": "contract",
+        "pagingToken": "0000249621810741248-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "d3e6a5b2c41f7869daf3b2e5f4c7d8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+        "topic": ["withdraw", "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"],
+        "value": {
+          "amount": 5000000000,
+          "user": "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"
+        }
+      },
+      {
+        "id": "0000249626105708544-0000000001",
+        "contractId": "CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K",
+        "ledger": 58110,
+        "ledgerClosedAt": "2026-05-18T09:15:07Z",
+        "type": "contract",
+        "pagingToken": "0000249626105708544-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "e4f7b6c3d5209a7beb04c3f6a5d8e9091a2b3c4d5e6f708192a3b4c5d6e7f80a",
+        "topic": ["deposit", "GCZJM35NKGVK5EQP2NL2QMPMHFUWFYSNMWNQPOVEDCF5S5CYPQFVQZQK"],
+        "value": {
+          "amount": 1000000000000000000,
+          "user": "GCZJM35NKGVK5EQP2NL2QMPMHFUWFYSNMWNQPOVEDCF5S5CYPQFVQZQK"
+        }
+      },
+      {
+        "id": "0000249630400675840-0000000001",
+        "contractId": "CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K",
+        "ledger": 58113,
+        "ledgerClosedAt": "2026-05-18T09:15:22Z",
+        "type": "contract",
+        "pagingToken": "0000249630400675840-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "f5081c7d4e631ab8fc15d407b6e9fa091a2b3c4d5e6f708192a3b4c5d6e7f80b",
+        "topic": ["harvest", "GCZJM35NKGVK5EQP2NL2QMPMHFUWFYSNMWNQPOVEDCF5S5CYPQFVQZQK"],
+        "value": {
+          "amount": 250000000000000000,
+          "user": "GCZJM35NKGVK5EQP2NL2QMPMHFUWFYSNMWNQPOVEDCF5S5CYPQFVQZQK"
+        }
+      },
+      {
+        "id": "0000249634695643136-0000000001",
+        "contractId": "CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K",
+        "ledger": 58116,
+        "ledgerClosedAt": "2026-05-18T09:15:37Z",
+        "type": "contract",
+        "pagingToken": "0000249634695643136-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "06192d8e5f742bc90d26e518c7fa0b091a2b3c4d5e6f708192a3b4c5d6e7f80c",
+        "topic": ["withdraw", "GCZJM35NKGVK5EQP2NL2QMPMHFUWFYSNMWNQPOVEDCF5S5CYPQFVQZQK"],
+        "value": {
+          "amount": 500000000000000000,
+          "user": "GCZJM35NKGVK5EQP2NL2QMPMHFUWFYSNMWNQPOVEDCF5S5CYPQFVQZQK"
+        }
+      },
+      {
+        "id": "0000249638990610432-0000000001",
+        "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "ledger": 58119,
+        "ledgerClosedAt": "2026-05-18T09:15:52Z",
+        "type": "contract",
+        "pagingToken": "0000249638990610432-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "172a3e9f60853cd01e37f629d80b1c091a2b3c4d5e6f708192a3b4c5d6e7f80d",
+        "topic": ["deposit", "GAKX7VYAJTQOZ4ZKQ7GCTAWOAKCXY6BFCHOEQ4RRWJBTAY3EKQXHTKZL"],
+        "value": {
+          "amount": 750000000,
+          "user": "GAKX7VYAJTQOZ4ZKQ7GCTAWOAKCXY6BFCHOEQ4RRWJBTAY3EKQXHTKZL"
+        }
+      },
+      {
+        "id": "0000249643285577728-0000000001",
+        "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "ledger": 58122,
+        "ledgerClosedAt": "2026-05-18T09:16:07Z",
+        "type": "contract",
+        "pagingToken": "0000249643285577728-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "283b4fa071964de12f480a3ae91c2d091a2b3c4d5e6f708192a3b4c5d6e7f80e",
+        "topic": ["pause"],
+        "value": {}
+      },
+      {
+        "id": "0000249647580545024-0000000001",
+        "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "ledger": 58125,
+        "ledgerClosedAt": "2026-05-18T09:16:22Z",
+        "type": "contract",
+        "pagingToken": "0000249647580545024-0000000001",
+        "inSuccessfulContractCall": true,
+        "txHash": "394c50b182a75ef2305a1b4bf02d3e091a2b3c4d5e6f708192a3b4c5d6e7f80f",
+        "topic": ["unpause"],
+        "value": {}
+      }
+    ]
+  }
+}

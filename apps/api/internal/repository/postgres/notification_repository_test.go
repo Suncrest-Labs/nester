@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"regexp"
 	"testing"
 	"time"
@@ -170,6 +171,124 @@ func TestNotificationRepository_SetPreferencesRejectsInvalidCadence(t *testing.T
 	_, err = repo.Set(context.Background(), uuid.New(), notifications.Preferences{DigestCadence: "daily"})
 	if err == nil {
 		t.Fatal("expected error for invalid digest_cadence")
+	}
+}
+
+func TestNotificationRepository_GetForCategory_NoRowDefaultsToCategoryDefault(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewNotificationRepository(db)
+	userID := uuid.New()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT category_overrides -> $2
+		FROM notification_preferences
+		WHERE user_id = $1
+	`)).
+		WithArgs(userID.String(), "promotional").
+		WillReturnError(sql.ErrNoRows)
+
+	prefs, err := repo.GetForCategory(context.Background(), userID, notifications.CategoryPromotional)
+	if err != nil {
+		t.Fatalf("GetForCategory: %v", err)
+	}
+	if prefs != notifications.DefaultPreferencesForCategory(notifications.CategoryPromotional) {
+		t.Fatalf("prefs = %+v, want category default", prefs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestNotificationRepository_GetForCategory_NoOverrideDefaultsToCategoryDefault(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewNotificationRepository(db)
+	userID := uuid.New()
+
+	// Row exists (user has set preferences before) but has no override for
+	// this specific category — the JSONB path expression returns SQL NULL.
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT category_overrides -> $2
+		FROM notification_preferences
+		WHERE user_id = $1
+	`)).
+		WithArgs(userID.String(), "transactional").
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(nil))
+
+	prefs, err := repo.GetForCategory(context.Background(), userID, notifications.CategoryTransactional)
+	if err != nil {
+		t.Fatalf("GetForCategory: %v", err)
+	}
+	if prefs != notifications.DefaultPreferencesForCategory(notifications.CategoryTransactional) {
+		t.Fatalf("prefs = %+v, want category default", prefs)
+	}
+}
+
+func TestNotificationRepository_GetForCategory_ReturnsStoredOverride(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewNotificationRepository(db)
+	userID := uuid.New()
+	stored := `{"email":false,"websocket":true,"push":false,"digest_cadence":"off"}`
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT category_overrides -> $2
+		FROM notification_preferences
+		WHERE user_id = $1
+	`)).
+		WithArgs(userID.String(), "promotional").
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(stored))
+
+	prefs, err := repo.GetForCategory(context.Background(), userID, notifications.CategoryPromotional)
+	if err != nil {
+		t.Fatalf("GetForCategory: %v", err)
+	}
+	want := notifications.Preferences{Email: false, WebSocket: true, Push: false, DigestCadence: "off"}
+	if prefs != want {
+		t.Fatalf("prefs = %+v, want %+v", prefs, want)
+	}
+}
+
+func TestNotificationRepository_SetCategoryOverride(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewNotificationRepository(db)
+	userID := uuid.New()
+	prefs := notifications.Preferences{Email: true, WebSocket: false, Push: false, DigestCadence: "off"}
+	raw, _ := json.Marshal(prefs)
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		INSERT INTO notification_preferences (user_id, category_overrides, updated_at)
+		VALUES ($1, jsonb_build_object($2::text, $3::jsonb), NOW())
+		ON CONFLICT (user_id) DO UPDATE SET
+			category_overrides = notification_preferences.category_overrides || jsonb_build_object($2::text, $3::jsonb),
+			updated_at = NOW()
+	`)).
+		WithArgs(userID.String(), "promotional", string(raw)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := repo.SetCategoryOverride(context.Background(), userID, notifications.CategoryPromotional, prefs); err != nil {
+		t.Fatalf("SetCategoryOverride: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
 	}
 }
 

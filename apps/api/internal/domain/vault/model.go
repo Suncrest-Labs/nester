@@ -29,6 +29,26 @@ var (
 	ErrVaultClosed          = errors.New("vault is closed")
 	ErrVaultNotActive       = errors.New("vault is not active")
 	ErrInsufficientBalance  = errors.New("vault balance must be zero before closing")
+	// ErrWithdrawalExceedsPosition is returned when a withdraw would take the
+	// caller's vault position below zero. Checked before any on-chain submit
+	// (nester#1076).
+	ErrWithdrawalExceedsPosition = errors.New("withdrawal would take the position below zero")
+	// ErrTxHashRequired is returned when a withdrawal is recorded without a
+	// verified on-chain transaction hash (nester#1076).
+	ErrTxHashRequired = errors.New("transaction hash is required")
+	// ErrUnverifiedChainTx is returned when the supplied hash cannot be
+	// reconciled against a matching vault contract event.
+	ErrUnverifiedChainTx = errors.New("on-chain transaction could not be verified")
+	// ErrChainVerificationUnavailable is returned when a caller supplies a
+	// transaction hash but no chain verifier is configured. Accepting the
+	// hash unverified would let a forged one move a balance, so the request
+	// is refused rather than trusted (nester#1075, nester#1076).
+	ErrChainVerificationUnavailable = errors.New("on-chain verification is not configured; transaction hash cannot be accepted")
+	// ErrChainEventCallerMismatch is returned when a verified contract event
+	// was emitted for a different account than the caller's wallet. Without
+	// this check one user can record another user's real withdrawal against
+	// their own vault (nester#1076).
+	ErrChainEventCallerMismatch = errors.New("on-chain event belongs to a different account")
 	ErrVaultForbidden       = errors.New("vault does not belong to caller")
 	ErrAllocationNotFound   = errors.New("allocation not found")
 	ErrAllocationHasBalance = errors.New("allocation has non-zero balance; set force=true to remove")
@@ -41,7 +61,34 @@ var (
 	// recurring-deposit job queue handler, #846) can treat this as "already
 	// recorded" and safely no-op rather than fail.
 	ErrDuplicateTransaction = errors.New("transaction already recorded")
+	// ErrContractAddressRegistered is returned when a vault is created for a
+	// contract address another live vault already claims. The database
+	// enforces this with the uq_vaults_contract_address_live partial unique
+	// index (migration 104); without a distinct error the collision would
+	// surface as an opaque 500.
+	//
+	// It matters beyond tidiness: the event indexer keys balance mutations on
+	// contract_address, so a second vault pointing at someone else's contract
+	// would have that victim's on-chain deposits credited to it as well
+	// (nester#1148).
+	ErrContractAddressRegistered = errors.New("a vault is already registered for this contract address")
+	// ErrInvalidSharePrice is returned when a vault's share price is zero or
+	// negative, which makes an asset/share conversion meaningless. It signals
+	// corrupted balances rather than bad user input.
+	ErrInvalidSharePrice = errors.New("vault share price is not positive")
+	// ErrOperatorFundedDepositRefused is returned when a deposit would have
+	// to be funded from the shared operator account and policy forbids it.
+	// The caller's remedy is to sign and submit the deposit from their own
+	// wallet and supply the resulting tx_hash (nester#1152).
+	ErrOperatorFundedDepositRefused = errors.New("deposits must be signed and funded by your own wallet: submit the transaction and supply its tx_hash")
 	ErrCapacityExceeded     = errors.New("deposit would exceed vault capacity limit")
+	// ErrUserCancelled is returned when a user declines the wallet signature
+	// or abandons an attempt before submission. It exists to keep that case
+	// distinguishable from a system fault: the deposit and withdrawal SLIs
+	// (nester#1056) exclude cancellations from the denominator, and without a
+	// dedicated sentinel a cancellation would be classified as an internal
+	// failure and burn the error budget for something the system did right.
+	ErrUserCancelled = errors.New("attempt cancelled by user")
 )
 
 const (

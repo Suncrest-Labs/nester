@@ -20,10 +20,11 @@ import (
 
 // ProjectionService handles compound interest projections, including the
 // Monte Carlo savings forecast added for issue #843 (see
-// projection_simulation.go). savingsGoalRepo/savingsScheduleRepo are only
-// used by the Monte Carlo path (to resolve a goal's target/deadline and a
-// user's real contribution cadence); the deterministic methods below don't
-// touch them.
+// projection_simulation.go). savingsGoalRepo/savingsScheduleRepo resolve a
+// goal's target/deadline and a user's real contribution cadence for the Monte
+// Carlo path, and CalculateVaultProjection also reads them to find the vault's
+// active recurring schedule (#1224) rather than assuming a single deposit.
+// Both must be non-nil.
 type ProjectionService struct {
 	calculator      projection.Calculator
 	vaultRepo       vault.Repository
@@ -65,12 +66,23 @@ func (s *ProjectionService) CalculateCompoundProjection(ctx context.Context, inp
 
 	summary := s.calculateSummary(input, timeline)
 
+	contributionSource := "single_deposit"
+	if input.MonthlyContribution.GreaterThan(decimal.Zero) {
+		contributionSource = "caller_supplied"
+	}
+
 	output := &projection.ProjectionOutput{
-		Currency:     "USD",
-		CurrentAPY:   input.APY.InexactFloat64(),
-		Input:        input,
-		Timeline:     timeline,
-		Summary:      summary,
+		Currency:   "USD",
+		CurrentAPY: input.APY.InexactFloat64(),
+		Input:      input,
+		Timeline:   timeline,
+		Summary:    summary,
+		Assumptions: projection.ProjectionAssumptions{
+			RecurringAmount:    input.MonthlyContribution,
+			ProjectedAPY:       input.APY.InexactFloat64(),
+			TimelineMonths:     input.PeriodMonths,
+			ContributionSource: contributionSource,
+		},
 		CalculatedAt: time.Now(),
 	}
 
@@ -110,10 +122,40 @@ func (s *ProjectionService) CalculateVaultProjection(ctx context.Context, input 
 		}
 	}
 
+	// Resolve the vault's real recurring contribution, if any, rather than
+	// assuming a single deposit (#1224). A vault has at most one linked
+	// savings goal, and a goal has at most one active schedule.
+	monthlyContribution := decimal.Zero
+	cadence := ""
+	contributionSource := "single_deposit"
+	// Only genuine absence falls back to a single-deposit projection:
+	// ErrGoalNotFound (no linked goal) and a nil schedule (a linked goal with
+	// no active schedule) are both normal. Every other error is operational --
+	// a database failure, a cancelled context -- and has to surface rather
+	// than be reported as a successful projection that happens to assume the
+	// user never contributes again. Swallowing those produced exactly the
+	// wrong number for the question #1224 is about, on a screen people use to
+	// decide whether a savings goal is reachable.
+	goal, goalErr := s.savingsGoalRepo.GetByVaultID(ctx, input.VaultID)
+	if goalErr != nil && !errors.Is(goalErr, savingsgoal.ErrGoalNotFound) {
+		return nil, fmt.Errorf("failed to resolve the vault's savings goal: %w", goalErr)
+	}
+	if goal != nil {
+		schedule, schedErr := s.savingsScheduleRepo.GetActiveByGoal(ctx, goal.ID, goal.UserID)
+		if schedErr != nil && !errors.Is(schedErr, savingsschedule.ErrScheduleNotFound) {
+			return nil, fmt.Errorf("failed to resolve the goal's active savings schedule: %w", schedErr)
+		}
+		if schedule != nil {
+			monthlyContribution = monthlyEquivalent(schedule.Amount, schedule.Frequency)
+			cadence = string(schedule.Frequency)
+			contributionSource = "schedule"
+		}
+	}
+
 	// Build projection input
 	projInput := projection.ProjectionInput{
 		InitialDeposit:      input.Deposit,
-		MonthlyContribution: decimal.Zero, // Single deposit for now
+		MonthlyContribution: monthlyContribution,
 		APY:                 *apy,
 		PeriodMonths:        periodMonths,
 		CompoundFrequency:   compoundFreq,
@@ -131,12 +173,19 @@ func (s *ProjectionService) CalculateVaultProjection(ctx context.Context, input 
 	summary := s.calculateSummary(projInput, timeline)
 
 	output := &projection.ProjectionOutput{
-		VaultID:      &input.VaultID,
-		Currency:     vaultEntity.Currency,
-		CurrentAPY:   apy.InexactFloat64(),
-		Input:        projInput,
-		Timeline:     timeline,
-		Summary:      summary,
+		VaultID:    &input.VaultID,
+		Currency:   vaultEntity.Currency,
+		CurrentAPY: apy.InexactFloat64(),
+		Input:      projInput,
+		Timeline:   timeline,
+		Summary:    summary,
+		Assumptions: projection.ProjectionAssumptions{
+			RecurringAmount:    monthlyContribution,
+			Cadence:            cadence,
+			ProjectedAPY:       apy.InexactFloat64(),
+			TimelineMonths:     periodMonths,
+			ContributionSource: contributionSource,
+		},
 		CalculatedAt: time.Now(),
 	}
 

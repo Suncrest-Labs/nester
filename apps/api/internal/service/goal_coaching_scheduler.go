@@ -5,7 +5,10 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/intelligence"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
 )
@@ -16,9 +19,10 @@ import (
 // realistic goal horizon without requiring a new repository method.
 const goalCoachingLookaheadDays = 10_000
 
-// GoalCoachingRepository is the read the weekly coaching job needs.
+// GoalCoachingRepository is the read and update operations the weekly coaching job needs.
 type GoalCoachingRepository interface {
 	ListActiveApproachingDeadline(ctx context.Context, maxDays int) ([]savingsgoal.SavingsGoal, error)
+	UpdateNotes(ctx context.Context, goalID uuid.UUID, notes string) error
 }
 
 // GoalCoachingClient requests an AI progress assessment for a single goal.
@@ -30,10 +34,11 @@ type GoalCoachingClient interface {
 // coaching notification for every active savings goal (#112 "AI coaching
 // message generated weekly per goal").
 type GoalCoachingScheduler struct {
-	repo       GoalCoachingRepository
-	coaching   GoalCoachingClient
-	dispatcher *notifications.Dispatcher
-	logger     *slog.Logger
+	repo        GoalCoachingRepository
+	coaching    GoalCoachingClient
+	dispatcher  *notifications.Dispatcher
+	logger      *slog.Logger
+	prefChecker nudge.PreferenceChecker
 }
 
 func NewGoalCoachingScheduler(
@@ -41,11 +46,18 @@ func NewGoalCoachingScheduler(
 	coaching GoalCoachingClient,
 	dispatcher *notifications.Dispatcher,
 	logger *slog.Logger,
+	prefChecker nudge.PreferenceChecker,
 ) *GoalCoachingScheduler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &GoalCoachingScheduler{repo: repo, coaching: coaching, dispatcher: dispatcher, logger: logger}
+	return &GoalCoachingScheduler{
+		repo:        repo,
+		coaching:    coaching,
+		dispatcher:  dispatcher,
+		logger:      logger,
+		prefChecker: prefChecker,
+	}
 }
 
 // Run ticks every `interval` (weekly in production) until ctx is cancelled,
@@ -85,10 +97,30 @@ func (s *GoalCoachingScheduler) tick(ctx context.Context) {
 }
 
 func (s *GoalCoachingScheduler) sendCoaching(ctx context.Context, goal savingsgoal.SavingsGoal) {
+	// Opt-out (#935): some users don't want AI-driven nudges/insights.
+	// Checked before any intelligence-service call is made — mirrors
+	// nudge_engine_service.go's prefChecker gate for the same preference.
+	// Also passed through explicitly on the request below so the
+	// intelligence service enforces the same preference independent of
+	// this check (defense in depth, not just "trust the caller skipped it").
+	enabled := true
+	if s.prefChecker != nil {
+		var err error
+		enabled, err = s.prefChecker.NudgesEnabled(ctx, goal.UserID)
+		if err != nil {
+			s.logger.Warn("goal coaching: failed to check nudges preference", "goal_id", goal.ID.String(), "error", err.Error())
+			return
+		}
+		if !enabled {
+			return
+		}
+	}
+
 	targetAmount, _ := goal.TargetAmount.Float64()
 	currentAmount, _ := goal.CurrentAmount.Float64()
 
 	result, err := s.coaching.GetGoalCoaching(ctx, intelligence.CoachingRequest{
+		AIInsightsEnabled: &enabled,
 		Goal: intelligence.SavingsGoalContext{
 			ID:            goal.ID.String(),
 			TargetAmount:  targetAmount,
@@ -105,6 +137,12 @@ func (s *GoalCoachingScheduler) sendCoaching(ctx context.Context, goal savingsgo
 	if err != nil {
 		s.logger.Warn("goal coaching: generation failed", "goal_id", goal.ID.String(), "error", err.Error())
 		return
+	}
+
+	if result != nil && result.ProgressAssessment != "" {
+		if err := s.repo.UpdateNotes(ctx, goal.ID, result.ProgressAssessment); err != nil {
+			s.logger.Warn("goal coaching: failed to persist notes", "goal_id", goal.ID.String(), "error", err.Error())
+		}
 	}
 
 	title := "Your weekly savings check-in"

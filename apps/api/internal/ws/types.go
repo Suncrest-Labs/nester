@@ -26,6 +26,22 @@ const (
 	EventMaintenanceScheduled EventType = "maintenance_scheduled"
 	EventNetworkStatus        EventType = "network_status"
 	EventEventsDropped        EventType = "events_dropped"
+
+	// EventPong answers an application-level ping. Browsers cannot send
+	// WebSocket protocol ping frames from JavaScript, so the DApp keepalive
+	// rides on top of the normal message channel: the client sends
+	// {"action":"ping"} and expects this event back inside its pong timeout.
+	// Without it a client cannot distinguish a live link from a socket that
+	// has been silently blackholed (proxy idle timeout, laptop sleep), and
+	// would keep rendering a stale balance as if it were current.
+	EventPong EventType = "pong"
+)
+
+// Actions a client may send on the wire.
+const (
+	ActionSubscribe   = "subscribe"
+	ActionUnsubscribe = "unsubscribe"
+	ActionPing        = "ping"
 )
 
 // Event represents a broadcastable event to clients

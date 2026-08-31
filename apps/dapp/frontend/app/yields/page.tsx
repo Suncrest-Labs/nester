@@ -12,6 +12,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { LoadingRegion } from "@/components/ui/skeleton/skeleton";
 import { useWallet } from "@/components/wallet-provider";
 import { useYields } from "@/hooks/useYields";
 import { YieldDepositDrawer } from "@/components/yields/YieldDepositDrawer";
@@ -246,11 +247,14 @@ export default function YieldsPage() {
         </div>
 
         {isLoading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <LoadingRegion
+            label="Loading yield opportunities"
+            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+          >
             {Array.from({ length: 6 }).map((_, i) => (
               <CardSkeleton key={i} />
             ))}
-          </div>
+          </LoadingRegion>
         ) : isError ? (
           <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16 text-center">
             <AlertTriangle className="h-6 w-6 text-black/25 dark:text-white/25" />

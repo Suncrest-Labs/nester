@@ -20,6 +20,8 @@ import (
 	performancedomain "github.com/suncrestlabs/nester/apps/api/internal/domain/performance"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	performancesvc "github.com/suncrestlabs/nester/apps/api/internal/service/performance"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
 // TestVaultServiceFullYieldCycleIntegration proves that deposit, performance
@@ -269,57 +271,9 @@ func openYieldCycleDB(t *testing.T) *sql.DB {
 
 func applyYieldCycleMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-	// Wipe every table in the public schema before applying so re-runs against
-	// a reused DB don't trip on non-idempotent statements from earlier
-	// migrations.
-	if _, err := db.Exec(`
-		DO $$
-		DECLARE r record;
-		BEGIN
-			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END$$;
-	`); err != nil {
-		t.Fatalf("drop tables: %v", err)
-	}
-	// Migration ordering notes (also required for production):
-	//  - 008 creates vault_transactions with the `tx_hash` column.
-	//  - 033 renames `tx_hash` → `transaction_hash` and adds the fee columns.
-	//  - 023 builds a UNIQUE INDEX on `transaction_hash`, so it MUST run after
-	//    033. Numeric ordering (008→023→033) fails on a fresh DB because 023
-	//    would reference a column that does not exist yet. We pin 033 before
-	//    023 here to keep the integration test self-contained on a fresh DB.
-	//  - 035 is intentionally skipped (byte-identical duplicate of 033 which
-	//    would re-run the non-idempotent RENAME COLUMN and fail).
-	//  - 036 widens vault_transactions.type CHECK to allow 'harvest' rows
-	//    produced by RecordHarvest.
-	for _, name := range []string{
-		"001_create_users_table.up.sql",
-		"002_create_vaults_table.up.sql",
-		"005_create_allocations_table.up.sql",
-		"006_create_settlements_table.up.sql",
-		"007_add_vault_deleted_at.up.sql",
-		"008_add_vault_transactions.up.sql",
-		"014_add_missing_columns.up.sql",
-		"016_add_indices_and_constraints.up.sql",
-		"018_create_vault_performance.up.sql",
-		// 033 BEFORE 023 — see ordering note above.
-		"033_update_vault_transactions.up.sql",
-		"023_vault_transactions_hash_unique.up.sql",
-		"036_allow_harvest_transaction_type.up.sql",
-	} {
-		// Test file lives at apps/api/internal/service/ → migrations are two
-		// directories up at apps/api/migrations.
-		path := filepath.Join("..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("apply migration %q: %v", name, err)
-		}
-	}
+	// The full migration chain in numeric order — see testutil.ApplyAllMigrations
+	// for why no per-test subset is used.
+	testutil.ApplyAllMigrations(t, db, filepath.Join("..", "..", "migrations"))
 }
 
 func resetYieldCycleTables(t *testing.T, db *sql.DB) {
@@ -342,9 +296,9 @@ func seedYieldCycleUser(t *testing.T, db *sql.DB) uuid.UUID {
 	t.Helper()
 	userID := uuid.New()
 	if _, err := db.Exec(
-		`INSERT INTO users (id, email, name) VALUES ($1, $2, $3)`,
+		`INSERT INTO users (id, wallet_address, display_name) VALUES ($1, $2, $3)`,
 		userID.String(),
-		userID.String()+"@example.com",
+		"G"+userID.String(), // final schema: wallet_address NOT NULL UNIQUE, email dropped by 010
 		"Yield Cycle Integration User",
 	); err != nil {
 		t.Fatalf("seed user failed: %v", err)

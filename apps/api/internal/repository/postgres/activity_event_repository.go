@@ -25,6 +25,19 @@ func (r *ActivityEventRepository) RecordEvent(ctx context.Context, userID uuid.U
 	return err
 }
 
+// DeleteOlderThan permanently removes activity_events rows whose occurred_at
+// is before cutoff (nester#1226 retention policy). Returns the number of
+// rows removed so the caller can audit-log the deletion with a real count.
+func (r *ActivityEventRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		DELETE FROM activity_events WHERE occurred_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (r *ActivityEventRepository) ListRecentEvents(ctx context.Context, userID uuid.UUID, since time.Time) ([]usersignal.ActivityEvent, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, user_id, event_type, occurred_at

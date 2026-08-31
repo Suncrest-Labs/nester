@@ -52,6 +52,36 @@ func TestLoggingInjectsRequestIDAndLogsFields(t *testing.T) {
 	}
 }
 
+func TestLoggingRespectsSuppliedRequestID(t *testing.T) {
+	var buffer bytes.Buffer
+	baseLogger := slog.New(slog.NewJSONHandler(&buffer, nil))
+
+	handler := Logging(baseLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := logpkg.RequestIDFromContext(r.Context())
+		if requestID != "client-123" {
+			t.Fatalf("expected supplied request ID to be preserved, got %q", requestID)
+		}
+		logpkg.FromContext(r.Context()).Info("handler log")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/echo", nil)
+	request.Header.Set("X-Request-ID", "client-123")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d", response.Code)
+	}
+	if response.Header().Get("X-Request-ID") != "client-123" {
+		t.Fatalf("expected preserved request ID header, got %q", response.Header().Get("X-Request-ID"))
+	}
+	if !strings.Contains(buffer.String(), `"request_id":"client-123"`) {
+		t.Fatalf("expected supplied request ID in log output, got %q", buffer.String())
+	}
+}
+
 func TestLoggingWritesErrorEntryForServerErrors(t *testing.T) {
 	var buffer bytes.Buffer
 	baseLogger := slog.New(slog.NewJSONHandler(&buffer, nil))

@@ -20,6 +20,7 @@ import {
   ArrowDownLeft,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { SavingsDetailSkeleton } from "@/components/skeletons/page-skeletons";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast/toast-provider";
@@ -32,9 +33,50 @@ import { useSavingsGoal, useSavingsGoalContributions } from "@/hooks/useSavingsG
 import { DeadlineBadge } from "@/components/savings/DeadlineBadge";
 import { EditGoalModal } from "@/components/savings/EditGoalModal";
 import { formatFullDeadline } from "@/lib/savings/deadline";
+import { ProgressVisualization } from "@/components/savings/ProgressVisualization";
+import type { GoalProgressData } from "@/lib/types/progress";
 
 function toNumber(value: string | number): number {
   return typeof value === "number" ? value : parseFloat(value) || 0;
+}
+
+function buildProgressData(goal: SavingsGoal): GoalProgressData {
+  const current = toNumber(goal.current_amount);
+  const target = toNumber(goal.target_amount);
+  const principal = goal.principal_amount != null ? toNumber(goal.principal_amount) : current;
+  const yieldAmt = goal.yield_amount != null ? toNumber(goal.yield_amount) : 0;
+  const locked = goal.locked_positions?.map((p) => ({
+    id: p.id,
+    amount: toNumber(p.amount),
+    currency: goal.currency,
+    locked_at: p.locked_at,
+    matures_at: p.matures_at,
+    boost_percent: p.boost_percent,
+    yield_earned: toNumber(p.yield_earned),
+  })) ?? [];
+  const flexible = goal.flexible_amount != null ? toNumber(goal.flexible_amount) : Math.max(0, current - locked.reduce((s, p) => s + p.amount, 0));
+
+  return {
+    current_amount: current,
+    target_amount: target,
+    currency: goal.currency,
+    principal_amount: principal,
+    yield_amount: yieldAmt,
+    locked_positions: locked,
+    flexible_amount: flexible,
+    projection: goal.projection ? {
+      vault_id: goal.vault_id,
+      currency: goal.currency,
+      current_apy: 0,
+      timeline: goal.projection.timeline,
+      success_probability: goal.projection.success_probability,
+      on_track: goal.projection.on_track,
+      monthly_gap: goal.projection.monthly_gap,
+    } : undefined,
+    asset_composition: goal.asset_composition,
+    deadline: goal.deadline,
+    status: goal.status,
+  };
 }
 
 function goalDisplayName(goal: SavingsGoal): string {
@@ -263,7 +305,7 @@ export default function SavingsGoalDetailPage() {
       </motion.nav>
 
       {isLoading ? (
-        <div className="p-12 text-center text-sm text-black/50 dark:text-white/50">Loading goal…</div>
+        <SavingsDetailSkeleton />
       ) : isError || !goal ? (
         <div className="rounded-3xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-12 text-center">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5">
@@ -284,10 +326,8 @@ export default function SavingsGoalDetailPage() {
         (() => {
           const current = toNumber(goal.current_amount);
           const target = toNumber(goal.target_amount);
-          const progress = Math.min(100, Math.max(0, goal.progress_pct ?? 0));
           const isPaused = goal.status === "paused";
           const isCompleted = goal.status === "completed";
-          const remaining = Math.max(0, target - current);
 
           return (
             <>
@@ -401,26 +441,7 @@ export default function SavingsGoalDetailPage() {
                       </div>
                     </div>
 
-                    <div
-                      className="h-3 overflow-hidden rounded-full bg-black/8 dark:bg-white/8"
-                      role="progressbar"
-                      aria-valuenow={Math.round(progress)}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-label="Goal progress"
-                    >
-                      <div
-                        className={cn(
-                          "h-full rounded-full transition-all",
-                          isCompleted ? "bg-emerald-500" : "bg-black dark:bg-white"
-                        )}
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-xs font-medium text-black/60 dark:text-white/60">
-                      <span>{progress.toFixed(0)}% complete</span>
-                      <span>{formatAmount(remaining, goal.currency)} to go</span>
-                    </div>
+                    <ProgressVisualization progress={buildProgressData(goal)} />
                   </div>
 
                   {/* Contributions */}

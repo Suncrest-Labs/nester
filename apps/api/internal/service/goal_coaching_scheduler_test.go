@@ -15,15 +15,24 @@ import (
 )
 
 type fakeGoalCoachingRepo struct {
-	goals []savingsgoal.SavingsGoal
-	err   error
+	goals         []savingsgoal.SavingsGoal
+	err           error
+	updatedNotes  map[uuid.UUID]string
 }
 
-func (f fakeGoalCoachingRepo) ListActiveApproachingDeadline(_ context.Context, _ int) ([]savingsgoal.SavingsGoal, error) {
+func (f *fakeGoalCoachingRepo) ListActiveApproachingDeadline(_ context.Context, _ int) ([]savingsgoal.SavingsGoal, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.goals, nil
+}
+
+func (f *fakeGoalCoachingRepo) UpdateNotes(_ context.Context, goalID uuid.UUID, notes string) error {
+	if f.updatedNotes == nil {
+		f.updatedNotes = make(map[uuid.UUID]string)
+	}
+	f.updatedNotes[goalID] = notes
+	return nil
 }
 
 type fakeGoalCoachingClient struct {
@@ -39,6 +48,16 @@ type fakePreferenceStore struct{}
 
 func (fakePreferenceStore) Get(_ context.Context, _ uuid.UUID) (notifications.Preferences, error) {
 	return notifications.DefaultPreferences(), nil
+}
+
+// fakeNudgePreferenceChecker implements nudge.PreferenceChecker for tests.
+type fakeNudgePreferenceChecker struct {
+	enabled bool
+	err     error
+}
+
+func (f fakeNudgePreferenceChecker) NudgesEnabled(_ context.Context, _ uuid.UUID) (bool, error) {
+	return f.enabled, f.err
 }
 
 type recordingChannel struct {
@@ -78,14 +97,16 @@ func TestGoalCoachingScheduler_TickSendsOnePerActiveGoal(t *testing.T) {
 	channel := &recordingChannel{}
 	dispatcher := notifications.New([]notifications.Channel{channel}, fakePreferenceStore{}, nil)
 
+	repo := &fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}}
 	scheduler := NewGoalCoachingScheduler(
-		fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
+		repo,
 		fakeGoalCoachingClient{resp: &intelligence.CoachingResponse{
 			ProgressAssessment: "You're 34% toward your goal.",
 			Nudges:             []string{"Keep going!"},
 		}},
 		dispatcher,
 		nil,
+		fakeNudgePreferenceChecker{enabled: true},
 	)
 
 	scheduler.tick(t.Context())
@@ -106,6 +127,9 @@ func TestGoalCoachingScheduler_TickSendsOnePerActiveGoal(t *testing.T) {
 	if delivered[0].Payload["goal_id"] != goal.ID.String() {
 		t.Errorf("Payload[goal_id] = %v, want %s", delivered[0].Payload["goal_id"], goal.ID.String())
 	}
+	if repo.updatedNotes[goal.ID] != "You're 34% toward your goal." {
+		t.Errorf("updatedNotes = %q, want %q", repo.updatedNotes[goal.ID], "You're 34% toward your goal.")
+	}
 }
 
 func TestGoalCoachingScheduler_TickSkipsGoalOnCoachingError(t *testing.T) {
@@ -116,10 +140,11 @@ func TestGoalCoachingScheduler_TickSkipsGoalOnCoachingError(t *testing.T) {
 	dispatcher := notifications.New([]notifications.Channel{channel}, fakePreferenceStore{}, nil)
 
 	scheduler := NewGoalCoachingScheduler(
-		fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
+		&fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
 		fakeGoalCoachingClient{err: context.DeadlineExceeded},
 		dispatcher,
 		nil,
+		fakeNudgePreferenceChecker{enabled: true},
 	)
 
 	scheduler.tick(t.Context())
@@ -130,6 +155,72 @@ func TestGoalCoachingScheduler_TickSkipsGoalOnCoachingError(t *testing.T) {
 }
 
 func TestGoalCoachingScheduler_TickNoopWithoutDependencies(t *testing.T) {
-	scheduler := NewGoalCoachingScheduler(nil, nil, nil, nil)
+	scheduler := NewGoalCoachingScheduler(nil, nil, nil, nil, nil)
 	scheduler.tick(t.Context()) // must not panic
+}
+
+func TestGoalCoachingScheduler_SkipsGoalWhenUserOptedOut(t *testing.T) {
+	userID := uuid.New()
+	goal := savingsgoal.SavingsGoal{ID: uuid.New(), UserID: userID, Currency: "USDC"}
+
+	channel := &recordingChannel{}
+	dispatcher := notifications.New([]notifications.Channel{channel}, fakePreferenceStore{}, nil)
+	client := &fakeGoalCoachingClient{resp: &intelligence.CoachingResponse{ProgressAssessment: "should not be sent"}}
+
+	scheduler := NewGoalCoachingScheduler(
+		&fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
+		client,
+		dispatcher,
+		nil,
+		fakeNudgePreferenceChecker{enabled: false},
+	)
+
+	scheduler.tick(t.Context())
+
+	if len(channel.all()) != 0 {
+		t.Fatalf("expected no notifications delivered for an opted-out user, got %d", len(channel.all()))
+	}
+}
+
+func TestGoalCoachingScheduler_PassesOptOutFlagThroughToIntelligenceRequest(t *testing.T) {
+	userID := uuid.New()
+	goal := savingsgoal.SavingsGoal{ID: uuid.New(), UserID: userID, Currency: "USDC"}
+
+	channel := &recordingChannel{}
+	dispatcher := notifications.New([]notifications.Channel{channel}, fakePreferenceStore{}, nil)
+	client := &recordingGoalCoachingClient{
+		resp: &intelligence.CoachingResponse{ProgressAssessment: "hi"},
+	}
+
+	scheduler := NewGoalCoachingScheduler(
+		&fakeGoalCoachingRepo{goals: []savingsgoal.SavingsGoal{goal}},
+		client,
+		dispatcher,
+		nil,
+		fakeNudgePreferenceChecker{enabled: true},
+	)
+
+	scheduler.tick(t.Context())
+
+	if len(client.requests) != 1 {
+		t.Fatalf("expected 1 coaching request, got %d", len(client.requests))
+	}
+	req := client.requests[0]
+	if req.AIInsightsEnabled == nil || !*req.AIInsightsEnabled {
+		t.Errorf("AIInsightsEnabled = %v, want pointer to true", req.AIInsightsEnabled)
+	}
+}
+
+// recordingGoalCoachingClient captures every request it's called with, so a
+// test can assert on the fields sent to the intelligence service (not just
+// the response side-effects).
+type recordingGoalCoachingClient struct {
+	resp     *intelligence.CoachingResponse
+	err      error
+	requests []intelligence.CoachingRequest
+}
+
+func (f *recordingGoalCoachingClient) GetGoalCoaching(_ context.Context, req intelligence.CoachingRequest) (*intelligence.CoachingResponse, error) {
+	f.requests = append(f.requests, req)
+	return f.resp, f.err
 }

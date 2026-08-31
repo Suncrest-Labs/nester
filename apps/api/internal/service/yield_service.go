@@ -117,6 +117,15 @@ func NewYieldService(defiLlamaURL string) *YieldService {
 	}
 }
 
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (s *YieldService) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		s.httpClient = client
+	}
+}
+
 type defiLlamaPoolsResponse struct {
 	Data []struct {
 		Pool      string   `json:"pool"`

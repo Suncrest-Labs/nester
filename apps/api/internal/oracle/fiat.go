@@ -31,6 +31,15 @@ func NewFiatProvider() *FiatProvider {
 
 func (p *FiatProvider) Name() string { return "forex" }
 
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (p *FiatProvider) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		p.client = client
+	}
+}
+
 func (p *FiatProvider) Fetch(ctx context.Context, base, quote string) (float64, error) {
 	if base != "USD" {
 		return 0, ErrUnsupportedPair

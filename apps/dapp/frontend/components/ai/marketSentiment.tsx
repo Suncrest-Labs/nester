@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { RefreshCw, TrendingDown, TrendingUp, Minus } from 'lucide-react'
+import { RefreshCw, TrendingDown, TrendingUp, Minus, AlertCircle } from 'lucide-react'
 import { intelligence, type MarketSentiment, type MarketSentimentPoint } from '@/lib/api/intelligence'
+import { useRelativeAge } from '@/hooks/useRelativeAge'
 
 /** Refresh the sentiment widget every 5 minutes. */
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000
@@ -49,7 +50,13 @@ export function MarketSentimentWidget() {
   const [spinning, setSpinning] = useState(false)
   const [historyRange, setHistoryRange] = useState<7 | 30>(7)
   const [historyPoints, setHistoryPoints] = useState<MarketSentimentPoint[]>([])
+  // When the last successful read happened, so a cached figure can be labelled
+  // with its age instead of being presented as current (nester#1126).
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Ticks only while degraded, which is the only time the age is shown.
+  const age = useRelativeAge(fetchedAt, error)
 
   const fetch = async (manual = false) => {
     if (manual) setSpinning(true)
@@ -57,6 +64,7 @@ export function MarketSentimentWidget() {
     try {
       const sentiment = await intelligence.getMarketSentiment()
       setData(sentiment)
+      setFetchedAt(Date.now())
     } catch {
       setError(true)
     } finally {
@@ -88,32 +96,71 @@ export function MarketSentimentWidget() {
 
   if (loading) return <MarketSentimentSkeleton />
 
-  if (error || !data) {
+  // Unreachable with nothing cached: say so plainly and offer a retry that
+  // does not need a page reload. Never a spinner that runs forever.
+  if (error && !data) {
     return (
       <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-foreground/60">Market Sentiment</p>
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+            <p className="text-xs font-medium text-foreground/60">Market Sentiment</p>
+          </div>
           <button
             type="button"
             onClick={() => fetch(true)}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-            aria-label="Retry"
+            disabled={spinning}
+            className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+            aria-label="Retry loading market sentiment"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw className={`h-3.5 w-3.5 ${spinning ? 'animate-spin' : ''}`} />
           </button>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="mt-2 text-xs text-muted-foreground" role="status">
           Intelligence service unavailable. Retrying automatically.
         </p>
       </div>
     )
   }
 
+  if (!data) return <MarketSentimentSkeleton />
+
   const { label, Icon, dot, badge } = SIGNAL_CONFIG[data.signal]
   const confidencePct = Math.round(data.confidence * 100)
 
   return (
-    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 transition-all hover:border-black/15 dark:hover:border-white/15 hover:shadow-sm">
+    <div
+      data-stale={error ? 'true' : 'false'}
+      className={`rounded-2xl border bg-white dark:bg-[#100F0F] p-4 transition-all hover:shadow-sm ${
+        error
+          ? 'border-amber-300 dark:border-amber-500/40'
+          : 'border-border hover:border-black/15 dark:hover:border-white/15'
+      }`}
+    >
+      {/* Stale banner: the service is unreachable but a previous read is still
+          on screen. Labelling it with its age is the point — an unlabelled
+          cached figure reads as current, which is the failure #1126 describes. */}
+      {error && (
+        <div
+          role="status"
+          className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-1.5 dark:border-amber-500/30 dark:bg-amber-500/10"
+        >
+          <span className="flex items-center gap-1.5 text-[11px] text-amber-800 dark:text-amber-200">
+            <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+            {age ? `Cached, last updated ${age}` : 'Cached — not current'}
+          </span>
+          <button
+            type="button"
+            onClick={() => fetch(true)}
+            disabled={spinning}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:opacity-50 dark:text-amber-100 dark:hover:bg-amber-500/20"
+          >
+            <RefreshCw className={`h-3 w-3 ${spinning ? 'animate-spin' : ''}`} aria-hidden="true" />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -134,8 +181,9 @@ export function MarketSentimentWidget() {
         </div>
       </div>
 
-      {/* Signal badge */}
-      <div className="mb-2 flex items-center gap-2">
+      {/* Signal badge. Dimmed while stale so the figure itself, not just the
+          banner, shows it is not live. */}
+      <div className={`mb-2 flex items-center gap-2 ${error ? 'opacity-60' : ''}`}>
         <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${badge}`}>
           <Icon className="h-3 w-3" />
           {label}

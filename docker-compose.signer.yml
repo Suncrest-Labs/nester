@@ -1,0 +1,89 @@
+# Signing isolation overlay.
+#
+# Runs the transaction signer as its own container and removes the operator key
+# from the API. Apply on top of the base compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.signer.yml up -d
+#
+# See docs/security/signing-isolation.md for the architecture and
+# docs/security/incident-response.md for the kill-switch procedure.
+
+services:
+  signer:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.signer
+    environment:
+      # The signing key lives here and ONLY here. It must not be present in the
+      # api service environment.
+      STELLAR_OPERATOR_SECRET: ${STELLAR_OPERATOR_SECRET:?the signer requires an operator secret}
+
+      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      STELLAR_RPC_URL: https://soroban-testnet.stellar.org
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+
+      SIGNER_SOCKET_PATH: /var/run/nester-signer/signer.sock
+      SIGNER_SOCKET_MODE: "0660"
+      SIGNER_PEER_NAME: nester-api
+
+      # The kill switch sentinel. Creating this file halts signing without a
+      # redeploy; see the runbook. The path must be on a volume an operator can
+      # reach independently of the API.
+      SIGNER_KILL_SWITCH_PATH: /var/run/nester-signer/signing.disabled
+
+      # Mandatory allowlist. The signer refuses to start without it: a signer
+      # that permitted any contract would be an oracle constrained only by
+      # function name.
+      SIGNER_ALLOWED_CONTRACTS: ${SIGNER_ALLOWED_CONTRACTS:?list the vault and strategy contract addresses}
+
+      # Optional. Defaults to all eight known operations; narrow it where a
+      # deployment does not need the full set.
+      SIGNER_ALLOWED_OPERATIONS: ${SIGNER_ALLOWED_OPERATIONS:-}
+
+      # Per-transaction cap in stroops. This is the limit that bounds damage
+      # from a compromised API making otherwise valid requests. 0 disables the
+      # check, which is not recommended in production.
+      SIGNER_MAX_AMOUNT_STROOPS: ${SIGNER_MAX_AMOUNT_STROOPS:-1000000000}
+
+      SIGNER_MAX_INTENT_AGE: ${SIGNER_MAX_INTENT_AGE:-2m}
+      SIGNER_CLOCK_SKEW: ${SIGNER_CLOCK_SKEW:-30s}
+
+      LOG_LEVEL: info
+
+    volumes:
+      # Shared with the API for the socket, and with the host so an operator can
+      # engage the kill switch even if the container is unhealthy.
+      - signer_run:/var/run/nester-signer
+
+    # The signer needs no database, no Redis, and no inbound network port. Its
+    # only dependency is outbound access to the Stellar RPC and Horizon
+    # endpoints for simulation and sequence numbers.
+    restart: unless-stopped
+
+    # Defence in depth: the process needs to write only the socket and the
+    # sentinel directory, both of which are on the mounted volume.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  api:
+    environment:
+      # Explicitly empty. The API builds and simulates transactions but holds no
+      # key; it delegates signing across the socket below.
+      STELLAR_OPERATOR_SECRET: ""
+
+      # The operator's PUBLIC address, so the API can build transactions against
+      # the correct source account. Public data; grants no signing capability.
+      STELLAR_OPERATOR_ADDRESS: ${STELLAR_OPERATOR_ADDRESS:?the API requires the operator public address}
+
+      SIGNER_SOCKET_PATH: /var/run/nester-signer/signer.sock
+    volumes:
+      - signer_run:/var/run/nester-signer
+    depends_on:
+      signer:
+        condition: service_started
+
+volumes:
+  signer_run:

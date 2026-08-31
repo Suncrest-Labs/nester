@@ -101,7 +101,8 @@ INSERT INTO vaults (id, user_id, contract_address, total_deposited, current_bala
     ('550e8400-e29b-41d4-a716-446655440011',
      '550e8400-e29b-41d4-a716-446655440001',
      'CCLQBFQKIIASLN7MXDQFAUXHQXPKR5ZVGKIMKNBZMKWL4LNKQXQXQAB',
-     5000.00, 5150.25, 'USDC', 'active');
+     5000.00, 5150.25, 'USDC', 'active')
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO allocations (id, vault_id, protocol, amount, apy, allocated_at) VALUES
     ('550e8400-e29b-41d4-a716-446655440020',
@@ -112,7 +113,8 @@ INSERT INTO allocations (id, vault_id, protocol, amount, apy, allocated_at) VALU
      'Aave', 4000.00, 7.2500, NOW()),
     ('550e8400-e29b-41d4-a716-446655440022',
      '550e8400-e29b-41d4-a716-446655440011',
-     'Compound', 5000.00, 6.8000, NOW());
+     'Compound', 5000.00, 6.8000, NOW())
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO settlements (
     id, user_id, vault_id, amount, currency, fiat_currency, fiat_amount,
@@ -141,4 +143,5 @@ INSERT INTO settlements (
      200.00, 'USDC', 'NGN', 330000.00, 1650.00,
      'bank_transfer', 'paystack', '9876543210', 'Test User', '058',
      'fiat_dispatched',
-     NOW() - INTERVAL '1 hour', NULL);
+     NOW() - INTERVAL '1 hour', NULL)
+ON CONFLICT (id) DO NOTHING;

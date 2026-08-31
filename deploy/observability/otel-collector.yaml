@@ -1,0 +1,105 @@
+# OpenTelemetry Collector configuration for local development (nester#1054).
+#
+# This collector is where the "always keep errors and slow requests" guarantee
+# is actually delivered. A head sampler in the services cannot express it: it
+# decides at span start, while error status and total latency are only known
+# at span end. Tail sampling sees the whole trace before deciding, so the
+# policies below can keep exactly the traces an incident needs and discard the
+# routine ones.
+#
+# Because the head sampler runs first, a trace it drops never reaches this
+# collector at all. Wherever tail sampling is deployed, set
+# TRACING_SAMPLE_RATIO=1.0 (and INTELLIGENCE_TRACING_SAMPLE_RATIO=1.0) so the
+# head keeps everything and this file makes the real decision. The service
+# defaults of 0.05 assume direct-to-backend export with no collector.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Bound memory before the batcher so a burst of spans cannot push the
+  # collector into an OOM kill and take the trace pipeline down with it.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+    spike_limit_mib: 96
+
+  tail_sampling:
+    # How long to hold a trace's spans before deciding. Must exceed the
+    # slowest request worth sampling, or a slow trace is judged on partial
+    # data — which would defeat the latency policy specifically.
+    decision_wait: 30s
+    num_traces: 50000
+    expected_new_traces_per_sec: 200
+    policies:
+      # 1. Anything explicitly marked for retention. Both services set
+      #    nester.force_keep on errors, on requests past the latency
+      #    threshold, and on slow model calls. This is the primary hook and
+      #    keeps the keep/drop decision in application code where the context
+      #    for it lives.
+      - name: explicitly-marked
+        type: boolean_attribute
+        boolean_attribute:
+          key: nester.force_keep
+          value: true
+
+      # 2. Any trace containing a span with error status, whether or not the
+      #    application marked it. Catches errors raised by instrumentation
+      #    the application does not own.
+      - name: errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+
+      # 3. Any trace slower than the threshold. Independent of the
+      #    application's own latency marking so a request that dies before
+      #    reaching that code path is still retained.
+      - name: slow-requests
+        type: latency
+        latency:
+          threshold_ms: 1000
+
+      # 4. A probabilistic sample of everything else, so normal traffic is
+      #    still represented and the baseline stays visible.
+      - name: baseline
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 5
+
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Uncomment to see spans in the collector's own log while debugging a
+  # pipeline. Verbose; not suitable for anything but local diagnosis.
+  # debug:
+  #   verbosity: detailed
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      # memory_limiter first, then the sampling decision, then batching:
+      # batching before tail_sampling would break trace-level grouping.
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [otlp/jaeger]
+
+  telemetry:
+    logs:
+      level: info

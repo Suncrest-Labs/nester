@@ -4,7 +4,7 @@ import re
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -59,6 +59,7 @@ def _request_id(request: Request) -> str:
 async def portfolio_insights(
     request: Request,
     user_id: str,
+    language: str | None = Query(None, description="Preferred response language"),
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> list[dict[str, Any]]:
     """Return AI-generated portfolio insight cards for a user.
@@ -72,14 +73,17 @@ async def portfolio_insights(
             detail="You are not authorised to access this user's insights",
         )
     safe_user_id = _validate_id(user_id, "user_id")
-    return await get_portfolio_insights(safe_user_id)
+    return await get_portfolio_insights(safe_user_id, language)
 
 
 @router.get("/market/sentiment")
 @_limiter.limit("30/minute")
-async def market_sentiment(request: Request) -> dict[str, Any]:
+async def market_sentiment(
+    request: Request,
+    language: str | None = Query(None, description="Preferred response language"),
+) -> dict[str, Any]:
     """Return current market sentiment for the Stellar DeFi / stablecoin space."""
-    return await get_market_sentiment()
+    return await get_market_sentiment(language)
 
 
 @router.get("/market/sentiment/history")
@@ -99,10 +103,11 @@ async def market_sentiment_history(request: Request, days: int = 7) -> dict[str,
 @_limiter.limit("20/minute")
 async def yield_recommendation(
     request: Request,
+    language: str | None = Query(None, description="Preferred response language"),
     claims: dict[str, Any] = Depends(verify_jwt),  # noqa: ARG001
 ) -> dict[str, Any]:
     """Return an AI-picked yield opportunity based on live DeFiLlama and CoinGecko data."""
-    return await get_yield_recommendation()
+    return await get_yield_recommendation(language)
 
 
 @router.post("/analyze", response_model=Recommendation)
@@ -110,6 +115,7 @@ async def yield_recommendation(
 async def analyze(
     request: Request,
     body: AnalyzeRequest,
+    language: str | None = Query(None, description="Preferred response language"),
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> Recommendation:
     """Return a confidence-annotated recommendation for a user prompt.
@@ -125,7 +131,10 @@ async def analyze(
             status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required"
         )
     return await analyze_recommendation(
-        prompt, claims.get("sub", ""), request_id=_request_id(request)
+        prompt,
+        claims.get("sub", ""),
+        request_id=_request_id(request),
+        language=language,
     )
 
 
@@ -138,7 +147,10 @@ async def recommend_vault(
 ) -> VaultRecommendationResponse:
     """Return an AI-picked vault allocation based on live APY and risk data."""
     return await recommend_vaults(
-        body, claims.get("sub", ""), request_id=_request_id(request)
+        body,
+        claims.get("sub", ""),
+        request_id=_request_id(request),
+        language=body.language,
     )
 
 
@@ -147,17 +159,19 @@ async def recommend_vault(
 async def vault_recommendations(
     request: Request,
     vault_id: str,
+    language: str | None = Query(None, description="Preferred response language"),
     claims: dict[str, Any] = Depends(verify_jwt),  # noqa: ARG001
 ) -> dict[str, Any]:
     """Return AI commentary and recommendations for a specific vault."""
     safe_vault_id = _validate_id(vault_id, "vault_id")
-    return await get_vault_recommendations(safe_vault_id)
+    return await get_vault_recommendations(safe_vault_id, language)
 
 
 @router.post("/portfolio/analyze", response_model=PortfolioAnalysisResponse)
 @_limiter.limit("5/hour")
 async def portfolio_analyze(
     request: Request,
+    language: str | None = Query(None, description="Preferred response language"),
     claims: dict[str, Any] = Depends(verify_jwt),
 ) -> PortfolioAnalysisResponse:
     """Return structured portfolio analysis using Claude tool use.
@@ -180,4 +194,6 @@ async def portfolio_analyze(
             detail="User ID not found in token",
         )
 
-    return await analyze_portfolio(user_id, request_id=_request_id(request))
+    return await analyze_portfolio(
+        user_id, request_id=_request_id(request), language=language
+    )

@@ -49,23 +49,40 @@ func (r *NudgeHistoryRepository) RecordDispatch(ctx context.Context, record nudg
 	return err
 }
 
+// effectivenessWindow bounds GetEffectivenessStats to recent dispatches, so
+// a nudge type's ranking reflects current behavior rather than an all-time
+// average that a stale early cohort could permanently skew.
+const effectivenessWindow = 90 * 24 * time.Hour
+
+// GetEffectivenessStats reports the measured conversion rate for a nudge
+// type/segment pair over the last effectivenessWindow. A query error is
+// returned to the caller rather than folded into the result (nester#1196):
+// the ranking engine needs to tell "unknown" apart from "measured," which
+// it previously could not — a broken query and a perfect conversion rate
+// produced the identical result.
 func (r *NudgeHistoryRepository) GetEffectivenessStats(ctx context.Context, nudgeType string, segment string) (nudge.EffectivenessStats, error) {
-	// Simple heuristic: 1.0 by default if small sample size
-	// We could do a complex query here joining nudge_dispatch_log and nudge_outcomes.
-	// For the sake of the MVP test, let's just return a stub.
 	var sent, converted int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT count(*), count(o.id)
+		SELECT count(DISTINCT d.id), count(DISTINCT o.dispatch_id)
 		FROM nudge_dispatch_log d
 		LEFT JOIN nudge_outcomes o ON o.dispatch_id = d.id
-		WHERE d.nudge_type = $1 AND d.segment = $2
-	`, nudgeType, segment).Scan(&sent, &converted)
-	
-	if err != nil || sent == 0 {
-		return nudge.EffectivenessStats{ConversionRate: 1.0}, nil // Cold start safe
+		WHERE d.nudge_type = $1 AND d.segment = $2 AND d.sent_at >= $3
+	`, nudgeType, segment, time.Now().Add(-effectivenessWindow)).Scan(&sent, &converted)
+	if err != nil {
+		return nudge.EffectivenessStats{}, err
 	}
-	
-	return nudge.EffectivenessStats{ConversionRate: float64(converted) / float64(sent)}, nil
+	if sent == 0 {
+		// Cold start: no dispatches yet in the window. Distinct from a
+		// measured 0% conversion rate — HasData false tells the ranking
+		// engine to skip the effectiveness boost entirely rather than
+		// scoring this as either "perfect" or "worst."
+		return nudge.EffectivenessStats{HasData: false}, nil
+	}
+
+	return nudge.EffectivenessStats{
+		ConversionRate: float64(converted) / float64(sent),
+		HasData:        true,
+	}, nil
 }
 
 func (r *NudgeHistoryRepository) GetLatestDispatchByType(ctx context.Context, userID uuid.UUID, nudgeType string) (*nudge.DispatchRecord, error) {
@@ -81,6 +98,25 @@ func (r *NudgeHistoryRepository) GetLatestDispatchByType(ctx context.Context, us
 		return nil, err
 	}
 	return &l, nil
+}
+
+// DeleteDispatchesOlderThan permanently removes nudge_dispatch_log rows
+// whose sent_at is before cutoff (nester#1226 retention policy). Their
+// nudge_outcomes rows cascade automatically (migration 072:
+// dispatch_id REFERENCES nudge_dispatch_log(id) ON DELETE CASCADE), so this
+// is the only delete this job needs to issue for either table. Returns the
+// number of dispatch rows removed for the audit log. cutoff must stay well
+// past effectivenessWindow (90 days) — GetEffectivenessStats reads dispatch
+// rows back that far, and deleting inside that window would silently starve
+// it of data rather than erroring.
+func (r *NudgeHistoryRepository) DeleteDispatchesOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		DELETE FROM nudge_dispatch_log WHERE sent_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // NudgesEnabled reads the user's nudges_enabled preference. Absence of a
@@ -109,7 +145,7 @@ func (r *NudgeHistoryRepository) RecordOutcome(ctx context.Context, userID uuid.
 		WHERE d.user_id = $1 AND o.id IS NULL AND d.sent_at >= $3
 		ORDER BY d.sent_at DESC LIMIT 1
 	`, userID, outcomeType, occurredAt.Add(-72*time.Hour))
-	
+
 	var dispatchID uuid.UUID
 	var sentAt time.Time
 	if err := row.Scan(&dispatchID, &sentAt); err != nil {

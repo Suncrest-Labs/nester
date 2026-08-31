@@ -25,14 +25,25 @@ type SavedBankAccountResolver interface {
 	ResolveForSettlement(ctx context.Context, userID, accountID uuid.UUID) (bankaccount.BankAccount, error)
 }
 
+// VaultRepository checks user vault balances for settlement validation.
+type VaultRepository interface {
+	GetUserVaultBalance(ctx context.Context, vaultID uuid.UUID) (decimal.Decimal, error)
+}
+
 type SettlementService struct {
 	repository   offramp.Repository
 	bankAccounts SavedBankAccountResolver
+	vaultRepo    VaultRepository
 	sep24        *Sep24Resolver // POC: SEP-24 integration
 }
 
 func NewSettlementService(repository offramp.Repository, bankAccounts SavedBankAccountResolver) *SettlementService {
 	return &SettlementService{repository: repository, bankAccounts: bankAccounts}
+}
+
+// SetVaultRepository injects the vault repository for balance validation.
+func (s *SettlementService) SetVaultRepository(vaultRepo VaultRepository) {
+	s.vaultRepo = vaultRepo
 }
 
 // SetSep24Resolver injects the SEP-24 resolver for POC testing.
@@ -133,6 +144,17 @@ func (s *SettlementService) InitiateSettlement(ctx context.Context, input Initia
 
 	if err := validateDestination(input.Destination); err != nil {
 		return offramp.Settlement{}, err
+	}
+
+	// Check vault balance if vaultRepo is configured
+	if s.vaultRepo != nil {
+		balance, err := s.vaultRepo.GetUserVaultBalance(ctx, input.VaultID)
+		if err != nil {
+			return offramp.Settlement{}, fmt.Errorf("vault balance check failed: %w", err)
+		}
+		if input.Amount.GreaterThan(balance) {
+			return offramp.Settlement{}, offramp.ErrInvalidAmount
+		}
 	}
 
 	model := offramp.Settlement{

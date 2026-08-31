@@ -25,10 +25,17 @@ func NewPortfolioService(vaultRepository vault.Repository) *PortfolioService {
 // GetUserPortfolioSummary returns an aggregated view of all user positions across their vaults.
 // Returns an empty portfolio with zero totals if user has no vaults (not an error).
 func (s *PortfolioService) GetUserPortfolioSummary(ctx context.Context, userID uuid.UUID) (portfolio.Summary, error) {
-	// Fetch all vaults for the user with minimal pagination
+	// Fetch all vaults for the user with minimal pagination.
+	//
+	// A 10,000-vault ceiling is safe here in a way the pending-deposit and
+	// reconciliation ceilings were not (nester#1193): vault count is bounded
+	// by how many a person can plausibly create through the product UI, not
+	// by transaction volume that grows with usage over time. If vault
+	// creation ever becomes bulk/programmatic this reasoning stops holding
+	// and this call needs real pagination.
 	vaults, _, err := s.vaultRepository.ListUserVaults(ctx, userID, vault.UserListFilter{
 		Page:    1,
-		PerPage: 10000, // Reasonable upper limit for number of vaults per user
+		PerPage: 10000,
 	})
 	if err != nil {
 		return portfolio.Summary{}, err
