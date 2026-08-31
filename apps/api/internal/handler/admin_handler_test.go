@@ -16,6 +16,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
@@ -231,6 +232,22 @@ func (s *adminHandlerStubService) ListVaultRebalances(context.Context, uuid.UUID
 
 func (s *adminHandlerStubService) GetDetailedHealth(context.Context) (admindomain.DetailedHealth, error) {
 	return s.health, nil
+}
+
+func (s *adminHandlerStubService) ListGoalTemplates(context.Context) ([]savingsgoal.GoalTemplate, error) {
+	return nil, nil
+}
+
+func (s *adminHandlerStubService) CreateGoalTemplate(context.Context, service.CreateGoalTemplateInput) (savingsgoal.GoalTemplate, error) {
+	return savingsgoal.GoalTemplate{}, nil
+}
+
+func (s *adminHandlerStubService) UpdateGoalTemplate(context.Context, service.UpdateGoalTemplateInput) (savingsgoal.GoalTemplate, error) {
+	return savingsgoal.GoalTemplate{}, nil
+}
+
+func (s *adminHandlerStubService) DeleteGoalTemplate(context.Context, uuid.UUID) error {
+	return nil
 }
 
 func (s *adminHandlerStubService) TriggerRebalance(_ context.Context, id uuid.UUID, req admindomain.RebalanceRequest) (admindomain.RebalanceResponse, error) {

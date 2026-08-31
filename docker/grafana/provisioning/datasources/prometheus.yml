@@ -1,0 +1,12 @@
+# Points the local Grafana at the Prometheus started by the same profile, so
+# a developer running `docker compose --profile observability up` gets a
+# working data source without clicking through setup.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

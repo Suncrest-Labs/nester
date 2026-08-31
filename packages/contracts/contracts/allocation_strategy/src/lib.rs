@@ -7,8 +7,8 @@ use soroban_sdk::{
 
 use nester_access_control::{AccessControl, Role};
 use nester_common::{
-    emit_event, fees::mul_div, CalleeAllowlist, ContractError, ProtocolType, SourceStatus,
-    with_reentrancy_guard, BASIS_POINT_SCALE,
+    adapters::ApyConfidence, emit_event, fees::mul_div, with_reentrancy_guard, CalleeAllowlist,
+    ContractError, ProtocolType, SourceStatus, BASIS_POINT_SCALE,
 };
 
 const STRATEGY: Symbol = symbol_short!("STRATEGY");
@@ -24,13 +24,18 @@ struct RegistryApySnapshot {
 
 #[contracttype]
 #[derive(Clone, Debug)]
+/// Local mirror of `yield_registry::YieldSource`. The field set must match the
+/// registry's exactly — Soroban unpacks the returned map positionally, so a
+/// missing field fails the whole `get_active_sources` decode.
 struct RegistrySource {
     pub id: Symbol,
     pub contract_address: Address,
+    pub adapter: Option<Address>,
     pub protocol_type: ProtocolType,
     pub status: SourceStatus,
     pub added_at: u64,
     pub current_apy_bps: u32,
+    pub apy_confidence: ApyConfidence,
     pub apy_history: Vec<RegistryApySnapshot>,
     pub tvl: i128,
     pub risk_rating: u32,
@@ -40,6 +45,8 @@ struct RegistrySource {
     pub migration_required: bool,
     pub migration_completed: bool,
     pub migration_completed_at: u64,
+    pub failure_count: u32,
+    pub last_failure_at: u64,
 }
 
 struct RegistryClient<'a> {
@@ -309,7 +316,7 @@ impl AllocationStrategyContract {
         operator.require_auth();
 
         if !AccessControl::has_role(&env, &operator, Role::Operator) {
-            panic!("Caller is not an authorized operator");
+            panic_with_error!(&env, ContractError::Unauthorized);
         }
 
         // Call the inner compute directly to avoid a second require_auth for the same address.
@@ -439,7 +446,12 @@ impl AllocationStrategyContract {
                     adjusted_weights.push_back(w.clone());
                     healthy_weight_sum += w.weight_bps;
                 }
-                SourceStatus::Paused => {
+                // Degraded is set automatically once an adapter exceeds the
+                // failure threshold. Treat it exactly like Paused — freeze the
+                // existing allocation rather than force-draining through an
+                // adapter that is already failing. Recovery is an explicit
+                // admin action back to Active.
+                SourceStatus::Paused | SourceStatus::Degraded => {
                     // Skip: keep current allocation, delta = 0
                     total_to_redistribute -= current;
                     deltas.push_back(AllocationDelta {
@@ -757,12 +769,27 @@ fn optimal_allocation_from_sources(
     if sources.is_empty() {
         return weights;
     }
-    let mut best = sources.get(0).unwrap();
+    // Rank only sources with a known APY. A source reporting Unavailable
+    // carries a meaningless `current_apy_bps`; ranking on it would let a
+    // silent adapter win or lose the allocation on noise.
+    let mut best: Option<RegistrySource> = None;
     for source in sources.iter() {
-        if source.current_apy_bps > best.current_apy_bps {
-            best = source;
+        if matches!(source.apy_confidence, ApyConfidence::Unavailable) {
+            continue;
+        }
+        match &best {
+            None => best = Some(source),
+            Some(b) if source.current_apy_bps > b.current_apy_bps => best = Some(source),
+            _ => {}
         }
     }
+    // Every source has an unknown APY. Returning an empty target holds the
+    // current allocation steady, which is the right answer: picking one at
+    // random would be a 100% bet placed on no information.
+    let best = match best {
+        Some(b) => b,
+        None => return weights,
+    };
     weights.push_back(AllocationWeight {
         source_id: best.id.clone(),
         weight_bps: BASIS_POINT_SCALE,
@@ -782,9 +809,18 @@ fn weighted_apy_for(weights: &Vec<AllocationWeight>, sources: &Vec<RegistrySourc
     (acc / BASIS_POINT_SCALE as u64) as u32
 }
 
+/// APY of a single source, or 0 when it is absent or its reading is unknown.
+///
+/// Treating "unknown" as 0 here is deliberate and safe: this feeds drift
+/// detection, where a lower weighted APY only makes a rebalance more likely to
+/// be *considered*. Allocation targets themselves never rank on an unknown
+/// reading — see [`optimal_allocation_from_sources`].
 fn apy_for_source(sources: &Vec<RegistrySource>, source_id: &Symbol) -> u32 {
     for source in sources.iter() {
         if &source.id == source_id {
+            if matches!(source.apy_confidence, ApyConfidence::Unavailable) {
+                return 0;
+            }
             return source.current_apy_bps;
         }
     }

@@ -11,15 +11,28 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/breaker"
+	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
+	"github.com/suncrestlabs/nester/apps/api/internal/retry"
 )
 
 // defaultDevJWTSecret is the placeholder value shipped in .env.example. It is long
 // enough to pass the length check, so it is rejected explicitly outside development.
-const defaultDevJWTSecret = "dev-nester-jwt-secret-change-in-production"
+// This is a deny-list entry, not a credential: config validation rejects
+// startup when AUTH_JWT_SECRET equals it outside development, so its presence
+// in source is what makes the check possible (nester#1035, G101).
+const defaultDevJWTSecret = "dev-nester-jwt-secret-change-in-production" // #nosec G101 -- known-bad placeholder that startup validation refuses, not a real secret
 
 // maxKeyVersionLen bounds an account cipher key version label so it fits the
 // bank_accounts.key_version VARCHAR(32) column.
 const maxKeyVersionLen = 32
+
+// maxDatabasePoolSize bounds DATABASE_POOL_SIZE. The value is narrowed to
+// int32 for pgxpool's MaxConns, so it must stay well inside int32 range on
+// every architecture; the limit is far above any workable pool size, so it
+// only rejects misconfiguration.
+const maxDatabasePoolSize = 10000
 
 type Config struct {
 	environment           string
@@ -42,11 +55,82 @@ type Config struct {
 	bankAccountCipherKey  string
 	accountCipher         AccountCipherConfig
 	transactionPoller     TransactionPollerConfig
+	reconciliation        ReconciliationConfig
 	recurringDeposit      RecurringDepositConfig
 	jobQueue              JobQueueConfig
+	outbox                OutboxConfig
 	harvest               HarvestConfig
 	rebalancer            RebalancerConfig
 	schedulerLeadership   SchedulerLeadershipConfig
+	tracing               TracingConfig
+	metrics               MetricsConfig
+	indexer               IndexerConfig
+	circuitBreaker        CircuitBreakerConfig
+	rpcRetry              RPCRetryConfig
+}
+
+// CircuitBreakerConfig is the policy protecting the chain upstreams, Soroban
+// RPC and Horizon (nester#1087).
+//
+// One policy, two independent breakers. The thresholds are shared because both
+// upstreams degrade the same way and there is no evidence for different
+// numbers; the failure *state* is strictly separate, so a Horizon outage never
+// sheds Soroban traffic. See docs/observability/circuit-breakers.md.
+type CircuitBreakerConfig struct {
+	enabled      bool
+	failureRatio float64
+	minRequests  int
+	window       time.Duration
+	openDuration time.Duration
+}
+
+// RPCRetryConfig is the bounded, jittered retry policy shared by every Soroban
+// RPC call site (nester#1086).
+//
+// It applies only to idempotent reads. Writes are never retried here — a
+// resubmitted transaction is a second attempt to move real money — and go
+// through the submission record instead.
+type RPCRetryConfig struct {
+	maxAttempts int
+	baseDelay   time.Duration
+	maxDelay    time.Duration
+	budget      time.Duration
+}
+
+// IndexerConfig holds the event indexer's freshness contract (nester#1088).
+//
+// The staleness budget is a single number with three consumers — the
+// `nester_indexer_staleness_budget_seconds` metric the alert compares against,
+// the `X-Indexer-Stale` header the API returns, and the SLO documentation —
+// so that the pager, the UI, and the runbook can never disagree about whether
+// balances are current.
+type IndexerConfig struct {
+	stalenessBudget time.Duration
+}
+
+// TracingConfig holds the OpenTelemetry tracing settings (nester#1054).
+//
+// Tracing is opt-in: with TRACING_ENABLED unset the tracer provider is a no-op
+// and no exporter connection is attempted, so the application starts and
+// serves normally without a collector present.
+type TracingConfig struct {
+	enabled          bool
+	otlpEndpoint     string
+	otlpInsecure     bool
+	serviceName      string
+	exporterTimeout  time.Duration
+	sampleRatio      float64
+	latencyThreshold time.Duration
+}
+
+// MetricsConfig controls the Prometheus exposition endpoint.
+//
+// The endpoint runs on its own listener, never on the public API router, so
+// that scrape traffic and the internal route names it exposes stay off the
+// public interface. See internal/metrics/server.go for the reasoning.
+type MetricsConfig struct {
+	enabled bool
+	addr    string
 }
 
 // AccountCipherConfig holds the versioned key set used to encrypt sensitive
@@ -92,6 +176,16 @@ type TransactionPollerConfig struct {
 	minAge   time.Duration
 }
 
+// ReconciliationConfig governs the scheduled vault-balance reconciliation job
+// (nester#1082, see internal/reconciliation.Runner): it reads authoritative
+// balances from the vault contract and compares them to the database,
+// recording — never correcting — any divergence.
+type ReconciliationConfig struct {
+	enabled  bool
+	interval time.Duration
+	dryRun   bool
+}
+
 // StartupConfig governs one-shot work performed before the server begins
 // accepting traffic (migrations, dependency reachability checks).
 type StartupConfig struct {
@@ -133,15 +227,33 @@ type DatabaseConfig struct {
 }
 
 type StellarConfig struct {
-	networkPassphrase         string
-	rpcURL                    string
-	horizonURL                string
-	operatorSecret            string
+	networkPassphrase string
+	rpcURL            string
+	horizonURL        string
+	operatorSecret    string
+	// operatorAddress is the operator's PUBLIC address. It is required when
+	// signing is delegated to the isolated signer, because the API still builds
+	// transactions against the operator's source account but holds no key.
+	operatorAddress string
+	// signerSocketPath, when set, routes signing to the isolated signer process
+	// over a Unix domain socket instead of holding the key in this process.
+	signerSocketPath          string
 	stellarUSDCIssuer         string
 	yieldRegistryContract     string
 	allocationStrategyAddress string
 	withdrawalSlippageBps     int
 	harvestDefaultCompound    bool
+	// operatorFundedDepositsEnabled allows the API to fund deposits from the
+	// shared operator account when the user did not sign one themselves.
+	// Off by default: the supported path is a wallet-signed deposit, and
+	// leaving this on makes the deposit endpoint a value transfer bounded
+	// only by the operator balance (nester#1152).
+	operatorFundedDepositsEnabled bool
+	// operatorFundedDepositVaults is the comma-separated allowlist of vault
+	// IDs permitted to use operator funds. Empty means none.
+	operatorFundedDepositVaults string
+	// operatorFundedDepositMaxAmount caps a single operator-funded deposit.
+	operatorFundedDepositMaxAmount string
 }
 
 type AllocationConfig struct {
@@ -164,19 +276,34 @@ type AuthConfig struct {
 }
 
 type RateLimitConfig struct {
-	globalLimit       int
-	globalWindow      time.Duration
-	writeLimit        int
-	writeWindow       time.Duration
-	walletLimit       int
-	walletWindow      time.Duration
-	rebalanceLimit    int
-	rebalanceWindow   time.Duration
-	authLimit         int
-	authWindow        time.Duration
-	settlementLimit   int
-	settlementWindow  time.Duration
-	trustedProxyCount int
+	globalLimit     int
+	globalWindow    time.Duration
+	writeLimit      int
+	writeWindow     time.Duration
+	walletLimit     int
+	walletWindow    time.Duration
+	rebalanceLimit  int
+	rebalanceWindow time.Duration
+	authLimit       int
+	authWindow      time.Duration
+	// Auth-failure lockout (nester#1104). Distinct from authLimit/authWindow,
+	// which bound request *rate*; these bound repeated *failures* and escalate
+	// a backoff the attacker cannot outrun by slowing down.
+	authFailureThreshold int
+	authFailureWindow    time.Duration
+	authLockoutBase      time.Duration
+	authLockoutMax       time.Duration
+	settlementLimit      int
+	settlementWindow     time.Duration
+	trustedProxyCount    int
+
+	// Cost-weighted quota (see middleware.CostQuota). This meters downstream
+	// work per user rather than request count, so an expensive route can be
+	// bounded without throttling ordinary browsing.
+	quotaEnabled     bool
+	quotaLimit       int
+	quotaWindow      time.Duration
+	quotaBypassToken string
 }
 
 type LogConfig struct {
@@ -227,15 +354,20 @@ func Load() (*Config, error) {
 			connectionTimeout: loader.durationDefault("DATABASE_CONNECTION_TIMEOUT", 5*time.Second),
 		},
 		stellar: StellarConfig{
-			networkPassphrase:         loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
-			rpcURL:                    loader.requiredURL("STELLAR_RPC_URL"),
-			horizonURL:                loader.requiredURL("STELLAR_HORIZON_URL"),
-			operatorSecret:            loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
-			stellarUSDCIssuer:         loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
-			yieldRegistryContract:     loader.stringDefault("YIELD_REGISTRY_CONTRACT", ""),
-			allocationStrategyAddress: loader.stringDefault("STELLAR_ALLOCATION_STRATEGY_ADDRESS", ""),
-			withdrawalSlippageBps:     loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
-			harvestDefaultCompound:    loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
+			networkPassphrase:              loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
+			rpcURL:                         loader.requiredURL("STELLAR_RPC_URL"),
+			horizonURL:                     loader.requiredURL("STELLAR_HORIZON_URL"),
+			operatorSecret:                 loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
+			operatorFundedDepositsEnabled:  loader.boolDefault("STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED", false),
+			operatorFundedDepositVaults:    loader.stringDefault("STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS", ""),
+			operatorFundedDepositMaxAmount: loader.stringDefault("STELLAR_OPERATOR_FUNDED_DEPOSIT_MAX_AMOUNT", "0"),
+			operatorAddress:                loader.stringDefault("STELLAR_OPERATOR_ADDRESS", ""),
+			signerSocketPath:               loader.stringDefault("SIGNER_SOCKET_PATH", ""),
+			stellarUSDCIssuer:              loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+			yieldRegistryContract:          loader.stringDefault("YIELD_REGISTRY_CONTRACT", ""),
+			allocationStrategyAddress:      loader.stringDefault("STELLAR_ALLOCATION_STRATEGY_ADDRESS", ""),
+			withdrawalSlippageBps:          loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
+			harvestDefaultCompound:         loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
 		},
 		intelligence: IntelligenceConfig{
 			baseURL:       loader.stringDefault("INTELLIGENCE_BASE_URL", loader.stringDefault("INTELLIGENCE_SERVICE_URL", "http://localhost:8000")),
@@ -248,6 +380,15 @@ func Load() (*Config, error) {
 		redis: RedisConfig{
 			addr: loader.stringDefault("REDIS_ADDR", ""),
 		},
+		tracing: TracingConfig{
+			enabled:          loader.boolDefault("TRACING_ENABLED", false),
+			otlpEndpoint:     loader.stringDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
+			otlpInsecure:     loader.boolDefault("OTEL_EXPORTER_OTLP_INSECURE", true),
+			serviceName:      loader.stringDefault("OTEL_SERVICE_NAME", "nester-api"),
+			exporterTimeout:  loader.durationDefault("OTEL_EXPORTER_TIMEOUT", 10*time.Second),
+			sampleRatio:      loader.floatDefault("TRACING_SAMPLE_RATIO", 0.05),
+			latencyThreshold: loader.durationDefault("TRACING_LATENCY_THRESHOLD", 1*time.Second),
+		},
 		settlementProviderURL: loader.stringDefault("SETTLEMENT_PROVIDER_URL", ""),
 		auth: AuthConfig{
 			secret:                  loader.requiredString("AUTH_JWT_SECRET"),
@@ -258,19 +399,39 @@ func Load() (*Config, error) {
 			challengeExpiry:         loader.durationDefault("AUTH_CHALLENGE_EXPIRY", 5*time.Minute),
 		},
 		rateLimit: RateLimitConfig{
-			globalLimit:       loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
-			globalWindow:      loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
-			writeLimit:        loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
-			writeWindow:       loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
-			walletLimit:       loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
-			walletWindow:      loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
-			rebalanceLimit:    loader.intDefault("RATELIMIT_REBALANCE_LIMIT", 3),
-			rebalanceWindow:   loader.durationDefault("RATELIMIT_REBALANCE_WINDOW", 1*time.Hour),
-			authLimit:         loader.intDefault("RATELIMIT_AUTH_LIMIT", 10),
-			authWindow:        loader.durationDefault("RATELIMIT_AUTH_WINDOW", 1*time.Minute),
+			globalLimit:     loader.intDefault("RATELIMIT_GLOBAL_LIMIT", 100),
+			globalWindow:    loader.durationDefault("RATELIMIT_GLOBAL_WINDOW", 1*time.Minute),
+			writeLimit:      loader.intDefault("RATELIMIT_WRITE_LIMIT", 20),
+			writeWindow:     loader.durationDefault("RATELIMIT_WRITE_WINDOW", 1*time.Minute),
+			walletLimit:     loader.intDefault("RATELIMIT_WALLET_LIMIT", 60),
+			walletWindow:    loader.durationDefault("RATELIMIT_WALLET_WINDOW", 1*time.Minute),
+			rebalanceLimit:  loader.intDefault("RATELIMIT_REBALANCE_LIMIT", 3),
+			rebalanceWindow: loader.durationDefault("RATELIMIT_REBALANCE_WINDOW", 1*time.Hour),
+			authLimit:       loader.intDefault("RATELIMIT_AUTH_LIMIT", 10),
+			authWindow:      loader.durationDefault("RATELIMIT_AUTH_WINDOW", 1*time.Minute),
+			// 5 failures in 15 minutes starts the backoff. A legitimate user
+			// retrying a flaky wallet signature stays well under it; a
+			// signature brute-force does not.
+			authFailureThreshold: loader.intDefault("AUTH_FAILURE_THRESHOLD", 5),
+			authFailureWindow:    loader.durationDefault("AUTH_FAILURE_WINDOW", 15*time.Minute),
+			// Doubling from 30s, capped at 15m: the 6th failure locks for 30s,
+			// the 7th for 1m, and so on. The cap keeps a wallet from being
+			// locked out indefinitely by someone else spamming its address.
+			authLockoutBase:   loader.durationDefault("AUTH_LOCKOUT_BASE", 30*time.Second),
+			authLockoutMax:    loader.durationDefault("AUTH_LOCKOUT_MAX", 15*time.Minute),
 			settlementLimit:   loader.intDefault("RATELIMIT_SETTLEMENT_LIMIT", 5),
 			settlementWindow:  loader.durationDefault("RATELIMIT_SETTLEMENT_WINDOW", 1*time.Minute),
 			trustedProxyCount: loader.intDefault("RATELIMIT_TRUSTED_PROXY_COUNT", 0),
+
+			// 300 cost units/minute. An ordinary read costs 1, so normal
+			// browsing never approaches it (the global 100 req/min per IP
+			// binds first); an intelligence relay call costs 25, so the
+			// quota is what actually bounds the expensive traffic.
+			// Deliberately per-environment: staging can run tighter.
+			quotaEnabled:     loader.boolDefault("RATELIMIT_QUOTA_ENABLED", true),
+			quotaLimit:       loader.intDefault("RATELIMIT_QUOTA_LIMIT", 300),
+			quotaWindow:      loader.durationDefault("RATELIMIT_QUOTA_WINDOW", 1*time.Minute),
+			quotaBypassToken: loader.stringDefault("RATELIMIT_QUOTA_BYPASS_TOKEN", ""),
 		},
 		log: LogConfig{
 			level:  strings.ToLower(loader.stringDefault("LOG_LEVEL", "info")),
@@ -302,6 +463,12 @@ func Load() (*Config, error) {
 			interval: loader.durationDefault("TX_POLLER_INTERVAL", 15*time.Second),
 			minAge:   loader.durationDefault("TX_POLLER_MIN_AGE", 30*time.Second),
 		},
+		reconciliation: ReconciliationConfig{
+			enabled: loader.boolDefault("RECONCILE_ENABLED", true),
+			// Default matches reconciliation.DefaultCadenceConfig().Balance.
+			interval: loader.durationDefault("RECONCILE_INTERVAL", 5*time.Minute),
+			dryRun:   loader.boolDefault("RECONCILE_DRY_RUN", false),
+		},
 		recurringDeposit: RecurringDepositConfig{
 			enabled:    loader.boolDefault("RECURRING_DEPOSIT_ENABLED", true),
 			interval:   loader.durationDefault("RECURRING_DEPOSIT_INTERVAL", time.Hour),
@@ -326,6 +493,23 @@ func Load() (*Config, error) {
 			statsInterval:      loader.durationDefault("JOB_QUEUE_STATS_INTERVAL", 30*time.Second),
 			drainTimeout:       loader.durationDefault("JOB_QUEUE_DRAIN_TIMEOUT", 25*time.Second),
 		},
+		outbox: OutboxConfig{
+			enabled:      loader.boolDefault("OUTBOX_RELAY_ENABLED", true),
+			pollInterval: loader.durationDefault("OUTBOX_RELAY_POLL_INTERVAL", time.Second),
+			batchSize:    loader.intDefault("OUTBOX_RELAY_BATCH_SIZE", 100),
+			lease:        loader.durationDefault("OUTBOX_RELAY_LEASE", 30*time.Second),
+			// Hand-off backoff only. Delivery retry belongs to the job
+			// queue (JOB_QUEUE_BACKOFF_*), and configuring a second budget
+			// for it here is exactly the duplication #1049 avoids.
+			backoff:             loader.durationDefault("OUTBOX_RELAY_BACKOFF", 5*time.Second),
+			statsInterval:       loader.durationDefault("OUTBOX_RELAY_STATS_INTERVAL", 30*time.Second),
+			retentionInterval:   loader.durationDefault("OUTBOX_RETENTION_INTERVAL", 24*time.Hour),
+			dispatchedRetention: loader.durationDefault("OUTBOX_DISPATCHED_RETENTION", 7*24*time.Hour),
+			// Dead rows outlive delivered ones by a wide margin: a delivered
+			// event is history, a dead one is the evidence someone needs to
+			// work out which side effect never happened and why.
+			deadRetention: loader.durationDefault("OUTBOX_DEAD_RETENTION", 30*24*time.Hour),
+		},
 		rebalancer: RebalancerConfig{
 			enabled:       loader.boolDefault("REBALANCER_ENABLED", true),
 			interval:      time.Duration(loader.intDefault("REBALANCER_INTERVAL_MINUTES", 15)) * time.Minute,
@@ -334,6 +518,36 @@ func Load() (*Config, error) {
 		schedulerLeadership: SchedulerLeadershipConfig{
 			lockKey:           int64(loader.intDefault("SCHEDULER_LEADER_LOCK_KEY", 846000)),
 			heartbeatInterval: loader.durationDefault("SCHEDULER_LEADER_HEARTBEAT_INTERVAL", 3*time.Second),
+		},
+		metrics: MetricsConfig{
+			enabled: loader.boolDefault("METRICS_ENABLED", true),
+			// Loopback by default: the endpoint exposes internal route names
+			// and traffic volumes, so reaching it from another host must be
+			// an explicit decision. Containers that need a scraper on the
+			// same network override this to 0.0.0.0:9090 and publish no
+			// host port.
+			addr: loader.stringDefault("METRICS_ADDR", "127.0.0.1:9090"),
+		},
+		indexer: IndexerConfig{
+			stalenessBudget: loader.durationDefault("INDEXER_STALENESS_BUDGET", freshness.DefaultBudget),
+		},
+		circuitBreaker: CircuitBreakerConfig{
+			// A kill switch, because a resilience mechanism can itself cause
+			// an outage if its thresholds are wrong for a given environment.
+			// Turning it off must not require a code change.
+			enabled:      loader.boolDefault("CIRCUIT_BREAKER_ENABLED", true),
+			failureRatio: loader.floatDefault("CIRCUIT_BREAKER_FAILURE_RATIO", breaker.DefaultFailureRatio),
+			minRequests:  loader.intDefault("CIRCUIT_BREAKER_MIN_REQUESTS", breaker.DefaultMinRequests),
+			window:       loader.durationDefault("CIRCUIT_BREAKER_WINDOW", breaker.DefaultWindow),
+			openDuration: loader.durationDefault("CIRCUIT_BREAKER_OPEN_DURATION", breaker.DefaultOpenDuration),
+		},
+		rpcRetry: RPCRetryConfig{
+			// 1 disables retrying without disabling the helper: the metrics
+			// and the typed error stay, only the second attempt goes away.
+			maxAttempts: loader.intDefault("RPC_RETRY_MAX_ATTEMPTS", retry.DefaultMaxAttempts),
+			baseDelay:   loader.durationDefault("RPC_RETRY_BASE_DELAY", retry.DefaultBaseDelay),
+			maxDelay:    loader.durationDefault("RPC_RETRY_MAX_DELAY", retry.DefaultMaxDelay),
+			budget:      loader.durationDefault("RPC_RETRY_BUDGET", retry.DefaultBudget),
 		},
 	}
 
@@ -358,6 +572,64 @@ func (c Config) Environment() string {
 
 func (c Config) Server() ServerConfig {
 	return c.server
+}
+
+func (c Config) Metrics() MetricsConfig {
+	return c.metrics
+}
+
+func (c Config) Indexer() IndexerConfig {
+	return c.indexer
+}
+
+func (c Config) CircuitBreaker() CircuitBreakerConfig {
+	return c.circuitBreaker
+}
+
+// Enabled reports whether chain calls are guarded. When false the breakers are
+// not installed at all and every request goes straight to the upstream.
+func (b CircuitBreakerConfig) Enabled() bool { return b.enabled }
+
+func (c Config) RPCRetry() RPCRetryConfig {
+	return c.rpcRetry
+}
+
+// Policy returns the retry policy this configuration describes.
+func (r RPCRetryConfig) Policy() retry.Policy {
+	return retry.Policy{
+		MaxAttempts: r.maxAttempts,
+		BaseDelay:   r.baseDelay,
+		MaxDelay:    r.maxDelay,
+		Budget:      r.budget,
+	}
+}
+
+// Policy returns the breaker policy this configuration describes.
+func (b CircuitBreakerConfig) Policy() breaker.Config {
+	return breaker.Config{
+		FailureRatio: b.failureRatio,
+		MinRequests:  b.minRequests,
+		Window:       b.window,
+		OpenDuration: b.openDuration,
+	}
+}
+
+// StalenessBudget is how far behind the chain indexed data may fall before the
+// API reports it stale and the alert pages.
+func (i IndexerConfig) StalenessBudget() time.Duration {
+	return i.stalenessBudget
+}
+
+// Enabled reports whether the internal metrics listener should be started.
+func (m MetricsConfig) Enabled() bool {
+	return m.enabled
+}
+
+// Addr is the host:port the internal metrics listener binds to. It defaults
+// to loopback so that an operator has to make a deliberate choice before the
+// endpoint is reachable from another host.
+func (m MetricsConfig) Addr() string {
+	return m.addr
 }
 
 func (c Config) Database() DatabaseConfig {
@@ -472,6 +744,52 @@ func (r RedisConfig) Addr() string {
 	return r.addr
 }
 
+// Tracing returns the OpenTelemetry tracing settings (nester#1054).
+func (c *Config) Tracing() TracingConfig {
+	return c.tracing
+}
+
+// Enabled reports whether trace export is switched on. When false the
+// application installs a no-op tracer provider and never dials a collector.
+func (t TracingConfig) Enabled() bool {
+	return t.enabled
+}
+
+// OTLPEndpoint is the host:port of the OTLP/gRPC collector.
+func (t TracingConfig) OTLPEndpoint() string {
+	return t.otlpEndpoint
+}
+
+// OTLPInsecure reports whether the collector connection skips TLS. This is the
+// default for local development against a collector on the same host; deploy
+// with it false so spans are not shipped in plaintext.
+func (t TracingConfig) OTLPInsecure() bool {
+	return t.otlpInsecure
+}
+
+// ServiceName is reported as service.name on every span this process emits.
+func (t TracingConfig) ServiceName() string {
+	return t.serviceName
+}
+
+// ExporterTimeout bounds a single export round trip to the collector.
+func (t TracingConfig) ExporterTimeout() time.Duration {
+	return t.exporterTimeout
+}
+
+// SampleRatio is the head-based sampling probability applied to traces that
+// are neither errors nor slow. Errors and requests exceeding LatencyThreshold
+// are retained regardless of this value.
+func (t TracingConfig) SampleRatio() float64 {
+	return t.sampleRatio
+}
+
+// LatencyThreshold is the server-span duration above which a trace is retained
+// irrespective of the base sample ratio.
+func (t TracingConfig) LatencyThreshold() time.Duration {
+	return t.latencyThreshold
+}
+
 func (c Config) Bank() BankConfig {
 	return c.bank
 }
@@ -487,6 +805,22 @@ func (c Config) AccountCipher() AccountCipherConfig {
 
 func (c Config) TransactionPoller() TransactionPollerConfig {
 	return c.transactionPoller
+}
+
+func (c Config) Reconciliation() ReconciliationConfig {
+	return c.reconciliation
+}
+
+func (r ReconciliationConfig) Enabled() bool {
+	return r.enabled
+}
+
+func (r ReconciliationConfig) Interval() time.Duration {
+	return r.interval
+}
+
+func (r ReconciliationConfig) DryRun() bool {
+	return r.dryRun
 }
 
 func (t TransactionPollerConfig) Enabled() bool {
@@ -537,6 +871,31 @@ type JobQueueConfig struct {
 	statsInterval      time.Duration
 	drainTimeout       time.Duration
 }
+
+// OutboxConfig governs the transactional outbox relay and its retention
+// sweep (#1049).
+type OutboxConfig struct {
+	enabled             bool
+	pollInterval        time.Duration
+	batchSize           int
+	lease               time.Duration
+	backoff             time.Duration
+	statsInterval       time.Duration
+	retentionInterval   time.Duration
+	dispatchedRetention time.Duration
+	deadRetention       time.Duration
+}
+
+func (c Config) Outbox() OutboxConfig                     { return c.outbox }
+func (o OutboxConfig) Enabled() bool                      { return o.enabled }
+func (o OutboxConfig) PollInterval() time.Duration        { return o.pollInterval }
+func (o OutboxConfig) BatchSize() int                     { return o.batchSize }
+func (o OutboxConfig) Lease() time.Duration               { return o.lease }
+func (o OutboxConfig) Backoff() time.Duration             { return o.backoff }
+func (o OutboxConfig) StatsInterval() time.Duration       { return o.statsInterval }
+func (o OutboxConfig) RetentionInterval() time.Duration   { return o.retentionInterval }
+func (o OutboxConfig) DispatchedRetention() time.Duration { return o.dispatchedRetention }
+func (o OutboxConfig) DeadRetention() time.Duration       { return o.deadRetention }
 
 // HarvestConfig governs the yield-harvest orchestration engine (#845).
 type HarvestConfig struct {
@@ -607,8 +966,47 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("SERVER_HOST is required")
 	}
 
+	if c.tracing.enabled {
+		if strings.TrimSpace(c.tracing.otlpEndpoint) == "" {
+			loader.addError("OTEL_EXPORTER_OTLP_ENDPOINT is required when TRACING_ENABLED is true")
+		}
+		// Spans carry request metadata and must not cross a network in
+		// plaintext. The insecure default suits a collector on the same host
+		// or compose network, but shipping it to staging or production would
+		// send telemetry over unencrypted gRPC — so it is rejected there and
+		// must be set explicitly.
+		if c.tracing.otlpInsecure && isOneOf(c.environment, "staging", "production") {
+			loader.addError("OTEL_EXPORTER_OTLP_INSECURE must be false when TRACING_ENABLED is true outside development")
+		}
+		if strings.TrimSpace(c.tracing.serviceName) == "" {
+			loader.addError("OTEL_SERVICE_NAME is required when TRACING_ENABLED is true")
+		}
+		if c.tracing.exporterTimeout <= 0 {
+			loader.addError("OTEL_EXPORTER_TIMEOUT must be greater than 0")
+		}
+	}
+
+	if c.tracing.sampleRatio < 0 || c.tracing.sampleRatio > 1 {
+		loader.addError("TRACING_SAMPLE_RATIO must be between 0 and 1")
+	}
+
+	if c.tracing.latencyThreshold < 0 {
+		loader.addError("TRACING_LATENCY_THRESHOLD must not be negative")
+	}
+
 	if c.server.port <= 0 || c.server.port > 65535 {
 		loader.addError("SERVER_PORT must be between 1 and 65535")
+	}
+
+	// Caught at boot rather than when the goroutine starts, so a typo fails
+	// the process immediately instead of silently leaving the service
+	// unscrapeable.
+	if c.metrics.enabled {
+		if _, _, err := net.SplitHostPort(c.metrics.addr); err != nil {
+			loader.addError("METRICS_ADDR must be a valid host:port")
+		} else if c.metrics.addr == c.server.Address() {
+			loader.addError("METRICS_ADDR must not equal the public server address")
+		}
 	}
 
 	if c.server.readTimeout <= 0 {
@@ -643,8 +1041,14 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("MIGRATIONS_DIR must not be empty")
 	}
 
-	if c.database.poolSize <= 0 {
-		loader.addError("DATABASE_POOL_SIZE must be greater than 0")
+	// Upper bound as well as lower: poolSize is an int parsed from the
+	// environment and is later narrowed to int32 for pgxpool's MaxConns, so an
+	// oversized value would silently overflow. maxDatabasePoolSize is far above
+	// any workable pool size, so this only rejects misconfiguration.
+	if c.database.poolSize <= 0 || c.database.poolSize > maxDatabasePoolSize {
+		loader.addError(fmt.Sprintf(
+			"DATABASE_POOL_SIZE must be between 1 and %d", maxDatabasePoolSize,
+		))
 	}
 
 	if c.database.connectionTimeout <= 0 {
@@ -658,6 +1062,34 @@ func (c *Config) validate(loader *envLoader) {
 	if (c.environment == "production" || c.environment == "staging") &&
 		strings.TrimSpace(c.auth.secret) == defaultDevJWTSecret {
 		loader.addError("AUTH_JWT_SECRET must not use the development default in production or staging")
+	}
+
+	if !jwtSecretHasAdequateEntropy(c.auth.secret) {
+		loader.addError("AUTH_JWT_SECRET has insufficient entropy: use at least 8 distinct characters")
+	}
+
+	// NESTER_SERVICE_API_KEY authenticates service-to-service callers and is
+	// shared between them, so a weak value is a shared weak value. It stays
+	// optional, but a key that is set must be a real one (nester#1149).
+	//
+	// Absence is not treated as a failure: an empty key disables service auth
+	// outright (the middleware's `serviceAPIKey != ""` guard), which is the
+	// safest configuration rather than a weak one. Requiring the key to exist
+	// would force every deployment that does not use service-to-service auth
+	// to invent a secret it never uses. A key that IS set, however, must be a
+	// real one in every environment — a weak shared key is weak everywhere.
+	if serviceKey := strings.TrimSpace(c.auth.serviceAPIKey); serviceKey != "" {
+		if len(serviceKey) < 32 {
+			loader.addError("NESTER_SERVICE_API_KEY must be at least 32 characters")
+		}
+		if !jwtSecretHasAdequateEntropy(serviceKey) {
+			loader.addError("NESTER_SERVICE_API_KEY has insufficient entropy: use at least 8 distinct characters")
+		}
+		// Reusing the JWT secret would let any holder of the service key mint
+		// arbitrary user tokens outright, making every other control moot.
+		if serviceKey == strings.TrimSpace(c.auth.secret) {
+			loader.addError("NESTER_SERVICE_API_KEY must not reuse AUTH_JWT_SECRET")
+		}
 	}
 
 	if c.auth.accessTokenExpiry <= 0 {
@@ -722,6 +1154,18 @@ func (c *Config) validate(loader *envLoader) {
 	} else if c.rateLimit.authWindow < time.Millisecond {
 		loader.addError("RATELIMIT_AUTH_WINDOW must be at least 1ms")
 	}
+	if c.rateLimit.authFailureThreshold <= 0 {
+		loader.addError("AUTH_FAILURE_THRESHOLD must be greater than 0")
+	}
+	if c.rateLimit.authFailureWindow <= 0 {
+		loader.addError("AUTH_FAILURE_WINDOW must be greater than 0")
+	}
+	if c.rateLimit.authLockoutBase <= 0 {
+		loader.addError("AUTH_LOCKOUT_BASE must be greater than 0")
+	}
+	if c.rateLimit.authLockoutMax < c.rateLimit.authLockoutBase {
+		loader.addError("AUTH_LOCKOUT_MAX must be at least AUTH_LOCKOUT_BASE")
+	}
 	if c.rateLimit.settlementLimit <= 0 {
 		loader.addError("RATELIMIT_SETTLEMENT_LIMIT must be greater than 0")
 	}
@@ -732,6 +1176,21 @@ func (c *Config) validate(loader *envLoader) {
 	}
 	if c.rateLimit.trustedProxyCount < 0 {
 		loader.addError("RATELIMIT_TRUSTED_PROXY_COUNT must be zero or greater")
+	}
+	// Only validated when enabled: a deployment that has turned quotas off
+	// should not be forced to keep their numbers meaningful.
+	if c.rateLimit.quotaEnabled {
+		if c.rateLimit.quotaLimit <= 0 {
+			loader.addError("RATELIMIT_QUOTA_LIMIT must be greater than 0")
+		}
+		if c.rateLimit.quotaWindow <= 0 {
+			loader.addError("RATELIMIT_QUOTA_WINDOW must be greater than 0")
+		} else if c.rateLimit.quotaWindow < time.Millisecond {
+			// The token bucket derives its refill rate from the window in
+			// whole milliseconds; a sub-millisecond window truncates to zero
+			// and the bucket would never refill.
+			loader.addError("RATELIMIT_QUOTA_WINDOW must be at least 1ms")
+		}
 	}
 
 	if !isOneOf(c.log.level, "debug", "info", "warn", "error") {
@@ -760,6 +1219,29 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("APY_BROADCAST_THRESHOLD must not be negative")
 	}
 
+	// A non-positive budget would mark every response stale and hold the
+	// staleness alert permanently firing, so it is refused at startup rather
+	// than discovered when the pager will not stop.
+	if c.indexer.stalenessBudget <= 0 {
+		loader.addError("INDEXER_STALENESS_BUDGET must be greater than 0")
+	}
+
+	// Only meaningful when the breakers are actually installed; a disabled
+	// breaker's thresholds are never read, so they must not block startup.
+	// The policy owns the rules, so they are stated once rather than
+	// duplicated here and left to drift.
+	if c.circuitBreaker.enabled {
+		if err := c.circuitBreaker.Policy().Validate(); err != nil {
+			loader.addError("CIRCUIT_BREAKER_* configuration is invalid: " + err.Error())
+		}
+	}
+
+	// The policy owns the rules, so they are stated once rather than
+	// duplicated here and left to drift.
+	if err := c.rpcRetry.Policy().Validate(); err != nil {
+		loader.addError("RPC_RETRY_* configuration is invalid: " + err.Error())
+	}
+
 	if c.transactionPoller.interval <= 0 {
 		loader.addError("TX_POLLER_INTERVAL must be greater than 0")
 	}
@@ -780,12 +1262,8 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("MIN_ALLOCATION_WEIGHT must be between 1 and 100")
 	}
 
-	// Require at least one payment provider key in production/staging so
-	// offramp features (bank list, account resolution) work at deploy time
-	// rather than failing silently when a user first triggers them.
-	if (c.environment == "production" || c.environment == "staging") &&
-		c.bank.paystackKey == "" && c.bank.flutterwaveKey == "" {
-		loader.addError("at least one of PAYSTACK_SECRET_KEY or FLUTTERWAVE_SECRET_KEY must be set in production")
+	if c.tracing.sampleRatio < 0 || c.tracing.sampleRatio > 1 {
+		loader.addError("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1")
 	}
 }
 
@@ -872,6 +1350,40 @@ func (s StellarConfig) HorizonURL() string {
 
 func (s StellarConfig) OperatorSecret() string {
 	return s.operatorSecret
+}
+
+// OperatorFundedDepositsEnabled reports whether the API may spend operator
+// funds on a user's behalf. Off unless explicitly enabled (nester#1152).
+func (s StellarConfig) OperatorFundedDepositsEnabled() bool {
+	return s.operatorFundedDepositsEnabled
+}
+
+// OperatorFundedDepositVaults is the raw comma-separated vault allowlist.
+func (s StellarConfig) OperatorFundedDepositVaults() string {
+	return s.operatorFundedDepositVaults
+}
+
+// OperatorFundedDepositMaxAmount caps a single operator-funded deposit.
+func (s StellarConfig) OperatorFundedDepositMaxAmount() string {
+	return s.operatorFundedDepositMaxAmount
+}
+
+// OperatorAddress returns the operator's public Stellar address. It is public
+// data and grants no signing capability.
+func (s StellarConfig) OperatorAddress() string {
+	return s.operatorAddress
+}
+
+// SignerSocketPath returns the isolated signer's socket path, or empty when
+// signing is not delegated.
+func (s StellarConfig) SignerSocketPath() string {
+	return s.signerSocketPath
+}
+
+// SigningIsolated reports whether signing is delegated to the separate signer
+// process. When true this process holds no operator key.
+func (s StellarConfig) SigningIsolated() bool {
+	return strings.TrimSpace(s.signerSocketPath) != ""
 }
 
 func (s StellarConfig) YieldRegistryContract() string {
@@ -966,6 +1478,28 @@ func (r RateLimitConfig) AuthWindow() time.Duration {
 	return r.authWindow
 }
 
+// AuthFailureThreshold is how many failures inside AuthFailureWindow are
+// tolerated before lockouts begin (nester#1104).
+func (r RateLimitConfig) AuthFailureThreshold() int {
+	return r.authFailureThreshold
+}
+
+// AuthFailureWindow is the sliding period over which auth failures accumulate.
+func (r RateLimitConfig) AuthFailureWindow() time.Duration {
+	return r.authFailureWindow
+}
+
+// AuthLockoutBase is the first lockout duration; it doubles per failure beyond
+// the threshold.
+func (r RateLimitConfig) AuthLockoutBase() time.Duration {
+	return r.authLockoutBase
+}
+
+// AuthLockoutMax caps the progressive backoff.
+func (r RateLimitConfig) AuthLockoutMax() time.Duration {
+	return r.authLockoutMax
+}
+
 func (r RateLimitConfig) SettlementLimit() int {
 	return r.settlementLimit
 }
@@ -976,6 +1510,29 @@ func (r RateLimitConfig) SettlementWindow() time.Duration {
 
 func (r RateLimitConfig) TrustedProxyCount() int {
 	return r.trustedProxyCount
+}
+
+// QuotaEnabled reports whether cost-weighted quota accounting is on. Turning it
+// off is the documented way to run a load test without re-tuning every limit.
+func (r RateLimitConfig) QuotaEnabled() bool {
+	return r.quotaEnabled
+}
+
+// QuotaLimit is the per-subject bucket capacity in cost units per QuotaWindow.
+func (r RateLimitConfig) QuotaLimit() int {
+	return r.quotaLimit
+}
+
+// QuotaWindow is how long a full bucket takes to refill from empty.
+func (r RateLimitConfig) QuotaWindow() time.Duration {
+	return r.quotaWindow
+}
+
+// QuotaBypassToken, when non-empty, allows a request presenting it in the
+// X-RateLimit-Bypass header to skip quota accounting. Empty by default, which
+// disables the mechanism entirely.
+func (r RateLimitConfig) QuotaBypassToken() string {
+	return r.quotaBypassToken
 }
 
 type envLoader struct {
@@ -1020,6 +1577,19 @@ func (l *envLoader) intDefault(key string, fallback int) int {
 	value, err := strconv.Atoi(raw)
 	if err != nil {
 		l.addError(fmt.Sprintf("%s must be an integer, got %q", key, raw))
+		return fallback
+	}
+	return value
+}
+
+func (l *envLoader) floatDefault(key string, fallback float64) float64 {
+	raw, ok := l.lookup(key)
+	if !ok {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		l.addError(fmt.Sprintf("%s must be a number, got %q", key, raw))
 		return fallback
 	}
 	return value
@@ -1187,6 +1757,20 @@ func defaultLogFormat(environment string) string {
 func isOneOf(value string, options ...string) bool {
 	for _, option := range options {
 		if value == option {
+			return true
+		}
+	}
+	return false
+}
+
+// jwtSecretHasAdequateEntropy returns false when the secret is composed of
+// fewer than 8 distinct bytes, catching low-entropy values such as repeated
+// characters or trivially predictable sequences.
+func jwtSecretHasAdequateEntropy(secret string) bool {
+	seen := make(map[byte]struct{}, 8)
+	for i := 0; i < len(secret); i++ {
+		seen[secret[i]] = struct{}{}
+		if len(seen) >= 8 {
 			return true
 		}
 	}

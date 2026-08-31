@@ -1,0 +1,73 @@
+# docker-compose.external.yml — Opt-in external binding override
+#
+# By default, docker-compose.yml binds all services to 127.0.0.1 (loopback only).
+# This keeps the dev stack secure on shared networks: a developer running `make dev`
+# in a café cannot inadvertently expose Postgres or Redis with known credentials.
+#
+# To expose services on all network interfaces (0.0.0.0), compose this file on top:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.external.yml up
+#
+# This is useful for:
+#   - Multi-machine setups where the API runs in a container accessed from another host
+#   - Mobile app testing against a dev backend
+#   - CI/CD pipelines that need network access from outside the container
+#
+# SECURITY WARNING: Binding to 0.0.0.0 exposes services to your network with
+# development credentials (postgres:nester_dev_password, redis with no auth).
+# Only use this on trusted networks. Never on public WiFi.
+#
+# See docs/security/dev-setup.md for more.
+
+services:
+  redis:
+    ports: !override
+      - "0.0.0.0:6379:6379"
+
+  postgres:
+    ports: !override
+      - "0.0.0.0:5432:5432"
+
+  api:
+    ports: !override
+      - "0.0.0.0:8080:8080"
+
+  frontend:
+    ports: !override
+      - "0.0.0.0:3001:3001"
+    # !override replaces the base service's environment wholesale rather than
+    # merging into it, so every key the base sets has to be repeated here.
+    # NEXT_PUBLIC_NETWORK and INTELLIGENCE_SERVICE_URL were dropped, and the
+    # /api/v1 and /ws suffixes were lost, which broke API routing and the
+    # intelligence rewrites under `make dev-external`.
+    environment: !override
+      NEXT_PUBLIC_API_URL: "http://${EXTERNAL_HOSTNAME:-localhost}:8080/api/v1"
+      NEXT_PUBLIC_WS_URL: "ws://${EXTERNAL_HOSTNAME:-localhost}:8080/ws"
+      NEXT_PUBLIC_NETWORK: testnet
+      INTELLIGENCE_SERVICE_URL: http://intelligence:8000
+      ALLOWED_ORIGINS: "${EXTERNAL_HOSTNAME:-localhost}"
+
+  intelligence:
+    ports: !override
+      - "0.0.0.0:8000:8000"
+
+  jaeger:
+    ports: !override
+      - "0.0.0.0:16686:16686"
+
+  otel-collector:
+    ports: !override
+      - "0.0.0.0:4317:4317"
+      - "0.0.0.0:4318:4318"
+
+  prometheus:
+    ports: !override
+      - "0.0.0.0:9091:9090"
+
+  alertmanager:
+    ports: !override
+      - "0.0.0.0:9093:9093"
+
+  grafana:
+    ports: !override
+      - "0.0.0.0:3002:3000"

@@ -111,21 +111,21 @@ type userScanner interface {
 
 func scanUser(row userScanner) (*user.User, error) {
 	var (
-		id                 string
-		walletAddress      string
-		displayName        string
-		kycStatus          string
-		tier               string
-		kycSubmittedAt     sql.NullTime
-		kycReviewedAt      sql.NullTime
-		kycRejectionReason sql.NullString
-    riskProfile         sql.NullString
+		id                  string
+		walletAddress       string
+		displayName         string
+		kycStatus           string
+		tier                string
+		kycSubmittedAt      sql.NullTime
+		kycReviewedAt       sql.NullTime
+		kycRejectionReason  sql.NullString
+		riskProfile         sql.NullString
 		savingsGoal         sql.NullString
 		onboardingCompleted bool
-		lastLoginAt        sql.NullTime
-		timezone           string
-		createdAt          time.Time
-		updatedAt          time.Time
+		lastLoginAt         sql.NullTime
+		timezone            string
+		createdAt           time.Time
+		updatedAt           time.Time
 	)
 
 	if err := row.Scan(
@@ -185,21 +185,21 @@ func scanUser(row userScanner) (*user.User, error) {
 	}
 
 	return &user.User{
-		ID:                 parsedID,
-		WalletAddress:      walletAddress,
-		DisplayName:        displayName,
-		KYCStatus:          user.KYCStatus(kycStatus),
-		Tier:               tier,
-		KYCSubmittedAt:     kycSubAtPtr,
-		KYCReviewedAt:      kycRevAtPtr,
-		KYCRejectionReason: kycRejReasonPtr,
-    RiskProfile:         riskPtr,
+		ID:                  parsedID,
+		WalletAddress:       walletAddress,
+		DisplayName:         displayName,
+		KYCStatus:           user.KYCStatus(kycStatus),
+		Tier:                tier,
+		KYCSubmittedAt:      kycSubAtPtr,
+		KYCReviewedAt:       kycRevAtPtr,
+		KYCRejectionReason:  kycRejReasonPtr,
+		RiskProfile:         riskPtr,
 		SavingsGoal:         savingsPtr,
 		OnboardingCompleted: onboardingCompleted,
-		LastLoginAt:        lastLoginAtPtr,
-		Timezone:           timezone,
-		CreatedAt:          createdAt,
-		UpdatedAt:          updatedAt,
+		LastLoginAt:         lastLoginAtPtr,
+		Timezone:            timezone,
+		CreatedAt:           createdAt,
+		UpdatedAt:           updatedAt,
 	}, nil
 }
 
@@ -229,14 +229,15 @@ func (r *UserRepository) SaveKYCDocument(ctx context.Context, doc *user.KYCDocum
 		INSERT INTO kyc_documents (
 			id, user_id, id_type, id_number, front_object_key, back_object_key,
 			id_number_encrypted, id_number_fingerprint, front_object_key_encrypted,
-			back_object_key_encrypted, key_version
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			back_object_key_encrypted, key_version, full_name, date_of_birth, country
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING submitted_at
 	`
 	err := r.db.QueryRowContext(ctx, query,
 		doc.ID.String(), doc.UserID.String(), doc.IDType, doc.IDNumber, doc.FrontObjectKey, doc.BackObjectKey,
 		encrypted.IDNumberEncrypted, encrypted.IDNumberFingerprint, encrypted.FrontKeyEncrypted,
 		nullOptionalBytes(encrypted.BackKeyEncrypted), encrypted.KeyVersion,
+		doc.FullName, doc.DateOfBirth, doc.Country,
 	).Scan(&doc.SubmittedAt)
 	return err
 }
@@ -245,7 +246,7 @@ func (r *UserRepository) GetKYCDocument(ctx context.Context, userID uuid.UUID) (
 	query := `
 		SELECT id, user_id, id_type, id_number, front_object_key, back_object_key,
 		       id_number_encrypted, id_number_fingerprint, front_object_key_encrypted,
-		       back_object_key_encrypted, key_version, submitted_at
+		       back_object_key_encrypted, key_version, full_name, date_of_birth, country, submitted_at
 		FROM kyc_documents
 		WHERE user_id = $1
 		ORDER BY submitted_at DESC
@@ -256,10 +257,12 @@ func (r *UserRepository) GetKYCDocument(ctx context.Context, userID uuid.UUID) (
 	var id, uid string
 	var backKey sql.NullString
 	var idNumFingerprint, kv sql.NullString
+	var fullName, country sql.NullString
+	var dateOfBirth sql.NullTime
 	if err := r.db.QueryRowContext(ctx, query, userID.String()).Scan(
 		&id, &uid, &doc.IDType, &doc.IDNumber, &doc.FrontObjectKey, &backKey,
 		&encrypted.IDNumberEncrypted, &idNumFingerprint, &encrypted.FrontKeyEncrypted,
-		&encrypted.BackKeyEncrypted, &kv, &doc.SubmittedAt,
+		&encrypted.BackKeyEncrypted, &kv, &fullName, &dateOfBirth, &country, &doc.SubmittedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.New("no kyc document found")
@@ -276,6 +279,15 @@ func (r *UserRepository) GetKYCDocument(ctx context.Context, userID uuid.UUID) (
 	}
 	if kv.Valid {
 		encrypted.KeyVersion = kv.String
+	}
+	if fullName.Valid {
+		doc.FullName = fullName.String
+	}
+	if country.Valid {
+		doc.Country = country.String
+	}
+	if dateOfBirth.Valid {
+		doc.DateOfBirth = dateOfBirth.Time
 	}
 	return &doc, &encrypted, nil
 }
@@ -322,9 +334,9 @@ func (r *UserRepository) ScanKYCDocumentsForBackfill(ctx context.Context, limit 
 	var out []KYCBackfillRow
 	for rows.Next() {
 		var (
-			id                       string
-			idNum, frontKey          string
-			backKey                  sql.NullString
+			id              string
+			idNum, frontKey string
+			backKey         sql.NullString
 		)
 		if err := rows.Scan(&id, &idNum, &frontKey, &backKey); err != nil {
 			return nil, err
@@ -389,10 +401,10 @@ func (r *UserRepository) ScanPendingKYCEncryption(ctx context.Context, activeVer
 	var out []rotation.EncryptedRow
 	for rows.Next() {
 		var (
-			id                     string
-			idNumEnc, frontKeyEnc  []byte
-			backKeyEnc             []byte
-			keyVersion             string
+			id                    string
+			idNumEnc, frontKeyEnc []byte
+			backKeyEnc            []byte
+			keyVersion            string
 		)
 		if err := rows.Scan(&id, &idNumEnc, &frontKeyEnc, &backKeyEnc, &keyVersion); err != nil {
 			return nil, err
@@ -403,7 +415,10 @@ func (r *UserRepository) ScanPendingKYCEncryption(ctx context.Context, activeVer
 		}
 		// Pack the three ciphertexts into a single []byte for the rotation
 		// store interface; unpacking happens during re-encryption.
-		packed := packKYCCiphertexts(idNumEnc, frontKeyEnc, backKeyEnc)
+		packed, err := packKYCCiphertexts(idNumEnc, frontKeyEnc, backKeyEnc)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, rotation.EncryptedRow{ID: parsedID, Ciphertext: packed, KeyVersion: keyVersion})
 	}
 	return out, rows.Err()
@@ -440,8 +455,30 @@ func (r *UserRepository) UpdateKYCFingerprint(ctx context.Context, id uuid.UUID,
 
 // packKYCCiphertexts packs three ciphertext byte slices into a single
 // length-prefixed blob for transport through the rotation.Store interface.
-func packKYCCiphertexts(idNum, frontKey, backKey []byte) []byte {
-	writeLen := func(buf []byte, v int) { buf[0] = byte(v >> 8); buf[1] = byte(v) }
+func packKYCCiphertexts(idNum, frontKey, backKey []byte) ([]byte, error) {
+	// The framing uses a 16-bit length prefix per segment, so a segment of
+	// 64 KiB or more cannot be represented. Truncating it would silently
+	// corrupt the packed blob and the corruption would only surface later, as
+	// an unexplained decryption failure during rotation (nester#1035, G115).
+	// Failing here instead keeps the damage visible and contained.
+	for _, seg := range []struct {
+		name  string
+		value []byte
+	}{
+		{"id_number", idNum},
+		{"front_object_key", frontKey},
+		{"back_object_key", backKey},
+	} {
+		if len(seg.value) > maxKYCSegmentLen {
+			return nil, fmt.Errorf(
+				"kyc repository: %s ciphertext is %d bytes, exceeding the %d-byte framing limit",
+				seg.name, len(seg.value), maxKYCSegmentLen)
+		}
+	}
+
+	// Segment lengths are bounded to maxKYCSegmentLen immediately above, so
+	// both byte extractions are exact (nester#1035, G115).
+	writeLen := func(buf []byte, v int) { buf[0] = byte(v >> 8); buf[1] = byte(v) } // #nosec G115 -- length bounded to 0xFFFF above
 	total := 6 + len(idNum) + len(frontKey) + len(backKey)
 	buf := make([]byte, total)
 	writeLen(buf[0:2], len(idNum))
@@ -450,8 +487,12 @@ func packKYCCiphertexts(idNum, frontKey, backKey []byte) []byte {
 	copy(buf[6:], idNum)
 	copy(buf[6+len(idNum):], frontKey)
 	copy(buf[6+len(idNum)+len(frontKey):], backKey)
-	return buf
+	return buf, nil
 }
+
+// maxKYCSegmentLen is the largest ciphertext segment the 16-bit length framing
+// in packKYCCiphertexts can represent.
+const maxKYCSegmentLen = 0xFFFF
 
 // UnpackKYCCiphertexts reverses packKYCCiphertexts.
 func UnpackKYCCiphertexts(packed []byte) (idNum, frontKey, backKey []byte) {

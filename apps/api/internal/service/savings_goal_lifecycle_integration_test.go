@@ -1,0 +1,170 @@
+package service
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/shopspring/decimal"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
+	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
+	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
+)
+
+// applySavingsGoalLifecycleMigrations applies every migration needed for the
+// full current savings_goals schema (status/completion, name/emoji, share
+// token, vault linking, auto-compound) so GetByID/List round-trip cleanly.
+func applySavingsGoalLifecycleMigrations(t *testing.T, db *sql.DB) {
+	t.Helper()
+	// The base helper now applies the complete migration chain, so the
+	// per-feature additions this function used to layer on are covered.
+	applySavingsGoalIntegrationMigrations(t, db)
+}
+
+// TestSavingsGoalDepositMilestoneCompletionLifecycle_Integration exercises the
+// full deposit -> milestone -> completion lifecycle end to end: a goal linked
+// to a vault progresses through 25/50/75/100% as its vault balance grows,
+// each crossing fires a milestone notification (side effect verified via the
+// notifications dispatcher), and reaching 100% auto-completes the goal.
+func TestSavingsGoalDepositMilestoneCompletionLifecycle_Integration(t *testing.T) {
+	db := openSavingsGoalIntegrationDB(t)
+	applySavingsGoalLifecycleMigrations(t, db)
+	if _, err := db.Exec(`TRUNCATE TABLE savings_goals, allocations, vaults, users, device_tokens, outbox, jobs RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("TRUNCATE failed: %v", err)
+	}
+
+	ctx := context.Background()
+	userID := seedSavingsGoalIntegrationUser(t, db)
+	vaultRepo := postgres.NewVaultRepository(db)
+	goalRepo := postgres.NewSavingsGoalRepository(db)
+	notificationRepo := postgres.NewNotificationRepository(db)
+
+	createdVault, err := vaultRepo.CreateVault(ctx, vault.Vault{
+		ID:              uuid.New(),
+		UserID:          userID,
+		ContractAddress: "CA-LIFECYCLE",
+		TotalDeposited:  decimal.Zero,
+		CurrentBalance:  decimal.Zero,
+		Currency:        "USDC",
+		Status:          vault.StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	if _, err := notificationRepo.UpsertDeviceToken(ctx, userID, "ExponentPushToken[lifecycle]", "expo"); err != nil {
+		t.Fatalf("UpsertDeviceToken() error = %v", err)
+	}
+
+	push := &notifications.RecordingPushSender{}
+	persistence := &notifications.RecordingPersistenceStore{}
+	dispatcher := notifications.New(
+		[]notifications.Channel{notifications.NewPushChannel(push, notificationRepo)},
+		notificationRepo,
+		persistence,
+	)
+	svc := NewSavingsGoalService(goalRepo, vaultRepo, DispatcherGoalMilestoneNotifier{Dispatcher: dispatcher})
+
+	deadline := time.Now().UTC().Add(365 * 24 * time.Hour)
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(100),
+		Currency:     "USDC",
+		Deadline:     deadline,
+		Description:  "New laptop",
+		VaultID:      &createdVault.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if goal.Status != savingsgoal.GoalStatusActive && goal.Status != "" {
+		t.Fatalf("initial goal status = %q, want active", goal.Status)
+	}
+
+	// Deposit in four steps, crossing each of the 25/50/75/100% milestones.
+	for _, balance := range []int64{25, 50, 75, 100} {
+		if err := vaultRepo.UpdateVaultBalances(ctx, createdVault.ID, decimal.NewFromInt(balance), decimal.NewFromInt(balance)); err != nil {
+			t.Fatalf("UpdateVaultBalances(%d) error = %v", balance, err)
+		}
+		if _, err := svc.Get(ctx, userID, goal.ID); err != nil {
+			t.Fatalf("Get() after depositing %d error = %v", balance, err)
+		}
+	}
+
+	// Milestone notifications now go through the transactional outbox
+	// (#1049): the four crossings are durably recorded but undelivered until
+	// the relay runs. Drain it here rather than sleeping — the four events
+	// share an aggregate, so they are handed over strictly in order, one per
+	// round, which is the per-aggregate ordering guarantee being exercised.
+	if n := pendingOutboxCount(t, db); n != 4 {
+		t.Fatalf("undelivered outbox events = %d, want 4 (25/50/75/100%%)", n)
+	}
+	harness := newOutboxHarness(t, db, map[string]jobqueue.Handler{
+		GoalMilestoneJobType: NewGoalMilestoneJobHandler(
+			DispatcherGoalMilestoneNotifier{Dispatcher: dispatcher}, nil),
+	})
+	harness.drain(ctx, t, 12)
+
+	if push.CallCount() < 4 || persistence.Count() < 4 {
+		t.Fatalf("after draining the outbox: push=%d persisted=%d, want at least 4 of each",
+			push.CallCount(), persistence.Count())
+	}
+	if n := pendingOutboxCount(t, db); n != 0 {
+		t.Fatalf("undelivered outbox events after drain = %d, want 0", n)
+	}
+
+	// Completion: reaching the target auto-completes the goal (#716).
+	final, err := svc.Get(ctx, userID, goal.ID)
+	if err != nil {
+		t.Fatalf("Get() final error = %v", err)
+	}
+	if final.Status != savingsgoal.GoalStatusCompleted {
+		t.Fatalf("final status = %q, want %q", final.Status, savingsgoal.GoalStatusCompleted)
+	}
+	if final.CompletedAt == nil {
+		t.Fatal("final CompletedAt = nil, want non-nil after auto-completion")
+	}
+	if final.ProgressPct != 100 {
+		t.Fatalf("final progress_pct = %v, want 100", final.ProgressPct)
+	}
+
+	// Milestone side effects persisted on the goal row.
+	stored, err := goalRepo.GetByID(ctx, goal.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	for _, milestone := range []int{25, 50, 75, 100} {
+		if !savingsgoal.ContainsMilestone(stored.NotifiedMilestones, milestone) {
+			t.Fatalf("notified_milestones = %v, want to contain %d", stored.NotifiedMilestones, milestone)
+		}
+	}
+	if stored.Status != savingsgoal.GoalStatusCompleted {
+		t.Fatalf("persisted status = %q, want %q", stored.Status, savingsgoal.GoalStatusCompleted)
+	}
+
+	// Notification side effects: one push per milestone, titled correctly.
+	wantTitles := map[string]bool{
+		"Great start!":     false,
+		"Halfway there!":   false,
+		"Almost there!":    false,
+		"Goal achieved! 🎉": false,
+	}
+	for _, call := range push.SnapshotCalls() {
+		if _, ok := wantTitles[call.Title]; ok {
+			wantTitles[call.Title] = true
+		}
+	}
+	for title, seen := range wantTitles {
+		if !seen {
+			t.Fatalf("missing push notification for milestone titled %q", title)
+		}
+	}
+	if persistence.Count() < 4 {
+		t.Fatalf("persisted notification count = %d, want >= 4", persistence.Count())
+	}
+}

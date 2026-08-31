@@ -1,7 +1,34 @@
-import { WizardVaultData } from "../types/vault-wizard";
+import {
+  Contract,
+  rpc as SorobanRpc,
+  TransactionBuilder,
+  BASE_FEE,
+  nativeToScVal,
+  Address,
+  Transaction,
+} from "@stellar/stellar-sdk";
 
-// Simulated delay helper
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+import { getCurrentNetwork } from "@/lib/stellar/transaction";
+import type { WizardVaultData } from "@/lib/types/vault-wizard";
+
+// Deliberately re-use the signer's resolver rather than reading
+// NEXT_PUBLIC_NETWORK here. The wallet signs against
+// localStorage["nester_network_id"]; resolving the network differently on the
+// build side means switching networks in the UI signs a transaction built for
+// a different passphrase, which fails deployment outright.
+
+export interface CreateVaultParams {
+  name: string;
+  description?: string;
+  ownerAddress: string;
+  signTransaction: (xdr: string) => Promise<string>;
+}
+
+export interface CreateVaultResult {
+  contractAddress: string;
+  transactionHash: string;
+  vaultId: string;
+}
 
 export interface VaultDeploymentResponse {
   success: boolean;
@@ -11,76 +38,204 @@ export interface VaultDeploymentResponse {
   error?: string;
 }
 
+/**
+ * Validate that the wizard data has the required fields for vault creation.
+ * Throws descriptive errors if validation fails before any contract interaction.
+ */
+function validateWizardData(data: WizardVaultData): void {
+  if (!data || typeof data !== "object") {
+    throw new Error("Invalid vault data: expected an object");
+  }
+
+  if (typeof data.name !== "string" || !data.name.trim()) {
+    throw new Error(
+      "Invalid vault name: must be a non-empty string. Did you rename the wizard field?",
+    );
+  }
+
+  if (data.description !== undefined && typeof data.description !== "string") {
+    throw new Error("Invalid vault description: must be a string or undefined");
+  }
+
+  // name is trimmed to reject whitespace-only names
+  const trimmedName = data.name.trim();
+  if (trimmedName.length === 0) {
+    throw new Error("Vault name cannot be empty or whitespace only");
+  }
+}
+
+/**
+ * Create a new vault by invoking the factory contract on Soroban.
+ *
+ * Flow:
+ * 1. Validate factory contract ID is configured
+ * 2. Fetch account sequence number
+ * 3. Build create_vault transaction
+ * 4. Simulate to populate footprint
+ * 5. Sign via wallet
+ * 6. Submit and poll for confirmation
+ * 7. Extract contract address from return value
+ */
+export async function createVault(
+  params: CreateVaultParams,
+): Promise<CreateVaultResult> {
+  // Evaluate at runtime so tests can set environment variables
+  const FACTORY_CONTRACT_ID = process.env.NEXT_PUBLIC_VAULT_FACTORY_CONTRACT_ID;
+  const NETWORK = getCurrentNetwork();
+  const NETWORK_PASSPHRASE = NETWORK.networkPassphrase;
+  const RPC_URL = process.env.NEXT_PUBLIC_STELLAR_RPC_URL || NETWORK.rpcUrl;
+
+  if (!FACTORY_CONTRACT_ID) {
+    throw new Error("NEXT_PUBLIC_VAULT_FACTORY_CONTRACT_ID is not configured");
+  }
+
+  const server = new SorobanRpc.Server(RPC_URL);
+  const contract = new Contract(FACTORY_CONTRACT_ID);
+
+  // Fetch account sequence number
+  const account = await server.getAccount(params.ownerAddress);
+
+  // Build the transaction
+  const transaction = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      contract.call(
+        "create_vault",
+        nativeToScVal(params.name, { type: "string" }),
+        new Address(params.ownerAddress).toScVal(),
+      ),
+    )
+    .setTimeout(30)
+    .build();
+
+  // Simulate to populate footprint
+  const simResult = await server.simulateTransaction(transaction);
+
+  if (SorobanRpc.Api.isSimulationError(simResult)) {
+    throw new Error(
+      `Simulation failed: ${(simResult as SorobanRpc.Api.SimulateTransactionErrorResponse).error}`,
+    );
+  }
+
+  // Prepare transaction with simulation results
+  const preparedTx = SorobanRpc.assembleTransaction(
+    transaction,
+    simResult,
+  ).build();
+  const preparedXdr = preparedTx.toXDR();
+
+  // Sign via wallet
+  const signedXdr = await params.signTransaction(preparedXdr);
+
+  // Submit transaction
+  const submitResult = await server.sendTransaction(
+    new Transaction(signedXdr, NETWORK_PASSPHRASE),
+  );
+
+  if (submitResult.status === "ERROR") {
+    throw new Error(
+      `Transaction failed: ${submitResult.errorResult?.toXDR("base64") ?? "unknown error"}`,
+    );
+  }
+
+  // Poll for result
+  const hash = submitResult.hash;
+  let getResult = await server.getTransaction(hash);
+
+  const maxAttempts = 30;
+  let attempts = 0;
+
+  while (
+    getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+    attempts < maxAttempts
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    getResult = await server.getTransaction(hash);
+    attempts++;
+  }
+
+  if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+    throw new Error(`Transaction failed on-chain: ${hash}`);
+  }
+
+  if (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+    throw new Error(`Transaction timed out waiting for confirmation: ${hash}`);
+  }
+
+  // Extract contract address from result — NEVER generate it
+  const returnValue = getResult.returnValue;
+  if (!returnValue) {
+    throw new Error("No return value from vault creation transaction");
+  }
+
+  const contractAddress = Address.fromScVal(returnValue).toString();
+
+  return {
+    contractAddress,
+    transactionHash: hash,
+    vaultId: contractAddress, // use actual contract address as vault ID
+  };
+}
+
+/**
+ * Wrapper for the wizard component that bridges CreateVaultWizard's expected interface
+ * to the real createVault implementation.
+ */
 export class VaultFactory {
   /**
-   * Simulates connecting to Freighter wallet
+   * Create a vault from typed wizard data.
+   *
+   * Validates all required fields before making any contract calls. A malformed
+   * payload is rejected immediately with a clear error message rather than
+   * failing mid-deployment.
    */
-  static async connectWallet(): Promise<{ address: string; network: string }> {
-    await delay(800);
-    // Return a mock Stellar address
-    return {
-      address: "GABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQRST",
-      network: "TESTNET",
-    };
-  }
-
-  /**
-   * Simulates gas estimation for vault deployment
-   * Returns estimated fee in XLM
-   */
-  static async estimateGas(data: WizardVaultData): Promise<number> {
-    await delay(500);
-    // Base fee + fee per protocol allocation + optional features fee
-    let fee = 0.5; // Base deployment fee in XLM
-    fee += data.allocations.filter(a => a.percentage > 0).length * 0.1;
-    if (data.autoRebalance) fee += 0.2;
-    return Number(fee.toFixed(4));
-  }
-
-  /**
-   * Simulates the entire vault creation transaction flow
-   */
-  static async createVault(data: WizardVaultData, onProgress?: (status: string) => void): Promise<VaultDeploymentResponse> {
+  static async createVault(
+    data: WizardVaultData,
+    onProgress?: (status: string) => void,
+    params?: {
+      ownerAddress: string;
+      signTransaction: (xdr: string) => Promise<string>;
+    },
+  ): Promise<VaultDeploymentResponse> {
     try {
+      if (!params) {
+        throw new Error(
+          "Missing required parameters: ownerAddress and signTransaction",
+        );
+      }
+
+      // Validate data before making any contract calls
+      validateWizardData(data);
+
       if (onProgress) onProgress("Preparing transaction...");
-      await delay(1000);
 
-      if (onProgress) onProgress("Requesting wallet signature...");
-      await delay(1500);
+      const result = await createVault({
+        name: data.name.trim(),
+        description: data.description?.trim() || undefined,
+        ownerAddress: params.ownerAddress,
+        signTransaction: params.signTransaction,
+      });
 
-      if (onProgress) onProgress("Deploying smart contract to Soroban...");
-      await delay(2000);
-
-      if (onProgress) onProgress("Configuring allocation strategy...");
-      await delay(1500);
-
-      if (onProgress) onProgress("Confirming transaction on Ledger...");
-      await delay(1000);
-
-      // Generate mock IDs
-      const mockVaultId = `vault-${Math.random().toString(36).substring(2, 9)}`;
-      const mockContract = `C${Array.from({length: 55}, () => Math.random().toString(36).toUpperCase()[0]).join('')}`;
-      const mockTxHash = Array.from({length: 64}, () => Math.random().toString(16)[0]).join('');
+      if (onProgress) onProgress("Vault created successfully!");
 
       return {
         success: true,
-        vaultId: mockVaultId,
-        contractAddress: mockContract,
-        transactionHash: mockTxHash,
+        vaultId: result.vaultId,
+        contractAddress: result.contractAddress,
+        transactionHash: result.transactionHash,
       };
     } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Failed to deploy vault to network";
+
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to deploy vault to network",
+        error: errorMessage,
       };
     }
-  }
-
-  /**
-   * Polls for mock transaction status
-   */
-  static async getMockTransactionStatus(): Promise<"pending" | "success" | "failed"> {
-    await delay(500);
-    return "success";
   }
 }

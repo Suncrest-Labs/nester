@@ -39,22 +39,34 @@ jobs:
         run: |
           cd packages/contracts
           rustup target add wasm32-unknown-unknown
-          # Build only workspace-member contracts (excludes non-member dirs like rent_escrow)
-          # Use cargo metadata to enumerate workspace package names, then filter to those
-          # whose manifest path lives under contracts/.
+          # Build only deployable workspace-member contracts. Match on the manifest
+          # path relative to workspace_root -- an absolute-substring match on
+          # "/contracts/" also matches libs/ and tests/, because the workspace root
+          # directory is itself named "contracts". Those crates depend on
+          # soroban-sdk with the "testutils" feature, which cannot compile for wasm.
+          # Requiring a cdylib target additionally excludes rlib-only helper crates.
+          cat > /tmp/list-contract-packages.py <<'PY'
+          import sys, json, os
+
+          meta = json.load(sys.stdin)
+          root = meta['workspace_root'].replace('\\', '/').rstrip('/')
+          for pkg in meta['packages']:
+              path = pkg['manifest_path'].replace('\\', '/')
+              rel = os.path.relpath(path, root).replace('\\', '/')
+              if not rel.startswith('contracts/'):
+                  continue
+              if '/test_fixtures/' in '/' + rel:
+                  continue
+              if not any('cdylib' in t['kind'] for t in pkg['targets']):
+                  continue
+              print(pkg['name'])
+          PY
           cargo metadata --no-deps --format-version 1 \
-            | python3 -c "
-import sys, json
-meta = json.load(sys.stdin)
-for pkg in meta['packages']:
-    if '/contracts/' in pkg['manifest_path'].replace('\\\\','/') and \
-       '/test_fixtures/' not in pkg['manifest_path'].replace('\\\\','/') and \
-       '/tests/' not in pkg['manifest_path'].replace('\\\\','/'):
-        print(pkg['name'])
-" | while read pkg_name; do
-            echo "Building $pkg_name..."
-            cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
-          done
+            | python3 /tmp/list-contract-packages.py \
+            | while read pkg_name; do
+                echo "Building $pkg_name..."
+                cargo build --release --target wasm32-unknown-unknown -p "$pkg_name"
+              done
           mkdir -p ../../wasm-hashes
           echo "# Reproducible WASM Hashes" > ../../wasm-hashes/wasm-hashes.txt
           echo "Generated on: $(date -u)" >> ../../wasm-hashes/wasm-hashes.txt

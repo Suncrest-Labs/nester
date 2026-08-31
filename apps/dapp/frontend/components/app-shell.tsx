@@ -80,7 +80,7 @@ function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
                                 "flex items-center gap-3 rounded-xl px-4 py-3 text-[14px] font-medium transition-colors",
                                 active
                                     ? "bg-black/[0.04] text-black dark:bg-white/10 dark:text-white"
-                                    : "text-black/40 hover:bg-black/[0.02] hover:text-black/60 dark:text-white/40 dark:hover:bg-white/5 dark:hover:text-white/70"
+                                    : "text-black/60 hover:bg-black/[0.02] hover:text-black/80 dark:text-white/60 dark:hover:bg-white/5 dark:hover:text-white/80"
                             )}
                         >
                             <item.icon className="h-[18px] w-[18px] shrink-0" />
@@ -95,7 +95,7 @@ function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
                 <Link
                     href="https://docs.nester.finance"
                     target="_blank"
-                    className="flex items-center gap-3 rounded-xl px-4 py-3 text-[14px] font-medium text-black/35 hover:bg-black/[0.02] hover:text-black/55 dark:text-white/35 dark:hover:bg-white/5 dark:hover:text-white/55 transition-colors"
+                    className="flex items-center gap-3 rounded-xl px-4 py-3 text-[14px] font-medium text-black/60 hover:bg-black/[0.02] hover:text-black/80 dark:text-white/60 dark:hover:bg-white/5 dark:hover:text-white/80 transition-colors"
                 >
                     <ExternalLink className="h-[18px] w-[18px] shrink-0" />
                     Developer Docs

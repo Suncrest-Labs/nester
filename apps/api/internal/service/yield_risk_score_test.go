@@ -6,13 +6,13 @@ func TestComputeRiskScore(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		tvlUsd       float64
-		apy7dSwing   float64
-		rewardRatio  float64
-		wantMin      float64 // score must be >= wantMin
-		wantMax      float64 // score must be <= wantMax
-		wantExact    *float64 // when non-nil, score must equal this exactly
+		name        string
+		tvlUsd      float64
+		apy7dSwing  float64
+		rewardRatio float64
+		wantMin     float64  // score must be >= wantMin
+		wantMax     float64  // score must be <= wantMax
+		wantExact   *float64 // when non-nil, score must equal this exactly
 	}{
 		{
 			name:        "zero inputs returns 0.0",

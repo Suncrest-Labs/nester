@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
 )
 
 // fakeTransactionRepo is an in-memory transaction.Repository for poller tests.
@@ -316,5 +317,152 @@ func TestTransactionPoller_Run_NoOpWhenDisabled(t *testing.T) {
 
 	if len(notifier.calls) != 0 {
 		t.Errorf("disabled poller must never broadcast, got %d", len(notifier.calls))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation and pending-submission metrics (nester#1108)
+// ---------------------------------------------------------------------------
+
+// recordingPollerMetrics captures what the poller reports, so the tests below
+// assert on the operational signal rather than on Prometheus internals.
+type recordingPollerMetrics struct {
+	runs        []metrics.ReconcileOutcome
+	divergences []metrics.DivergenceKind
+	pendingLast struct {
+		count  int
+		oldest time.Duration
+		set    bool
+	}
+}
+
+func (r *recordingPollerMetrics) RecordReconcileRun(outcome metrics.ReconcileOutcome) {
+	r.runs = append(r.runs, outcome)
+}
+
+func (r *recordingPollerMetrics) RecordReconcileDivergence(kind metrics.DivergenceKind) {
+	r.divergences = append(r.divergences, kind)
+}
+
+func (r *recordingPollerMetrics) SetPendingSubmissions(count int, oldest time.Duration) {
+	r.pendingLast.count = count
+	r.pendingLast.oldest = oldest
+	r.pendingLast.set = true
+}
+
+// A transaction old enough to poll that the chain still has not resolved is a
+// stuck submission — money in flight the user cannot see. Before #1108 this
+// was logged at most; it must now reach the metrics an alert reads.
+func TestTransactionPoller_Tick_RecordsStuckDivergence(t *testing.T) {
+	tx := newPendingTx(transaction.TypeDeposit, "stuck1", time.Minute)
+	repo := newFakeTransactionRepo(tx)
+
+	horizon := horizonStub(t, nil) // 404: not yet resolved on chain
+	defer horizon.Close()
+
+	svc := NewTransactionService(repo, horizon.URL)
+	rec := &recordingPollerMetrics{}
+	poller := NewTransactionPoller(
+		TransactionPollerConfig{Enabled: true, Interval: time.Hour, MinAge: 30 * time.Second},
+		svc, nil, nil,
+	)
+	poller.SetMetrics(rec)
+
+	poller.Tick(context.Background())
+
+	if len(rec.divergences) != 1 || rec.divergences[0] != metrics.DivergenceStuck {
+		t.Fatalf("divergences = %v, want exactly one stuck", rec.divergences)
+	}
+	if len(rec.runs) != 1 || rec.runs[0] != metrics.ReconcileCompleted {
+		t.Fatalf("runs = %v, want one completed", rec.runs)
+	}
+}
+
+// A transaction that reconciles to a terminal state is not a divergence: the
+// system worked. Counting it would make the divergence signal fire on healthy
+// traffic and train operators to ignore it.
+func TestTransactionPoller_Tick_ResolvedTransactionIsNotADivergence(t *testing.T) {
+	tx := newPendingTx(transaction.TypeDeposit, "good77", time.Minute)
+	repo := newFakeTransactionRepo(tx)
+
+	horizon := horizonStub(t, map[string]horizonTransactionResponse{
+		"good77": {Successful: true, CreatedAt: time.Now().UTC().Format(time.RFC3339)},
+	})
+	defer horizon.Close()
+
+	svc := NewTransactionService(repo, horizon.URL)
+	rec := &recordingPollerMetrics{}
+	poller := NewTransactionPoller(
+		TransactionPollerConfig{Enabled: true, Interval: time.Hour, MinAge: 30 * time.Second},
+		svc, nil, nil,
+	)
+	poller.SetMetrics(rec)
+
+	poller.Tick(context.Background())
+
+	if len(rec.divergences) != 0 {
+		t.Fatalf("divergences = %v, want none for a transaction that resolved", rec.divergences)
+	}
+	if len(rec.runs) != 1 || rec.runs[0] != metrics.ReconcileCompleted {
+		t.Fatalf("runs = %v, want one completed", rec.runs)
+	}
+}
+
+// The backlog gauges are published every pass, including when the queue is
+// empty — otherwise a drained queue would leave the previous non-zero reading
+// in place and the alert would never clear.
+func TestTransactionPoller_Tick_PublishesPendingBacklog(t *testing.T) {
+	older := newPendingTx(transaction.TypeDeposit, "old01", 10*time.Minute)
+	newer := newPendingTx(transaction.TypeWithdrawal, "new01", time.Minute)
+	repo := newFakeTransactionRepo(older, newer)
+
+	horizon := horizonStub(t, nil)
+	defer horizon.Close()
+
+	svc := NewTransactionService(repo, horizon.URL)
+	rec := &recordingPollerMetrics{}
+	poller := NewTransactionPoller(
+		TransactionPollerConfig{Enabled: true, Interval: time.Hour, MinAge: 30 * time.Second},
+		svc, nil, nil,
+	)
+	poller.SetMetrics(rec)
+
+	poller.Tick(context.Background())
+
+	if !rec.pendingLast.set {
+		t.Fatal("pending backlog was never published")
+	}
+	if rec.pendingLast.count != 2 {
+		t.Fatalf("pending count = %d, want 2", rec.pendingLast.count)
+	}
+	// The oldest entry drives the age, not the most recent one.
+	if rec.pendingLast.oldest < 9*time.Minute {
+		t.Fatalf("oldest age = %s, want at least 9m (the older of the two)", rec.pendingLast.oldest)
+	}
+}
+
+// A poller with no recorder wired must behave exactly as before. Losing
+// observability must never be able to break reconciliation itself.
+func TestTransactionPoller_Tick_WorksWithoutMetrics(t *testing.T) {
+	tx := newPendingTx(transaction.TypeDeposit, "nom001", time.Minute)
+	repo := newFakeTransactionRepo(tx)
+
+	horizon := horizonStub(t, map[string]horizonTransactionResponse{
+		"nom001": {Successful: true, CreatedAt: time.Now().UTC().Format(time.RFC3339)},
+	})
+	defer horizon.Close()
+
+	svc := NewTransactionService(repo, horizon.URL)
+	poller := NewTransactionPoller(
+		TransactionPollerConfig{Enabled: true, Interval: time.Hour, MinAge: 30 * time.Second},
+		svc, nil, nil,
+	)
+	poller.SetMetrics(nil) // explicitly nil: must not panic
+
+	poller.Tick(context.Background())
+
+	stored, _ := repo.GetByHash(context.Background(), "nom001")
+	if stored.Status != transaction.StatusCompleted {
+		t.Fatalf("status = %q, want completed", stored.Status)
 	}
 }

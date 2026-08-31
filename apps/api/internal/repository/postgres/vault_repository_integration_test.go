@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/testutil"
 )
 
 func TestVaultRepositoryIntegrationCRUD(t *testing.T) {
@@ -206,6 +209,163 @@ func TestVaultRepositoryIntegrationRecordDepositConcurrent(t *testing.T) {
 	}
 }
 
+// TestVaultRepositoryIntegrationRecordWithdrawalConcurrent is the acceptance
+// test for nester#1084: N concurrent withdrawals of the full balance must
+// yield exactly one success. Without the FOR UPDATE re-check every goroutine
+// reads the same pre-withdrawal balance, all pass, and the position goes
+// negative.
+func TestVaultRepositoryIntegrationRecordWithdrawalConcurrent(t *testing.T) {
+	db := openIntegrationDB(t)
+	applyIntegrationMigrations(t, db)
+	resetIntegrationTables(t, db)
+
+	repository := NewVaultRepository(db)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, db)
+
+	fullBalance := decimal.RequireFromString("100")
+	created, err := repository.CreateVault(ctx, vault.Vault{
+		ID:              uuid.New(),
+		UserID:          userID,
+		ContractAddress: "CA-INT-WD-RACE",
+		TotalDeposited:  fullBalance,
+		CurrentBalance:  fullBalance,
+		Currency:        "USDC",
+		Status:          vault.StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	const n = 8
+	results := make(chan error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			results <- repository.RecordWithdrawal(ctx, created.ID, vault.TransactionRecord{
+				UserID:               userID,
+				Amount:               fullBalance,
+				SharesMintedOrBurned: fullBalance,
+				SharePriceAtTime:     decimal.NewFromInt(1),
+			})
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var successes, insufficient int
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, vault.ErrWithdrawalExceedsPosition):
+			insufficient++
+		default:
+			t.Errorf("RecordWithdrawal() unexpected error = %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 successful withdrawal, got %d", successes)
+	}
+	if insufficient != n-1 {
+		t.Fatalf("expected %d ErrWithdrawalExceedsPosition, got %d", n-1, insufficient)
+	}
+
+	fetched, err := repository.GetVault(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetVault() error = %v", err)
+	}
+	if !fetched.CurrentBalance.Equal(decimal.Zero) {
+		t.Fatalf("expected current balance 0, got %s", fetched.CurrentBalance)
+	}
+
+	var ledgerRows int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM vault_transactions WHERE vault_id = $1 AND type = 'withdrawal'`,
+		created.ID.String(),
+	).Scan(&ledgerRows); err != nil {
+		t.Fatalf("count ledger rows: %v", err)
+	}
+	if ledgerRows != 1 {
+		t.Fatalf("expected exactly 1 withdrawal ledger row, got %d", ledgerRows)
+	}
+}
+
+// TestVaultRepositoryIntegrationDepositWithdrawalInterleaved exercises the
+// documented lock ordering (nester#1084): deposits and withdrawals on the
+// same position queue on one row lock in the same order, so an interleaved
+// mix must complete without deadlock and land on the exact expected balance.
+func TestVaultRepositoryIntegrationDepositWithdrawalInterleaved(t *testing.T) {
+	db := openIntegrationDB(t)
+	applyIntegrationMigrations(t, db)
+	resetIntegrationTables(t, db)
+
+	repository := NewVaultRepository(db)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, db)
+
+	start := decimal.RequireFromString("100")
+	created, err := repository.CreateVault(ctx, vault.Vault{
+		ID:              uuid.New(),
+		UserID:          userID,
+		ContractAddress: "CA-INT-MIXED",
+		TotalDeposited:  start,
+		CurrentBalance:  start,
+		Currency:        "USDC",
+		Status:          vault.StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	// 5 deposits of 10 and 5 withdrawals of 10. Worst-case ordering (all
+	// withdrawals first) still only draws down 50 of the initial 100, so
+	// every operation must succeed regardless of interleaving.
+	const each = 5
+	amount := decimal.RequireFromString("10")
+	var wg sync.WaitGroup
+	wg.Add(each * 2)
+	errs := make(chan error, each*2)
+	for range each {
+		go func() {
+			defer wg.Done()
+			errs <- repository.RecordDeposit(ctx, created.ID, vault.TransactionRecord{
+				UserID:               userID,
+				Amount:               amount,
+				SharesMintedOrBurned: amount,
+				SharePriceAtTime:     decimal.NewFromInt(1),
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			errs <- repository.RecordWithdrawal(ctx, created.ID, vault.TransactionRecord{
+				UserID:               userID,
+				Amount:               amount,
+				SharesMintedOrBurned: amount,
+				SharePriceAtTime:     decimal.NewFromInt(1),
+			})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent money-path write error = %v", err)
+		}
+	}
+
+	fetched, err := repository.GetVault(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetVault() error = %v", err)
+	}
+	if !fetched.CurrentBalance.Equal(start) {
+		t.Fatalf("expected current balance %s, got %s", start, fetched.CurrentBalance)
+	}
+}
+
 func openIntegrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 
@@ -225,58 +385,9 @@ func openIntegrationDB(t *testing.T) *sql.DB {
 
 func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-
-	// Wipe every table in the public schema before applying. The docker
-	// volume persists across container restarts, so tables created in prior
-	// runs must be dropped to avoid non-idempotent CREATE TABLE statements
-	// (e.g. 006_create_settlements_table) failing on the second run. CASCADE
-	// pulls in dependent objects; schema_migrations and any tables outside
-	// the public schema are untouched.
-	if _, err := db.Exec(`
-		DO $$
-		DECLARE r record;
-		BEGIN
-			FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END$$;
-	`); err != nil {
-		t.Fatalf("drop tables: %v", err)
-	}
-
-	// 033 must run BEFORE 023: 033 renames vault_transactions.tx_hash →
-	// transaction_hash, and 023 creates the UNIQUE INDEX on that column. 035
-	// is a byte-identical duplicate of 033 whose non-idempotent RENAME COLUMN
-	// would fail on re-runs, so it is intentionally skipped.
-	// 010 and 020 are deliberately omitted: they DROP users.email and RENAME
-	// users.name → display_name, which would break the seed helpers that
-	// INSERT into users (id, email, name). Apply either via a separate,
-	// opt-in helper if user-profile tests are extended.
-	for _, name := range []string{
-		"001_create_users_table.up.sql",
-		"002_create_vaults_table.up.sql",
-		"005_create_allocations_table.up.sql",
-		"006_create_settlements_table.up.sql",
-		"007_add_vault_deleted_at.up.sql",
-		"008_add_vault_transactions.up.sql",
-		"014_add_missing_columns.up.sql",
-		"027_user_profile_fields.up.sql",
-		"033_update_vault_transactions.up.sql",
-		"023_vault_transactions_hash_unique.up.sql",
-		"036_allow_harvest_transaction_type.up.sql",
-		"042_create_yield_harvests.up.sql",
-		"074_add_vault_name_description_search.up.sql",
-		"075_add_vault_transactions_memo_search.up.sql",
-	} {
-		path := filepath.Join("..", "..", "..", "migrations", name)
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if _, err := db.Exec(string(contents)); err != nil {
-			t.Fatalf("applying migration %q failed: %v", name, err)
-		}
-	}
+	// The full migration chain in numeric order — see testutil.ApplyAllMigrations
+	// for why no per-test subset is used.
+	testutil.ApplyAllMigrations(t, db, filepath.Join("..", "..", "..", "migrations"))
 }
 
 func resetIntegrationTables(t *testing.T, db *sql.DB) {
@@ -292,9 +403,9 @@ func seedIntegrationUser(t *testing.T, db *sql.DB) uuid.UUID {
 
 	userID := uuid.New()
 	if _, err := db.Exec(
-		`INSERT INTO users (id, email, name) VALUES ($1, $2, $3)`,
+		`INSERT INTO users (id, wallet_address, display_name) VALUES ($1, $2, $3)`,
 		userID.String(),
-		userID.String()+"@example.com",
+		"G"+userID.String(), // final schema: wallet_address NOT NULL UNIQUE, email dropped by 010
 		"Integration User",
 	); err != nil {
 		t.Fatalf("seed user failed: %v", err)

@@ -10,11 +10,15 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from app.middleware.request_id import RequestIDMiddleware, install_request_id_log_filter
 from app.routers import (
     analyze,
     chat,
     coaching,
+    deterioration,
+    feedback,
     health,
+    metrics,
     nudges,
     optimize,
     rebalance,
@@ -23,9 +27,21 @@ from app.routers import (
     tool_actions,
     ws_chat,
 )
+from app.telemetry import setup_tracing, shutdown_tracing
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+class RequestIDFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:  # noqa: A003
+        record.request_id = getattr(record, "request_id", "")
+        return super().format(record)
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s [request_id=%(request_id)s]: %(message)s",
+)
 logger = logging.getLogger(__name__)
+install_request_id_log_filter()
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -40,11 +56,25 @@ _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Intelligence service started")
-    yield
+    try:
+        yield
+    finally:
+        # Flush buffered spans. The BatchSpanProcessor would otherwise drop
+        # its last batch on exit, losing the traces that describe the
+        # shutdown itself. A no-op when tracing is disabled.
+        shutdown_tracing(app)
 
 
 app = FastAPI(title="Nester Intelligence", lifespan=lifespan)
 app.state.limiter = limiter
+app.add_middleware(RequestIDMiddleware)
+
+# Distributed tracing (nester#1054). Opt-in via INTELLIGENCE_TRACING_ENABLED;
+# a no-op when disabled. Installed here so the FastAPI instrumentation wraps
+# the fully-constructed app and can extract the inbound traceparent that links
+# this service's spans to the calling Go API's trace. X-Request-ID handling
+# above is untouched — the two identifiers coexist.
+setup_tracing(app)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 
@@ -85,6 +115,10 @@ async def add_process_time_header(
 
 
 app.include_router(health.router)
+# Prometheus exposition for the intelligence SLIs (nester#1056). Registered
+# before the prefixed routers so the path stays /metrics, which is what a
+# scrape config expects.
+app.include_router(metrics.router)
 app.include_router(chat.router, prefix="/intelligence")
 app.include_router(coaching.router)
 app.include_router(analyze.router)
@@ -94,4 +128,6 @@ app.include_router(rebalance.router)
 app.include_router(optimize.router, prefix="/intelligence")
 app.include_router(recommendations.router, prefix="/intelligence")
 app.include_router(nudges.router, prefix="/intelligence/nudges")
+app.include_router(feedback.router, prefix="/intelligence")
 app.include_router(tool_actions.router, prefix="/intelligence")
+app.include_router(deterioration.router, prefix="/intelligence")
