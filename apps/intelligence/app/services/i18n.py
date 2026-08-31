@@ -368,7 +368,7 @@ def format_date(value: "_dt.date | _dt.datetime | str", language: str) -> str:
     parsed: "_dt.date | _dt.datetime"
     if isinstance(value, str):
         try:
-            parsed: _dt.date = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return value
     else:

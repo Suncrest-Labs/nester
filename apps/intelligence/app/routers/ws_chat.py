@@ -112,7 +112,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 # its current suspension point, unwinding the
                 # `async with client.messages.stream(...)` block immediately
                 # so we stop consuming (and paying for) tokens nobody reads.
-                await stream.aclose()  # type: ignore[attr-defined]
+                await stream.aclose()
 
     except WebSocketDisconnect:
         pass
