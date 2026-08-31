@@ -32,6 +32,8 @@ func applyLedgerMigrations(t *testing.T, db *sql.DB) {
 		"001_create_users_table.up.sql",
 		"002_create_vaults_table.up.sql",
 		"005_create_allocations_table.up.sql",
+		// 014 alters settlements, so the table has to exist first.
+		"006_create_settlements_table.up.sql",
 		"014_add_missing_columns.up.sql",
 		"113_create_ledger_accounts.up.sql",
 		"114_create_ledger_entries.up.sql",
