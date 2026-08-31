@@ -140,7 +140,7 @@ pnpm run lint
 
 **Where it runs:**
 
-- `ci.yml` — dapp-frontend job, now enforced (was `continue-on-error: true`, fixed in #XXXX)
+- `ci.yml` — dapp-frontend job, now enforced (was `continue-on-error: true`, fixed in #1236)
 
 ## All Languages
 
