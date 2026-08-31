@@ -117,6 +117,7 @@ pub struct SourceMigrationEventData {
     pub migration_completed_at: u64,
 }
 
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -635,12 +636,15 @@ impl YieldRegistryContract {
         let mut source = get_source_or_panic(&env, &id);
 
         // Deviation guard: reject single-update jumps that are implausible.
-        // Threshold is read from storage so it can be tuned by an admin.
+        // Threshold is read from storage so it can be tuned by an admin. Do
+        // not panic here: a panic would roll back the failure accounting and
+        // let a source report rejected values indefinitely without degrading.
         let last_apy = source.current_apy_bps;
         if last_apy != 0 {
             let deviation = new_apy_bps.abs_diff(last_apy);
             if deviation > apy_deviation_threshold(&env) {
-                panic_with_error!(env, ContractError::InvalidOperation);
+                record_failure(&env, &id, &mut source, &caller);
+                return;
             }
         }
 
@@ -1059,7 +1063,6 @@ impl YieldRegistryContract {
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Private helpers

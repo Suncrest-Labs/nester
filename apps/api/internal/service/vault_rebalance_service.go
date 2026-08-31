@@ -15,14 +15,14 @@ import (
 
 // RebalanceSuggestion describes a recommended allocation shift for a vault.
 type RebalanceSuggestion struct {
-	VaultID              uuid.UUID              `json:"vault_id"`
-	HasSuggestion        bool                   `json:"has_suggestion"`
-	CurrentAllocations   []AllocationPct        `json:"current_allocations"`
-	RecommendedAllocations []AllocationPct      `json:"recommended_allocations"`
-	ExpectedAPYGainBPS   int64                  `json:"expected_apy_gain_bps"`
-	ExpectedAPYGainPct   float64                `json:"expected_apy_gain_pct"`
-	Confidence           string                 `json:"confidence"`
-	Reason               string                 `json:"reason"`
+	VaultID                uuid.UUID       `json:"vault_id"`
+	HasSuggestion          bool            `json:"has_suggestion"`
+	CurrentAllocations     []AllocationPct `json:"current_allocations"`
+	RecommendedAllocations []AllocationPct `json:"recommended_allocations"`
+	ExpectedAPYGainBPS     int64           `json:"expected_apy_gain_bps"`
+	ExpectedAPYGainPct     float64         `json:"expected_apy_gain_pct"`
+	Confidence             string          `json:"confidence"`
+	Reason                 string          `json:"reason"`
 }
 
 type AllocationPct struct {
@@ -71,12 +71,12 @@ func (s *VaultRebalanceService) GetSuggestion(ctx context.Context, vaultID, user
 	})
 
 	suggestion := RebalanceSuggestion{
-		VaultID:       vaultID,
-		HasSuggestion: decision.Rebalance,
+		VaultID:            vaultID,
+		HasSuggestion:      decision.Rebalance,
 		ExpectedAPYGainBPS: decision.ExpectedGainBPS,
 		ExpectedAPYGainPct: float64(decision.ExpectedGainBPS) / 100.0,
-		Reason:        decision.Reason,
-		Confidence:    confidenceFromGain(decision.ExpectedGainBPS),
+		Reason:             decision.Reason,
+		Confidence:         confidenceFromGain(decision.ExpectedGainBPS),
 	}
 	suggestion.CurrentAllocations = allocationsToPct(v.Allocations)
 	if decision.Rebalance {

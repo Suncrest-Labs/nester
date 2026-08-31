@@ -50,6 +50,6 @@ func TestToolAuditService_Record(t *testing.T) {
 	assert.False(t, result.CreatedAt.IsZero())
 	assert.Equal(t, "genesis-hash", result.PrevHash)
 	assert.NotEmpty(t, result.EntryHash)
-	
+
 	assert.Equal(t, result, *repo.inserted)
 }

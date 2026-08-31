@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net/http"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/signing"
 	"github.com/suncrestlabs/nester/apps/api/internal/stellar"
@@ -58,6 +60,36 @@ func NewSorobanVaultChainInvoker(
 	}, nil
 }
 
+// SetHTTPClient replaces the HTTP client used for outbound chain calls. It
+// exists so startup can install the metrics-instrumented, circuit-broken
+// transport; a nil client is ignored so callers need not branch.
+//
+// The underlying invoker uses one client for both Soroban RPC and Horizon, so
+// this single client carries both upstreams. The breaker routes per request
+// URL rather than per client, which is what keeps their failure state
+// independent — see internal/breaker.Router.
+func (s *SorobanVaultChainInvoker) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		s.invoker.SetHTTPClient(client)
+	}
+}
+
+// SetSubmissionStore installs the durable submission record (nester#1085), so
+// every chain write this invoker performs persists an intent before it is
+// sent and a lost RPC response can be reconciled rather than resubmitted.
+func (s *SorobanVaultChainInvoker) SetSubmissionStore(store stellar.SubmissionStore, logger *slog.Logger) {
+	s.invoker.SetSubmissionStore(store, logger)
+}
+
+// SetRPCOptions installs the shared Soroban retry policy (nester#1086).
+//
+// Only the invoker's reads are affected: simulateTransaction and the
+// getTransaction polls are retried, sendTransaction is not. The write path's
+// durability comes from the submission record, not from repeating the call.
+func (s *SorobanVaultChainInvoker) SetRPCOptions(opts stellar.RPCOptions) {
+	s.invoker.SetRPCOptions(opts)
+}
+
 func (s *SorobanVaultChainInvoker) PauseVault(ctx context.Context, contractAddress string) error {
 	return s.invoker.InvokeVoidFunction(ctx, contractAddress, "pause")
 }
@@ -93,7 +125,8 @@ func (s *SorobanVaultChainInvoker) SetAllocationWeights(
 // operator as both caller and depositing user, passing amount and zero
 // as the minimum-shares-out slippage guard.
 func (s *SorobanVaultChainInvoker) DepositToVault(ctx context.Context, contractAddress string, amountStroops int64) error {
-	return s.invoker.InvokeWithI128Pair(ctx, contractAddress, "deposit", amountStroops, 0)
+	_, err := s.invoker.InvokeWithI128Pair(ctx, contractAddress, "deposit", amountStroops, 0)
+	return err
 }
 
 // WithdrawFromVault invokes the vault contract's withdraw function with a
@@ -103,15 +136,15 @@ func (s *SorobanVaultChainInvoker) WithdrawFromVault(
 	contractAddress string,
 	sharesStroops int64,
 	slippageBps int,
-) error {
+) (string, error) {
 	bps, err := stellar.ResolveSlippageBps(slippageBps, s.defaultSlippageBps)
 	if err != nil {
-		return fmt.Errorf("invalid slippage: %w", err)
+		return "", fmt.Errorf("invalid slippage: %w", err)
 	}
 
 	previewNet, err := s.invoker.PreviewWithdrawNet(ctx, contractAddress, sharesStroops)
 	if err != nil {
-		return fmt.Errorf("preview withdrawal: %w", err)
+		return "", fmt.Errorf("preview withdrawal: %w", err)
 	}
 
 	minAssetsOut := stellar.ComputeMinAssetsOut(previewNet, bps)

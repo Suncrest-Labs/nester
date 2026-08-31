@@ -454,6 +454,10 @@ func TestLoadAllDefaults(t *testing.T) {
 		{"ratelimit settlement limit", cfg.RateLimit().SettlementLimit(), 5},
 		{"ratelimit settlement window", cfg.RateLimit().SettlementWindow(), 1 * time.Minute},
 		{"ratelimit trusted proxy count", cfg.RateLimit().TrustedProxyCount(), 0},
+		{"ratelimit quota enabled", cfg.RateLimit().QuotaEnabled(), true},
+		{"ratelimit quota limit", cfg.RateLimit().QuotaLimit(), 300},
+		{"ratelimit quota window", cfg.RateLimit().QuotaWindow(), 1 * time.Minute},
+		{"ratelimit quota bypass token", cfg.RateLimit().QuotaBypassToken(), ""},
 	}
 
 	for _, tc := range cases {
@@ -1035,6 +1039,46 @@ func TestLoadAllowsDefaultJWTSecretInDevelopment(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsLowEntropyJWTSecret verifies that a secret long enough to
+// pass the length check but composed of too few distinct characters is rejected
+// (nester#1106).
+func TestLoadRejectsLowEntropyJWTSecret(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	// 32 'a's: passes length, fails entropy.
+	t.Setenv("AUTH_JWT_SECRET", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	chdir(t, t.TempDir())
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load() to fail when AUTH_JWT_SECRET has insufficient entropy")
+	}
+	if !strings.Contains(err.Error(), "entropy") {
+		t.Fatalf("expected entropy error message, got %q", err.Error())
+	}
+}
+
+// TestJWTSecretHasAdequateEntropy covers the helper directly.
+func TestJWTSecretHasAdequateEntropy(t *testing.T) {
+	cases := []struct {
+		secret string
+		want   bool
+	}{
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},  // single distinct byte
+		{"abababababababababababababababab", false},  // only 2 distinct bytes
+		{"abcdefg" + strings.Repeat("a", 25), false}, // 7 distinct bytes
+		{"abcdefgh" + strings.Repeat("a", 24), true}, // exactly 8 distinct bytes
+		{"this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes", true},
+	}
+	for _, tc := range cases {
+		if got := jwtSecretHasAdequateEntropy(tc.secret); got != tc.want {
+			t.Errorf("jwtSecretHasAdequateEntropy(%q) = %v, want %v", tc.secret, got, tc.want)
+		}
+	}
+}
+
 // TestLoadAllowedOriginsRejectsMalformed verifies malformed origins are rejected.
 func TestLoadAllowedOriginsRejectsMalformed(t *testing.T) {
 	cases := []struct {
@@ -1068,92 +1112,68 @@ func TestLoadAllowedOriginsRejectsMalformed(t *testing.T) {
 	}
 }
 
-// TestLoadPaymentProviderKeysValidation verifies that production/staging requires
-// at least one payment provider key, while development does not.
-func TestLoadPaymentProviderKeysValidation(t *testing.T) {
-	t.Run("production fails when both keys are empty", func(t *testing.T) {
-		baseEnv(t)
-		requiredEnv(t)
-		t.Setenv("APP_ENV", "production")
-		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+// TestLoadPaymentProviderKeysOptional verifies that no environment requires a
+// fiat payment provider key. The offramp feature the keys served was dropped
+// (#1154); requiring them only blocked staging deploys behind dummy
+// credentials, or pushed operators to set a wrong APP_ENV -- which would also
+// silently disable the JWT-default and CORS-origin guards.
+func TestLoadPaymentProviderKeysOptional(t *testing.T) {
+	for _, env := range []string{"production", "staging", "development", "test"} {
+		t.Run(env+" succeeds with no provider key", func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", env)
+			if env == "production" || env == "staging" {
+				t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+			}
 
-		chdir(t, t.TempDir())
+			chdir(t, t.TempDir())
 
-		_, err := Load()
-		if err == nil {
-			t.Fatal("expected Load() to fail when both provider keys are empty in production")
-		}
-		if !strings.Contains(err.Error(), "PAYSTACK_SECRET_KEY") {
-			t.Fatalf("expected error to mention PAYSTACK_SECRET_KEY, got %q", err.Error())
-		}
-	})
+			if _, err := Load(); err != nil {
+				t.Fatalf("Load() error = %v (no environment should require a fiat provider key)", err)
+			}
+		})
+	}
+}
 
-	t.Run("staging fails when both keys are empty", func(t *testing.T) {
+// TestStagingGuardsSurviveProviderKeyRemoval pins the guards that dropping the
+// fiat requirement must not weaken: staging still rejects the development JWT
+// default and still demands an explicit CORS origin list. These are the guards
+// an operator would have lost by setting a wrong APP_ENV to work around the
+// provider requirement, so they are asserted here alongside its removal.
+func TestStagingGuardsSurviveProviderKeyRemoval(t *testing.T) {
+	t.Run("staging still rejects the development JWT default", func(t *testing.T) {
 		baseEnv(t)
 		requiredEnv(t)
 		t.Setenv("APP_ENV", "staging")
 		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+		t.Setenv("AUTH_JWT_SECRET", defaultDevJWTSecret)
 
 		chdir(t, t.TempDir())
 
 		_, err := Load()
 		if err == nil {
-			t.Fatal("expected Load() to fail when both provider keys are empty in staging")
+			t.Fatal("expected Load() to reject the development JWT default in staging")
 		}
-		if !strings.Contains(err.Error(), "PAYSTACK_SECRET_KEY") {
-			t.Fatalf("expected error to mention PAYSTACK_SECRET_KEY, got %q", err.Error())
-		}
-	})
-
-	t.Run("production succeeds with paystack key set", func(t *testing.T) {
-		baseEnv(t)
-		requiredEnv(t)
-		t.Setenv("APP_ENV", "production")
-		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
-		t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
-
-		chdir(t, t.TempDir())
-
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v", err)
+		if !strings.Contains(err.Error(), "AUTH_JWT_SECRET") {
+			t.Fatalf("expected error to mention AUTH_JWT_SECRET, got %q", err.Error())
 		}
 	})
 
-	t.Run("production succeeds with flutterwave key set", func(t *testing.T) {
+	t.Run("staging still requires an explicit CORS origin list", func(t *testing.T) {
 		baseEnv(t)
 		requiredEnv(t)
-		t.Setenv("APP_ENV", "production")
-		t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
-		t.Setenv("FLUTTERWAVE_SECRET_KEY", "FLWSECK_TEST-dummy")
+		t.Setenv("APP_ENV", "staging")
+		t.Setenv("ALLOWED_ORIGINS", "")
 
 		chdir(t, t.TempDir())
 
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v", err)
+		_, err := Load()
+		if err == nil {
+			t.Fatal("expected Load() to require ALLOWED_ORIGINS in staging")
 		}
-	})
-
-	t.Run("development succeeds without any provider key", func(t *testing.T) {
-		baseEnv(t)
-		requiredEnv(t)
-		t.Setenv("APP_ENV", "development")
-
-		chdir(t, t.TempDir())
-
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v (dev should not require provider keys)", err)
-		}
-	})
-
-	t.Run("test env succeeds without any provider key", func(t *testing.T) {
-		baseEnv(t)
-		requiredEnv(t)
-		t.Setenv("APP_ENV", "test")
-
-		chdir(t, t.TempDir())
-
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v (test env should not require provider keys)", err)
+		if !strings.Contains(err.Error(), "ALLOWED_ORIGINS") {
+			t.Fatalf("expected error to mention ALLOWED_ORIGINS, got %q", err.Error())
 		}
 	})
 }
@@ -1279,4 +1299,95 @@ type testErr struct {
 
 func (e *testErr) Error() string {
 	return e.message
+}
+
+// Quotas must be tunable per environment — the whole point is that staging can
+// run tighter limits than production while a load test opts out entirely.
+func TestLoadQuotaOverrides(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_QUOTA_LIMIT", "50")
+	t.Setenv("RATELIMIT_QUOTA_WINDOW", "30s")
+	t.Setenv("RATELIMIT_QUOTA_BYPASS_TOKEN", "load-test-token")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.RateLimit().QuotaLimit(); got != 50 {
+		t.Errorf("QuotaLimit() = %d, want 50", got)
+	}
+	if got := cfg.RateLimit().QuotaWindow(); got != 30*time.Second {
+		t.Errorf("QuotaWindow() = %s, want 30s", got)
+	}
+	if got := cfg.RateLimit().QuotaBypassToken(); got != "load-test-token" {
+		t.Errorf("QuotaBypassToken() = %q, want %q", got, "load-test-token")
+	}
+	if !cfg.RateLimit().QuotaEnabled() {
+		t.Error("QuotaEnabled() = false, want true by default")
+	}
+}
+
+// The documented load-test opt-out.
+func TestLoadQuotaCanBeDisabled(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_QUOTA_ENABLED", "false")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RateLimit().QuotaEnabled() {
+		t.Error("QuotaEnabled() = true, want false")
+	}
+}
+
+func TestLoadQuotaRejectsNonPositiveLimit(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_QUOTA_LIMIT", "0")
+
+	chdir(t, t.TempDir())
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want an error for RATELIMIT_QUOTA_LIMIT=0")
+	}
+}
+
+// A sub-millisecond window truncates to a zero refill rate, leaving a bucket
+// that never refills — worse than no limiter, because it locks every caller out.
+func TestLoadQuotaRejectsSubMillisecondWindow(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_QUOTA_WINDOW", "100us")
+
+	chdir(t, t.TempDir())
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want an error for a sub-millisecond quota window")
+	}
+}
+
+// A disabled quota should not force its numbers to stay meaningful.
+func TestLoadQuotaValidationSkippedWhenDisabled(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_QUOTA_ENABLED", "false")
+	t.Setenv("RATELIMIT_QUOTA_LIMIT", "0")
+
+	chdir(t, t.TempDir())
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() error = %v, want nil when quotas are disabled", err)
+	}
 }

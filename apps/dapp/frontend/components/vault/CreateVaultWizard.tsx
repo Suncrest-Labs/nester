@@ -11,12 +11,14 @@ import {
 } from "../../lib/types/vault-wizard";
 import { AllocationBuilder } from "./AllocationBuilder";
 import { VaultFactory, VaultDeploymentResponse } from "../../lib/stellar/vault-factory";
+import { signTransaction } from "../../lib/stellar/transaction";
 import { 
   ChevronRight, ChevronLeft, CheckCircle2, AlertCircle, 
   Wallet, ShieldCheck, Activity, Check, Copy, ExternalLink, RefreshCw, Sparkles
 } from "lucide-react";
 import clsx from "clsx";
 import Link from "next/link";
+import { useWallet } from "@/components/wallet-provider";
 
 const STEPS = [
   { id: 1, title: "Basics" },
@@ -32,6 +34,7 @@ const VAULT_TYPES: { id: VaultType; title: string; desc: string; icon: ElementTy
 ];
 
 export function CreateVaultWizard() {
+  const wallet = useWallet();
   const [currentStep, setCurrentStep] = useState(1);
   const [data, setData] = useState<WizardVaultData>(INITIAL_WIZARD_DATA);
   const [isDeploying, setIsDeploying] = useState(false);
@@ -85,16 +88,23 @@ export function CreateVaultWizard() {
   const handleCreate = async () => {
     if (!canProceed()) return;
     
+    // Ensure wallet is connected
+    if (!wallet.isConnected || !wallet.address) {
+      setDeployError("Please connect your Stellar wallet first");
+      return;
+    }
+    
     setIsDeploying(true);
     setDeployError("");
     
     try {
-      // Connect mock wallet
-      setDeployStatus("Connecting wallet...");
-      await VaultFactory.connectWallet();
+      setDeployStatus("Preparing transaction...");
       
-      // Deploy
-      const response = await VaultFactory.createVault(data, setDeployStatus);
+      // Deploy with real wallet signing
+      const response = await VaultFactory.createVault(data, setDeployStatus, {
+        ownerAddress: wallet.address,
+        signTransaction: signTransaction,
+      });
       
       if (response.success) {
         setSuccessData(response);
@@ -142,7 +152,11 @@ export function CreateVaultWizard() {
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">Description (Optional)</label>
           <textarea
-            value={data.description}
+            // ?? "" keeps this controlled. description became optional on
+            // WizardVaultData, and passing undefined to value flips React to
+            // an uncontrolled textarea mid-render — it warns, and the field
+            // stops tracking state.
+            value={data.description ?? ""}
             onChange={(e) => setData({ ...data, description: e.target.value })}
             placeholder="What is the goal of this vault?"
             rows={3}
@@ -522,7 +536,8 @@ export function CreateVaultWizard() {
             ) : (
               <button
                 onClick={handleCreate}
-                disabled={!canProceed() || isDeploying}
+                disabled={!canProceed() || isDeploying || !wallet.isConnected}
+                title={!wallet.isConnected ? "Please connect your wallet first" : ""}
                 className="px-8 py-2.5 bg-linear-to-r from-blue-600 to-emerald-600 hover:from-blue-500 hover:to-emerald-500 text-white rounded-lg font-medium transition-all shadow-lg disabled:opacity-50 disabled:pointer-events-none flex items-center gap-2 relative overflow-hidden group"
               >
                 {isDeploying ? (
@@ -532,7 +547,7 @@ export function CreateVaultWizard() {
                   </>
                 ) : (
                   <>
-                    Deploy Vault
+                    {!wallet.isConnected ? "Connect Wallet to Deploy" : "Deploy Vault"}
                     <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform" />
                   </>
                 )}

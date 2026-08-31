@@ -18,6 +18,24 @@ global:
   external_labels:
     environment: local
 
+# SLO recording and alerting rules (nester#1056). The recording rules define
+# the SLIs once; the alerts and the Grafana dashboards both read those recorded
+# series, so a dashboard cannot disagree with the pager during an incident.
+# Relative to this file, so the same paths resolve both inside the container
+# (where the rules are mounted alongside this config at /etc/prometheus) and in
+# CI, which runs promtool against the checkout. Absolute container paths would
+# validate locally under a matching mount and fail in CI, which is exactly what
+# happened the first time this landed.
+rule_files:
+  - rules/slo_recording.yml
+  - rules/slo_alerts.yml
+  - rules/slo_probe_alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: nester-api
     metrics_path: /metrics
@@ -25,3 +43,14 @@ scrape_configs:
       - targets: ["api:9090"]
         labels:
           service: api
+
+  # The intelligence service serves a single port, so its exposition is
+  # bearer-token guarded rather than isolated on a second listener. The local
+  # profile leaves INTELLIGENCE_METRICS_TOKEN empty, which disables the check;
+  # a deployed environment sets it and adds the matching authorization here.
+  - job_name: nester-intelligence
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["intelligence:8000"]
+        labels:
+          service: intelligence

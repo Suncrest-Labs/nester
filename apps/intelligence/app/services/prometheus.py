@@ -1,5 +1,6 @@
 """Core Prometheus AI logic — system prompt, streaming chat, and structured analysis."""
 
+import asyncio
 import json
 import logging
 import time
@@ -10,6 +11,7 @@ from typing import Any, Literal, Optional, cast
 import aiohttp
 import anthropic
 
+from app import metrics
 from app.config import settings
 from app.models.coaching import CoachingRequest, CoachingResponse
 from app.models.explainability import DocumentUsed, ExplainabilityTrace, ToolInvocation
@@ -27,7 +29,7 @@ from app.models.recommendation import (
     VaultRecommendationRequest,
     VaultRecommendationResponse,
 )
-from app.services import guardrails
+from app.services import grounding, guardrails
 from app.services.claude import apply_tone_preferences, build_system_prompt
 from app.services.coingecko import get_client as get_coingecko_client
 from app.services.conversation_store import store as conversation_store
@@ -375,6 +377,105 @@ def build_explainability_trace(
 
 
 async def stream_chat(
+    user_id: str,
+    message: str,
+    request_id: str = "",
+    preferences: ResponsePreferences | None = None,
+    language: str | None = None,
+) -> AsyncGenerator[str, None]:
+    """Instrumented wrapper around the chat stream (nester#1056).
+
+    Wrapping the generator rather than instrumenting inside ``_stream_chat``
+    means every exit path is measured — a normal completion, a refusal, an
+    upstream error, and a client disconnecting mid-stream all pass through
+    here — without a recording call on each of the dozen ``yield`` sites in
+    the body, where a newly added early return would silently stop being
+    counted.
+
+    Both callers (the SSE route and the WebSocket route) consume this
+    wrapper, so the SLI covers the whole surface rather than one transport.
+    """
+    started = time.perf_counter()
+    first_token_seen = False
+    outcome = metrics.OUTCOME_ANSWERED
+    refusal_reason = metrics.REFUSAL_GUARDRAIL
+
+    try:
+        async for chunk in _stream_chat(
+            user_id,
+            message,
+            request_id=request_id,
+            preferences=preferences,
+            language=language,
+        ):
+            if not first_token_seen and _is_content_chunk(chunk):
+                first_token_seen = True
+                metrics.record_first_token(time.perf_counter() - started)
+
+            # A refusal is a 200 carrying a polite sentence, so no transport
+            # metric can see it. Detected here on the emitted text, which is
+            # the same string the user receives.
+            reason = _refusal_reason(chunk)
+            if reason is not None:
+                outcome = metrics.OUTCOME_REFUSED
+                refusal_reason = reason
+
+            yield chunk
+
+    except (GeneratorExit, asyncio.CancelledError):
+        # The client went away mid-stream. Not an availability failure: the
+        # service was not given the chance to succeed or fail, so this is
+        # excluded from the SLI denominator rather than counted against the
+        # error budget. Re-raised so generator finalisation is unchanged.
+        outcome = metrics.OUTCOME_CANCELLED
+        raise
+
+    except Exception:
+        outcome = metrics.OUTCOME_ERROR
+        raise
+
+    finally:
+        # In a finally block so an exception on the way out is still counted;
+        # a failure mode that stops recording itself is the one an SLI cannot
+        # survive.
+        metrics.record_request(outcome, time.perf_counter() - started)
+        if outcome == metrics.OUTCOME_REFUSED:
+            metrics.record_refusal(refusal_reason)
+
+
+def _is_content_chunk(chunk: str) -> bool:
+    """Whether an SSE chunk carries model text rather than protocol framing.
+
+    The terminator and the named events (``event: explainability`` and
+    friends) are not tokens; counting one of them as the first token would
+    report a TTFT of roughly the whole request duration for a stream that had
+    in fact started promptly.
+    """
+    if not chunk.startswith("data: "):
+        return False
+
+    return chunk.strip() != "data: [DONE]"
+
+
+def _refusal_reason(chunk: str) -> str | None:
+    """The refusal reason an emitted chunk carries, or None if it is not one.
+
+    Matched on the emitted text because that is the one point both refusal
+    mechanisms converge; a flag threaded out of each refusal site would miss
+    any site added later. The result is returned rather than stored on the
+    module, because concurrent streams share module state and would race to
+    mislabel each other's reason.
+    """
+    if guardrails.REFUSAL_MESSAGE in chunk:
+        return metrics.REFUSAL_GUARDRAIL
+
+    if grounding.REFUSAL_MARKER in chunk:
+        return metrics.REFUSAL_GROUNDING
+
+    return None
+
+
+async def _stream_chat(
     user_id: str,
     message: str,
     request_id: str = "",

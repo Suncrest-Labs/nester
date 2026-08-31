@@ -1,0 +1,87 @@
+# Alertmanager routing for the local observability profile (nester#1056).
+#
+# This file exists so that the routing *policy* — what pages, what tickets, how
+# alerts group, how long they wait before repeating — is reviewable in the repo
+# and identical in shape to what a deployed environment runs. The receivers
+# here deliberately go nowhere: a local stack must never be able to page a
+# human, and a webhook URL in a committed file would be a credential leak.
+#
+# To connect a real destination, set the receiver's webhook/API URL from the
+# environment in your deployment overlay. Do not commit one here.
+
+global:
+  # How long to wait for a resolved notification before declaring an alert
+  # resolved on its own. Must exceed the rule evaluation interval by enough
+  # that a slow evaluation does not flap the alert closed.
+  resolve_timeout: 5m
+
+route:
+  # Group by the SLO and the burn speed, not by alertname alone. During a
+  # broad incident several SLOs breach at once; grouping this way produces one
+  # notification per affected SLO rather than one per firing series, which is
+  # the difference between a usable page and a pager storm.
+  group_by: ["slo", "burn", "service"]
+
+  # Wait this long for other alerts in the same group before sending the first
+  # notification. Long enough to batch a burst that arrives together, short
+  # enough not to delay a page meaningfully.
+  group_wait: 30s
+
+  # Once a group has notified, wait this long before sending an update about
+  # newly-added alerts in the same group.
+  group_interval: 5m
+
+  # How long before re-notifying about an alert that is still firing. Four
+  # hours for the default: long enough not to nag, short enough that an
+  # unacknowledged incident resurfaces within a shift.
+  repeat_interval: 4h
+
+  receiver: default
+
+  routes:
+    # Pages. Short repeat interval because an unacknowledged page is the
+    # failure mode that matters most: an alert that fires once at 3am and then
+    # goes quiet is indistinguishable from no alert at all.
+    - matchers:
+        - severity = "page"
+      receiver: pager
+      group_wait: 30s
+      repeat_interval: 1h
+
+    # Tickets. Daily repeat: these are real and should not be forgotten, but
+    # re-notifying every hour about work that is scheduled for business hours
+    # trains people to mute the channel.
+    - matchers:
+        - severity = "ticket"
+      receiver: ticket
+      group_wait: 5m
+      repeat_interval: 24h
+
+inhibit_rules:
+  # A fast burn on an SLO makes the slow burn on the same SLO redundant: the
+  # fast alert is strictly more urgent and describes the same incident.
+  # Without this, every serious incident delivers two notifications for one
+  # problem, and the second one adds nothing.
+  - source_matchers:
+      - burn = "fast"
+    target_matchers:
+      - burn = "slow"
+    equal: ["slo", "service"]
+
+  # If the scrape target is down, every SLO computed from it will also alert
+  # as its data goes stale. The target being down is the actionable fact; the
+  # derived alerts are noise on top of it.
+  - source_matchers:
+      - alertname = "SLOTargetDown"
+    target_matchers:
+      - severity =~ "page|ticket"
+    equal: ["service"]
+
+receivers:
+  # Intentionally empty. A receiver with no configured destination discards
+  # the notification, which is the correct behaviour for a local stack: alerts
+  # are still visible in the Alertmanager UI at http://localhost:9093 for
+  # inspection and testing, but cannot reach a human.
+  - name: default
+  - name: pager
+  - name: ticket

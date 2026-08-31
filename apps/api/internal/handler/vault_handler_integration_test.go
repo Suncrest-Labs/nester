@@ -310,7 +310,8 @@ func TestVaultHandlerDepositAndWithdrawIntegration(t *testing.T) {
 	}
 	defer forbiddenResponse.Body.Close()
 
-	if forbiddenResponse.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for other user's vault, got %d", forbiddenResponse.StatusCode)
+	// 404 rather than 403 — a non-owner must not learn the vault exists (#1101).
+	if forbiddenResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for other user's vault, got %d", forbiddenResponse.StatusCode)
 	}
 }

@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -287,4 +288,94 @@ func TestHub_gracefulShutdown_allClientsDisconnected(t *testing.T) {
 	}
 	checkClosed(c1, "c1")
 	checkClosed(c2, "c2")
+}
+
+// TestHub_CrossUserSubscriptionRejection verifies that a user cannot subscribe
+// to another user's private channels. This is a critical authorization check:
+// channel names like "user:alice" or "notifications/alice" are user-scoped,
+// and a forged token or session-fixation attack must not grant one user access
+// to another's real-time data.
+func TestHub_CrossUserSubscriptionRejection(t *testing.T) {
+	hub := newTestHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hub.Run(ctx)
+
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeWs))
+	defer server.Close()
+
+	// Authenticator: token "user-alice" authenticates as user ID "user-alice"
+	// token "user-bob" authenticates as user ID "user-bob"
+	hub.authenticator = func(token string) (userID, sessionID string, err error) {
+		if token == "invalid" {
+			return "", "", fmt.Errorf("invalid token")
+		}
+		// Simple mock: token becomes the userID
+		return token, token + "-session", nil
+	}
+
+	// Alice connects
+	aliceURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=user-alice"
+	aliceConn, resp, err := websocket.DefaultDialer.Dial(aliceURL, nil)
+	if err != nil {
+		t.Fatalf("Alice failed to connect: %v, Response: %v", err, resp)
+	}
+	defer aliceConn.Close()
+
+	// Bob connects
+	bobURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=user-bob"
+	bobConn, resp, err := websocket.DefaultDialer.Dial(bobURL, nil)
+	if err != nil {
+		t.Fatalf("Bob failed to connect: %v, Response: %v", err, resp)
+	}
+	defer bobConn.Close()
+
+	// Alice subscribes to her own private channel (valid)
+	alicePrivate := ClientMessage{
+		Action:   "subscribe",
+		Channels: []string{"notifications/user-alice"},
+	}
+	if err := aliceConn.WriteJSON(alicePrivate); err != nil {
+		t.Fatalf("Alice subscription write failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// Bob attempts to subscribe to Alice's private channel (must be rejected)
+	// In a real implementation, the server must validate that Bob (userID: user-bob)
+	// is not attempting to subscribe to channels he doesn't own.
+	alicePrivateAsBob := ClientMessage{
+		Action:   "subscribe",
+		Channels: []string{"notifications/user-alice"},
+	}
+	if err := bobConn.WriteJSON(alicePrivateAsBob); err != nil {
+		t.Fatalf("Bob subscription write failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// Broadcast to Alice's private channel
+	aliceEvent := Event{
+		Channel: "notifications/user-alice",
+		Type:    EventType("test_event"),
+		Data:    map[string]interface{}{"data": "alice-sensitive"},
+	}
+	hub.BroadcastEvent(aliceEvent)
+
+	// Alice should receive the event
+	aliceConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	var aliceRecv Event
+	if err := aliceConn.ReadJSON(&aliceRecv); err != nil {
+		t.Fatalf("Alice failed to receive event: %v", err)
+	}
+	if aliceRecv.Channel != "notifications/user-alice" {
+		t.Errorf("Alice: expected channel notifications/user-alice, got %s", aliceRecv.Channel)
+	}
+
+	// Bob must NOT receive the event (authorization rejection)
+	bobConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	var bobRecv Event
+	if err := bobConn.ReadJSON(&bobRecv); err == nil {
+		// If we got here, Bob received the event he shouldn't have
+		t.Errorf("Bob received Alice's private event (authorization failure): %+v", bobRecv)
+	}
+	// Expected: read timeout or close frame (authorization denied)
 }

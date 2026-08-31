@@ -18,6 +18,7 @@ from app.routers import (
     deterioration,
     feedback,
     health,
+    metrics,
     nudges,
     optimize,
     rebalance,
@@ -114,6 +115,10 @@ async def add_process_time_header(
 
 
 app.include_router(health.router)
+# Prometheus exposition for the intelligence SLIs (nester#1056). Registered
+# before the prefixed routers so the path stays /metrics, which is what a
+# scrape config expects.
+app.include_router(metrics.router)
 app.include_router(chat.router, prefix="/intelligence")
 app.include_router(coaching.router)
 app.include_router(analyze.router)

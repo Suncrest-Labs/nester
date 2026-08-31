@@ -56,6 +56,22 @@ class Settings(BaseSettings):
     # tracer provider is installed and no collector is dialled.
     tracing_enabled: bool = False
 
+    # Prometheus exposition for the intelligence SLIs (nester#1056).
+    #
+    # Enabled by default, unlike tracing: the metrics are unsampled counters
+    # backing an error budget, and a service whose SLI stops being recorded
+    # reports a perfect success rate rather than an outage. The cost is a few
+    # dozen series with no external dependency and no collector to dial.
+    metrics_enabled: bool = True
+
+    # Bearer token required to scrape /metrics. When empty the endpoint is
+    # unauthenticated, which is only safe where the port is not publicly
+    # routable. The Go API solves this with a separate loopback listener; this
+    # service serves one port, so the route is guarded by a shared secret
+    # instead. Exposition reveals internal route names, traffic volumes, and
+    # error rates, so it is not public data.
+    metrics_token: str = ""
+
     # Deployment environment reported as deployment.environment.name on every
     # span. Mirrors the ENVIRONMENT variable the JWT validator reads, so a
     # single value describes the deployment.

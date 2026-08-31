@@ -8,7 +8,7 @@ import {
     ArrowDownToLine, 
     Sparkles 
 } from "lucide-react";
-import { PortfolioStats } from "@/lib/mock-data";
+import type { PortfolioStats } from "@/lib/types";
 import { useSettings } from "@/context/settings-context";
 
 interface DashboardStatsProps {
@@ -29,7 +29,7 @@ export function DashboardStats({ stats, loading }: DashboardStatsProps) {
         {
             label: "Total Yield Earned",
             value: formatValue(stats.totalYieldEarned),
-            change: "+12.5%", // Mock change
+            change: null,
             icon: TrendingUp,
         },
         {

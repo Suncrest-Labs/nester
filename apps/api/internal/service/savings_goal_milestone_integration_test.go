@@ -186,3 +186,38 @@ func TestSavingsGoalMilestoneIntegration(t *testing.T) {
 		t.Fatalf("push calls = %+v, want 50%% milestone notification", calls)
 	}
 }
+
+// waitFor polls until done returns true or the timeout elapses.
+//
+// Polling rather than a fixed sleep because the work being waited on is a
+// detached goroutine with no completion signal to synchronise on; describe is
+// only evaluated on failure, so the message reports the state at the moment
+// the wait gave up rather than a stale snapshot.
+func waitFor(t *testing.T, timeout time.Duration, done func() bool, describe func() string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		if done() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for notifications; %s", timeout, describe())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// pushCallForMilestone reports whether a push for the given milestone has been
+// recorded. Matched on the payload rather than the title so the check does not
+// break when copy is reworded.
+func pushCallForMilestone(push *notifications.RecordingPushSender, milestone int) bool {
+	for _, call := range push.SnapshotCalls() {
+		if value, ok := call.Payload["milestone"]; ok {
+			if asInt, ok := value.(int); ok && asInt == milestone {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -1,39 +1,28 @@
+// Re-export domain types so existing imports continue to work.
+// New production code should import directly from "@/lib/types".
+export type {
+    TransactionType,
+    TransactionStatus,
+    Transaction,
+    RiskTier,
+    VaultPosition,
+    PortfolioStats,
+    LoadingState,
+} from "@/lib/types";
 
-export type TransactionType = "Deposit" | "Withdrawal" | "Yield Accrual" | "Rebalance";
-export type TransactionStatus = "Confirmed" | "Pending" | "Failed";
+// ── Mock data ────────────────────────────────────────────────────────────────
+// Only tests, storybooks, and local demos should consume these values.
+// Production components must derive all data from live hooks/APIs.
 
-export interface Transaction {
-    id: string;
-    type: TransactionType;
-    amount: string;
-    asset: string;
-    vaultName: string;
-    timestamp: string;
-    status: TransactionStatus;
-    txHash: string;
-    isOnChain?: boolean;
-}
-
-export type RiskTier = "Safe" | "Balanced" | "Aggressive";
-
-export interface VaultPosition {
-    id: string;
-    vaultName: string;
-    riskTier: RiskTier;
-    balance: number;
-    apy: string;
-    yieldEarned: number;
-    nVaultBalance: string;
-    asset: string;
-    trendData: number[];
-}
-
-export interface PortfolioStats {
-    totalBalance: number;
-    totalYieldEarned: number;
-    activeVaults: number;
-    prometheusInsights: number;
-}
+import type {
+    Transaction,
+    TransactionType,
+    TransactionStatus,
+    VaultPosition,
+    RiskTier,
+    PortfolioStats,
+    LoadingState,
+} from "@/lib/types";
 
 const VAULTS = ["Conservative Yield", "Balanced Growth", "DeFi500 Index", "Growth Strategy"];
 const ASSETS = ["USDC", "XLM"];
@@ -115,8 +104,6 @@ export const mockPerformanceHistory = Array.from({ length: 30 }, (_, i) => {
     };
 });
 
-
-export type LoadingState = "loading" | "error" | "success" | "empty";
 
 // Enhanced mock data with loading states
 export const mockDataWithStates = {

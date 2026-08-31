@@ -54,7 +54,7 @@ func (s *UserService) GetUserRoles(ctx context.Context, id uuid.UUID) ([]string,
 
 var ErrEncryptionUnavailable = errors.New("encryption is not configured")
 
-func (s *UserService) SubmitKYC(ctx context.Context, userID uuid.UUID, idType, idNumber, frontKey string, backKey *string) error {
+func (s *UserService) SubmitKYC(ctx context.Context, userID uuid.UUID, identity user.KYCIdentity, idType, idNumber, frontKey string, backKey *string) error {
 	if s.cipher == nil {
 		return ErrEncryptionUnavailable
 	}
@@ -86,6 +86,9 @@ func (s *UserService) SubmitKYC(ctx context.Context, userID uuid.UUID, idType, i
 		IDNumber:       idNumber,
 		FrontObjectKey: frontKey,
 		BackObjectKey:  backKey,
+		FullName:       identity.FullName,
+		DateOfBirth:    identity.DateOfBirth,
+		Country:        identity.Country,
 	}
 
 	encrypted := &user.EncryptedKYCDoc{

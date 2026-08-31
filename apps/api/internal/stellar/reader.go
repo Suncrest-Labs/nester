@@ -1,13 +1,10 @@
 package stellar
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
-	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stellar/go/keypair"
@@ -16,11 +13,16 @@ import (
 )
 
 // ContractReader performs read-only Soroban contract simulations via RPC.
+//
+// Every call it makes is a simulation — it never submits — so all of its
+// traffic is idempotent and eligible for the shared retry policy.
 type ContractReader struct {
 	rpcURL            string
 	networkPassphrase string
 	sourceAddress     string
 	httpClient        *http.Client
+	rpcOpts           RPCOptions
+	rpc               *rpcClient
 }
 
 // NewContractReader builds a reader that simulates view calls without submitting
@@ -29,25 +31,49 @@ func NewContractReader(rpcURL, networkPassphrase, sourceAddress string) *Contrac
 	if sourceAddress == "" {
 		sourceAddress = keypair.MustRandom().Address()
 	}
-	return &ContractReader{
+	r := &ContractReader{
 		rpcURL:            rpcURL,
 		networkPassphrase: networkPassphrase,
 		sourceAddress:     sourceAddress,
-		httpClient:        &http.Client{Timeout: 30 * time.Second},
+		httpClient:        &http.Client{Timeout: defaultRPCTimeout},
 	}
+	r.rebuildRPC()
+	return r
 }
 
 // SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
-// startup can install a metrics-instrumented transport; a nil client is
-// ignored so callers need not branch.
+// startup can install a metrics-instrumented, circuit-broken transport; a nil
+// client is ignored so callers need not branch.
 func (r *ContractReader) SetHTTPClient(client *http.Client) {
 	if client != nil {
 		r.httpClient = client
+		r.rebuildRPC()
 	}
+}
+
+// SetRPCOptions installs the shared retry policy and its metrics observer.
+// Startup calls it; without it the reader retries on the package defaults,
+// which keeps tests and tooling working unchanged.
+func (r *ContractReader) SetRPCOptions(opts RPCOptions) {
+	r.rpcOpts = opts
+	r.rebuildRPC()
+}
+
+// rebuildRPC recreates the shared caller after any of its inputs change. The
+// caller is immutable once built, so replacing it is simpler than mutating it
+// under a lock — and these setters only ever run during startup wiring.
+func (r *ContractReader) rebuildRPC() {
+	r.rpc = newRPCClient(r.rpcURL, r.httpClient, r.rpcOpts, false)
 }
 
 // TotalAssets calls the vault_token total_assets() view and converts the i128
 // return value (7-decimal stroops) to a decimal USDC amount.
+//
+// NOT for reconciliation: this method returns DISPLAY units, and *ContractReader
+// therefore satisfies reconciliation.VaultBalanceReader with the wrong unit.
+// Reconciliation compares against vaults.current_balance, which stores raw
+// stroops — wire StroopsBalanceReader there, never this reader directly, or
+// every vault diverges by a factor of 1e7.
 func (r *ContractReader) TotalAssets(ctx context.Context, contractAddress string) (decimal.Decimal, error) {
 	return r.VaultBalance(ctx, contractAddress)
 }
@@ -60,6 +86,42 @@ func (r *ContractReader) VaultBalance(ctx context.Context, contractAddress strin
 	}
 	// Soroban vault amounts are stored in 7-decimal stroops (Stellar standard).
 	return decimal.NewFromInt(raw).Shift(-7), nil
+}
+
+// TotalAssetsStroops calls the vault_token total_assets() view and returns the
+// i128 value as raw stroops, without the display rescale TotalAssets applies.
+//
+// This is the reconciliation read (nester#1082). The event indexer stores
+// vault balances "as emitted" — raw stroop integers, not display USDC (see
+// docs/event-indexer-replay.md fixture rule 7 and migration 103, which widened
+// vaults.current_balance specifically so i128 stroop amounts round-trip
+// exactly). Comparing that column against the chain therefore has to happen in
+// stroops: rescaling either side would turn an exact integer comparison into a
+// decimal one and hide single-stroop bookkeeping errors — the exact class of
+// divergence reconciliation exists to catch.
+//
+// Known bound: simulateI128 rejects values outside int64 (~9.2e18 stroops,
+// ~922 billion USDC). A vault past that errors here rather than reporting a
+// truncated balance; the balance comparator logs and skips it each pass, so
+// the bound is visible in the logs, never silently wrong.
+func (r *ContractReader) TotalAssetsStroops(ctx context.Context, contractAddress string) (decimal.Decimal, error) {
+	raw, err := r.simulateI128(ctx, contractAddress, "total_assets", nil)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return decimal.NewFromInt(raw), nil
+}
+
+// StroopsBalanceReader adapts ContractReader to the reconciliation package's
+// VaultBalanceReader interface (TotalAssets) while keeping the raw-stroops
+// unit contract documented on TotalAssetsStroops. The reconciliation engine
+// asks for "total assets" and must receive the same unit the database stores.
+type StroopsBalanceReader struct {
+	Reader *ContractReader
+}
+
+func (s StroopsBalanceReader) TotalAssets(ctx context.Context, contractAddress string) (decimal.Decimal, error) {
+	return s.Reader.TotalAssetsStroops(ctx, contractAddress)
 }
 
 // SourceAPYBPS calls yield_registry get_source_performance(id) and returns
@@ -187,22 +249,8 @@ type simulateResultExtended struct {
 	ReturnValue     string `json:"returnValue,omitempty"`
 }
 
+// rpcCall delegates to the shared client so reads here get the same bounded,
+// jittered retry every other Soroban call site does (nester#1086).
 func (r *ContractReader) rpcCall(ctx context.Context, method string, params, result any) error {
-	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: 1, Method: method, Params: params})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.rpcURL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("rpc %s: %w", method, err)
-	}
-	defer resp.Body.Close()
-
-	return json.NewDecoder(resp.Body).Decode(result)
+	return r.rpc.call(ctx, method, params, result)
 }

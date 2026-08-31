@@ -268,6 +268,16 @@ func (m *memorySavingsGoalRepo) UpdateOnchainLink(_ context.Context, goalID uuid
 	return nil
 }
 
+func (m *memorySavingsGoalRepo) UpdateNotes(_ context.Context, goalID uuid.UUID, notes string) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.Notes = notes
+	m.goals[goalID] = g
+	return nil
+}
+
 // newVaultReader builds an in-memory VaultReader seeded with the given vaults,
 // reusing the shared memoryVaultRepo fake.
 func newVaultReader(vaults ...vault.Vault) *memoryVaultRepo {
@@ -1320,8 +1330,11 @@ func TestSavingsGoalService_Create_VaultNotFound(t *testing.T) {
 		Deadline:     testDeadline(),
 		VaultID:      &missing,
 	})
-	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
-		t.Fatalf("Create() error = %v, want ErrInvalidGoal", err)
+	// A vault that does not exist and a vault owned by someone else must
+	// produce the same error, so the caller cannot tell them apart and use
+	// the endpoint to probe which vault IDs exist (#1101).
+	if !errors.Is(err, savingsgoal.ErrUnauthorized) {
+		t.Fatalf("Create() error = %v, want ErrUnauthorized", err)
 	}
 }
 

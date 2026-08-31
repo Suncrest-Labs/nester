@@ -380,7 +380,7 @@ def test_no_hardcoded_model_literal_outside_config():
     for path in APP_DIR.rglob("*.py"):
         if path.name == "config.py":
             continue
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if _MODEL_LITERAL_RE.search(text):
             offenders.append(str(path.relative_to(APP_DIR)))
     assert offenders == [], f"Hardcoded Claude model literal found in: {offenders}"
@@ -390,7 +390,7 @@ def test_all_claude_calls_reference_settings_anthropic_model():
     """Every `model=` kwarg passed to a Claude call must read `settings.anthropic_model`."""
     calls_with_literal_model: list[str] = []
     for path in APP_DIR.rglob("*.py"):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         for match in re.finditer(r"model\s*=\s*([^\s,)]+)", text):
             value = match.group(1)
             if value != "settings.anthropic_model" and "anthropic_model" not in value:

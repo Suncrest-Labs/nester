@@ -229,14 +229,15 @@ func (r *UserRepository) SaveKYCDocument(ctx context.Context, doc *user.KYCDocum
 		INSERT INTO kyc_documents (
 			id, user_id, id_type, id_number, front_object_key, back_object_key,
 			id_number_encrypted, id_number_fingerprint, front_object_key_encrypted,
-			back_object_key_encrypted, key_version
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			back_object_key_encrypted, key_version, full_name, date_of_birth, country
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING submitted_at
 	`
 	err := r.db.QueryRowContext(ctx, query,
 		doc.ID.String(), doc.UserID.String(), doc.IDType, doc.IDNumber, doc.FrontObjectKey, doc.BackObjectKey,
 		encrypted.IDNumberEncrypted, encrypted.IDNumberFingerprint, encrypted.FrontKeyEncrypted,
 		nullOptionalBytes(encrypted.BackKeyEncrypted), encrypted.KeyVersion,
+		doc.FullName, doc.DateOfBirth, doc.Country,
 	).Scan(&doc.SubmittedAt)
 	return err
 }
@@ -245,7 +246,7 @@ func (r *UserRepository) GetKYCDocument(ctx context.Context, userID uuid.UUID) (
 	query := `
 		SELECT id, user_id, id_type, id_number, front_object_key, back_object_key,
 		       id_number_encrypted, id_number_fingerprint, front_object_key_encrypted,
-		       back_object_key_encrypted, key_version, submitted_at
+		       back_object_key_encrypted, key_version, full_name, date_of_birth, country, submitted_at
 		FROM kyc_documents
 		WHERE user_id = $1
 		ORDER BY submitted_at DESC
@@ -256,10 +257,12 @@ func (r *UserRepository) GetKYCDocument(ctx context.Context, userID uuid.UUID) (
 	var id, uid string
 	var backKey sql.NullString
 	var idNumFingerprint, kv sql.NullString
+	var fullName, country sql.NullString
+	var dateOfBirth sql.NullTime
 	if err := r.db.QueryRowContext(ctx, query, userID.String()).Scan(
 		&id, &uid, &doc.IDType, &doc.IDNumber, &doc.FrontObjectKey, &backKey,
 		&encrypted.IDNumberEncrypted, &idNumFingerprint, &encrypted.FrontKeyEncrypted,
-		&encrypted.BackKeyEncrypted, &kv, &doc.SubmittedAt,
+		&encrypted.BackKeyEncrypted, &kv, &fullName, &dateOfBirth, &country, &doc.SubmittedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.New("no kyc document found")
@@ -276,6 +279,15 @@ func (r *UserRepository) GetKYCDocument(ctx context.Context, userID uuid.UUID) (
 	}
 	if kv.Valid {
 		encrypted.KeyVersion = kv.String
+	}
+	if fullName.Valid {
+		doc.FullName = fullName.String
+	}
+	if country.Valid {
+		doc.Country = country.String
+	}
+	if dateOfBirth.Valid {
+		doc.DateOfBirth = dateOfBirth.Time
 	}
 	return &doc, &encrypted, nil
 }
