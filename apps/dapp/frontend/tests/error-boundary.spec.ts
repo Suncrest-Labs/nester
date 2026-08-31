@@ -39,22 +39,14 @@ test.describe("Error boundary", () => {
   });
 
   test("error boundary is accessible via keyboard", async ({ page }) => {
-    // Navigate to a page that triggers the error boundary
-    await page.route("**/offline", (route) =>
-      route.fulfill({
-        status: 500,
-        contentType: "text/html",
-        body: "<html><body>Server Error</body></html>",
-      }),
-    );
-
+    // No route interception here, unlike the test above: that one stubs
+    // /offline with a bare "Server Error" body, which by construction has no
+    // interactive elements. This test is about the real page's recovery
+    // affordances, so let it render.
     await page.goto("/offline", { waitUntil: "domcontentloaded" });
 
-    // Check that interactive elements exist (may be default Next.js error
-    // or custom error boundary — either way keyboard navigation should work).
-    // Wait for the first one rather than counting immediately: the API proxy
-    // is not up in CI, so the page finishes rendering after its data fetch
-    // fails rather than at load.
+    // The offline page offers a way back (a home link and a retry control),
+    // so a keyboard user is never stranded.
     await expect(page.locator("button, a").first()).toBeAttached({
       timeout: 15_000,
     });
