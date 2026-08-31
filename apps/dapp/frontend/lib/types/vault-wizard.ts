@@ -24,7 +24,7 @@ export interface ProtocolAllocation {
 export interface WizardVaultData {
   // Step 1: Basics
   name: string;
-  description: string;
+  description?: string;
   type: VaultType | null;
 
   // Step 2: Allocation
@@ -44,7 +44,7 @@ export const PROTOCOL_OPTIONS: ProtocolOption[] = [
     estimatedApy: 8.5,
     riskLevel: "low",
     description: "Lending and borrowing protocol on Soroban.",
-    color: "hsl(var(--chart-1))"
+    color: "hsl(var(--chart-1))",
   },
   {
     id: "lobstr",
@@ -52,7 +52,7 @@ export const PROTOCOL_OPTIONS: ProtocolOption[] = [
     estimatedApy: 12.0,
     riskLevel: "medium",
     description: "Automated yield generation through AMM liquidity.",
-    color: "hsl(var(--chart-2))"
+    color: "hsl(var(--chart-2))",
   },
   {
     id: "aquarius",
@@ -60,7 +60,7 @@ export const PROTOCOL_OPTIONS: ProtocolOption[] = [
     estimatedApy: 15.5,
     riskLevel: "high",
     description: "High-yield liquidity provisioning incentives.",
-    color: "hsl(var(--chart-3))"
+    color: "hsl(var(--chart-3))",
   },
   {
     id: "soroswap",
@@ -68,8 +68,8 @@ export const PROTOCOL_OPTIONS: ProtocolOption[] = [
     estimatedApy: 10.2,
     riskLevel: "medium",
     description: "Decentralized exchange liquidity pools.",
-    color: "hsl(var(--chart-4))"
-  }
+    color: "hsl(var(--chart-4))",
+  },
 ];
 
 export const INITIAL_WIZARD_DATA: WizardVaultData = {

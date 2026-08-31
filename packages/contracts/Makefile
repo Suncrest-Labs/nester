@@ -1,9 +1,15 @@
-.PHONY: build test integration-test fmt clippy clean help deploy-testnet
+.PHONY: build build-adapters test integration-test fmt clippy clean help deploy-testnet
+
+# Yield source adapters (#812). Each external protocol gets one small adapter
+# implementing nester_common::adapters::YieldAdapter. Adding a third protocol
+# means adding its package here — no vault changes.
+ADAPTER_PKGS := adapter-lending-contract adapter-pool-contract
 
 help:
 	@echo "Nester Soroban Workspace Commands"
 	@echo "=================================="
 	@echo "make build            - Build all contracts to WASM"
+	@echo "make build-adapters   - Build only the yield source adapters"
 	@echo "make test             - Run all unit tests"
 	@echo "make integration-test - Run multi-contract integration tests only"
 	@echo "make fmt              - Format code with cargo fmt"
@@ -25,6 +31,14 @@ build:
 		fi \
 	done
 	@echo "✓ Build successful - all contracts compiled to WASM"
+
+build-adapters:
+	@echo "Building yield source adapters to WASM..."
+	@for pkg in $(ADAPTER_PKGS); do \
+		echo "  Building $$pkg..."; \
+		cargo build --release --target wasm32-unknown-unknown -p "$$pkg" || exit 1; \
+	done
+	@echo "✓ Adapters compiled to WASM"
 
 test:
 	@echo "Running all tests..."

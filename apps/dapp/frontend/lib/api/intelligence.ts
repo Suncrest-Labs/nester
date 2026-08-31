@@ -47,6 +47,7 @@ export interface CoachingResponse {
   deposit_schedule: CoachingDepositItem[]
   nudges: string[]
   confidence: string
+  session_summary?: string
 }
 
 export interface CoachingRequest {
@@ -73,6 +74,17 @@ export interface MarketSentiment {
   disclaimer?: string
 }
 
+export interface MarketSentimentPoint {
+  signal: 'bull' | 'bear' | 'neutral'
+  confidence: number
+  observed_at: number // unix seconds
+}
+
+export interface MarketSentimentHistory {
+  days: number
+  points: MarketSentimentPoint[]
+}
+
 export interface MarketContextSignal {
   protocol: string
   asset?: string | null
@@ -88,6 +100,7 @@ export interface MarketContextSignal {
 }
 
 export interface PortfolioInsight {
+  id?: string
   title: string
   body: string
   confidence: number
@@ -107,6 +120,7 @@ export interface AllocationRecommendation {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  proposal?: { id: string; text: string; status?: 'pending' | 'executed' | 'declined' }
 }
 
 export interface SavingsPlanRequest {
@@ -184,6 +198,10 @@ export const intelligenceApi = {
   getMarketSentiment: () =>
     apiFetch<MarketSentiment>('/market/sentiment'),
 
+  /** Historical sentiment points (7 or 30 day) for the trend sparkline. */
+  getMarketSentimentHistory: (days: 7 | 30 = 7) =>
+    apiFetch<MarketSentimentHistory>(`/market/sentiment/history?days=${days}`),
+
   /** Portfolio-level insight cards for a given user. */
   getPortfolioInsights: (userId: string) =>
     apiFetch<PortfolioInsight[]>(`/portfolio/${userId}/insights`),
@@ -227,6 +245,12 @@ export const intelligenceApi = {
     const params = new URLSearchParams({ userId, message })
     return new EventSource(`${INTELLIGENCE_BASE}/intelligence/chat?${params}`)
   },
+
+  confirmToolAction: (proposalId: string, approved: boolean) =>
+    goApiFetch<{ status: string; assistant_message: string }>(`/intelligence/tools/${proposalId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ approved })
+    }),
 }
 
 // Export as default or intelligence for backward compatibility if needed

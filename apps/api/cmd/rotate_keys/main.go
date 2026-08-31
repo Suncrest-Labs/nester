@@ -19,6 +19,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
@@ -71,7 +72,8 @@ func run() error {
 	db := stdlib.OpenDBFromPool(pgPool.Pool)
 	defer db.Close()
 
-	repo := postgres.NewBankAccountRepository(db)
+	bankRepo := postgres.NewBankAccountRepository(db)
+	userRepo := postgres.NewUserRepository(db)
 
 	ctx := context.Background()
 	if *timeout > 0 {
@@ -81,19 +83,57 @@ func run() error {
 	}
 
 	start := time.Now()
-	stats, err := rotation.NewRotator(repo, cipher).Run(ctx, rotation.Options{
+
+	// Rotate bank account ciphertext
+	bankStats, err := rotation.NewRotator(bankRepo, cipher).Run(ctx, rotation.Options{
 		BatchSize: *batchSize,
 		Logger:    logger,
 	})
 	if err != nil {
-		return fmt.Errorf("rotation failed after %d rows rotated: %w", stats.Rotated, err)
+		return fmt.Errorf("bank account rotation failed after %d rows rotated: %w", bankStats.Rotated, err)
+	}
+
+	logger.Info("bank account rotation done",
+		"rotated", bankStats.Rotated,
+		"pending_at_start", bankStats.Pending,
+	)
+
+	// Rotate KYC document ciphertext
+	kycStore := &kycRotationStore{repo: userRepo}
+	kycStats, err := rotation.NewRotator(kycStore, cipher).Run(ctx, rotation.Options{
+		BatchSize: *batchSize,
+		Logger:    logger,
+	})
+	if err != nil {
+		return fmt.Errorf("kyc document rotation failed after %d rows rotated: %w", kycStats.Rotated, err)
 	}
 
 	logger.Info("rotation finished",
 		"active_version", acCfg.ActiveVersion(),
-		"pending_at_start", stats.Pending,
-		"rotated", stats.Rotated,
+		"bank_accounts_rotated", bankStats.Rotated,
+		"kyc_documents_rotated", kycStats.Rotated,
 		"duration", time.Since(start).String(),
 	)
 	return nil
+}
+
+// kycRotationStore adapts *postgres.UserRepository to implement rotation.Store
+// for KYC documents. It packs/unpacks the three encrypted fields (id_number,
+// front_object_key, back_object_key) into a single ciphertext blob for the
+// rotator interface.
+type kycRotationStore struct {
+	repo *postgres.UserRepository
+}
+
+func (s *kycRotationStore) CountPending(ctx context.Context, activeVersion string) (int, error) {
+	return s.repo.CountPendingKYCEncryption(ctx, activeVersion)
+}
+
+func (s *kycRotationStore) ScanPending(ctx context.Context, activeVersion string, limit int) ([]rotation.EncryptedRow, error) {
+	return s.repo.ScanPendingKYCEncryption(ctx, activeVersion, limit)
+}
+
+func (s *kycRotationStore) UpdateCipher(ctx context.Context, id uuid.UUID, ciphertext []byte, keyVersion string) error {
+	idNum, frontKey, backKey := postgres.UnpackKYCCiphertexts(ciphertext)
+	return s.repo.UpdateKYCCipher(ctx, id, idNum, frontKey, backKey, keyVersion)
 }

@@ -45,13 +45,19 @@ func (m *memorySavingsGoalRepo) Create(_ context.Context, goal *savingsgoal.Savi
 	return nil
 }
 
-func (m *memorySavingsGoalRepo) ListByUser(_ context.Context, userID uuid.UUID, category string) ([]savingsgoal.SavingsGoal, error) {
+func (m *memorySavingsGoalRepo) ListByUser(_ context.Context, userID uuid.UUID, category, search string) ([]savingsgoal.SavingsGoal, error) {
 	var out []savingsgoal.SavingsGoal
 	for _, g := range m.goals {
 		if g.UserID != userID {
 			continue
 		}
+		if g.DeletedAt != nil {
+			continue
+		}
 		if category != "" && string(g.Category) != category {
+			continue
+		}
+		if search != "" && !strings.Contains(strings.ToLower(g.Name), strings.ToLower(search)) {
 			continue
 		}
 		out = append(out, g)
@@ -61,7 +67,7 @@ func (m *memorySavingsGoalRepo) ListByUser(_ context.Context, userID uuid.UUID, 
 
 func (m *memorySavingsGoalRepo) GetByID(_ context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
 	g, ok := m.goals[id]
-	if !ok {
+	if !ok || g.DeletedAt != nil {
 		return nil, savingsgoal.ErrGoalNotFound
 	}
 	return &g, nil
@@ -77,7 +83,46 @@ func (m *memorySavingsGoalRepo) Update(_ context.Context, goal *savingsgoal.Savi
 
 func (m *memorySavingsGoalRepo) Delete(_ context.Context, id, userID uuid.UUID) error {
 	g, ok := m.goals[id]
-	if !ok || g.UserID != userID {
+	if !ok || g.UserID != userID || g.DeletedAt != nil {
+		return savingsgoal.ErrGoalNotFound
+	}
+	now := time.Now().UTC()
+	g.DeletedAt = &now
+	m.goals[id] = g
+	return nil
+}
+
+func (m *memorySavingsGoalRepo) Restore(_ context.Context, id, userID uuid.UUID) error {
+	g, ok := m.goals[id]
+	if !ok || g.UserID != userID || g.DeletedAt == nil {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.DeletedAt = nil
+	m.goals[id] = g
+	return nil
+}
+
+func (m *memorySavingsGoalRepo) GetByIDIncludingDeleted(_ context.Context, id uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	g, ok := m.goals[id]
+	if !ok {
+		return nil, savingsgoal.ErrGoalNotFound
+	}
+	return &g, nil
+}
+
+func (m *memorySavingsGoalRepo) ListDeletedOlderThan(_ context.Context, cutoff time.Time) ([]savingsgoal.SavingsGoal, error) {
+	var out []savingsgoal.SavingsGoal
+	for _, g := range m.goals {
+		if g.DeletedAt != nil && g.DeletedAt.Before(cutoff) {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+func (m *memorySavingsGoalRepo) HardDelete(_ context.Context, id uuid.UUID) error {
+	g, ok := m.goals[id]
+	if !ok || g.DeletedAt == nil {
 		return savingsgoal.ErrGoalNotFound
 	}
 	delete(m.goals, id)
@@ -162,6 +207,25 @@ func (m *memorySavingsGoalRepo) SumGoalDeposits(_ context.Context, goalID uuid.U
 	return decimal.Zero, nil
 }
 
+func (m *memorySavingsGoalRepo) GetByVaultID(_ context.Context, vaultID uuid.UUID) (*savingsgoal.SavingsGoal, error) {
+	for _, g := range m.goals {
+		if g.VaultID != nil && *g.VaultID == vaultID {
+			return &g, nil
+		}
+	}
+	return nil, savingsgoal.ErrGoalNotFound
+}
+
+func (m *memorySavingsGoalRepo) CreditYieldBalance(_ context.Context, goalID uuid.UUID, amount decimal.Decimal) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.YieldBalance = g.YieldBalance.Add(amount)
+	m.goals[goalID] = g
+	return nil
+}
+
 func (m *memorySavingsGoalRepo) SetShareToken(_ context.Context, goalID, userID uuid.UUID, token uuid.UUID) error {
 	g, ok := m.goals[goalID]
 	if !ok || g.UserID != userID {
@@ -204,6 +268,16 @@ func (m *memorySavingsGoalRepo) UpdateOnchainLink(_ context.Context, goalID uuid
 	return nil
 }
 
+func (m *memorySavingsGoalRepo) UpdateNotes(_ context.Context, goalID uuid.UUID, notes string) error {
+	g, ok := m.goals[goalID]
+	if !ok {
+		return savingsgoal.ErrGoalNotFound
+	}
+	g.Notes = notes
+	m.goals[goalID] = g
+	return nil
+}
+
 // newVaultReader builds an in-memory VaultReader seeded with the given vaults,
 // reusing the shared memoryVaultRepo fake.
 func newVaultReader(vaults ...vault.Vault) *memoryVaultRepo {
@@ -223,12 +297,13 @@ type recordedGoalMilestone struct {
 	UserID    uuid.UUID
 	GoalID    uuid.UUID
 	Milestone int
+	DedupeKey string
 }
 
-func (r *recordingGoalMilestoneNotifier) SendGoalMilestone(_ context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int) {
+func (r *recordingGoalMilestoneNotifier) SendGoalMilestone(_ context.Context, userID uuid.UUID, goal savingsgoal.SavingsGoal, milestone int, dedupeKey string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, recordedGoalMilestone{UserID: userID, GoalID: goal.ID, Milestone: milestone})
+	r.calls = append(r.calls, recordedGoalMilestone{UserID: userID, GoalID: goal.ID, Milestone: milestone, DedupeKey: dedupeKey})
 }
 
 func (r *recordingGoalMilestoneNotifier) count() int {
@@ -1255,8 +1330,11 @@ func TestSavingsGoalService_Create_VaultNotFound(t *testing.T) {
 		Deadline:     testDeadline(),
 		VaultID:      &missing,
 	})
-	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
-		t.Fatalf("Create() error = %v, want ErrInvalidGoal", err)
+	// A vault that does not exist and a vault owned by someone else must
+	// produce the same error, so the caller cannot tell them apart and use
+	// the endpoint to probe which vault IDs exist (#1101).
+	if !errors.Is(err, savingsgoal.ErrUnauthorized) {
+		t.Fatalf("Create() error = %v, want ErrUnauthorized", err)
 	}
 }
 
@@ -1460,5 +1538,162 @@ func TestSavingsGoalService_Update_RejectsOverlongName(t *testing.T) {
 	_, err = svc.Update(ctx, userID, goal.ID, UpdateSavingsGoalInput{Name: &long})
 	if !errors.Is(err, savingsgoal.ErrInvalidGoal) {
 		t.Fatalf("Update(101-char name) error = %v, want ErrInvalidGoal", err)
+	}
+}
+
+// TestSavingsGoalService_Delete_HidesGoalFromReads covers the #924
+// soft-delete: after Delete, GetByID/ListByUser must no longer surface the
+// goal (deleted_at IS NULL filtering), even though the row still exists.
+func TestSavingsGoalService_Delete_HidesGoalFromReads(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		Name:         "Emergency fund",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := svc.Delete(ctx, userID, goal.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	if _, err := svc.Get(ctx, userID, goal.ID); !errors.Is(err, savingsgoal.ErrGoalNotFound) {
+		t.Fatalf("Get() after delete error = %v, want ErrGoalNotFound", err)
+	}
+
+	goals, err := svc.List(ctx, userID, "", "", false)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, g := range goals {
+		if g.ID == goal.ID {
+			t.Fatalf("expected deleted goal %s to be excluded from List()", goal.ID)
+		}
+	}
+}
+
+// TestSavingsGoalService_Restore_WithinWindowUndeletesGoal covers restoring a
+// goal deleted less than SavingsGoalRecoveryWindow ago (#924).
+func TestSavingsGoalService_Restore_WithinWindowUndeletesGoal(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		Name:         "Emergency fund",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Delete(ctx, userID, goal.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	restored, err := svc.Restore(ctx, userID, goal.ID)
+	if err != nil {
+		t.Fatalf("Restore() error = %v, want nil", err)
+	}
+	if restored.DeletedAt != nil {
+		t.Fatalf("expected restored goal DeletedAt to be nil, got %v", restored.DeletedAt)
+	}
+
+	if _, err := svc.Get(ctx, userID, goal.ID); err != nil {
+		t.Fatalf("Get() after restore error = %v, want nil", err)
+	}
+}
+
+// TestSavingsGoalService_Restore_AfterWindowReturnsExpiredError covers
+// attempting to restore a goal deleted more than SavingsGoalRecoveryWindow
+// ago (#924): Restore must refuse, not silently undelete it.
+func TestSavingsGoalService_Restore_AfterWindowReturnsExpiredError(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		Name:         "Emergency fund",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Delete(ctx, userID, goal.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	// Back-date deleted_at past the recovery window directly in the fake repo.
+	g := repo.goals[goal.ID]
+	expired := time.Now().UTC().Add(-(savingsgoal.SavingsGoalRecoveryWindow + time.Hour))
+	g.DeletedAt = &expired
+	repo.goals[goal.ID] = g
+
+	_, err = svc.Restore(ctx, userID, goal.ID)
+	if !errors.Is(err, savingsgoal.ErrRecoveryWindowExpired) {
+		t.Fatalf("Restore() after window error = %v, want ErrRecoveryWindowExpired", err)
+	}
+}
+
+// TestSavingsGoalService_Restore_NeverDeletedReturnsNotDeletedError covers
+// calling Restore on a goal that was never soft-deleted (#924).
+func TestSavingsGoalService_Restore_NeverDeletedReturnsNotDeletedError(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		Name:         "Emergency fund",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	_, err = svc.Restore(ctx, userID, goal.ID)
+	if !errors.Is(err, savingsgoal.ErrGoalNotDeleted) {
+		t.Fatalf("Restore() on non-deleted goal error = %v, want ErrGoalNotDeleted", err)
+	}
+}
+
+// TestSavingsGoalService_Restore_WrongUserReturnsNotFound ensures Restore
+// doesn't leak/act on another user's deleted goal (#924).
+func TestSavingsGoalService_Restore_WrongUserReturnsNotFound(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	otherUserID := uuid.New()
+	repo := newMemorySavingsGoalRepo()
+	svc := NewSavingsGoalService(repo, nil, nil)
+
+	goal, err := svc.Create(ctx, userID, CreateSavingsGoalInput{
+		TargetAmount: decimal.NewFromInt(1000),
+		Currency:     "USDC",
+		Deadline:     testDeadline(),
+		Name:         "Emergency fund",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Delete(ctx, userID, goal.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	if _, err := svc.Restore(ctx, otherUserID, goal.ID); !errors.Is(err, savingsgoal.ErrGoalNotFound) {
+		t.Fatalf("Restore() by wrong user error = %v, want ErrGoalNotFound", err)
 	}
 }

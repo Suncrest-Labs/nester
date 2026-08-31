@@ -117,6 +117,40 @@ func TestEngine_SkipsBelowThreshold(t *testing.T) {
 	}
 }
 
+func TestEngine_SkipsNotDueForFrequency(t *testing.T) {
+	v := vaultYield("10") // would clear the economic gate...
+	recent := time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)
+	v.HarvestFrequency = "daily"
+	v.LastHarvestedAt = &recent
+	vs := &fakeVaultSource{list: []VaultYield{v}}
+	q := newFakeEnqueuer()
+	e := newEngine(t, vs, &fakeGas{fee: decimal.RequireFromString("2")}, q)
+	e.clock = func() time.Time { return recent.Add(2 * time.Hour) } // only 2h since last harvest
+
+	e.tick(context.Background())
+
+	if len(q.calls) != 0 {
+		t.Fatalf("daily vault harvested 2h ago should not be due; enqueued %d jobs", len(q.calls))
+	}
+}
+
+func TestEngine_HarvestsWhenFrequencyElapsed(t *testing.T) {
+	v := vaultYield("10")
+	past := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	v.HarvestFrequency = "daily"
+	v.LastHarvestedAt = &past
+	vs := &fakeVaultSource{list: []VaultYield{v}}
+	q := newFakeEnqueuer()
+	e := newEngine(t, vs, &fakeGas{fee: decimal.RequireFromString("2")}, q)
+	e.clock = func() time.Time { return past.Add(48 * time.Hour) }
+
+	e.tick(context.Background())
+
+	if len(q.calls) != 1 {
+		t.Fatalf("daily vault harvested 48h ago should be due; enqueued %d jobs, want 1", len(q.calls))
+	}
+}
+
 func TestEngine_DefersWhenCongested(t *testing.T) {
 	v := vaultYield("100")
 	vs := &fakeVaultSource{list: []VaultYield{v}}

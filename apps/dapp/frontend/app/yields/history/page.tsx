@@ -6,9 +6,10 @@ import { AppShell } from "@/components/app-shell";
 import { useYieldHarvests } from "@/hooks/useYieldHarvests";
 import { EmptyState } from "@/components/ui/empty-state/empty-state";
 import { getExplorerTxUrl } from "@/utils/explorer";
-import { ArrowLeft, Calendar, ExternalLink, Loader2 } from "lucide-react";
+import { ArrowLeft, Calendar, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import type { ListYieldHarvestsResponse } from "@/lib/api/yields";
+import { HarvestHistorySkeleton } from "@/components/skeletons/page-skeletons";
 
 export default function YieldHarvestHistoryPage() {
   const router = useRouter();
@@ -16,6 +17,8 @@ export default function YieldHarvestHistoryPage() {
     data,
     isLoading,
     isError,
+    refetch,
+    isFetching,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -60,16 +63,27 @@ export default function YieldHarvestHistoryPage() {
         </div>
 
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16">
-            <Loader2 className="h-8 w-8 animate-spin text-black/30 dark:text-white/30" />
-            <p className="mt-4 text-sm text-black/50 dark:text-white/50">Loading harvests...</p>
-          </div>
+          <HarvestHistorySkeleton />
         ) : isError ? (
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16">
+          <div
+            role="alert"
+            data-testid="harvests-error"
+            className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16"
+          >
             <p className="text-sm text-black/50 dark:text-white/50">Failed to load harvest history.</p>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              data-testid="harvests-retry"
+              className="flex items-center gap-1.5 rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs text-black/55 dark:text-white/55 hover:text-black dark:hover:text-white disabled:opacity-50"
+            >
+              <RefreshCw className={isFetching ? "h-3 w-3 animate-spin" : "h-3 w-3"} aria-hidden="true" />
+              {isFetching ? "Retrying…" : "Retry"}
+            </button>
           </div>
         ) : allHarvests.length === 0 ? (
-          <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]">
+          <div data-testid="harvests-empty-state" className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]">
             <EmptyState
               icon={Calendar}
               title="No harvests yet"

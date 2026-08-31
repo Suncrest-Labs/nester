@@ -1,0 +1,22 @@
+# Dashboard provisioning for the SLO dashboards (nester#1056).
+#
+# The dashboard JSON lives in the repo and is mounted read-only, so what a
+# developer sees locally is the same definition CI sees and the same one a
+# deployment applies. Editing a provisioned dashboard in the Grafana UI is
+# allowed for exploration but is not persisted back to the file — a change
+# worth keeping is a change worth committing.
+apiVersion: 1
+
+providers:
+  - name: nester-slo
+    orgId: 1
+    folder: SLO
+    type: file
+    disableDeletion: false
+    # Grafana re-reads the files on this interval, so editing a dashboard in
+    # the repo shows up locally without restarting the container.
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

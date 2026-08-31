@@ -84,7 +84,7 @@ func (r *fakeTransactionRepository) ListUserTransactions(_ context.Context, _ tr
 	return nil, 0, nil
 }
 
-func TestCreateTransactionIDORReturns403ForOtherUser(t *testing.T) {
+func TestCreateTransactionIDORReturns404ForOtherUser(t *testing.T) {
 	ownerID := uuid.New()
 	otherID := uuid.New()
 
@@ -114,8 +114,8 @@ func TestCreateTransactionIDORReturns403ForOtherUser(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for cross-user transaction creation, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-user transaction creation, got %d", resp.StatusCode)
 	}
 }
 
@@ -321,7 +321,7 @@ func TestCreateTransactionReturns401WithoutAuth(t *testing.T) {
 	}
 }
 
-func TestGetTransactionByIDORReturns403ForOtherUser(t *testing.T) {
+func TestGetTransactionByIDORReturns404ForOtherUser(t *testing.T) {
 	ownerID := uuid.New()
 	otherID := uuid.New()
 
@@ -359,8 +359,8 @@ func TestGetTransactionByIDORReturns403ForOtherUser(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for cross-user transaction read, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-user transaction read, got %d", resp.StatusCode)
 	}
 }
 
@@ -388,13 +388,13 @@ func TestGetTransactionByHashReturns200ForOwner(t *testing.T) {
 
 	txHash := "tx_hash_owner"
 	txRepo.transactions[txHash] = transaction.Transaction{
-		ID:      uuid.New(),
-		VaultID: vaultID,
-		Type:    transaction.TypeDeposit,
-		Amount:  decimal.NewFromFloat(100.0),
+		ID:       uuid.New(),
+		VaultID:  vaultID,
+		Type:     transaction.TypeDeposit,
+		Amount:   decimal.NewFromFloat(100.0),
 		Currency: "USDC",
-		TxHash:  txHash,
-		Status:  transaction.StatusPending,
+		TxHash:   txHash,
+		Status:   transaction.StatusPending,
 	}
 
 	resp, err := http.Get(server.URL + "/api/v1/transactions/" + txHash)

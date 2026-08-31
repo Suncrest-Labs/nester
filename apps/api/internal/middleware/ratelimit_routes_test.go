@@ -164,7 +164,7 @@ func TestSensitiveUserRouteLimiterPerUser(t *testing.T) {
 	routes := []RouteMatch{{Method: http.MethodPost, Path: "/api/v1/settlements"}}
 
 	rules := []RouteRule{{PathPrefix: "/api/v1/"}}
-	chain := Authenticate(testSecret, "", rules)(
+	chain := Authenticate(testSecret, "", rules, alwaysActiveRevocation)(
 		SensitiveUserRouteLimiter(l, routes, "settlement rate limit exceeded")(ok200),
 	)
 
@@ -197,6 +197,26 @@ func TestSensitiveUserRouteLimiterPerUser(t *testing.T) {
 	// user-B shares the IP but must have an independent per-user bucket.
 	if got := send(tokB); got != http.StatusOK {
 		t.Fatalf("user-B first: got %d, want 200 (bucket is per-user, not per-IP)", got)
+	}
+}
+
+func TestMatchPathPatternWildcard(t *testing.T) {
+	routes := []RouteMatch{{Method: http.MethodPost, Path: "/api/v1/vaults/{id}/deposit"}}
+	match := func(method, path string) bool {
+		req := httptest.NewRequest(method, path, nil)
+		return matchesRoute(routes, req)
+	}
+	if !match(http.MethodPost, "/api/v1/vaults/11111111-1111-1111-1111-111111111111/deposit") {
+		t.Fatal("expected wildcard path to match a vault deposit")
+	}
+	if match(http.MethodPost, "/api/v1/vaults/11111111-1111-1111-1111-111111111111/withdraw") {
+		t.Fatal("deposit pattern must not match withdraw")
+	}
+	if match(http.MethodGet, "/api/v1/vaults/11111111-1111-1111-1111-111111111111/deposit") {
+		t.Fatal("POST pattern must not match GET")
+	}
+	if match(http.MethodPost, "/api/v1/vaults") {
+		t.Fatal("must not match a shorter path")
 	}
 }
 

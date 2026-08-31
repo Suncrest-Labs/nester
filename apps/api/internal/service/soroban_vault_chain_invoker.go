@@ -2,19 +2,48 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 
-	"github.com/stellar/go/xdr"
-
+	"github.com/suncrestlabs/nester/apps/api/internal/signing"
 	"github.com/suncrestlabs/nester/apps/api/internal/stellar"
 )
 
 // SorobanVaultChainInvoker implements VaultChainInvoker by submitting
 // InvokeHostFunction transactions to the Soroban RPC node.
 type SorobanVaultChainInvoker struct {
-	invoker              *stellar.ContractInvoker
-	defaultSlippageBps   int
+	invoker            *stellar.ContractInvoker
+	defaultSlippageBps int
+}
+
+// NewIsolatedSorobanVaultChainInvoker builds a chain invoker that delegates
+// signing to the standalone signer process over a Unix domain socket.
+//
+// This process holds no operator key: operatorAddress is the operator's public
+// address, needed only so transactions are built against the correct source
+// account. This is the recommended production configuration; see
+// docs/security/signing-isolation.md.
+func NewIsolatedSorobanVaultChainInvoker(
+	rpcURL, horizonURL, networkPassphrase, operatorAddress, signerSocketPath string,
+	defaultSlippageBps int,
+) (*SorobanVaultChainInvoker, error) {
+	client, err := signing.NewClient(signing.ClientOptions{SocketPath: signerSocketPath})
+	if err != nil {
+		return nil, fmt.Errorf("build signer client: %w", err)
+	}
+	remote, err := stellar.NewRemoteSigner(client, operatorAddress, networkPassphrase)
+	if err != nil {
+		return nil, fmt.Errorf("build remote signer: %w", err)
+	}
+	inv, err := stellar.NewContractInvokerWithSigner(rpcURL, horizonURL, networkPassphrase, remote)
+	if err != nil {
+		return nil, err
+	}
+	return &SorobanVaultChainInvoker{
+		invoker:            inv,
+		defaultSlippageBps: defaultSlippageBps,
+	}, nil
 }
 
 func NewSorobanVaultChainInvoker(
@@ -29,6 +58,36 @@ func NewSorobanVaultChainInvoker(
 		invoker:            inv,
 		defaultSlippageBps: defaultSlippageBps,
 	}, nil
+}
+
+// SetHTTPClient replaces the HTTP client used for outbound chain calls. It
+// exists so startup can install the metrics-instrumented, circuit-broken
+// transport; a nil client is ignored so callers need not branch.
+//
+// The underlying invoker uses one client for both Soroban RPC and Horizon, so
+// this single client carries both upstreams. The breaker routes per request
+// URL rather than per client, which is what keeps their failure state
+// independent — see internal/breaker.Router.
+func (s *SorobanVaultChainInvoker) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		s.invoker.SetHTTPClient(client)
+	}
+}
+
+// SetSubmissionStore installs the durable submission record (nester#1085), so
+// every chain write this invoker performs persists an intent before it is
+// sent and a lost RPC response can be reconciled rather than resubmitted.
+func (s *SorobanVaultChainInvoker) SetSubmissionStore(store stellar.SubmissionStore, logger *slog.Logger) {
+	s.invoker.SetSubmissionStore(store, logger)
+}
+
+// SetRPCOptions installs the shared Soroban retry policy (nester#1086).
+//
+// Only the invoker's reads are affected: simulateTransaction and the
+// getTransaction polls are retried, sendTransaction is not. The write path's
+// durability comes from the submission record, not from repeating the call.
+func (s *SorobanVaultChainInvoker) SetRPCOptions(opts stellar.RPCOptions) {
+	s.invoker.SetRPCOptions(opts)
 }
 
 func (s *SorobanVaultChainInvoker) PauseVault(ctx context.Context, contractAddress string) error {
@@ -66,7 +125,8 @@ func (s *SorobanVaultChainInvoker) SetAllocationWeights(
 // operator as both caller and depositing user, passing amount and zero
 // as the minimum-shares-out slippage guard.
 func (s *SorobanVaultChainInvoker) DepositToVault(ctx context.Context, contractAddress string, amountStroops int64) error {
-	return s.invoker.InvokeWithI128Pair(ctx, contractAddress, "deposit", amountStroops, 0)
+	_, err := s.invoker.InvokeWithI128Pair(ctx, contractAddress, "deposit", amountStroops, 0)
+	return err
 }
 
 // WithdrawFromVault invokes the vault contract's withdraw function with a
@@ -76,15 +136,15 @@ func (s *SorobanVaultChainInvoker) WithdrawFromVault(
 	contractAddress string,
 	sharesStroops int64,
 	slippageBps int,
-) error {
+) (string, error) {
 	bps, err := stellar.ResolveSlippageBps(slippageBps, s.defaultSlippageBps)
 	if err != nil {
-		return fmt.Errorf("invalid slippage: %w", err)
+		return "", fmt.Errorf("invalid slippage: %w", err)
 	}
 
 	previewNet, err := s.invoker.PreviewWithdrawNet(ctx, contractAddress, sharesStroops)
 	if err != nil {
-		return fmt.Errorf("preview withdrawal: %w", err)
+		return "", fmt.Errorf("preview withdrawal: %w", err)
 	}
 
 	minAssetsOut := stellar.ComputeMinAssetsOut(previewNet, bps)
@@ -110,10 +170,9 @@ func (s *SorobanVaultChainInvoker) PreviewWithdrawNet(ctx context.Context, contr
 	if err != nil {
 		return 0, err
 	}
-	if val.Type != xdr.ScValTypeScvI128 || val.I128 == nil {
-		return 0, errors.New("expected i128 return value")
-	}
-	return int64(val.I128.Lo), nil
+	// Bounds-checked rather than a direct int64() conversion: a value above
+	// int64 max would otherwise truncate into a negative amount.
+	return stellar.I128ScValToInt64(val)
 }
 
 func (s *SorobanVaultChainInvoker) PreviewDeposit(ctx context.Context, contractAddress string, amountStroops int64) (int64, error) {
@@ -121,10 +180,9 @@ func (s *SorobanVaultChainInvoker) PreviewDeposit(ctx context.Context, contractA
 	if err != nil {
 		return 0, err
 	}
-	if val.Type != xdr.ScValTypeScvI128 || val.I128 == nil {
-		return 0, errors.New("expected i128 return value")
-	}
-	return int64(val.I128.Lo), nil
+	// Bounds-checked rather than a direct int64() conversion: a value above
+	// int64 max would otherwise truncate into a negative amount.
+	return stellar.I128ScValToInt64(val)
 }
 
 // PreviewWithdraw calls preview_withdraw on the vault contract and returns the
@@ -138,10 +196,9 @@ func (s *SorobanVaultChainInvoker) PreviewWithdraw(ctx context.Context, contract
 	if err != nil {
 		return 0, err
 	}
-	if val.Type != xdr.ScValTypeScvI128 || val.I128 == nil {
-		return 0, errors.New("expected i128 return value")
-	}
-	return int64(val.I128.Lo), nil
+	// Bounds-checked rather than a direct int64() conversion: a value above
+	// int64 max would otherwise truncate into a negative amount.
+	return stellar.I128ScValToInt64(val)
 }
 
 // EmergencyWithdrawAll invokes the vault contract's emergency_withdraw_all

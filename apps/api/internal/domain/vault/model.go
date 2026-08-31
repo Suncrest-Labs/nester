@@ -29,22 +29,83 @@ var (
 	ErrVaultClosed          = errors.New("vault is closed")
 	ErrVaultNotActive       = errors.New("vault is not active")
 	ErrInsufficientBalance  = errors.New("vault balance must be zero before closing")
+	// ErrWithdrawalExceedsPosition is returned when a withdraw would take the
+	// caller's vault position below zero. Checked before any on-chain submit
+	// (nester#1076).
+	ErrWithdrawalExceedsPosition = errors.New("withdrawal would take the position below zero")
+	// ErrTxHashRequired is returned when a withdrawal is recorded without a
+	// verified on-chain transaction hash (nester#1076).
+	ErrTxHashRequired = errors.New("transaction hash is required")
+	// ErrUnverifiedChainTx is returned when the supplied hash cannot be
+	// reconciled against a matching vault contract event.
+	ErrUnverifiedChainTx = errors.New("on-chain transaction could not be verified")
+	// ErrChainVerificationUnavailable is returned when a caller supplies a
+	// transaction hash but no chain verifier is configured. Accepting the
+	// hash unverified would let a forged one move a balance, so the request
+	// is refused rather than trusted (nester#1075, nester#1076).
+	ErrChainVerificationUnavailable = errors.New("on-chain verification is not configured; transaction hash cannot be accepted")
+	// ErrChainEventCallerMismatch is returned when a verified contract event
+	// was emitted for a different account than the caller's wallet. Without
+	// this check one user can record another user's real withdrawal against
+	// their own vault (nester#1076).
+	ErrChainEventCallerMismatch = errors.New("on-chain event belongs to a different account")
 	ErrVaultForbidden       = errors.New("vault does not belong to caller")
 	ErrAllocationNotFound   = errors.New("allocation not found")
 	ErrAllocationHasBalance = errors.New("allocation has non-zero balance; set force=true to remove")
 	ErrDuplicateProtocol    = errors.New("protocol already allocated")
 	ErrBelowMinDeposit      = errors.New("deposit amount is below the minimum required for this protocol")
+	ErrInvalidHarvestFrequency = errors.New("harvest frequency must be 'daily' or 'weekly'")
 	// ErrDuplicateTransaction is returned when a deposit/withdrawal insert
 	// collides with vault_transactions' UNIQUE transaction_hash index. A
 	// caller that generates its own idempotency-bearing hash (e.g. the
 	// recurring-deposit job queue handler, #846) can treat this as "already
 	// recorded" and safely no-op rather than fail.
 	ErrDuplicateTransaction = errors.New("transaction already recorded")
+	// ErrContractAddressRegistered is returned when a vault is created for a
+	// contract address another live vault already claims. The database
+	// enforces this with the uq_vaults_contract_address_live partial unique
+	// index (migration 104); without a distinct error the collision would
+	// surface as an opaque 500.
+	//
+	// It matters beyond tidiness: the event indexer keys balance mutations on
+	// contract_address, so a second vault pointing at someone else's contract
+	// would have that victim's on-chain deposits credited to it as well
+	// (nester#1148).
+	ErrContractAddressRegistered = errors.New("a vault is already registered for this contract address")
+	// ErrInvalidSharePrice is returned when a vault's share price is zero or
+	// negative, which makes an asset/share conversion meaningless. It signals
+	// corrupted balances rather than bad user input.
+	ErrInvalidSharePrice = errors.New("vault share price is not positive")
+	// ErrOperatorFundedDepositRefused is returned when a deposit would have
+	// to be funded from the shared operator account and policy forbids it.
+	// The caller's remedy is to sign and submit the deposit from their own
+	// wallet and supply the resulting tx_hash (nester#1152).
+	ErrOperatorFundedDepositRefused = errors.New("deposits must be signed and funded by your own wallet: submit the transaction and supply its tx_hash")
+	ErrCapacityExceeded     = errors.New("deposit would exceed vault capacity limit")
+	// ErrUserCancelled is returned when a user declines the wallet signature
+	// or abandons an attempt before submission. It exists to keep that case
+	// distinguishable from a system fault: the deposit and withdrawal SLIs
+	// (nester#1056) exclude cancellations from the denominator, and without a
+	// dedicated sentinel a cancellation would be classified as an internal
+	// failure and burn the error budget for something the system did right.
+	ErrUserCancelled = errors.New("attempt cancelled by user")
 )
 
 const (
 	MaxAmountScale = int32(8)
 	MaxAPYScale    = int32(4)
+	// DefaultCapacityWarningThreshold is the percentage of capacity at which
+	// warnings are surfaced (80% by default).
+	DefaultCapacityWarningThreshold = 80.0
+)
+
+// HarvestFrequencyDaily and HarvestFrequencyWeekly are the supported cadences
+// for the per-vault harvest engine gate (#940). Smaller vaults default to
+// daily; larger vaults may prefer weekly to reduce cumulative gas spend.
+const (
+	HarvestFrequencyDaily   = "daily"
+	HarvestFrequencyWeekly  = "weekly"
+	DefaultHarvestFrequency = HarvestFrequencyDaily
 )
 
 type Vault struct {
@@ -57,12 +118,26 @@ type Vault struct {
 	Status          VaultStatus     `json:"status"`
 	YieldEarned     decimal.Decimal `json:"yield_earned"`
 	FeesPaid        decimal.Decimal `json:"fees_paid"`
-	LastSyncedAt       *time.Time      `json:"last_synced_at,omitempty"`
-	LastAPYAlertSentAt *time.Time      `json:"last_apy_alert_sent_at,omitempty"`
-	DeletedAt          *time.Time      `json:"deleted_at,omitempty"`
-	Allocations     []Allocation    `json:"allocations,omitempty"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	// SoftCapacity is an optional maximum deposit limit. When nil, no capacity
+	// limit is enforced. When set, deposits that would push CurrentBalance over
+	// this limit are rejected with ErrCapacityExceeded.
+	SoftCapacity        *decimal.Decimal `json:"soft_capacity,omitempty"`
+	// CapacityWarningPct is the percentage threshold at which capacity warnings
+	// are surfaced. Defaults to DefaultCapacityWarningThreshold (80%) when nil.
+	CapacityWarningPct  *float64         `json:"capacity_warning_pct,omitempty"`
+	// HarvestFrequency controls how often the harvest engine will consider this
+	// vault for a harvest: "daily" or "weekly". Defaults to
+	// DefaultHarvestFrequency when empty.
+	HarvestFrequency    string           `json:"harvest_frequency"`
+	// LastHarvestedAt is when the vault's yield was last harvested, used by the
+	// harvest engine to enforce HarvestFrequency. Nil means never harvested.
+	LastHarvestedAt     *time.Time       `json:"last_harvested_at,omitempty"`
+	LastSyncedAt        *time.Time       `json:"last_synced_at,omitempty"`
+	LastAPYAlertSentAt  *time.Time       `json:"last_apy_alert_sent_at,omitempty"`
+	DeletedAt           *time.Time       `json:"deleted_at,omitempty"`
+	Allocations         []Allocation     `json:"allocations,omitempty"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
 }
 
 type ProjectionPoint struct {
@@ -133,6 +208,7 @@ type Repository interface {
 	UpdateVaultBalances(ctx context.Context, id uuid.UUID, totalDeposited decimal.Decimal, currentBalance decimal.Decimal) error
 	ReplaceAllocations(ctx context.Context, vaultID uuid.UUID, allocations []Allocation) error
 	UpdateVault(ctx context.Context, id uuid.UUID, contractAddress string, status VaultStatus) error
+	UpdateHarvestFrequency(ctx context.Context, id uuid.UUID, frequency string) error
 	RecordWithdrawal(ctx context.Context, vaultID uuid.UUID, record TransactionRecord) error
 	RecordHarvest(ctx context.Context, input HarvestRecordInput) error
 	RecordRebalance(ctx context.Context, input RebalanceRecordInput, withdrawRecord, depositRecord TransactionRecord) error
@@ -158,6 +234,20 @@ func (s VaultStatus) CanTransitionTo(next VaultStatus) bool {
 	}
 }
 
+// ParseHarvestFrequency validates a harvest frequency string, returning
+// ErrInvalidHarvestFrequency for anything other than "daily" or "weekly"
+// (case-insensitive, trimmed).
+func ParseHarvestFrequency(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case HarvestFrequencyDaily:
+		return HarvestFrequencyDaily, nil
+	case HarvestFrequencyWeekly:
+		return HarvestFrequencyWeekly, nil
+	default:
+		return "", ErrInvalidHarvestFrequency
+	}
+}
+
 func ParseStatus(value string) (VaultStatus, error) {
 	switch VaultStatus(strings.ToLower(strings.TrimSpace(value))) {
 	case StatusActive:
@@ -169,4 +259,74 @@ func ParseStatus(value string) (VaultStatus, error) {
 	default:
 		return "", ErrInvalidVault
 	}
+}
+
+// CapacityStatus describes the vault's capacity utilization for display and gating.
+type CapacityStatus struct {
+	// HasLimit is true when the vault has a soft capacity set.
+	HasLimit bool `json:"has_limit"`
+	// Capacity is the soft cap amount, nil if no limit.
+	Capacity *decimal.Decimal `json:"capacity,omitempty"`
+	// CurrentBalance is the vault's current balance.
+	CurrentBalance decimal.Decimal `json:"current_balance"`
+	// UtilizationPct is the percentage of capacity used, nil if no limit.
+	UtilizationPct *float64 `json:"utilization_pct,omitempty"`
+	// Warning is true when the vault is at or above the warning threshold.
+	Warning bool `json:"warning"`
+	// WarningThreshold is the percentage at which warnings are shown.
+	WarningThreshold float64 `json:"warning_threshold"`
+}
+
+// GetCapacityStatus computes the vault's capacity utilization status.
+func (v *Vault) GetCapacityStatus() CapacityStatus {
+	warningThreshold := DefaultCapacityWarningThreshold
+	if v.CapacityWarningPct != nil {
+		warningThreshold = *v.CapacityWarningPct
+	}
+
+	if v.SoftCapacity == nil {
+		return CapacityStatus{
+			HasLimit:         false,
+			CurrentBalance:   v.CurrentBalance,
+			Warning:          false,
+			WarningThreshold: warningThreshold,
+		}
+	}
+
+	utilization := calculateUtilizationPct(v.CurrentBalance, *v.SoftCapacity)
+	warning := utilization >= warningThreshold
+
+	return CapacityStatus{
+		HasLimit:         true,
+		Capacity:         v.SoftCapacity,
+		CurrentBalance:   v.CurrentBalance,
+		UtilizationPct:   &utilization,
+		Warning:          warning,
+		WarningThreshold: warningThreshold,
+	}
+}
+
+// CanAcceptDeposit checks whether a deposit amount would exceed the vault's
+// soft capacity. Returns nil if the deposit is allowed, ErrCapacityExceeded otherwise.
+func (v *Vault) CanAcceptDeposit(amount decimal.Decimal) error {
+	if v.SoftCapacity == nil {
+		return nil
+	}
+
+	newBalance := v.CurrentBalance.Add(amount)
+	if newBalance.GreaterThan(*v.SoftCapacity) {
+		return ErrCapacityExceeded
+	}
+
+	return nil
+}
+
+// calculateUtilizationPct computes the percentage of capacity used.
+func calculateUtilizationPct(current, capacity decimal.Decimal) float64 {
+	if capacity.IsZero() {
+		return 0.0
+	}
+	pct := current.Div(capacity).Mul(decimal.NewFromInt(100))
+	utilization, _ := pct.Float64()
+	return utilization
 }

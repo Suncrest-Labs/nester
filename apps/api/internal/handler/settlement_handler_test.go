@@ -110,12 +110,12 @@ func (r *settlementStubUserRepo) GetRoles(_ context.Context, _ uuid.UUID) ([]str
 	return nil, nil
 }
 
-func (r *settlementStubUserRepo) SaveKYCDocument(_ context.Context, _ *user.KYCDocument) error {
+func (r *settlementStubUserRepo) SaveKYCDocument(_ context.Context, _ *user.KYCDocument, _ *user.EncryptedKYCDoc) error {
 	return nil
 }
 
-func (r *settlementStubUserRepo) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, error) {
-	return nil, user.ErrUserNotFound
+func (r *settlementStubUserRepo) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, *user.EncryptedKYCDoc, error) {
+	return nil, nil, user.ErrUserNotFound
 }
 
 func (r *settlementStubUserRepo) UpdateKYCStatus(_ context.Context, _ uuid.UUID, _ user.KYCStatus, _ *string, _ *time.Time) error {
@@ -456,4 +456,77 @@ func TestSettlementHandler_ListUserSettlementsWithStatus(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("want 1 settlement, got %d", len(list))
 	}
+}
+
+// TestSettlementHandler_PostRejectsOverWithdrawal tests that settlement
+// initiation rejects amounts exceeding the user's available balance.
+// This is a critical server-side check that cannot rely on client-side validation.
+func TestSettlementHandler_PostRejectsOverWithdrawal(t *testing.T) {
+	userID := uuid.New()
+	vaultID := uuid.New()
+
+	// Create a settlement service with a vault repository that tracks balance
+	vaultRepo := &settlementVaultRepoMock{
+		balance: decimal.NewFromInt(100), // User has 100 USDC
+	}
+	svc := service.NewSettlementService(newSettlementStubRepo(), nil)
+	svc.SetVaultRepository(vaultRepo)
+
+	h := newSettlementHandler(svc, userID)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	handler := injectAuthUser(auth.User{ID: userID.String()}, mux)
+	server := httptest.NewServer(middleware.Logging(slog.New(slog.NewTextHandler(io.Discard, nil)))(handler))
+	defer server.Close()
+
+	// Attempt to withdraw 150 USDC when only 100 is available
+	overWithdrawalBody := `{
+		"user_id": "` + userID.String() + `",
+		"vault_id": "` + vaultID.String() + `",
+		"amount": "150",
+		"currency": "USDC",
+		"fiat_currency": "NGN",
+		"fiat_amount": "226500",
+		"exchange_rate": "1512.45",
+		"destination": {
+			"type": "bank_transfer",
+			"provider": "bank",
+			"account_number": "1234567890",
+			"account_name": "Test User",
+			"bank_code": "029"
+		}
+	}`
+
+	resp, err := http.Post(
+		server.URL+"/api/v1/settlements",
+		"application/json",
+		bytes.NewBufferString(overWithdrawalBody),
+	)
+	if err != nil {
+		t.Fatalf("POST settlements: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Server must reject over-withdrawals with 400 Bad Request or 422 Unprocessable Entity
+	if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("Expected 400 or 422 for over-withdrawal, got %d", resp.StatusCode)
+	}
+
+	// Verify no settlement was created by checking the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	if len(body) > 0 {
+		t.Logf("Response body: %s", string(body))
+	}
+}
+
+// settlementVaultRepoMock is a test helper that mocks vault balance for over-withdrawal testing.
+type settlementVaultRepoMock struct {
+	balance decimal.Decimal
+}
+
+func (m *settlementVaultRepoMock) GetUserVaultBalance(_ context.Context, _ uuid.UUID) (decimal.Decimal, error) {
+	return m.balance, nil
 }

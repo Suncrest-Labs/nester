@@ -151,11 +151,18 @@ func TestVaultRepositoryIntegrationAllocationPersistence(t *testing.T) {
 		t.Fatalf("fetched %d allocations, want 2", len(fetched.Allocations))
 	}
 
+	// GetVault returns allocations newest-first (ORDER BY allocated_at DESC),
+	// so match each fetched row to its fixture by ID rather than by position.
+	expectedByID := make(map[uuid.UUID]vault.Allocation, len(allocations))
+	for _, a := range allocations {
+		expectedByID[a.ID] = a
+	}
+
 	// Verify each allocation
 	for i, alloc := range fetched.Allocations {
-		expected := allocations[i]
-		if alloc.ID != expected.ID {
-			t.Fatalf("allocation[%d] ID = %v, want %v", i, alloc.ID, expected.ID)
+		expected, ok := expectedByID[alloc.ID]
+		if !ok {
+			t.Fatalf("allocation[%d] ID = %v not among the inserted fixtures", i, alloc.ID)
 		}
 		if alloc.VaultID != expected.VaultID {
 			t.Fatalf("allocation[%d] VaultID = %v, want %v", i, alloc.VaultID, expected.VaultID)

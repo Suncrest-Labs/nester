@@ -25,8 +25,8 @@ func NewSavingsScheduleRepository(db *sql.DB) *SavingsScheduleRepository {
 func (r *SavingsScheduleRepository) Create(ctx context.Context, schedule *savingsschedule.SavingsSchedule) error {
 	query := `
 		INSERT INTO savings_schedules (
-			id, user_id, goal_id, vault_id, amount, currency, frequency, next_run_at, is_active
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			id, user_id, goal_id, vault_id, amount, currency, frequency, next_run_at, is_active, onchain_mandate_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING created_at, updated_at
 	`
 	err := r.db.QueryRowContext(
@@ -40,6 +40,7 @@ func (r *SavingsScheduleRepository) Create(ctx context.Context, schedule *saving
 		string(schedule.Frequency),
 		schedule.NextRunAt,
 		schedule.IsActive,
+		schedule.OnchainMandateID,
 	).Scan(&schedule.CreatedAt, &schedule.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -55,7 +56,7 @@ func (r *SavingsScheduleRepository) Create(ctx context.Context, schedule *saving
 func (r *SavingsScheduleRepository) ListByGoal(ctx context.Context, goalID, userID uuid.UUID) ([]savingsschedule.SavingsSchedule, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, user_id, goal_id, vault_id, amount, currency, frequency,
-		       next_run_at, last_run_at, is_active, created_at, updated_at
+		       next_run_at, last_run_at, is_active, onchain_mandate_id, created_at, updated_at
 		FROM savings_schedules
 		WHERE goal_id = $1 AND user_id = $2
 		ORDER BY created_at DESC
@@ -79,7 +80,7 @@ func (r *SavingsScheduleRepository) ListByGoal(ctx context.Context, goalID, user
 func (r *SavingsScheduleRepository) GetByID(ctx context.Context, scheduleID uuid.UUID) (*savingsschedule.SavingsSchedule, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, goal_id, vault_id, amount, currency, frequency,
-		       next_run_at, last_run_at, is_active, created_at, updated_at
+		       next_run_at, last_run_at, is_active, onchain_mandate_id, created_at, updated_at
 		FROM savings_schedules WHERE id = $1
 	`, scheduleID)
 	s, err := scanSavingsSchedule(row)
@@ -95,7 +96,7 @@ func (r *SavingsScheduleRepository) GetByID(ctx context.Context, scheduleID uuid
 func (r *SavingsScheduleRepository) GetActiveByGoal(ctx context.Context, goalID, userID uuid.UUID) (*savingsschedule.SavingsSchedule, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, goal_id, vault_id, amount, currency, frequency,
-		       next_run_at, last_run_at, is_active, created_at, updated_at
+		       next_run_at, last_run_at, is_active, onchain_mandate_id, created_at, updated_at
 		FROM savings_schedules
 		WHERE goal_id = $1 AND user_id = $2 AND is_active = TRUE
 		ORDER BY created_at DESC LIMIT 1
@@ -161,7 +162,7 @@ func (r *SavingsScheduleRepository) Cancel(ctx context.Context, scheduleID, goal
 func (r *SavingsScheduleRepository) ListDue(ctx context.Context, now time.Time) ([]savingsschedule.SavingsSchedule, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, user_id, goal_id, vault_id, amount, currency, frequency,
-		       next_run_at, last_run_at, is_active, created_at, updated_at
+		       next_run_at, last_run_at, is_active, onchain_mandate_id, created_at, updated_at
 		FROM savings_schedules
 		WHERE is_active = TRUE AND next_run_at <= $1
 		ORDER BY next_run_at ASC
@@ -221,13 +222,14 @@ type savingsScheduleScanner interface {
 func scanSavingsSchedule(row savingsScheduleScanner) (savingsschedule.SavingsSchedule, error) {
 	var (
 		id, userID, goalID, vaultID, amountStr, currency, frequency string
-		nextRunAt, createdAt, updatedAt                            time.Time
-		lastRunAt                                                  sql.NullTime
-		isActive                                                   bool
+		nextRunAt, createdAt, updatedAt                             time.Time
+		lastRunAt                                                   sql.NullTime
+		onchainMandateID                                            sql.NullInt64
+		isActive                                                    bool
 	)
 	if err := row.Scan(
 		&id, &userID, &goalID, &vaultID, &amountStr, &currency, &frequency,
-		&nextRunAt, &lastRunAt, &isActive, &createdAt, &updatedAt,
+		&nextRunAt, &lastRunAt, &isActive, &onchainMandateID, &createdAt, &updatedAt,
 	); err != nil {
 		return savingsschedule.SavingsSchedule{}, err
 	}
@@ -243,18 +245,24 @@ func scanSavingsSchedule(row savingsScheduleScanner) (savingsschedule.SavingsSch
 		lastRunPtr = &t
 	}
 
+	var onchainMandatePtr *int64
+	if onchainMandateID.Valid {
+		onchainMandatePtr = &onchainMandateID.Int64
+	}
+
 	return savingsschedule.SavingsSchedule{
-		ID:        parsedID,
-		UserID:    parsedUserID,
-		GoalID:    parsedGoalID,
-		VaultID:   parsedVaultID,
-		Amount:    amount,
-		Currency:  currency,
-		Frequency: savingsschedule.Frequency(frequency),
-		NextRunAt: nextRunAt.UTC(),
-		LastRunAt: lastRunPtr,
-		IsActive:  isActive,
-		CreatedAt: createdAt.UTC(),
-		UpdatedAt: updatedAt.UTC(),
+		ID:               parsedID,
+		UserID:           parsedUserID,
+		GoalID:           parsedGoalID,
+		VaultID:          parsedVaultID,
+		Amount:           amount,
+		Currency:         currency,
+		Frequency:        savingsschedule.Frequency(frequency),
+		NextRunAt:        nextRunAt.UTC(),
+		LastRunAt:        lastRunPtr,
+		IsActive:         isActive,
+		OnchainMandateID: onchainMandatePtr,
+		CreatedAt:        createdAt.UTC(),
+		UpdatedAt:        updatedAt.UTC(),
 	}, nil
 }

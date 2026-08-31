@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { RefreshCw, TrendingDown, TrendingUp, Minus } from 'lucide-react'
-import { intelligence, type MarketSentiment } from '@/lib/api/intelligence'
+import { RefreshCw, TrendingDown, TrendingUp, Minus, AlertCircle } from 'lucide-react'
+import { intelligence, type MarketSentiment, type MarketSentimentPoint } from '@/lib/api/intelligence'
+import { useRelativeAge } from '@/hooks/useRelativeAge'
 
 /** Refresh the sentiment widget every 5 minutes. */
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000
@@ -47,7 +48,15 @@ export function MarketSentimentWidget() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [spinning, setSpinning] = useState(false)
+  const [historyRange, setHistoryRange] = useState<7 | 30>(7)
+  const [historyPoints, setHistoryPoints] = useState<MarketSentimentPoint[]>([])
+  // When the last successful read happened, so a cached figure can be labelled
+  // with its age instead of being presented as current (nester#1126).
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Ticks only while degraded, which is the only time the age is shown.
+  const age = useRelativeAge(fetchedAt, error)
 
   const fetch = async (manual = false) => {
     if (manual) setSpinning(true)
@@ -55,11 +64,21 @@ export function MarketSentimentWidget() {
     try {
       const sentiment = await intelligence.getMarketSentiment()
       setData(sentiment)
+      setFetchedAt(Date.now())
     } catch {
       setError(true)
     } finally {
       setLoading(false)
       if (manual) setTimeout(() => setSpinning(false), 600)
+    }
+  }
+
+  const fetchHistory = async (range: 7 | 30) => {
+    try {
+      const { points } = await intelligence.getMarketSentimentHistory(range)
+      setHistoryPoints(points)
+    } catch {
+      setHistoryPoints([])
     }
   }
 
@@ -71,34 +90,77 @@ export function MarketSentimentWidget() {
     }
   }, [])
 
+  useEffect(() => {
+    fetchHistory(historyRange)
+  }, [historyRange])
+
   if (loading) return <MarketSentimentSkeleton />
 
-  if (error || !data) {
+  // Unreachable with nothing cached: say so plainly and offer a retry that
+  // does not need a page reload. Never a spinner that runs forever.
+  if (error && !data) {
     return (
       <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-foreground/60">Market Sentiment</p>
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+            <p className="text-xs font-medium text-foreground/60">Market Sentiment</p>
+          </div>
           <button
             type="button"
             onClick={() => fetch(true)}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-            aria-label="Retry"
+            disabled={spinning}
+            className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+            aria-label="Retry loading market sentiment"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw className={`h-3.5 w-3.5 ${spinning ? 'animate-spin' : ''}`} />
           </button>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="mt-2 text-xs text-muted-foreground" role="status">
           Intelligence service unavailable. Retrying automatically.
         </p>
       </div>
     )
   }
 
+  if (!data) return <MarketSentimentSkeleton />
+
   const { label, Icon, dot, badge } = SIGNAL_CONFIG[data.signal]
   const confidencePct = Math.round(data.confidence * 100)
 
   return (
-    <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 transition-all hover:border-black/15 dark:hover:border-white/15 hover:shadow-sm">
+    <div
+      data-stale={error ? 'true' : 'false'}
+      className={`rounded-2xl border bg-white dark:bg-[#100F0F] p-4 transition-all hover:shadow-sm ${
+        error
+          ? 'border-amber-300 dark:border-amber-500/40'
+          : 'border-border hover:border-black/15 dark:hover:border-white/15'
+      }`}
+    >
+      {/* Stale banner: the service is unreachable but a previous read is still
+          on screen. Labelling it with its age is the point — an unlabelled
+          cached figure reads as current, which is the failure #1126 describes. */}
+      {error && (
+        <div
+          role="status"
+          className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-1.5 dark:border-amber-500/30 dark:bg-amber-500/10"
+        >
+          <span className="flex items-center gap-1.5 text-[11px] text-amber-800 dark:text-amber-200">
+            <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+            {age ? `Cached, last updated ${age}` : 'Cached — not current'}
+          </span>
+          <button
+            type="button"
+            onClick={() => fetch(true)}
+            disabled={spinning}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:opacity-50 dark:text-amber-100 dark:hover:bg-amber-500/20"
+          >
+            <RefreshCw className={`h-3 w-3 ${spinning ? 'animate-spin' : ''}`} aria-hidden="true" />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -119,8 +181,9 @@ export function MarketSentimentWidget() {
         </div>
       </div>
 
-      {/* Signal badge */}
-      <div className="mb-2 flex items-center gap-2">
+      {/* Signal badge. Dimmed while stale so the figure itself, not just the
+          banner, shows it is not live. */}
+      <div className={`mb-2 flex items-center gap-2 ${error ? 'opacity-60' : ''}`}>
         <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${badge}`}>
           <Icon className="h-3 w-3" />
           {label}
@@ -129,6 +192,13 @@ export function MarketSentimentWidget() {
           {confidencePct}%
         </span>
       </div>
+
+      {/* Historical trend */}
+      <SentimentSparkline
+        points={historyPoints}
+        range={historyRange}
+        onRangeChange={setHistoryRange}
+      />
 
       {/* Summary */}
       <p className="text-xs leading-relaxed text-muted-foreground">{data.summary}</p>
@@ -164,6 +234,90 @@ export function MarketSentimentWidget() {
       <p className="mt-2 text-[10px] text-muted-foreground/50">
         Updated {new Date(data.updatedAt).toLocaleTimeString()}
       </p>
+    </div>
+  )
+}
+
+// ── Sparkline ─────────────────────────────────────────────────────────────────
+
+const SPARKLINE_SIGNAL_COLOR: Record<MarketSentimentPoint['signal'], string> = {
+  bull: '#10b981', // emerald-500, matches SIGNAL_CONFIG.bull.dot
+  bear: '#ef4444', // red-500, matches SIGNAL_CONFIG.bear.dot
+  neutral: '#fbbf24', // amber-400, matches SIGNAL_CONFIG.neutral.dot
+}
+
+const SPARKLINE_WIDTH = 100
+const SPARKLINE_HEIGHT = 24
+const SPARKLINE_PADDING_Y = 3
+
+interface SentimentSparklineProps {
+  points: MarketSentimentPoint[]
+  range: 7 | 30
+  onRangeChange: (range: 7 | 30) => void
+}
+
+/**
+ * SentimentSparkline
+ *
+ * A small confidence-over-time trend line (7 or 30 day) so users see how
+ * sentiment has been moving, not just the current point-in-time read.
+ * Line color follows the most recent point's signal.
+ */
+function SentimentSparkline({ points, range, onRangeChange }: SentimentSparklineProps) {
+  const hasEnoughData = points.length >= 2
+
+  const path = hasEnoughData
+    ? (() => {
+        const xs = points.map((_, i) => (i / (points.length - 1)) * SPARKLINE_WIDTH)
+        const usableHeight = SPARKLINE_HEIGHT - SPARKLINE_PADDING_Y * 2
+        const ys = points.map(
+          (p) => SPARKLINE_HEIGHT - SPARKLINE_PADDING_Y - p.confidence * usableHeight
+        )
+        return xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${ys[i].toFixed(2)}`).join(' ')
+      })()
+    : ''
+
+  const lineColor = hasEnoughData
+    ? SPARKLINE_SIGNAL_COLOR[points[points.length - 1].signal]
+    : SPARKLINE_SIGNAL_COLOR.neutral
+
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <div className="h-6 flex-1">
+        {hasEnoughData ? (
+          <svg
+            viewBox={`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`}
+            preserveAspectRatio="none"
+            className="h-6 w-full"
+            role="img"
+            aria-label={`Sentiment confidence trend over the last ${range} days`}
+          >
+            <path d={path} fill="none" stroke={lineColor} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          </svg>
+        ) : (
+          <p className="text-[10px] leading-6 text-muted-foreground/60">
+            Not enough history yet to chart a trend
+          </p>
+        )}
+      </div>
+      <div className="flex gap-0.5" role="tablist" aria-label="Sentiment trend period">
+        {([7, 30] as const).map((r) => (
+          <button
+            key={r}
+            type="button"
+            role="tab"
+            aria-selected={range === r}
+            onClick={() => onRangeChange(r)}
+            className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+              range === r
+                ? 'bg-secondary text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {r}d
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

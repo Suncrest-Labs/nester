@@ -1,0 +1,754 @@
+# SLI recording rules for nester#1056.
+#
+# Why recording rules rather than putting the expressions inline in the alerts:
+#
+#  1. A burn-rate alert needs the same ratio evaluated over several windows.
+#     Written inline, the SLI definition is duplicated once per window per
+#     alert — for nine SLOs that is dozens of copies of the same numerator and
+#     denominator, and an exclusion corrected in one copy and missed in another
+#     is a silent, permanent disagreement between the fast and slow alert.
+#
+#  2. The dashboards read the same recorded series the alerts fire on. Without
+#     that, a dashboard can disagree with the pager during an incident, which
+#     is precisely when nobody has time to work out which one is lying.
+#
+# Naming: <service>:<indicator>:<operation><window>. The `ratio_rate` series
+# are *error* ratios (bad / eligible), not success ratios, so a burn-rate
+# threshold reads directly against them without an inversion at every use.
+#
+# Every ratio uses the same shape:
+#
+#     bad events over W
+#     ------------------
+#     eligible events over W
+#
+# with the exclusions applied to *both* halves. Applying an exclusion to the
+# numerator only would shrink the error count while leaving the denominator
+# inflated, quietly reporting a better SLI than reality.
+#
+# Windows: 5m and 1h serve the fast-burn pair, 30m and 6h the slow-burn pair.
+# See docs/observability/slo.md for the arithmetic that produces them.
+#
+# `or vector(0)` appears on every subtracted or optional term, and it is not
+# decoration. In PromQL a binary operation against an empty vector produces an
+# empty vector, so `sum(all) - sum(4xx)` evaluates to *nothing* when the
+# service has served no 4xx at all, and the SLI silently ceases to exist
+# rather than reading 100%. The same applies to a 5xx term on a healthy
+# service. A vanished series cannot breach a threshold, so without these
+# guards the alerts would go quiet exactly when the service is healthiest —
+# and stay quiet if a label were ever renamed. This is verified by the
+# "no 4xx traffic" and "no 5xx traffic" cases in slo_alerts_test.yml.
+
+groups:
+  # ---------------------------------------------------------------------------
+  # API availability
+  # ---------------------------------------------------------------------------
+  #
+  # Eligible: every request that reached a registered route and produced a
+  # response. Bad: 5xx only.
+  #
+  # 4xx is excluded from the numerator *and* the denominator. Excluded from the
+  # numerator because a 400 or a 403 is the API correctly rejecting a bad
+  # request — counting it as unavailability would mean a client looping an
+  # invalid request could drive the service "down" from the outside, which
+  # makes the SLO unusable as a signal and trivially abusable. Excluded from
+  # the denominator too, because leaving it there lets a flood of 404s dilute a
+  # real 5xx spike: the ratio falls while the absolute number of failed
+  # requests climbs.
+  #
+  # route="other" (unmatched paths — scanners, probes, typos) is excluded
+  # entirely for the same reason, and because those requests are not a service
+  # anyone is promised.
+  #
+  # 429 deserves a note: rate-limited requests are 4xx and therefore excluded.
+  # A rate limiter shedding load is the system defending itself, not failing.
+  # If the limiter is *misconfigured* and shedding legitimate traffic, that
+  # shows up as a drop in eligible volume, which the dashboards plot alongside
+  # the ratio for exactly this reason.
+  - name: slo_api_availability
+    interval: 30s
+    rules:
+      - record: api:availability:eligible_rate5m
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other"}[5m]))
+          -
+          (
+            sum(rate(nester_http_requests_total{route!="other",status_class="4xx"}[5m]))
+            or vector(0)
+          )
+
+      - record: api:availability:bad_rate5m
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other",status_class="5xx"}[5m]))
+          or vector(0)
+
+      # clamp_min on the denominator, not a division guard: with no traffic the
+      # rate is 0 and 0/0 is NaN, which compares false against every threshold
+      # and silently disables the alert. Clamping to a floor makes a
+      # zero-traffic window evaluate to 0 error ratio, and the absence of
+      # traffic is caught by the synthetic probes instead — that is their job.
+      - record: api:availability:error_ratio_rate5m
+        expr: |
+          api:availability:bad_rate5m
+          / clamp_min(api:availability:eligible_rate5m, 0.001)
+
+      - record: api:availability:eligible_rate30m
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other"}[30m]))
+          -
+          (
+            sum(rate(nester_http_requests_total{route!="other",status_class="4xx"}[30m]))
+            or vector(0)
+          )
+
+      - record: api:availability:bad_rate30m
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other",status_class="5xx"}[30m]))
+          or vector(0)
+
+      - record: api:availability:error_ratio_rate30m
+        expr: |
+          api:availability:bad_rate30m
+          / clamp_min(api:availability:eligible_rate30m, 0.001)
+
+      - record: api:availability:eligible_rate1h
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other"}[1h]))
+          -
+          (
+            sum(rate(nester_http_requests_total{route!="other",status_class="4xx"}[1h]))
+            or vector(0)
+          )
+
+      - record: api:availability:bad_rate1h
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other",status_class="5xx"}[1h]))
+          or vector(0)
+
+      - record: api:availability:error_ratio_rate1h
+        expr: |
+          api:availability:bad_rate1h
+          / clamp_min(api:availability:eligible_rate1h, 0.001)
+
+      - record: api:availability:eligible_rate6h
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other"}[6h]))
+          -
+          (
+            sum(rate(nester_http_requests_total{route!="other",status_class="4xx"}[6h]))
+            or vector(0)
+          )
+
+      - record: api:availability:bad_rate6h
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other",status_class="5xx"}[6h]))
+          or vector(0)
+
+      - record: api:availability:error_ratio_rate6h
+        expr: |
+          api:availability:bad_rate6h
+          / clamp_min(api:availability:eligible_rate6h, 0.001)
+
+      # 28-day attainment, for the dashboard and the error-budget policy
+      # review. Not used by alerts: a 28d rate reacts far too slowly to page
+      # on, which is the entire reason burn-rate alerting exists.
+      - record: api:availability:error_ratio_rate28d
+        expr: |
+          sum(rate(nester_http_requests_total{route!="other",status_class="5xx"}[28d]))
+          / clamp_min(
+              sum(rate(nester_http_requests_total{route!="other"}[28d]))
+              - (
+                  sum(rate(nester_http_requests_total{route!="other",status_class="4xx"}[28d]))
+                  or vector(0)
+                ),
+              0.001
+            )
+
+  # ---------------------------------------------------------------------------
+  # Per-route availability (nester#1227)
+  # ---------------------------------------------------------------------------
+  #
+  # The aggregate api:availability:* series above answers "is the API healthy
+  # overall", and deposit/withdraw volume dominates it — a route that fails
+  # continuously can sit inside the aggregate's error budget indefinitely if
+  # it is not one of the high-volume money-path endpoints. This group answers
+  # the narrower question per route, using the same bounded `route` label the
+  # metrics middleware already resolves (internal/metrics/http.go) — a
+  # registered pattern or the constant "other", never an arbitrary client
+  # path, so `by (route)` here cannot mint an unbounded number of series.
+  #
+  # Deliberately NOT the full four-window burn-rate treatment the aggregate
+  # SLOs use: with ~93 routes, replicating that machinery per route would
+  # multiply the alert count by ~93 and produce dozens of near-duplicate
+  # pages during any real incident (the aggregate and the affected route
+  # would both page for the same root cause). Per-route detection instead
+  # uses a single absolute-threshold alert (slo_alerts.yml
+  # EndpointErrorRateHigh) — this recording group only needs the one ratio
+  # that alert reads, at the window the alert evaluates.
+  #
+  # `route="other"` is excluded, same reasoning as the aggregate: unmatched
+  # paths are scanner/probe traffic, not a service anyone is promised.
+  - name: slo_route_availability
+    interval: 30s
+    rules:
+      # Per-route needs a different shape than the aggregate's bare
+      # `- (... or vector(0))`: that pattern is correct only when the
+      # subtracted term is a single scalar-like (label-less) series, where
+      # "no 4xx at all" and "0 4xx" are the same result. Grouped `by (route)`,
+      # a route with traffic but zero 4xx has NO series in the 4xx
+      # sub-expression at all (not a zero-valued one), so a bare `-` between
+      # two `by (route)` vectors would silently drop that route from the
+      # result wherever the right side has no matching `route` — the exact
+      # opposite of the intent (a route's own healthy 4xx-free traffic must
+      # not make the route disappear from its own eligible-rate series).
+      # `(4xx or on (route) all * 0)` is the standard idiom for "subtract
+      # this optional per-group term, treating a missing group as zero": it
+      # produces a same-label-set zero series for every route present in
+      # `all` but absent from `4xx`, so the outer `-` always has a matching
+      # right-hand series for every route on the left.
+      - record: route:availability:eligible_rate1h
+        expr: |
+          sum by (route) (rate(nester_http_requests_total{route!="other"}[1h]))
+          -
+          (
+            sum by (route) (rate(nester_http_requests_total{route!="other",status_class="4xx"}[1h]))
+            or on (route)
+            sum by (route) (rate(nester_http_requests_total{route!="other"}[1h])) * 0
+          )
+
+      # No `or vector(0)` here (unlike the aggregate bad_rate1h): a route
+      # with zero 5xx traffic simply has no series in this result at all,
+      # which is correct — error_ratio_rate1h below is a division, so a
+      # route absent here produces no result for that route rather than a
+      # spurious 0, and EndpointErrorRateHigh only needs to evaluate routes
+      # that have some 5xx to possibly breach 20% of.
+      - record: route:availability:bad_rate1h
+        expr: |
+          sum by (route) (rate(nester_http_requests_total{route!="other",status_class="5xx"}[1h]))
+
+      # clamp_min for the same reason as the aggregate series: a route with no
+      # traffic in the window must read 0 error ratio, not NaN (which would
+      # compare false against every threshold and silently disable the
+      # alert). Floor is tighter than the aggregate's 0.001 (whole-API
+      # req/s) because a single low-traffic route can legitimately sit well
+      # under 1 req/s without being unhealthy.
+      - record: route:availability:error_ratio_rate1h
+        expr: |
+          route:availability:bad_rate1h
+          / clamp_min(route:availability:eligible_rate1h, 0.0001)
+
+  # ---------------------------------------------------------------------------
+  # Deposit and withdrawal success rate
+  # ---------------------------------------------------------------------------
+  #
+  # Eligible: attempts that the service accepted and carried toward the chain,
+  # i.e. everything except `rejected` and `cancelled`. Bad: failed_chain and
+  # failed_internal.
+  #
+  # The two exclusions are the substance of this SLI and each is deliberate:
+  #
+  #   rejected  — the service refused an invalid request (bad amount, closed
+  #               vault, insufficient balance). Excluded so a client cannot
+  #               burn the budget by looping an invalid request.
+  #   cancelled — the user declined the wallet signature. Excluded on the
+  #               issue's instruction; a user changing their mind is not a
+  #               service failure.
+  #
+  # failed_chain is *not* excluded even though Soroban RPC is not ours. A user
+  # whose deposit did not land does not care which side of the boundary broke,
+  # and an SLI that excused unowned infrastructure would report perfect health
+  # through a total chain outage.
+  #
+  # The `flow` label is preserved rather than summed away: deposits and
+  # withdrawals get separate budgets, because averaging them lets healthy
+  # deposit volume hide a withdrawal outage, and being unable to withdraw is
+  # the worse failure.
+  - name: slo_flow_success
+    interval: 30s
+    rules:
+      - record: flow:success:eligible_rate5m
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome!~"rejected|cancelled"}[5m])
+          )
+
+      - record: flow:success:bad_rate5m
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome=~"failed_chain|failed_internal"}[5m])
+          )
+
+      - record: flow:success:error_ratio_rate5m
+        expr: |
+          flow:success:bad_rate5m
+          / clamp_min(flow:success:eligible_rate5m, 0.001)
+
+      - record: flow:success:eligible_rate30m
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome!~"rejected|cancelled"}[30m])
+          )
+
+      - record: flow:success:bad_rate30m
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome=~"failed_chain|failed_internal"}[30m])
+          )
+
+      - record: flow:success:error_ratio_rate30m
+        expr: |
+          flow:success:bad_rate30m
+          / clamp_min(flow:success:eligible_rate30m, 0.001)
+
+      - record: flow:success:eligible_rate1h
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome!~"rejected|cancelled"}[1h])
+          )
+
+      - record: flow:success:bad_rate1h
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome=~"failed_chain|failed_internal"}[1h])
+          )
+
+      - record: flow:success:error_ratio_rate1h
+        expr: |
+          flow:success:bad_rate1h
+          / clamp_min(flow:success:eligible_rate1h, 0.001)
+
+      - record: flow:success:eligible_rate6h
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome!~"rejected|cancelled"}[6h])
+          )
+
+      - record: flow:success:bad_rate6h
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome=~"failed_chain|failed_internal"}[6h])
+          )
+
+      - record: flow:success:error_ratio_rate6h
+        expr: |
+          flow:success:bad_rate6h
+          / clamp_min(flow:success:eligible_rate6h, 0.001)
+
+      - record: flow:success:error_ratio_rate28d
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_attempts_total{outcome=~"failed_chain|failed_internal"}[28d])
+          )
+          / clamp_min(
+              sum by (flow) (
+                rate(nester_flow_attempts_total{outcome!~"rejected|cancelled"}[28d])
+              ),
+              0.001
+            )
+
+  # ---------------------------------------------------------------------------
+  # Deposit and withdrawal latency
+  # ---------------------------------------------------------------------------
+  #
+  # A latency SLI as a *ratio of slow events*, not as a percentile.
+  #
+  # This is deliberate and it is the one non-obvious choice in this file.
+  # Alerting on "p95 > threshold" cannot be converted into an error budget:
+  # a percentile is not a count of bad events, so there is nothing to burn.
+  # Counting requests slower than a threshold gives a bad/eligible ratio with
+  # exactly the same shape as every other SLI here, so the same burn-rate
+  # arithmetic applies unchanged.
+  #
+  # Threshold: 30s. Stellar ledgers close at roughly 5s, so a confirmed
+  # deposit cannot beat ~5s and a normal one lands in 5-15s. 30s is therefore
+  # ~2-6 ledgers: comfortably slow enough that a healthy confirmation never
+  # trips it, tight enough that a user staring at a spinner is counted as
+  # badly served. The histogram has an explicit 30s bucket boundary, so this
+  # needs no interpolation.
+  #
+  # Only `succeeded` observations are eligible. A failure's duration measures
+  # how long the failure took to surface, which is a different question with a
+  # different owner; folding it in here would let a fast-failing outage look
+  # like a latency improvement.
+  - name: slo_flow_latency
+    interval: 30s
+    rules:
+      - record: flow:latency:eligible_rate5m
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_duration_seconds_count{outcome="succeeded"}[5m])
+          )
+
+      - record: flow:latency:bad_rate5m
+        expr: |
+          flow:latency:eligible_rate5m
+          -
+          sum by (flow) (
+            rate(nester_flow_duration_seconds_bucket{outcome="succeeded",le="30"}[5m])
+          )
+
+      - record: flow:latency:error_ratio_rate5m
+        expr: |
+          clamp_min(flow:latency:bad_rate5m, 0)
+          / clamp_min(flow:latency:eligible_rate5m, 0.001)
+
+      - record: flow:latency:eligible_rate30m
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_duration_seconds_count{outcome="succeeded"}[30m])
+          )
+
+      - record: flow:latency:bad_rate30m
+        expr: |
+          flow:latency:eligible_rate30m
+          -
+          sum by (flow) (
+            rate(nester_flow_duration_seconds_bucket{outcome="succeeded",le="30"}[30m])
+          )
+
+      - record: flow:latency:error_ratio_rate30m
+        expr: |
+          clamp_min(flow:latency:bad_rate30m, 0)
+          / clamp_min(flow:latency:eligible_rate30m, 0.001)
+
+      - record: flow:latency:eligible_rate1h
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_duration_seconds_count{outcome="succeeded"}[1h])
+          )
+
+      - record: flow:latency:bad_rate1h
+        expr: |
+          flow:latency:eligible_rate1h
+          -
+          sum by (flow) (
+            rate(nester_flow_duration_seconds_bucket{outcome="succeeded",le="30"}[1h])
+          )
+
+      - record: flow:latency:error_ratio_rate1h
+        expr: |
+          clamp_min(flow:latency:bad_rate1h, 0)
+          / clamp_min(flow:latency:eligible_rate1h, 0.001)
+
+      - record: flow:latency:eligible_rate6h
+        expr: |
+          sum by (flow) (
+            rate(nester_flow_duration_seconds_count{outcome="succeeded"}[6h])
+          )
+
+      - record: flow:latency:bad_rate6h
+        expr: |
+          flow:latency:eligible_rate6h
+          -
+          sum by (flow) (
+            rate(nester_flow_duration_seconds_bucket{outcome="succeeded",le="30"}[6h])
+          )
+
+      - record: flow:latency:error_ratio_rate6h
+        expr: |
+          clamp_min(flow:latency:bad_rate6h, 0)
+          / clamp_min(flow:latency:eligible_rate6h, 0.001)
+
+      # p95 for the dashboard only. Operators think in percentiles even though
+      # the budget is computed from the slow-event ratio above, and a runbook
+      # that says "latency is degraded" is more actionable next to a number a
+      # human recognises.
+      - record: flow:latency:p95_5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (flow, le) (
+              rate(nester_flow_duration_seconds_bucket{outcome="succeeded"}[5m])
+            )
+          )
+
+  # ---------------------------------------------------------------------------
+  # Intelligence availability, latency, and refusals
+  # ---------------------------------------------------------------------------
+  #
+  # Availability is measured from the intelligence service's own counter rather
+  # than from the Go API's outbound view, because only this process can tell a
+  # refusal (a 200 carrying a polite sentence) apart from an answer. The
+  # outbound metrics remain the dependency-health signal and are what the
+  # runbook uses to decide whether the problem is the service or the network
+  # between it and the API.
+  #
+  # Eligible: answered + refused + error. `cancelled` is excluded — the client
+  # disconnected, so the service was never given the chance to succeed or fail.
+  #
+  # Refusals count as *available*. The service worked exactly as designed; a
+  # guardrail declining an off-topic question is not an outage. Refusal rate is
+  # tracked as its own product-quality indicator below, with its own target and
+  # a ticket-level alert, because a refusal wave caused by a misconfigured
+  # guardrail is invisible to every transport metric while being extremely
+  # visible to users.
+  - name: slo_intelligence
+    interval: 30s
+    rules:
+      - record: intelligence:availability:eligible_rate5m
+        expr: sum(rate(nester_intelligence_requests_total{outcome!="cancelled"}[5m]))
+
+      - record: intelligence:availability:bad_rate5m
+        expr: sum(rate(nester_intelligence_requests_total{outcome="error"}[5m]))
+
+      - record: intelligence:availability:error_ratio_rate5m
+        expr: |
+          intelligence:availability:bad_rate5m
+          / clamp_min(intelligence:availability:eligible_rate5m, 0.001)
+
+      - record: intelligence:availability:eligible_rate30m
+        expr: sum(rate(nester_intelligence_requests_total{outcome!="cancelled"}[30m]))
+
+      - record: intelligence:availability:bad_rate30m
+        expr: sum(rate(nester_intelligence_requests_total{outcome="error"}[30m]))
+
+      - record: intelligence:availability:error_ratio_rate30m
+        expr: |
+          intelligence:availability:bad_rate30m
+          / clamp_min(intelligence:availability:eligible_rate30m, 0.001)
+
+      - record: intelligence:availability:eligible_rate1h
+        expr: sum(rate(nester_intelligence_requests_total{outcome!="cancelled"}[1h]))
+
+      - record: intelligence:availability:bad_rate1h
+        expr: sum(rate(nester_intelligence_requests_total{outcome="error"}[1h]))
+
+      - record: intelligence:availability:error_ratio_rate1h
+        expr: |
+          intelligence:availability:bad_rate1h
+          / clamp_min(intelligence:availability:eligible_rate1h, 0.001)
+
+      - record: intelligence:availability:eligible_rate6h
+        expr: sum(rate(nester_intelligence_requests_total{outcome!="cancelled"}[6h]))
+
+      - record: intelligence:availability:bad_rate6h
+        expr: sum(rate(nester_intelligence_requests_total{outcome="error"}[6h]))
+
+      - record: intelligence:availability:error_ratio_rate6h
+        expr: |
+          intelligence:availability:bad_rate6h
+          / clamp_min(intelligence:availability:eligible_rate6h, 0.001)
+
+      - record: intelligence:availability:error_ratio_rate28d
+        expr: |
+          sum(rate(nester_intelligence_requests_total{outcome="error"}[28d]))
+          / clamp_min(
+              sum(rate(nester_intelligence_requests_total{outcome!="cancelled"}[28d])),
+              0.001
+            )
+
+      # Time to first token. Threshold 3s: below ~1s reads as instant and
+      # beyond ~5s users abandon, so 3s is the point where the experience has
+      # measurably degraded but the answer is still worth waiting for. The
+      # histogram has an explicit 3s boundary, so no interpolation is needed.
+      #
+      # TTFT rather than total duration is the SLI because perceived
+      # responsiveness of a stream is dominated by when text starts appearing,
+      # not by when it stops. A 40s answer that begins in 800ms feels fine; an
+      # 8s answer that begins at 7s feels broken.
+      - record: intelligence:ttft:eligible_rate5m
+        expr: sum(rate(nester_intelligence_time_to_first_token_seconds_count[5m]))
+
+      - record: intelligence:ttft:bad_rate5m
+        expr: |
+          intelligence:ttft:eligible_rate5m
+          - sum(rate(nester_intelligence_time_to_first_token_seconds_bucket{le="3.0"}[5m]))
+
+      - record: intelligence:ttft:error_ratio_rate5m
+        expr: |
+          clamp_min(intelligence:ttft:bad_rate5m, 0)
+          / clamp_min(intelligence:ttft:eligible_rate5m, 0.001)
+
+      - record: intelligence:ttft:eligible_rate30m
+        expr: sum(rate(nester_intelligence_time_to_first_token_seconds_count[30m]))
+
+      - record: intelligence:ttft:bad_rate30m
+        expr: |
+          intelligence:ttft:eligible_rate30m
+          - sum(rate(nester_intelligence_time_to_first_token_seconds_bucket{le="3.0"}[30m]))
+
+      - record: intelligence:ttft:error_ratio_rate30m
+        expr: |
+          clamp_min(intelligence:ttft:bad_rate30m, 0)
+          / clamp_min(intelligence:ttft:eligible_rate30m, 0.001)
+
+      - record: intelligence:ttft:eligible_rate1h
+        expr: sum(rate(nester_intelligence_time_to_first_token_seconds_count[1h]))
+
+      - record: intelligence:ttft:bad_rate1h
+        expr: |
+          intelligence:ttft:eligible_rate1h
+          - sum(rate(nester_intelligence_time_to_first_token_seconds_bucket{le="3.0"}[1h]))
+
+      - record: intelligence:ttft:error_ratio_rate1h
+        expr: |
+          clamp_min(intelligence:ttft:bad_rate1h, 0)
+          / clamp_min(intelligence:ttft:eligible_rate1h, 0.001)
+
+      - record: intelligence:ttft:eligible_rate6h
+        expr: sum(rate(nester_intelligence_time_to_first_token_seconds_count[6h]))
+
+      - record: intelligence:ttft:bad_rate6h
+        expr: |
+          intelligence:ttft:eligible_rate6h
+          - sum(rate(nester_intelligence_time_to_first_token_seconds_bucket{le="3.0"}[6h]))
+
+      - record: intelligence:ttft:error_ratio_rate6h
+        expr: |
+          clamp_min(intelligence:ttft:bad_rate6h, 0)
+          / clamp_min(intelligence:ttft:eligible_rate6h, 0.001)
+
+      - record: intelligence:ttft:p95_5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(nester_intelligence_time_to_first_token_seconds_bucket[5m])
+            )
+          )
+
+      # Refusal rate. Denominator is answered + refused: requests that the
+      # model was actually asked to answer. Errors are excluded because a
+      # request that failed was never given the chance to be refused, and
+      # including them would make the refusal rate move whenever availability
+      # moved — two independent problems reported as one number.
+      #
+      # This is a product-quality guardrail, not an availability signal. A
+      # baseline of refusals is correct and healthy: users do ask off-topic
+      # questions, and grounding *should* decline when the account data is
+      # missing. What this catches is the rate departing from that baseline,
+      # which means a guardrail is misfiring or grounding has lost its data.
+      - record: intelligence:refusal:eligible_rate30m
+        expr: sum(rate(nester_intelligence_requests_total{outcome=~"answered|refused"}[30m]))
+
+      - record: intelligence:refusal:bad_rate30m
+        expr: sum(rate(nester_intelligence_requests_total{outcome="refused"}[30m]))
+
+      - record: intelligence:refusal:error_ratio_rate30m
+        expr: |
+          intelligence:refusal:bad_rate30m
+          / clamp_min(intelligence:refusal:eligible_rate30m, 0.001)
+
+      - record: intelligence:refusal:eligible_rate6h
+        expr: sum(rate(nester_intelligence_requests_total{outcome=~"answered|refused"}[6h]))
+
+      - record: intelligence:refusal:bad_rate6h
+        expr: sum(rate(nester_intelligence_requests_total{outcome="refused"}[6h]))
+
+      - record: intelligence:refusal:error_ratio_rate6h
+        expr: |
+          intelligence:refusal:bad_rate6h
+          / clamp_min(intelligence:refusal:eligible_rate6h, 0.001)
+
+      # Split by mechanism, for the runbook. "Refusals are up" is not
+      # actionable; "guardrail refusals are up and grounding refusals are flat"
+      # points at one deploy.
+      - record: intelligence:refusal:by_reason_rate30m
+        expr: sum by (reason) (rate(nester_intelligence_refusals_total[30m]))
+
+  # ---------------------------------------------------------------------------
+  # Balance freshness
+  # ---------------------------------------------------------------------------
+  #
+  # This SLI is a gauge, not a ratio of events, so the burn-rate machinery does
+  # not apply to it and it is not given one. Pretending otherwise — inventing a
+  # synthetic "bad event" per scrape to force it into the same shape — would
+  # produce a burn rate that means nothing, and the resulting alert could not
+  # be reasoned about during an incident.
+  #
+  # Instead it is alerted on directly, with the staleness guard doing the work
+  # a denominator would otherwise do: distinguishing "lag is genuinely zero"
+  # from "nothing has updated this gauge in ten minutes".
+  #
+  # Threshold: 60 ledgers, roughly 5 minutes at a ~5s close interval. The
+  # indexer polls every 6s and advances its cursor to the tip it just fetched,
+  # so healthy lag is a handful of ledgers. 60 is far enough above that to
+  # tolerate a slow poll or a brief RPC stall without firing, and close enough
+  # that a user seeing a stale balance is caught within minutes.
+  #
+  # The same budget stated in seconds is 60 * 5s = 300s, and that is the form
+  # the API and the staleness alert use (nester#1088). It is deliberately NOT
+  # written as a literal anywhere in this file: the application exports the
+  # budget it is actually enforcing as
+  # nester_indexer_staleness_budget_seconds, and the alert compares lag against
+  # that series. An operator who retunes INDEXER_STALENESS_BUDGET therefore
+  # moves the alert and the API's stale flag together, and the two cannot drift
+  # into disagreeing about whether balances are current.
+  #
+  # `max` across replicas rather than `avg`: freshness is a property of the
+  # data being served, and if any replica is serving stale balances, users are
+  # seeing stale balances. Averaging would let a healthy majority hide it.
+  - name: slo_balance_freshness
+    interval: 30s
+    rules:
+      - record: indexer:freshness:lag_ledgers
+        expr: max(nester_indexer_lag_ledgers)
+
+      # Staleness in wall time: time since the last freshness sample plus that
+      # sample's ledger lag. Unlike lag_ledgers this series is always present
+      # and always moving, because the API derives it from the clock at scrape
+      # time rather than the indexer pushing it on a successful poll. That is
+      # what makes it able to catch an indexer that has stopped entirely.
+      - record: indexer:freshness:lag_seconds
+        expr: max(nester_indexer_lag_seconds)
+
+      - record: indexer:freshness:budget_seconds
+        expr: max(nester_indexer_staleness_budget_seconds)
+
+      - record: indexer:freshness:sample_age_seconds
+        expr: max(nester_indexer_lag_last_sample_age_seconds)
+
+      - record: indexer:freshness:sample_error_rate5m
+        expr: sum(rate(nester_indexer_lag_sample_errors_total[5m]))
+
+  # Money-path integrity (nester#1108). The SLIs above answer "are deposits and
+  # withdrawals succeeding, and is the indexer keeping up". These answer the
+  # question those cannot: does our record of the money still agree with the
+  # chain, and is anything stuck in flight.
+  #
+  # Recorded here rather than queried ad hoc in each alert so the dashboard and
+  # the pager read the same series, per the note at the top of this file.
+  - name: slo_money_path_integrity
+    interval: 30s
+    rules:
+      # Divergence rate by kind. A mismatch means a balance is wrong, which is
+      # categorically worse than a record merely missing or stuck, so the kind
+      # label is preserved rather than summed away.
+      - record: reconcile:divergence:rate5m
+        expr: sum by (kind) (rate(nester_reconcile_divergences_total[5m]))
+
+      - record: reconcile:divergence:rate30m
+        expr: sum by (kind) (rate(nester_reconcile_divergences_total[30m]))
+
+      # Total divergences seen in the last hour, for the "any divergence at
+      # all" alert. #1108 asks to alert on any reconciliation divergence, so
+      # this is an increase over a window rather than a rate threshold.
+      - record: reconcile:divergence:increase1h
+        expr: sum(increase(nester_reconcile_divergences_total[1h]))
+
+      # Reconciler liveness. A divergence count of zero means nothing if the
+      # reconciler is not running, so the age of the last completed pass is
+      # recorded alongside the findings.
+      - record: reconcile:health:last_run_age_seconds
+        expr: max(nester_reconcile_last_run_age_seconds)
+
+      - record: reconcile:health:failed_run_rate5m
+        expr: sum(rate(nester_reconcile_runs_total{outcome="failed"}[5m]))
+
+      # Balance-reconciler liveness (nester#1082). The age gauge above belongs
+      # to the transaction poller and is reset every 15 seconds by its passes,
+      # so a dead vault-balance reconciler would hide behind it forever. The
+      # balance job publishes its own scrape-time age series — emitted only by
+      # the replica actually doing the work — recorded here for the same
+      # dashboard/pager symmetry as the rest of the group.
+      - record: reconcile:balance:last_run_age_seconds
+        expr: max(nester_reconcile_balance_last_run_age_seconds)
+
+      # Pending submissions. Depth alone is ambiguous — a large queue that
+      # drains is healthy — so the age of the oldest entry is the series the
+      # alert is written against.
+      - record: submission:pending:count
+        expr: max(nester_submission_pending_count)
+
+      - record: submission:pending:oldest_age_seconds
+        expr: max(nester_submission_pending_oldest_age_seconds)

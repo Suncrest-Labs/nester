@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
@@ -20,6 +20,8 @@ import {
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { TransactionAnnouncer } from "@/components/vault/transactionAnnouncer";
 import {
   executeVaultWithdraw,
   UserRejectedError,
@@ -33,7 +35,7 @@ import { getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type ActionState = "input" | "building" | "signing" | "submitting" | "success" | "error";
+type ActionState = "input" | "building" | "signing" | "submitting" | "pending" | "success" | "error";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,15 @@ function ModalShell({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const titleId = 'withdraw-modal-title';
+  const subtitleId = 'withdraw-modal-subtitle';
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Escape must cancel without submitting, and focus must return to the
+  // trigger on close (nester#1128). Both live in the hook so the deposit and
+  // withdraw shells cannot drift apart.
+  useFocusTrap(dialogRef, open, { onEscape: onClose });
+
   return (
     <AnimatePresence>
       {open && (
@@ -81,6 +92,12 @@ function ModalShell({
         >
           <div className="flex min-h-full items-center justify-center">
             <motion.div
+              ref={dialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              aria-describedby={subtitleId}
+              tabIndex={-1}
               initial={{ opacity: 0, y: 24, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
@@ -92,13 +109,15 @@ function ModalShell({
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
                     Vault Action
                   </p>
-                  <h2 className="mt-2 font-heading text-2xl font-light text-foreground">
+                  <h2 id={titleId} className="mt-2 font-heading text-2xl font-light text-foreground">
                     {title}
                   </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+                  <p id={subtitleId} className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
                 </div>
                 <button
+                  type="button"
                   onClick={onClose}
+                  aria-label="Close dialog"
                   className="rounded-full border border-border bg-white dark:bg-[#100F0F] p-2 text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
@@ -116,9 +135,9 @@ function ModalShell({
 // ── Transaction steps ─────────────────────────────────────────────────────────
 
 const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
-  { label: "Build contract call", activeStates: ["building", "signing", "submitting", "success"] },
-  { label: "Sign with wallet",    activeStates: ["signing", "submitting", "success"] },
-  { label: "Submit and confirm",  activeStates: ["success"] },
+  { label: "Build contract call", activeStates: ["building", "signing", "submitting", "pending", "success"] },
+  { label: "Sign with wallet",    activeStates: ["signing", "submitting", "pending", "success"] },
+  { label: "Submit and confirm",  activeStates: ["submitting", "pending", "success"] },
 ];
 
 // ── WithdrawModal ─────────────────────────────────────────────────────────────
@@ -149,6 +168,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const [state, setState] = useState<ActionState>("input");
   const [errorMsg, setErrorMsg] = useState("");
   const [receipt, setReceipt] = useState<(TransactionReceipt & { penaltyAmount: number; netAmount: number }) | null>(null);
+  const submittingRef = useRef(false);
 
   const amount = Number(amountInput) || 0;
 
@@ -184,13 +204,17 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   };
 
   const handleWithdraw = async () => {
-    if (!position || !address || !quote) return;
+    if (!position || !address || !quote || submittingRef.current) return;
+    submittingRef.current = true;
 
     setErrorMsg("");
 
     try {
-      setState("building");
       const vaultDef = getVaultById(position.vaultId);
+      // Enter the pending state before awaiting. Setting it afterwards
+      // batches it with setState("success") into one render, so the user
+      // never sees "waiting for confirmation".
+      setState("pending");
       const txReceipt = await executeVaultWithdraw({
         walletAddress: address,
         vaultId: position.vaultId,
@@ -219,16 +243,26 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     } catch (err) {
       setErrorMsg(humanizeError(err));
       setState("error");
+    } finally {
+      submittingRef.current = false;
     }
   };
 
   return (
     <ModalShell
       open={open && !!position}
-      onClose={state === "signing" || state === "submitting" ? () => {} : reset}
+      onClose={state === "signing" || state === "submitting" || state === "pending" ? () => {} : reset}
       title={`Withdraw from ${position?.vaultName ?? "Vault"}`}
       subtitle="Review shares, lock period, and net proceeds before signing."
     >
+      <TransactionAnnouncer
+        phase={state}
+        errorMessage={errorMsg}
+        amountLabel={
+          amount > 0 ? `${formatCurrency(amount)} ${position?.asset ?? "USDC"}` : undefined
+        }
+        action="Withdrawal"
+      />
       {position && (
         <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
           {/* ── Left: position summary + amount ── */}
@@ -449,7 +483,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
               <div className="mt-5 flex gap-3">
                 <button
                   onClick={reset}
-                  disabled={state === "signing" || state === "submitting"}
+                  disabled={state === "signing" || state === "submitting" || state === "pending"}
                   className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
                 >
                   {state === "success" ? "Close" : "Cancel"}
@@ -462,6 +496,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                       state === "building" ||
                       state === "signing" ||
                       state === "submitting" ||
+                      state === "pending" ||
                       (state === "input" && !canSubmit)
                     }
                     className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
@@ -482,6 +517,12 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                       <span className="inline-flex items-center justify-center gap-2">
                         <Loader2 className="h-4 w-4 animate-spin" />
                         Submitting
+                      </span>
+                    )}
+                    {state === "pending" && (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Waiting for confirmation
                       </span>
                     )}
                     {state === "error" && "Try Again"}

@@ -134,7 +134,10 @@ func seedIntegrationVault(t *testing.T, db *sql.DB, userID uuid.UUID) uuid.UUID 
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		vaultID.String(),
 		userID.String(),
-		"CA-SETTLE-INT",
+		// Unique per vault: contract_address is unique among live vaults
+		// (migration 104), because the event indexer keys balance mutations
+		// on it. A shared literal made every multi-vault test collide.
+		"CA-SETTLE-INT-"+vaultID.String(),
 		"0",
 		"0",
 		"USDC",

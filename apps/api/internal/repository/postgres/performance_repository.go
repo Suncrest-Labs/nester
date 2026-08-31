@@ -239,7 +239,6 @@ func (r *PerformanceRepository) APYStatsForVault(
 	return
 }
 
-
 type rowScanner interface {
 	Scan(dest ...any) error
 }

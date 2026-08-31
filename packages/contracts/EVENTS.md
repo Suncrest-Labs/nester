@@ -249,6 +249,72 @@ Emitted when a timelocked operation is cancelled.
     }
     ```
 
+---
+
+## Yield Adapters (#812)
+
+### SRC_FAIL
+Emitted by the registry each time an adapter interaction fails. Fires on every
+failure, including ones below the degradation threshold.
+- **Topics**: `(REGISTRY, SRC_FAIL, source_id: Symbol)`
+- **Data**:
+    ```rust
+    {
+        failure_count: u32,   // consecutive failures including this one
+        threshold: u32,       // failures tolerated before degradation
+        reporter: Address     // registry itself, or the vault
+    }
+    ```
+
+### SRC_DEGR
+Emitted once when consecutive failures exceed the threshold and the source is
+flipped to `SourceStatus::Degraded`. Allocation logic then freezes the source's
+existing allocation. Recovery is never automatic.
+- **Topics**: `(REGISTRY, SRC_DEGR, source_id: Symbol)`
+- **Data**:
+    ```rust
+    {
+        failure_count: u32,
+        previous_status: SourceStatus,
+        degraded_at: u64
+    }
+    ```
+
+### SRC_RECO
+Emitted when an admin explicitly returns a degraded source to `Active` via
+`recover_source`.
+- **Topics**: `(REGISTRY, SRC_RECO, source_id: Symbol)`
+- **Data**:
+    ```rust
+    {
+        recovered_by: Address,
+        recovered_at: u64
+    }
+    ```
+
+### SRC_SKIP
+Emitted by the vault when a rebalance skips a source because its adapter
+failed, or when `record_source_allocation` refuses an unhealthy source. The
+rebalance continues across the remaining sources.
+- **Topics**: `(VAULT, SRC_SKIP, source_id: Symbol)`
+- **Data**:
+    ```rust
+    {
+        attempted_delta: i128,
+        timestamp: u64
+    }
+    ```
+
+### ADAPTER DEPOSIT / WITHDRAW
+Emitted by each adapter when value moves through it.
+- **Topics**: `(ADAPTER, DEPOSIT | WITHDRAW, counterparty: Address)`
+- **Data**:
+    ```rust
+    {
+        amount: i128,   // underlying assets in/out
+        units: i128     // protocol position units minted/burned
+    }
+    ```
 ## Savings Goal Events (Contract Symbol: `SAV_GOAL` — issue #807)
 
 ### GOAL_NEW (goal_created)
@@ -275,3 +341,97 @@ Emitted when the permissionless `expire_goal` transitions a goal past its deadli
 Emitted when the goal owner calls `abandon_goal`.
 - **Topics**: `(SAV_GOAL, GOAL_AB, goal_id: BytesN<32>)`
 - **Data**: `{ contributed: i128, timestamp: u64 }`
+
+## Upgrade Events (Contract Symbol: `UPGRADE`)
+
+### PROP_UPG (upgrade_proposed)
+Emitted when a new contract WASM upgrade is proposed with a timelock ETA.
+- **Topics**: `(UPGRADE, PROP_UPG, proposer: Address)`
+- **Data**:
+    ```rust
+    {
+        wasm_hash: BytesN<32>,
+        eta: u64,
+        proposer: Address
+    }
+    ```
+
+### CAN_UPG (upgrade_cancelled)
+Emitted when a pending WASM upgrade proposal is cancelled before execution.
+- **Topics**: `(UPGRADE, CAN_UPG, cancelled_by: Address)`
+- **Data**:
+    ```rust
+    {
+        wasm_hash: BytesN<32>,
+        cancelled_by: Address
+    }
+    ```
+
+### EXEC_UPG (upgrade_executed)
+Emitted when a matured WASM upgrade is executed, updating the contract WASM.
+- **Topics**: `(UPGRADE, EXEC_UPG, executed_by: Address)`
+- **Data**:
+    ```rust
+    {
+        wasm_hash: BytesN<32>,
+        executed_by: Address,
+        execution_timestamp: u64
+    }
+    ```
+
+## Recurring Deposit Events (Contract Symbol: `MANDATE`)
+
+### MDT_CRTD (mandate_created)
+Emitted when a user creates a new recurring deposit authorization mandate.
+- **Topics**: `(MANDATE, MDT_CRTD, user: Address)`
+- **Data**:
+    ```rust
+    {
+        mandate_id: u64,
+        user: Address,
+        vault: Address,
+        token: Address,
+        amount_per_period: i128,
+        period_secs: u64,
+        expires_at: u64,
+        max_total: i128
+    }
+    ```
+
+### MDT_EXEC (mandate_executed)
+Emitted when a mandate execution is triggered.
+- **Topics**: `(MANDATE, MDT_EXEC, user: Address)`
+- **Data**:
+    ```rust
+    {
+        mandate_id: u64,
+        user: Address,
+        vault: Address,
+        amount: i128,
+        total_drawn: i128,
+        executor: Address
+    }
+    ```
+
+### MDT_CANC (mandate_cancelled)
+Emitted when a mandate is cancelled by its owner.
+- **Topics**: `(MANDATE, MDT_CANC, user: Address)`
+- **Data**:
+    ```rust
+    {
+        mandate_id: u64,
+        user: Address
+    }
+    ```
+
+### MDT_PAUSE (mandate_paused)
+Emitted when a mandate is paused or resumed.
+- **Topics**: `(MANDATE, MDT_PAUSE, user: Address)`
+- **Data**:
+    ```rust
+    {
+        mandate_id: u64,
+        user: Address,
+        paused: bool
+    }
+    ```
