@@ -307,6 +307,8 @@ def format_amount(
         # Crypto or unrecognised code — ticker suffix, e.g. "1,250.00 USDC".
         return f"{sign}{number} {code}".strip()
 
+    # The sign leads the whole amount: "-$42.50" (prefix symbols) and
+    # "-42,50 $" (suffix symbols) both render the sign first.
     if fmt.symbol_prefix:
         body = f"{symbol} {number}" if fmt.symbol_space else f"{symbol}{number}"
     else:
