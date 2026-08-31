@@ -63,13 +63,13 @@ func (s *YieldService) GetYieldComparison(ctx context.Context, chain string, lim
 			order = append(order, key)
 		}
 
-		tvl := pool.TvlUsd
+		tvl := pool.TVLUsd
 		item.entry.TVLUSD += tvl
 		if tvl > 0 {
-			item.weightedAPY += pool.Apy * tvl
+			item.weightedAPY += pool.APY * tvl
 			item.weightedRisk += pool.RiskScore * tvl
 		} else {
-			item.weightedAPY += pool.Apy
+			item.weightedAPY += pool.APY
 			item.weightedRisk += pool.RiskScore
 			item.zeroTVLCount++
 		}
