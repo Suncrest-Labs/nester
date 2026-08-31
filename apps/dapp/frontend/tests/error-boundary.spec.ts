@@ -26,7 +26,7 @@ test.describe("Error boundary", () => {
       }),
     );
 
-    await page.goto("/offline", { waitUntil: "networkidle" });
+    await page.goto("/offline", { waitUntil: "domcontentloaded" });
 
     // The page may show the Next.js default error page or the custom
     // error boundary — the key assertion is that a blank page is NOT
@@ -48,21 +48,23 @@ test.describe("Error boundary", () => {
       }),
     );
 
-    await page.goto("/offline", { waitUntil: "networkidle" });
+    await page.goto("/offline", { waitUntil: "domcontentloaded" });
 
     // Check that interactive elements exist (may be default Next.js error
-    // or custom error boundary — either way keyboard navigation should work)
-    const buttons = page.locator("button, a");
-    const count = await buttons.count();
-    // At least one interactive element (retry/go home)
-    expect(count).toBeGreaterThanOrEqual(1);
+    // or custom error boundary — either way keyboard navigation should work).
+    // Wait for the first one rather than counting immediately: the API proxy
+    // is not up in CI, so the page finishes rendering after its data fetch
+    // fails rather than at load.
+    await expect(page.locator("button, a").first()).toBeAttached({
+      timeout: 15_000,
+    });
   });
 });
 
 test.describe("Loading states", () => {
   test("page skeleton renders on route navigation", async ({ page }) => {
     // The `/` route (home page) renders without wallet connection
-    await page.goto("/", { waitUntil: "networkidle" });
+    await page.goto("/", { waitUntil: "domcontentloaded" });
 
     // The home page is the ConnectWallet screen — no loading skeleton
     // expected.  Verify it renders something non-blank.
