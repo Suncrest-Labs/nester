@@ -27,9 +27,39 @@ const (
 
 var (
 	ErrTransactionNotFound = errors.New("transaction not found")
-	ErrInvalidTransaction   = errors.New("invalid transaction input")
-	ErrInvalidStatus        = errors.New("invalid transaction status")
-	ErrInvalidType          = errors.New("invalid transaction type")
+	ErrInvalidTransaction  = errors.New("invalid transaction input")
+	ErrInvalidStatus       = errors.New("invalid transaction status")
+	ErrInvalidType         = errors.New("invalid transaction type")
+
+	// ErrChainClaimMismatch is returned when a transaction hash is confirmed
+	// successful on-chain but its operations do not match what the client
+	// claimed: wrong asset, wrong destination, or an amount other than the one
+	// actually transferred. A successful transaction is not evidence that it
+	// moved the claimed value to the claimed vault (nester#1145).
+	ErrChainClaimMismatch = errors.New("on-chain operations do not match the claimed transaction")
+)
+
+// Typed failure reasons persisted in Transaction.ErrorReason when a
+// confirmation is rejected. They are stable strings: dashboards and support
+// tooling match on them, so change them only with a migration of consumers.
+const (
+	// ReasonNoMatchingOperation: the transaction succeeded but carries no
+	// payment operation to (or from) the vault's contract address at all. This
+	// is the unrelated-but-successful hash case.
+	ReasonNoMatchingOperation = "chain_no_matching_operation"
+	// ReasonAmountMismatch: a matching operation exists but moved a different
+	// amount than the request claimed.
+	ReasonAmountMismatch = "chain_amount_mismatch"
+	// ReasonAssetMismatch: a matching operation exists but moved a different
+	// asset than the vault's currency.
+	ReasonAssetMismatch = "chain_asset_mismatch"
+	// ReasonDestinationMismatch: a payment exists for the claimed asset and
+	// amount, but not to the vault's contract address.
+	ReasonDestinationMismatch = "chain_destination_mismatch"
+	// ReasonVaultUnresolvable: the vault (and therefore the expected
+	// destination) could not be loaded, so the claim cannot be checked. The
+	// transaction is left pending rather than credited.
+	ReasonVaultUnresolvable = "chain_vault_unresolvable"
 )
 
 type Transaction struct {

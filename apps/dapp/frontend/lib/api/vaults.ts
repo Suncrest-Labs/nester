@@ -1,8 +1,6 @@
 // lib/api/vaults.ts
 import { apiRequest } from "@/lib/api/client";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
-
 export interface ProjectionPoint {
   date: string;
   balance: number;
@@ -77,30 +75,18 @@ export interface HarvestResult {
   tx_hash?: string;
 }
 
+function newIdempotencyKey(): string {
+  return crypto.randomUUID();
+}
+
 export const vaultsApi = {
-  getProjection: async (vaultId: string): Promise<Projection> => {
-    const res = await fetch(`${API_BASE}/api/v1/vaults/${vaultId}/projection`, {
-      headers: {
-        Authorization: `Bearer ${getStoredToken()}`,
-      },
-    });
-    if (!res.ok) throw new Error("Failed to fetch projection");
-    const json = await res.json();
-    return json.data;
-  },
+  getProjection: (vaultId: string) =>
+    apiRequest<Projection>(`/vaults/${vaultId}/projection`),
 
   getTransactions: async (vaultId?: string): Promise<Transaction[]> => {
-    const url = new URL(`${API_BASE}/api/v1/transactions`);
-    if (vaultId) url.searchParams.append("vault_id", vaultId);
-    
-    const res = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${getStoredToken()}`,
-      },
-    });
-    if (!res.ok) throw new Error("Failed to fetch transactions");
-    const json = await res.json();
-    return json.data ?? [];
+    const query = vaultId ? `?vault_id=${encodeURIComponent(vaultId)}` : "";
+    const data = await apiRequest<Transaction[]>(`/transactions${query}`);
+    return data ?? [];
   },
 
   getApyHistory: (vaultId: string, period: APYHistoryPeriod = "30d") =>
@@ -119,17 +105,14 @@ export const vaultsApi = {
   harvest: (vaultId: string, compound: boolean) =>
     apiRequest<HarvestResult>(`/vaults/${vaultId}/harvest`, {
       method: "POST",
+      headers: { "Idempotency-Key": newIdempotencyKey() },
       body: JSON.stringify({ compound }),
     }),
 
   applyRebalance: (vaultId: string, allocations: AllocationPct[]) =>
     apiRequest<unknown>(`/vaults/${vaultId}/rebalance`, {
       method: "POST",
+      headers: { "Idempotency-Key": newIdempotencyKey() },
       body: JSON.stringify({ allocations }),
     }),
-}
-
-function getStoredToken(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem("nester_token") ?? "";
 }

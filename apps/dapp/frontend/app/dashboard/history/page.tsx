@@ -8,6 +8,9 @@ import TransactionTable from "@/components/history/TransactionTable";
 import { exportCsv } from "@/lib/export/csv";
 import { exportPdf } from "@/lib/export/pdf";
 import { useWallet } from "@/components/wallet-provider";
+import { useAuth } from "@/components/auth-provider";
+import { useVaults } from "@/hooks/useVaults";
+import { getStoredToken } from "@/lib/api/client";
 import { AppShell } from "@/components/app-shell";
 import { motion } from "framer-motion";
 
@@ -22,7 +25,7 @@ interface Transaction {
   timestamp: string;
   type: "Deposit" | "Withdrawal" | "Rebalance" | "Settlement" | "Yield Earned";
   vaultName: string;
-  amount: number;
+  amount: string; // exact decimal string from the API, e.g. "123.45" (#1223)
   asset: string;
   status: "Confirmed" | "Pending" | "Failed";
   txHash?: string;
@@ -30,7 +33,14 @@ interface Transaction {
 
 export default function HistoryPage() {
   const { isConnected, user } = useWallet();
+  const { userId } = useAuth();
+  const { vaults } = useVaults(userId ?? undefined);
   const router = useRouter();
+
+  const vaultOptions = useMemo(
+    () => vaults.map((v) => ({ id: v.id, name: `${v.currency} Vault` })),
+    [vaults]
+  );
 
   useEffect(() => {
     if (!isConnected) router.push("/");
@@ -59,6 +69,7 @@ export default function HistoryPage() {
     if (filters.toDate) params.append("to", filters.toDate);
     if (filters.vaultId) params.append("vault", filters.vaultId);
     if (filters.status && filters.status !== "All") params.append("status", filters.status);
+    if (filters.searchTerm) params.append("q", filters.searchTerm);
     if (cursor) params.append("cursor", cursor);
     params.append("limit", "25");
     return params.toString();
@@ -70,7 +81,9 @@ export default function HistoryPage() {
       setError(null);
       try {
         const query = buildQuery();
-        const res = await fetch(`/api/v1/activity?${query}`);
+        const res = await fetch(`/api/v1/activity?${query}`, {
+          headers: { Authorization: `Bearer ${getStoredToken()}` },
+        });
         if (!res.ok) throw new Error(`Error ${res.status}`);
         const json: ActivityResponse = await res.json();
         setTransactions(json.data);
@@ -90,7 +103,7 @@ export default function HistoryPage() {
     const term = filters.searchTerm.toLowerCase();
     return transactions.filter((tx) => {
       const hashMatch = tx.txHash?.toLowerCase().includes(term) ?? false;
-      const amountMatch = tx.amount.toString().includes(term);
+      const amountMatch = tx.amount.includes(term);
       return hashMatch || amountMatch;
     });
   }, [transactions, filters.searchTerm]);
@@ -98,13 +111,13 @@ export default function HistoryPage() {
   const summary = useMemo(() => {
     const totalDeposited = transactions
       .filter((t) => t.type === "Deposit")
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + Number(t.amount), 0);
     const totalWithdrawn = transactions
       .filter((t) => t.type === "Withdrawal")
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + Number(t.amount), 0);
     const totalYield = transactions
       .filter((t) => t.type === "Yield Earned")
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + Number(t.amount), 0);
     return { totalDeposited, totalWithdrawn, totalYield };
   }, [transactions]);
 
@@ -113,7 +126,7 @@ export default function HistoryPage() {
       date: tx.timestamp,
       type: tx.type,
       vault: tx.vaultName,
-      amount: tx.amount.toFixed(2),
+      amount: Number(tx.amount).toFixed(2),
       status: tx.status,
       txHash: tx.txHash,
     }));
@@ -167,7 +180,7 @@ export default function HistoryPage() {
         </div>
       </div>
 
-      <FilterBar vaultOptions={[]} onChange={setFilters} />
+      <FilterBar vaultOptions={vaultOptions} onChange={setFilters} />
 
       <TransactionTable
         transactions={filteredTransactions}

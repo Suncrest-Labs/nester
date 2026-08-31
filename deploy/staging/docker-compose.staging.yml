@@ -1,0 +1,59 @@
+services:
+  postgres_staging:
+    image: postgres:15-alpine
+    container_name: nester_postgres_staging
+    environment:
+      POSTGRES_DB: nester_staging
+      POSTGRES_USER: nester
+      POSTGRES_PASSWORD: staging_secure_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nester -d nester_staging"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis_staging:
+    image: redis:7-alpine
+    container_name: nester_redis_staging
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api_staging:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: nester_api_staging
+    environment:
+      - DATABASE_URL=postgres://nester:staging_secure_password@postgres_staging:5432/nester_staging?sslmode=disable
+      - REDIS_URL=redis://redis_staging:6379
+      - STELLAR_NETWORK=testnet
+      - STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
+      # Contract addresses and the funded test account are deliberately left
+      # without defaults. The placeholders that were here were not valid
+      # Stellar strings, so the service started and then failed at its first
+      # chain call rather than at boot — and a secret-shaped default is a
+      # pattern worth not establishing even on testnet. Supply these through
+      # deploy/staging/.env, which is gitignored.
+      - CONTRACT_ADDRESS_VAULT_FACTORY=${CONTRACT_ADDRESS_VAULT_FACTORY:?set in deploy/staging/.env}
+      - CONTRACT_ADDRESS_YIELD_REGISTRY=${CONTRACT_ADDRESS_YIELD_REGISTRY:?set in deploy/staging/.env}
+      - FUNDED_TEST_ACCOUNT_SECRET=${FUNDED_TEST_ACCOUNT_SECRET:?set in deploy/staging/.env}
+      - APP_ENV=staging
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres_staging:
+        condition: service_healthy
+      redis_staging:
+        condition: service_healthy
+
+volumes:
+  postgres_staging_data:

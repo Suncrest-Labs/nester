@@ -1,9 +1,13 @@
 #![no_std]
 
+mod basket;
 mod breaker;
+pub mod conversion;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN,
+    Env,
     IntoVal, Symbol, Val, Vec,
 };
 
@@ -97,8 +101,16 @@ impl<'a> VaultTokenContractClient<'a> {
     }
 }
 
+mod queue;
+mod rebalance;
+
 use nester_access_control::{AccessControl, Role};
-use nester_common::{emit_event, with_reentrancy_guard, CalleeAllowlist, ContractError};
+use nester_common::{
+    emit_event, emit_event_with_sym, with_reentrancy_guard, AssetConfig, BasketValuation,
+    CalleeAllowlist, ContractError, PriceInfo, SourceStatus,
+};
+use queue::{QueueEntry, QueuePosition, QueueStats};
+pub use rebalance::RebalanceLeg;
 
 const VAULT: Symbol = symbol_short!("VAULT");
 const DEPOSIT: Symbol = symbol_short!("DEPOSIT");
@@ -106,8 +118,9 @@ const WITHDRAW: Symbol = symbol_short!("WITHDRAW");
 const PAUSE: Symbol = symbol_short!("PAUSE");
 const UNPAUSE: Symbol = symbol_short!("UNPAUSE");
 const REBALANCE: Symbol = symbol_short!("REBAL");
+/// Emitted when a rebalance skips a source because its adapter failed.
+const SOURCE_SKIPPED: Symbol = symbol_short!("SRC_SKIP");
 const HARVEST: Symbol = symbol_short!("HARVEST");
-const HARVEST_VLT: Symbol = symbol_short!("HARV_VLT");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
 const DEFAULT_REBALANCE_COOLDOWN: u64 = 3600;
 /// Default rebalance slippage tolerance: 50 bps (0.5%) — issue #638.
@@ -115,6 +128,20 @@ const DEFAULT_REBALANCE_SLIPPAGE_BPS: u32 = 50;
 /// Upper bound on the configurable rebalance slippage tolerance (50%).
 const MAX_REBALANCE_SLIPPAGE_BPS: u32 = 5_000;
 const FEE_CONFIG_UPDATED: Symbol = symbol_short!("FEE_CFG");
+const EMRG_REQD: Symbol = symbol_short!("EMRG_REQD");
+const EMRG_FILL: Symbol = symbol_short!("EMRG_FILL");
+const EMRG_CANCL: Symbol = symbol_short!("EMRG_CANC");
+const REBAL_LEG: Symbol = symbol_short!("REBAL_LEG");
+const REBAL_CMP: Symbol = symbol_short!("REBAL_CMP");
+const DEFAULT_MAX_REBALANCE_VALUE_BPS: u32 = rebalance::DEFAULT_MAX_REBALANCE_VALUE_BPS;
+const DEFAULT_MAX_LEG_SLIPPAGE_BPS: u32 = rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING;
+const PNLTY_CHG: Symbol = symbol_short!("PNLTY_CHG");
+const PNLTY_DST: Symbol = symbol_short!("PNLTY_DST");
+/// Default split: 70% of every penalty compensates remaining depositors,
+/// 30% is protocol revenue — within the compile-time treasury cap.
+const DEFAULT_DEPOSITOR_SHARE_BPS: u32 = 10_000 - nester_common::MAX_TREASURY_SHARE_BPS + 2_000;
+const DEFAULT_MIN_PENALTY_DISTRIBUTION_AMOUNT: i128 = 1_000_000;
+const DEFAULT_PENALTY_DISTRIBUTION_COOLDOWN: u64 = 3_600;
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -217,6 +244,38 @@ pub struct EmergencyRequest {
     pub amount: i128,
 }
 
+/// Fair-ordering emergency withdrawal queue events (issue #814). Distinct
+/// from the legacy `ERG_REQ`/`ERG_QUE`/`ERG_PROC` events emitted by
+/// `emergency_withdraw`, which remains a separate, simpler paused-only exit
+/// path. `request_emergency_withdrawal` / `process_emergency_queue` /
+/// `cancel_emergency_request` are the fairness-hardened primitives intended
+/// for general withdrawal-under-stress scenarios.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyRequestedEventData {
+    pub user: Address,
+    pub seq: u64,
+    pub shares_requested: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyFilledEventData {
+    pub user: Address,
+    pub seq: u64,
+    pub fill_shares: i128,
+    pub fill_assets: i128,
+    pub fully_filled: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyCancelledEventData {
+    pub user: Address,
+    pub seq: u64,
+    pub shares_returned: i128,
+}
+
 /// A single yield-source position unwound by an emergency exit.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -274,15 +333,6 @@ pub struct HarvestResult {
     pub user: Address,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct VaultHarvestResult {
-    pub total_gross_yield: i128,
-    pub total_fee_collected: i128,
-    pub total_net_yield: i128,
-    pub positions_harvested: u32,
-}
-
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
@@ -317,6 +367,7 @@ enum DataKey {
     EmergencyQueue,
     LiquidReserved, // total amount committed to the emergency queue but not yet paid
     AllocationStrategy,
+    YieldRegistry,
     SourceAllocation(Symbol),
     AllocatedSources,
     LastRebalanceAt,
@@ -325,6 +376,17 @@ enum DataKey {
     UserYield(Address),
     TotalReportedYield,
     LastHarvestAt(Address),
+    FirstDepositAt(Address),
+    PerformanceFeeTiers,
+    ExitFeeTiers,
+    ManagementFeeTiers,
+    MaxLegSlippageBps,
+    MaxRebalanceValueBps,
+    PenaltyEscrow,
+    DepositorShareBps,
+    LastPenaltyDistributionAt,
+    MinPenaltyDistributionAmount,
+    PenaltyDistributionCooldown,
     // --- Circuit breaker v2 (issue #817) ---
     Severity,
     LastTripReason,
@@ -335,8 +397,83 @@ enum DataKey {
     SharePriceBaselineAt,
     SourceFailureCount,
     BreakerConfigV2,
+    // Multi-asset vault support (#804)
+    BasketAssets,         // Vec<AssetConfig> for multi-asset vaults
+    IsMultiAsset,         // bool flag indicating if vault is multi-asset
+    LastPrices,           // Vec<PriceInfo> for basket assets
+    MaxPriceAgeSecs,      // u64 maximum price age
+    MaxPriceDeviationBps, // u32 maximum price deviation
     // --- Referral integration (issue #818) ---
     ReferralContract,
+}
+
+/// Why a penalty was charged (issue #805). `LockBreak` and `WeightDeviation`
+/// are reserved for the time-lock and multi-asset-deposit features
+/// respectively — neither exists in this vault yet, so no path currently
+/// emits them, but the discriminant is defined up front so those features
+/// can adopt the same escrow without an event-schema change later.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PenaltyReason {
+    EarlyWithdrawal,
+    LockBreak,
+    EmergencyExit,
+    WeightDeviation,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PenaltyChargedEventData {
+    pub user: Address,
+    pub amount: i128,
+    pub shares_burned: i128,
+    pub reason: PenaltyReason,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PenaltyDistributedEventData {
+    pub depositor_amount: i128,
+    pub treasury_amount: i128,
+    pub retained_dust: i128,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PenaltyConfig {
+    pub depositor_share_bps: u32,
+    pub min_distribution_amount: i128,
+    pub distribution_cooldown: u64,
+}
+
+/// One (threshold, rate) breakpoint in an on-chain fee schedule (issue
+/// #813). `threshold` is a tenure in seconds for performance/exit tiers, or
+/// a TVL amount for the management tier.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VaultFeeTier {
+    pub threshold: i128,
+    pub rate_bps: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FeeTierKind {
+    Performance,
+    Exit,
+    Management,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeSchedulePreview {
+    pub tenure_secs: u64,
+    pub current_exit_fee_bps: u32,
+    pub current_performance_fee_bps: u32,
+    pub next_boundary_secs: Option<u64>,
+    pub next_boundary_exit_fee_bps: u32,
+    pub next_boundary_perf_fee_bps: u32,
 }
 
 #[contracttype]
@@ -357,7 +494,46 @@ pub struct AllocationDeltaView {
 #[derive(Clone, Debug)]
 pub struct RebalancedEventData {
     pub source_deltas: Vec<AllocationDeltaView>,
+    /// Sources skipped because their adapter failed. A non-empty list means
+    /// the rebalance completed across the remainder rather than aborting.
+    pub skipped_sources: Vec<Symbol>,
     pub timestamp: u64,
+}
+
+/// Emitted per source skipped during a rebalance due to adapter failure.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SourceSkippedEventData {
+    pub attempted_delta: i128,
+    pub timestamp: u64,
+}
+
+/// Return shape of `plan_rebalance`: the plan plus its `plan_hash`, so
+/// callers never have to compute the checksum themselves off-chain.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RebalancePlan {
+    pub legs: Vec<RebalanceLeg>,
+    pub plan_hash: u64,
+}
+
+/// Per-leg execution record for `execute_rebalance` (issue #810).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RebalanceLegExecutedEventData {
+    pub source_id: Symbol,
+    pub delta: i128,
+    pub amount_out: i128,
+    pub min_out: i128,
+}
+
+/// Summary emitted once per `execute_rebalance` call.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RebalanceCompletedEventData {
+    pub plan_hash: u64,
+    pub total_value_moved: i128,
+    pub realized_slippage_bps: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +586,241 @@ fn rebalance_min_assets_out(env: &Env, gross: i128, slippage_bps: u32) -> i128 {
     nester_common::fees::mul_div(net, (10_000 - slippage_bps) as i128, 10_000).unwrap_or(0)
 }
 
+/// Outcome of attempting to move value through a source's adapter.
+enum AdapterOutcome {
+    /// The source has no adapter — bookkeeping-only, pre-adapter behaviour.
+    NoAdapter,
+    /// The adapter moved value and enforced its minimum-output floor. Carries
+    /// the **realised** asset-denominated delta the protocol actually
+    /// confirmed, signed like the requested delta. Bookkeeping records this
+    /// rather than the requested figure, so the vault never books an amount the
+    /// protocol did not acknowledge.
+    Moved(i128),
+    /// The adapter (or the registry lookup) reverted. Isolate this source.
+    Failed,
+}
+
+/// The YieldRegistry bound to this vault, if any.
+fn get_yield_registry(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::YieldRegistry)
+}
+
+/// Look up `source_id`'s adapter and move `delta` through it: a positive delta
+/// deposits into the protocol, a negative delta withdraws from it.
+///
+/// Every step — the registry read, the status check, and the adapter call
+/// itself — uses `try_invoke_contract` so a reverting third-party protocol can
+/// never abort the whole rebalance. Any failure returns
+/// [`AdapterOutcome::Failed`] and the caller isolates that one source.
+///
+/// Sources that are not `Active` (paused, degraded, deprecated) are reported
+/// as `Failed` so the caller skips them without touching allocations.
+fn move_via_adapter(
+    env: &Env,
+    registry_id: &Address,
+    source_id: &Symbol,
+    delta: i128,
+    slippage_bps: u32,
+) -> AdapterOutcome {
+    let source_args: Vec<Val> = soroban_sdk::vec![env, source_id.clone().into_val(env)];
+
+    let status = match env.try_invoke_contract::<SourceStatus, ContractError>(
+        registry_id,
+        &Symbol::new(env, "get_source_status"),
+        source_args.clone(),
+    ) {
+        Ok(Ok(s)) => s,
+        _ => return AdapterOutcome::Failed,
+    };
+    if !matches!(status, SourceStatus::Active) {
+        return AdapterOutcome::Failed;
+    }
+
+    let adapter = match env.try_invoke_contract::<Option<Address>, ContractError>(
+        registry_id,
+        &Symbol::new(env, "get_source_adapter"),
+        source_args,
+    ) {
+        Ok(Ok(Some(a))) => a,
+        // No adapter configured: legacy bookkeeping-only source.
+        Ok(Ok(None)) => return AdapterOutcome::NoAdapter,
+        _ => return AdapterOutcome::Failed,
+    };
+
+    // Adapters call third-party protocol code, so they are gated by the same
+    // callee allowlist as every other external callee (#811). An unregistered
+    // adapter is treated as a per-source failure rather than an assert, so an
+    // un-allowlisted source is skipped instead of aborting the whole rebalance
+    // — the same blast-radius rule the rest of this path follows. Register an
+    // adapter with `register_callee` before it can move value.
+    if !CalleeAllowlist::is_registered(env, &adapter) {
+        return AdapterOutcome::Failed;
+    }
+
+    let me = env.current_contract_address();
+    if delta > 0 {
+        // Pre-authorize the adapter to pull exactly `delta` of the underlying
+        // from this vault for this call, and nothing else.
+        //
+        // The pull happens inside the adapter's invocation, so if the adapter
+        // reverts, `try_invoke_contract` rolls the transfer back with it. A
+        // push before the call would leave the funds stranded at a broken
+        // adapter — a fund-loss bug in exactly the failure path this design
+        // exists to survive.
+        let underlying = VaultContract::get_token(env.clone());
+        CalleeAllowlist::assert_allowed(env, &underlying);
+        authorize_adapter_pull(env, &underlying, &adapter, delta);
+
+        // Floor the position units on the same slippage tolerance used for
+        // withdrawals, priced off the adapter's own valuation of what it
+        // already holds. With no prior position there is no rate to price
+        // against, so require only that the protocol mints something.
+        let min_units_out = deposit_min_units_out(env, &adapter, delta, slippage_bps);
+
+        let args: Vec<Val> = soroban_sdk::vec![
+            env,
+            me.into_val(env),
+            delta.into_val(env),
+            min_units_out.into_val(env),
+        ];
+        match env.try_invoke_contract::<i128, ContractError>(
+            &adapter,
+            &Symbol::new(env, "deposit"),
+            args,
+        ) {
+            // The adapter returns units; the vault books assets. The assets it
+            // actually parted with is `delta`, which the push above realised.
+            Ok(Ok(_)) => AdapterOutcome::Moved(delta),
+            // The authorized pull is rolled back with the failed invocation,
+            // so no funds have left the vault.
+            _ => AdapterOutcome::Failed,
+        }
+    } else {
+        let gross = -delta;
+        let min_out = rebalance_min_assets_out(env, gross, slippage_bps);
+
+        // `withdraw` is denominated in position units, not assets. Convert
+        // using the adapter's own valuation of the position it holds:
+        //     units_to_burn = units_held * gross / position_value
+        // Passing the asset figure straight into the units slot would burn an
+        // arbitrary and usually wrong fraction of the position.
+        let units = match assets_to_units(env, &adapter, gross) {
+            Some(u) if u > 0 => u,
+            _ => return AdapterOutcome::Failed,
+        };
+
+        let args: Vec<Val> = soroban_sdk::vec![
+            env,
+            me.into_val(env),
+            units.into_val(env),
+            min_out.into_val(env),
+        ];
+        match env.try_invoke_contract::<i128, ContractError>(
+            &adapter,
+            &Symbol::new(env, "withdraw"),
+            args,
+        ) {
+            // Book the proceeds the protocol actually paid, not the request.
+            Ok(Ok(received)) => AdapterOutcome::Moved(-received),
+            _ => AdapterOutcome::Failed,
+        }
+    }
+}
+
+/// Authorize `adapter` to `transfer` exactly `amount` of `token` out of this
+/// vault, scoped to the next invocation only.
+///
+/// This is the canonical Soroban mechanism for a contract to permit a nested
+/// transfer from its own address. The grant names the token, the exact
+/// arguments, and nothing else, so the adapter cannot move a different amount,
+/// a different asset, or anyone else's funds.
+fn authorize_adapter_pull(env: &Env, token: &Address, adapter: &Address, amount: i128) {
+    let me = env.current_contract_address();
+    let args: Vec<Val> = soroban_sdk::vec![
+        env,
+        me.clone().into_val(env),
+        adapter.clone().into_val(env),
+        amount.into_val(env),
+    ];
+
+    env.authorize_as_current_contract(soroban_sdk::vec![
+        env,
+        InvokerContractAuthEntry::Contract(SubContractInvocation {
+            context: ContractContext {
+                contract: token.clone(),
+                fn_name: Symbol::new(env, "transfer"),
+                args,
+            },
+            sub_invocations: Vec::new(env),
+        }),
+    ]);
+}
+
+/// Convert an asset amount into adapter position units, pro-rata against the
+/// adapter's current position. Returns `None` when the adapter cannot be read
+/// or holds nothing to value against — callers treat that as a failure and
+/// skip the source rather than guessing a unit count.
+fn assets_to_units(env: &Env, adapter: &Address, assets: i128) -> Option<i128> {
+    let me = env.current_contract_address();
+    let owner_args: Vec<Val> = soroban_sdk::vec![env, me.into_val(env)];
+    let no_args: Vec<Val> = Vec::new(env);
+
+    let value = match env.try_invoke_contract::<i128, ContractError>(
+        adapter,
+        &Symbol::new(env, "position_value"),
+        owner_args,
+    ) {
+        Ok(Ok(v)) if v > 0 => v,
+        _ => return None,
+    };
+    let units_held = match env.try_invoke_contract::<i128, ContractError>(
+        adapter,
+        &Symbol::new(env, "max_withdraw"),
+        no_args,
+    ) {
+        Ok(Ok(u)) if u > 0 => u,
+        _ => return None,
+    };
+
+    // Withdrawing the whole position must burn every unit, not a rounded-down
+    // share of them.
+    if assets >= value {
+        return Some(units_held);
+    }
+    units_held.checked_mul(assets).map(|n| n / value)
+}
+
+/// Minimum position units to accept for a deposit of `assets`, derived from
+/// the adapter's existing position and the configured slippage tolerance.
+/// Falls back to 1 (the protocol must mint something) when there is no prior
+/// position to price against.
+fn deposit_min_units_out(env: &Env, adapter: &Address, assets: i128, slippage_bps: u32) -> i128 {
+    match assets_to_units(env, adapter, assets) {
+        Some(expected) if expected > 0 => {
+            nester_common::fees::mul_div(expected, (10_000 - slippage_bps) as i128, 10_000)
+                .unwrap_or(1)
+                .max(1)
+        }
+        _ => 1,
+    }
+}
+
+/// Tell the registry that this source's adapter failed. Best-effort: a
+/// registry that rejects the report must not abort the rebalance that is
+/// already skipping the source.
+fn report_source_failure(env: &Env, registry_id: &Address, source_id: &Symbol) {
+    let args: Vec<Val> = soroban_sdk::vec![
+        env,
+        env.current_contract_address().into_val(env),
+        source_id.clone().into_val(env),
+    ];
+    let _ = env.try_invoke_contract::<(), ContractError>(
+        registry_id,
+        &Symbol::new(env, "report_source_failure"),
+        args,
+    );
+}
+
 /// Reverts with `SlippageExceeded` when realised proceeds fall below the floor.
 fn enforce_rebalance_slippage(env: &Env, min_assets_out: i128, actual_received: i128) {
     if actual_received < min_assets_out {
@@ -454,6 +865,68 @@ fn get_total_assets(env: &Env) -> i128 {
 
 fn set_total_assets(env: &Env, amount: i128) {
     env.storage().instance().set(&DataKey::TotalAssets, &amount);
+}
+
+/// Assets backing shares after already-accrued vault fees.
+fn get_net_total_assets(env: &Env) -> i128 {
+    get_total_assets(env).saturating_sub(get_accrued_fees(env))
+}
+
+/// Remaining assets that can be withdrawn without crossing the configured
+/// rolling circuit-breaker threshold. This helper is read-only and deliberately
+/// uses saturating arithmetic so `max_*` queries never fail.
+fn circuit_breaker_headroom(env: &Env) -> i128 {
+    let Some(config) = env
+        .storage()
+        .instance()
+        .get::<_, CircuitBreakerConfig>(&DataKey::CircuitBreakerConfig)
+    else {
+        return 0;
+    };
+
+    let threshold = nester_common::fees::mul_div(
+        get_total_assets(env),
+        config.threshold_bps as i128,
+        10_000,
+    )
+    .unwrap_or(0);
+    // A zero threshold disables the check in `check_circuit_breaker`.
+    if threshold == 0 {
+        return i128::MAX;
+    }
+
+    let window_start = env
+        .ledger()
+        .timestamp()
+        .saturating_sub(config.window_seconds);
+    let history: Vec<WithdrawalEntry> = env
+        .storage()
+        .instance()
+        .get(&DataKey::WithdrawalHistory)
+        .unwrap_or(Vec::new(env));
+    let mut used = 0_i128;
+    for entry in history.iter() {
+        if entry.timestamp >= window_start && entry.sum > 0 {
+            used = used.saturating_add(entry.sum);
+        }
+    }
+    threshold.saturating_sub(used)
+}
+
+/// Maximum gross assets the holder can presently redeem. Unlike the mutating
+/// withdrawal path this function never panics.
+fn max_withdrawable_assets(env: &Env, user: &Address) -> i128 {
+    if !env.storage().instance().has(&DataKey::Token) || is_paused(env) {
+        return 0;
+    }
+
+    let shares = get_shares(env, user);
+    let total_shares = vault_token_client(env).total_supply();
+    let total_assets = get_net_total_assets(env);
+    let holder_assets =
+        conversion::shares_to_assets_down(shares, total_assets, total_shares).unwrap_or(0);
+    let liquid = get_vault_liquid_reserves(env).saturating_sub(get_liquid_reserved(env));
+    holder_assets.min(liquid).min(circuit_breaker_headroom(env))
 }
 
 fn sync_vault_token_total_assets(env: &Env) {
@@ -526,6 +999,153 @@ fn set_emergency_queue(env: &Env, queue: &soroban_sdk::Vec<EmergencyRequest>) {
         .set(&DataKey::EmergencyQueue, queue);
 }
 
+// ---------------------------------------------------------------------------
+// Tiered fee schedule helpers (issue #813)
+// ---------------------------------------------------------------------------
+
+fn has_first_deposit_at(env: &Env, user: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .has(&DataKey::FirstDepositAt(user.clone()))
+}
+
+fn get_first_deposit_at(env: &Env, user: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::FirstDepositAt(user.clone()))
+        .unwrap_or(0)
+}
+
+fn set_first_deposit_at(env: &Env, user: &Address, ts: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::FirstDepositAt(user.clone()), &ts);
+}
+
+fn clear_first_deposit_at(env: &Env, user: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::FirstDepositAt(user.clone()));
+}
+
+/// Seconds since `user`'s first deposit into their current position. Reset
+/// only by a full exit (see [`clear_first_deposit_at`]); unaffected by
+/// partial withdrawals or additional deposits.
+///
+/// Existence is checked explicitly rather than comparing the stored
+/// timestamp to zero — a deposit genuinely made at ledger timestamp 0 (the
+/// start of any fresh test/dev chain) is a legitimate value, not a sentinel
+/// for "unset".
+fn tenure_secs(env: &Env, user: &Address) -> u64 {
+    if !has_first_deposit_at(env, user) {
+        return 0;
+    }
+    let first = get_first_deposit_at(env, user);
+    env.ledger().timestamp().saturating_sub(first)
+}
+
+fn get_performance_tiers(env: &Env) -> Vec<VaultFeeTier> {
+    env.storage()
+        .instance()
+        .get(&DataKey::PerformanceFeeTiers)
+        .unwrap_or(Vec::new(env))
+}
+
+fn set_performance_tiers(env: &Env, tiers: &Vec<VaultFeeTier>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PerformanceFeeTiers, tiers);
+}
+
+fn get_exit_tiers(env: &Env) -> Vec<VaultFeeTier> {
+    env.storage()
+        .instance()
+        .get(&DataKey::ExitFeeTiers)
+        .unwrap_or(Vec::new(env))
+}
+
+fn set_exit_tiers(env: &Env, tiers: &Vec<VaultFeeTier>) {
+    env.storage().instance().set(&DataKey::ExitFeeTiers, tiers);
+}
+
+fn get_management_tiers(env: &Env) -> Vec<VaultFeeTier> {
+    env.storage()
+        .instance()
+        .get(&DataKey::ManagementFeeTiers)
+        .unwrap_or(Vec::new(env))
+}
+
+fn set_management_tiers(env: &Env, tiers: &Vec<VaultFeeTier>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ManagementFeeTiers, tiers);
+}
+
+/// Converts a bounded on-chain `Vec<VaultFeeTier>` into a fixed-size array so
+/// it can be handed to `nester_common::fees`'s pure, Soroban-free tier math.
+/// Bounded by `MAX_FEE_TIERS`, so this is cheap regardless of on-chain size
+/// (which is itself validated to never exceed that bound on write).
+fn to_fee_tier_array(
+    tiers: &Vec<VaultFeeTier>,
+) -> (
+    [nester_common::fees::FeeTier; nester_common::fees::MAX_FEE_TIERS],
+    usize,
+) {
+    let mut arr = [nester_common::fees::FeeTier {
+        threshold: 0,
+        rate_bps: 0,
+    }; nester_common::fees::MAX_FEE_TIERS];
+    let mut n = 0;
+    for t in tiers.iter() {
+        if n >= arr.len() {
+            break;
+        }
+        arr[n] = nester_common::fees::FeeTier {
+            threshold: t.threshold,
+            rate_bps: t.rate_bps,
+        };
+        n += 1;
+    }
+    (arr, n)
+}
+
+/// Tenure-tiered performance fee rate, falling back to the flat
+/// `FeeConfig::performance_fee_bps` when no tiers have been configured
+/// (empty table = feature not opted into, fully backward compatible).
+fn effective_performance_fee_bps(env: &Env, user: &Address, config: &FeeConfig) -> u32 {
+    let tiers = get_performance_tiers(env);
+    let (arr, n) = to_fee_tier_array(&tiers);
+    if n == 0 {
+        config.performance_fee_bps
+    } else {
+        nester_common::fees::rate_at(&arr[..n], tenure_secs(env, user) as i128)
+    }
+}
+
+/// Tenure-tiered exit (early withdrawal) fee rate, falling back to the flat
+/// `FeeConfig::early_withdrawal_fee_bps` when no tiers are configured.
+fn effective_exit_fee_bps(env: &Env, user: &Address, config: &FeeConfig) -> u32 {
+    let tiers = get_exit_tiers(env);
+    let (arr, n) = to_fee_tier_array(&tiers);
+    if n == 0 {
+        config.early_withdrawal_fee_bps
+    } else {
+        nester_common::fees::rate_at(&arr[..n], tenure_secs(env, user) as i128)
+    }
+}
+
+/// TVL-tiered management fee rate, falling back to the flat
+/// `FeeConfig::management_fee_bps` when no tiers are configured.
+fn effective_management_fee_bps(env: &Env, total_assets: i128, config: &FeeConfig) -> u32 {
+    let tiers = get_management_tiers(env);
+    let (arr, n) = to_fee_tier_array(&tiers);
+    if n == 0 {
+        config.management_fee_bps
+    } else {
+        nester_common::fees::rate_at(&arr[..n], total_assets)
+    }
+}
+
 fn get_fee_config(env: &Env) -> FeeConfig {
     env.storage()
         .instance()
@@ -551,9 +1171,10 @@ fn accrue_management_fee(env: &Env) {
     if elapsed > 0 {
         let config = get_fee_config(env);
         let total_assets = get_total_assets(env);
+        let management_fee_bps = effective_management_fee_bps(env, total_assets, &config);
         let fee = nester_common::fees::calculate_management_fee(
             total_assets,
-            config.management_fee_bps,
+            management_fee_bps,
             elapsed,
         )
         .unwrap_or_else(|e| panic_with_error!(env, e));
@@ -766,6 +1387,143 @@ fn check_circuit_breaker(env: &Env, amount: i128) {
 }
 
 // ---------------------------------------------------------------------------
+// Slippage-safe multi-hop rebalance helpers (issue #810)
+// ---------------------------------------------------------------------------
+
+fn get_max_leg_slippage_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxLegSlippageBps)
+        .unwrap_or(DEFAULT_MAX_LEG_SLIPPAGE_BPS)
+}
+
+fn get_max_rebalance_value_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxRebalanceValueBps)
+        .unwrap_or(DEFAULT_MAX_REBALANCE_VALUE_BPS)
+}
+
+/// Recomputes the rebalance plan the contract would produce right now:
+/// fetches current allocations, asks the allocation strategy for deltas, and
+/// builds a fresh, slippage-safe leg plan. Used by both `plan_rebalance`
+/// (as-is, for previewing) and `execute_rebalance` (to check the submitted
+/// plan hasn't gone stale).
+fn compute_fresh_rebalance_plan(env: &Env) -> (Vec<RebalanceLeg>, i128, i128) {
+    let total_assets = get_total_assets(env) - get_accrued_fees(env);
+    let strategy = get_allocation_strategy(env);
+    let current = current_allocations_vec(env);
+
+    let mut deployed_total: i128 = 0;
+    for a in current.iter() {
+        deployed_total = deployed_total
+            .checked_add(a.amount)
+            .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+    }
+
+    let deltas: Vec<AllocationDeltaView> = invoke_allowed(
+        env,
+        &strategy,
+        &Symbol::new(env, "calculate_rebalance_deltas"),
+        (current, deployed_total).into_val(env),
+    );
+
+    let mut delta_inputs = Vec::new(env);
+    for d in deltas.iter() {
+        delta_inputs.push_back(rebalance::DeltaInput {
+            source_id: d.source_id.clone(),
+            delta: d.delta,
+        });
+    }
+
+    let slippage_bps = env
+        .storage()
+        .instance()
+        .get(&DataKey::RebalanceSlippageBps)
+        .unwrap_or(DEFAULT_REBALANCE_SLIPPAGE_BPS);
+    let effective_slippage = slippage_bps.min(get_max_leg_slippage_bps(env));
+
+    let (plan, total_moved) = rebalance::build_plan(env, &delta_inputs, |gross| {
+        rebalance_min_assets_out(env, gross, effective_slippage)
+    });
+
+    (plan, total_moved, total_assets)
+}
+
+// ---------------------------------------------------------------------------
+// Early-exit penalty escrow helpers (issue #805)
+// ---------------------------------------------------------------------------
+
+fn get_penalty_escrow(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PenaltyEscrow)
+        .unwrap_or(0)
+}
+
+fn set_penalty_escrow(env: &Env, amount: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PenaltyEscrow, &amount);
+}
+
+fn get_depositor_share_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::DepositorShareBps)
+        .unwrap_or(DEFAULT_DEPOSITOR_SHARE_BPS)
+}
+
+fn get_min_penalty_distribution_amount(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinPenaltyDistributionAmount)
+        .unwrap_or(DEFAULT_MIN_PENALTY_DISTRIBUTION_AMOUNT)
+}
+
+fn get_penalty_distribution_cooldown(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PenaltyDistributionCooldown)
+        .unwrap_or(DEFAULT_PENALTY_DISTRIBUTION_COOLDOWN)
+}
+
+/// Route a penalty into the escrow and emit `penalty_charged`. The amount is
+/// value that stays inside the vault's real token balance without being
+/// reflected in `TotalAssets` (mirroring how the fee is already excluded
+/// from the amount transferred back to the exiting user) — `distribute_penalties`
+/// later either folds the depositor slice back into `TotalAssets` (raising
+/// share price) or transfers the treasury slice out.
+fn charge_penalty(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+    reason: PenaltyReason,
+    shares_burned: i128,
+) {
+    if amount <= 0 {
+        return;
+    }
+    let escrow = get_penalty_escrow(env)
+        .checked_add(amount)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+    set_penalty_escrow(env, escrow);
+
+    emit_event(
+        env,
+        VAULT,
+        PNLTY_CHG,
+        user.clone(),
+        PenaltyChargedEventData {
+            user: user.clone(),
+            amount,
+            shares_burned,
+            reason,
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
 
@@ -793,6 +1551,7 @@ impl VaultContract {
     ) {
         // AccessControl::initialize handles AlreadyInitialized guard and require_auth
         AccessControl::initialize(&env, &admin);
+        nester_common::Upgrade::init_schema_version(&env, 1);
         env.storage()
             .instance()
             .set(&DataKey::Token, &token_address);
@@ -959,6 +1718,110 @@ impl VaultContract {
         );
     }
 
+    /// Admin: replace one of the three tiered fee schedules (issue #813).
+    /// Validated for: bounded tier count, strictly ascending thresholds,
+    /// every rate at or below the relevant compile-time ceiling, and — the
+    /// grandfathering rule — no point on the new curve exceeding the old
+    /// curve by more than `fees::MAX_SCHEDULE_RATE_INCREASE_BPS`, so an
+    /// admin cannot retroactively spike an existing depositor's rate.
+    pub fn set_fee_tiers(env: Env, caller: Address, kind: FeeTierKind, tiers: Vec<VaultFeeTier>) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+
+        let ceiling = match kind {
+            FeeTierKind::Performance => nester_common::MAX_PERFORMANCE_FEE_BPS,
+            FeeTierKind::Exit => nester_common::MAX_EARLY_WITHDRAWAL_FEE_BPS,
+            FeeTierKind::Management => nester_common::MAX_MANAGEMENT_FEE_BPS,
+        };
+
+        let (new_arr, new_n) = to_fee_tier_array(&tiers);
+        nester_common::fees::validate_tiers(&new_arr[..new_n], ceiling)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+
+        let old_tiers = match kind {
+            FeeTierKind::Performance => get_performance_tiers(&env),
+            FeeTierKind::Exit => get_exit_tiers(&env),
+            FeeTierKind::Management => get_management_tiers(&env),
+        };
+        let (old_arr, old_n) = to_fee_tier_array(&old_tiers);
+        nester_common::fees::validate_no_adverse_increase(
+            &old_arr[..old_n],
+            &new_arr[..new_n],
+            nester_common::fees::MAX_SCHEDULE_RATE_INCREASE_BPS,
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e));
+
+        match kind {
+            FeeTierKind::Performance => set_performance_tiers(&env, &tiers),
+            FeeTierKind::Exit => set_exit_tiers(&env, &tiers),
+            FeeTierKind::Management => set_management_tiers(&env, &tiers),
+        }
+    }
+
+    pub fn get_fee_tiers(env: Env, kind: FeeTierKind) -> Vec<VaultFeeTier> {
+        match kind {
+            FeeTierKind::Performance => get_performance_tiers(&env),
+            FeeTierKind::Exit => get_exit_tiers(&env),
+            FeeTierKind::Management => get_management_tiers(&env),
+        }
+    }
+
+    /// A user's current tenure, the exit/performance rates that apply to
+    /// them right now, and the next tier boundary — lets the frontend show
+    /// "wait N more days and your exit fee drops to X%".
+    pub fn fee_schedule_preview(env: Env, user: Address) -> FeeSchedulePreview {
+        require_initialized(&env);
+        let config = get_fee_config(&env);
+        let tenure = tenure_secs(&env, &user);
+
+        let perf_tiers = get_performance_tiers(&env);
+        let (parr, pn) = to_fee_tier_array(&perf_tiers);
+        let exit_tiers = get_exit_tiers(&env);
+        let (earr, en) = to_fee_tier_array(&exit_tiers);
+
+        let current_performance_fee_bps = if pn == 0 {
+            config.performance_fee_bps
+        } else {
+            nester_common::fees::rate_at(&parr[..pn], tenure as i128)
+        };
+        let current_exit_fee_bps = if en == 0 {
+            config.early_withdrawal_fee_bps
+        } else {
+            nester_common::fees::rate_at(&earr[..en], tenure as i128)
+        };
+
+        let perf_next = if pn == 0 {
+            None
+        } else {
+            nester_common::fees::next_boundary(&parr[..pn], tenure as i128)
+        };
+        let exit_next = if en == 0 {
+            None
+        } else {
+            nester_common::fees::next_boundary(&earr[..en], tenure as i128)
+        };
+
+        let next_boundary_secs = match (perf_next, exit_next) {
+            (Some(a), Some(b)) => Some(a.threshold.min(b.threshold) as u64),
+            (Some(a), None) => Some(a.threshold as u64),
+            (None, Some(b)) => Some(b.threshold as u64),
+            (None, None) => None,
+        };
+
+        FeeSchedulePreview {
+            tenure_secs: tenure,
+            current_exit_fee_bps,
+            current_performance_fee_bps,
+            next_boundary_secs,
+            next_boundary_exit_fee_bps: exit_next
+                .map(|t| t.rate_bps)
+                .unwrap_or(current_exit_fee_bps),
+            next_boundary_perf_fee_bps: perf_next
+                .map(|t| t.rate_bps)
+                .unwrap_or(current_performance_fee_bps),
+        }
+    }
+
     pub fn set_emergency_fee(env: Env, admin: Address, fee_bps: u32) -> Result<(), ContractError> {
         admin.require_auth();
         require_admin_or_fee_manager(&env, &admin);
@@ -998,6 +1861,36 @@ impl VaultContract {
 
     pub fn get_allocation_strategy(env: Env) -> Address {
         get_allocation_strategy(&env)
+    }
+
+    /// Bind this vault to the YieldRegistry so `rebalance` can resolve each
+    /// source's adapter and report adapter failures. Admin only.
+    ///
+    /// Optional: with no registry configured the vault falls back to pure
+    /// bookkeeping (pre-adapter behaviour) rather than refusing to rebalance.
+    ///
+    /// **Deployment requirement:** grant this vault the `Operator` role on the
+    /// registry (`registry.grant_role(admin, vault, Operator)`). The vault
+    /// reports the adapter failures it observes during rebalance, and without
+    /// that role those reports are rejected and silently dropped — sources
+    /// would then never reach `Degraded`.
+    pub fn set_yield_registry(env: Env, caller: Address, registry: Address) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::YieldRegistry, &registry);
+    }
+
+    /// Return the configured YieldRegistry, if any.
+    pub fn get_yield_registry(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::YieldRegistry)
+    }
+
+    /// Amount currently booked against a single yield source.
+    pub fn get_source_allocation(env: Env, source_id: Symbol) -> i128 {
+        get_source_allocation(&env, &source_id)
     }
 
     pub fn set_rebalance_cooldown(env: Env, caller: Address, seconds: u64) {
@@ -1255,9 +2148,9 @@ impl VaultContract {
     /// Steps (issue #518):
     ///  1. Calculate accrued yield since last harvest.
     ///  2. Deduct performance fee — only on net positive yield, never on impairment.
-    ///  3. Send the fee portion to the treasury contract.
-    ///  4. Compound the net yield: mint new vault-token shares at the current price
-    ///     and credit them to `user`, then increase TotalAssets accordingly.
+    ///  3. Burn fee-equivalent shares from `user` and send that value to the
+    ///     treasury, preserving the exchange rate for every other holder.
+    ///  4. Leave the net yield compounded in `user`'s remaining shares.
     ///  5. Update `LastHarvestAt` timestamp for `user`.
     ///
     /// Returns a zero-filled `HarvestResult` with `compounded: false` when the
@@ -1292,16 +2185,39 @@ impl VaultContract {
         }
 
         let config = get_fee_config(&env);
+        // Rate is taken at the user's tenure *now*, at harvest time, and
+        // immediately netted out of the compounded shares below — this is
+        // the "incremental, already-netted" choice from issue #813: a
+        // schedule change can only affect yield the user hasn't harvested
+        // yet, never yield already compounded into their principal under an
+        // earlier rate. Users who want to lock in today's rate before a
+        // tier boundary can simply harvest first.
+        let performance_fee_bps = effective_performance_fee_bps(&env, &user, &config);
         let performance_fee =
-            nester_common::fees::calculate_performance_fee(gross_yield, config.performance_fee_bps)
+            nester_common::fees::calculate_performance_fee(gross_yield, performance_fee_bps)
                 .unwrap_or_else(|e| panic_with_error!(&env, e));
 
         let net_yield = gross_yield
             .checked_sub(performance_fee)
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
-        // Transfer performance fee to treasury.
+        // Charge the performance fee against the harvesting user only. Yield
+        // is already reflected in TotalAssets and therefore in the value of
+        // the user's existing shares. Minting more shares for that same yield,
+        // or reducing assets without reducing supply, would dilute passive
+        // holders. Burning enough of the user's shares to cover the fee before
+        // transferring it reduces assets and supply together. Rounding the
+        // share charge up assigns any dust to the fee payer, never to holders
+        // who did not harvest.
         if performance_fee > 0 {
+            let fee_shares = conversion::assets_to_shares_up(
+                performance_fee,
+                get_net_total_assets(&env),
+                vault_token_client(&env).total_supply(),
+            )
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+            let _ = vault_token_client(&env).burn_for_withdrawal(&user, &fee_shares);
+
             let token_address = self::VaultContract::get_token(env.clone());
             transfer_tokens(
                 &env,
@@ -1332,20 +2248,6 @@ impl VaultContract {
             notify_referral_of_fee(&env, &user, performance_fee, principal);
         }
 
-        // Compound net yield: mint new shares for the user at the current price.
-        // The gross yield was already added to TotalAssets by report_yield, so
-        // only the fee reduction above affects TotalAssets here.
-        let new_shares = if net_yield > 0 {
-            let s = vault_token_client(&env).mint_for_deposit(&user, &net_yield);
-            // mint_for_deposit increments vault token's total_assets by net_yield, but
-            // that amount was already tracked by report_yield — sync back to the correct value.
-            sync_vault_token_total_assets(&env);
-            s
-        } else {
-            0
-        };
-        let _ = new_shares; // shares minted internally; user balance updated by vault token
-
         // Reset per-user pending yield to zero and record harvest timestamp.
         set_user_yield(&env, &user, 0);
         set_last_harvest_at(&env, &user, now);
@@ -1371,84 +2273,32 @@ impl VaultContract {
         result
     }
 
-    /// Admin-level vault-wide harvest: reads the aggregate yield reported since
-    /// the last vault harvest, extracts the performance fee portion, transfers
-    /// it to the treasury, and resets the `TotalReportedYield` counter to zero.
-    /// Suitable for periodic treasury collection without enumerating individual
-    /// user positions on-chain (Soroban does not support unbounded iteration).
-    pub fn harvest_vault(env: Env, admin: Address) -> VaultHarvestResult {
-        with_reentrancy_guard(env, |env| Self::harvest_vault_internal(env, admin))
-    }
-
-    fn harvest_vault_internal(env: Env, admin: Address) -> VaultHarvestResult {
-        require_initialized(&env);
-        require_active(&env);
-        admin.require_auth();
-        AccessControl::require_role(&env, &admin, Role::Admin);
-
-        let total_gross_yield = get_total_reported_yield(&env);
-
-        if total_gross_yield == 0 {
-            return VaultHarvestResult {
-                total_gross_yield: 0,
-                total_fee_collected: 0,
-                total_net_yield: 0,
-                positions_harvested: 0,
-            };
-        }
-
-        let config = get_fee_config(&env);
-        let total_fee_collected = nester_common::fees::calculate_performance_fee(
-            total_gross_yield,
-            config.performance_fee_bps,
-        )
-        .unwrap_or_else(|e| panic_with_error!(&env, e));
-
-        let total_net_yield = total_gross_yield
-            .checked_sub(total_fee_collected)
-            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
-
-        // Transfer performance fee to treasury.
-        if total_fee_collected > 0 {
-            let token_address = self::VaultContract::get_token(env.clone());
-            transfer_tokens(
-                &env,
-                &token_address,
-                &env.current_contract_address(),
-                &config.treasury_address,
-                &total_fee_collected,
-            );
-            invoke_allowed::<()>(
-                &env,
-                &config.treasury_address,
-                &Symbol::new(&env, "receive_fees"),
-                (total_fee_collected,).into_val(&env),
-            );
-            // Reduce TotalAssets by the fee sent to treasury.
-            let total_assets = get_total_assets(&env);
-            let post_fee_assets = total_assets
-                .checked_sub(total_fee_collected)
-                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
-            set_total_assets(&env, post_fee_assets);
-            sync_vault_token_total_assets(&env);
-        }
-
-        // Reset aggregate yield counter; per-user UserYield entries are left
-        // in place — they are swept individually by each user's own harvest() call.
-        set_total_reported_yield(&env, 0);
-
-        // positions_harvested reflects the aggregate sweep (one vault-wide sweep).
-        let result = VaultHarvestResult {
-            total_gross_yield,
-            total_fee_collected,
-            total_net_yield,
-            positions_harvested: 1,
-        };
-
-        emit_event(&env, VAULT, HARVEST_VLT, admin, result.clone());
-
-        result
-    }
+    // harvest_vault (admin-level aggregate harvest) was removed in #1159.
+    //
+    // It charged a performance fee on TotalReportedYield and transferred it to
+    // the treasury, then reduced TotalAssets by that fee while leaving total
+    // share supply untouched. Every holder's share price fell by the fee
+    // amount -- the same dilution #1078 removed from the per-user path.
+    //
+    // It was not replaced, because the fee it collected was a *second* charge
+    // on yield the per-user path already bills. harvest() derives gross yield
+    // from share value against recorded principal, and since #1157 it settles
+    // the fee by burning the harvesting user's own shares: assets and supply
+    // fall together, the treasury is paid in full, and no other holder moves.
+    // Running both paths took roughly twice the configured rate on the same
+    // yield, with the extra half taken from holders who never harvested.
+    //
+    // Minting fee-equivalent shares to the treasury was considered and
+    // rejected. A new claim on a fixed pool of assets has to come from
+    // somewhere: minting while the fee leaves the vault lowers the share price
+    // further than the present bug does, and minting while the fee is retained
+    // still moves the price. No share-accounting arrangement lets an aggregate
+    // fee be collected a second time without some holder paying it.
+    //
+    // Nothing outside the contract's own tests called this entrypoint. Treasury
+    // collection continues through per-user harvest(), which needs no unbounded
+    // iteration -- the constraint that motivated an aggregate entrypoint in the
+    // first place.
 
     /// Read-only check: does the live allocation drift exceed the strategy's
     /// `rebalance_threshold_bps`? Returns false when no strategy is set or the
@@ -1554,16 +2404,57 @@ impl VaultContract {
 
         // Apply each delta to source-allocation bookkeeping. Min-rebalance
         // skip is per-source so we don't pay tx fees for dust adjustments.
+        //
+        // Failure isolation (#812): each source's adapter interaction is
+        // attempted independently. A reverting adapter degrades only its own
+        // source — it is skipped, reported to the registry (which flips the
+        // source to Degraded once the failure threshold is exceeded), and the
+        // rebalance continues across the remaining sources.
+        let registry = get_yield_registry(&env);
         let mut applied = Vec::new(&env);
+        let mut skipped = Vec::new(&env);
         let mut total_delta: i128 = 0;
         for d in deltas.iter() {
             if d.delta.abs() < MIN_REBALANCE_AMOUNT {
                 continue;
             }
 
+            // Move value through the source's adapter when one is configured.
+            // Any failure isolates to this source.
+            //
+            // `effective_delta` is what actually moved: for an adapter-backed
+            // source that is the amount the protocol confirmed, which can differ
+            // from the requested delta. Bookkeeping follows the realised figure.
+            let mut adapter_handled = false;
+            let mut effective_delta = d.delta;
+            if let Some(registry_id) = registry.clone() {
+                match move_via_adapter(&env, &registry_id, &d.source_id, d.delta, slippage_bps) {
+                    AdapterOutcome::NoAdapter => {}
+                    AdapterOutcome::Moved(realised) => {
+                        adapter_handled = true;
+                        effective_delta = realised;
+                    }
+                    AdapterOutcome::Failed => {
+                        report_source_failure(&env, &registry_id, &d.source_id);
+                        emit_event_with_sym(
+                            &env,
+                            VAULT,
+                            SOURCE_SKIPPED,
+                            d.source_id.clone(),
+                            SourceSkippedEventData {
+                                attempted_delta: d.delta,
+                                timestamp: now,
+                            },
+                        );
+                        skipped.push_back(d.source_id.clone());
+                        continue;
+                    }
+                }
+            }
+
             let current_amount = get_source_allocation(&env, &d.source_id);
             let new_amount = current_amount
-                .checked_add(d.delta)
+                .checked_add(effective_delta)
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
             if new_amount < 0 {
@@ -1579,7 +2470,10 @@ impl VaultContract {
             // current accounting model the full gross is moved internally
             // (actual == gross); once rebalance performs real LP/protocol
             // withdrawals, pass the call's returned amount as `actual_received`.
-            if d.delta < 0 {
+            // When an adapter performed the move it already enforced the
+            // minimum-output floor against the real protocol proceeds, so
+            // re-checking the bookkeeping identity here would be redundant.
+            if d.delta < 0 && !adapter_handled {
                 let gross = -d.delta;
                 let min_assets_out = rebalance_min_assets_out(&env, gross, slippage_bps);
                 let actual_received = gross;
@@ -1587,8 +2481,11 @@ impl VaultContract {
             }
 
             set_source_allocation(&env, &d.source_id, new_amount);
-            total_delta += d.delta;
-            applied.push_back(d);
+            total_delta += effective_delta;
+            applied.push_back(AllocationDeltaView {
+                source_id: d.source_id.clone(),
+                delta: effective_delta,
+            });
         }
 
         if total_delta < 0 {
@@ -1607,6 +2504,7 @@ impl VaultContract {
             caller,
             RebalancedEventData {
                 source_deltas: applied.clone(),
+                skipped_sources: skipped,
                 timestamp: now,
             },
         );
@@ -1614,10 +2512,239 @@ impl VaultContract {
         applied
     }
 
+    // -----------------------------------------------------------------------
+    // Slippage-safe multi-hop rebalance: plan/execute split (issue #810)
+    // -----------------------------------------------------------------------
+
+    /// Pure read: the rebalance plan the contract would execute right now,
+    /// with every leg's `min_out` already computed, plus the exact
+    /// `plan_hash` `execute_rebalance` expects for it. Callable by anyone —
+    /// a caller previews with this, then passes the returned `legs` and
+    /// `plan_hash` straight through to `execute_rebalance` unmodified.
+    pub fn plan_rebalance(env: Env) -> RebalancePlan {
+        require_initialized(&env);
+        let (plan, _total_moved, _total_assets) = compute_fresh_rebalance_plan(&env);
+        let plan_hash = rebalance::checksum(&plan);
+        RebalancePlan {
+            legs: plan,
+            plan_hash,
+        }
+    }
+
+    /// Executes a previously planned rebalance. `plan_hash` must equal the
+    /// checksum of `legs` (integrity — the caller can't submit legs that
+    /// don't match what they committed to), and `legs` must match a
+    /// freshly recomputed plan within [`rebalance::PLAN_STALENESS_TOLERANCE_BPS`]
+    /// (freshness — rejects a plan built against prices that have since
+    /// moved too far, reverting with `PlanStale`). Every leg's `min_out` is
+    /// enforced individually: one under-delivering leg reverts the entire
+    /// call, so a manipulated leg can never hide inside an aggregate
+    /// tolerance. The total value moved is capped at
+    /// `max_rebalance_value_bps` of vault assets.
+    pub fn execute_rebalance(
+        env: Env,
+        caller: Address,
+        plan_hash: u64,
+        legs: Vec<RebalanceLeg>,
+    ) -> Vec<RebalanceLeg> {
+        with_reentrancy_guard(env, |env| {
+            Self::execute_rebalance_internal(env, caller, plan_hash, legs)
+        })
+    }
+
+    fn execute_rebalance_internal(
+        env: Env,
+        caller: Address,
+        plan_hash: u64,
+        legs: Vec<RebalanceLeg>,
+    ) -> Vec<RebalanceLeg> {
+        require_initialized(&env);
+        require_active(&env);
+        caller.require_auth();
+        if !AccessControl::has_role(&env, &caller, Role::Admin)
+            && !AccessControl::has_role(&env, &caller, Role::Operator)
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
+
+        let now = env.ledger().timestamp();
+        let cooldown: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RebalanceCooldown)
+            .unwrap_or(DEFAULT_REBALANCE_COOLDOWN);
+        let last: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::LastRebalanceAt)
+            .unwrap_or(0);
+        if last != 0 && now < last + cooldown {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
+
+        accrue_management_fee(&env);
+
+        if rebalance::checksum(&legs) != plan_hash {
+            panic_with_error!(&env, ContractError::PlanStale);
+        }
+
+        let (fresh_plan, _fresh_total_moved, total_assets) = compute_fresh_rebalance_plan(&env);
+        if total_assets <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        if !rebalance::plan_matches_fresh(
+            &fresh_plan,
+            &legs,
+            rebalance::PLAN_STALENESS_TOLERANCE_BPS,
+        ) {
+            panic_with_error!(&env, ContractError::PlanStale);
+        }
+
+        let max_value_bps = get_max_rebalance_value_bps(&env);
+        let value_cap = nester_common::fees::mul_div(total_assets, max_value_bps as i128, 10_000)
+            .unwrap_or(total_assets);
+        let mut total_moved: i128 = 0;
+        let mut net_delta: i128 = 0;
+        for leg in fresh_plan.iter() {
+            total_moved = total_moved.saturating_add(leg.delta.abs());
+            net_delta += leg.delta;
+        }
+        if total_moved > value_cap {
+            panic_with_error!(&env, ContractError::RebalanceValueCapExceeded);
+        }
+
+        // Execute against the freshly recomputed plan, not the
+        // caller-submitted `legs` — `legs`/`plan_hash` only establish that
+        // the caller's view was within tolerance of live state (checked
+        // above). Enforcing `min_out` from the caller's own input would let
+        // a malicious caller submit deltas that pass the freshness check
+        // but a hollowed-out `min_out`, defeating the whole point of
+        // per-leg slippage protection.
+        let mut applied = Vec::new(&env);
+        for leg in fresh_plan.iter() {
+            let current_amount = get_source_allocation(&env, &leg.source_id);
+            let new_amount = current_amount
+                .checked_add(leg.delta)
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+            if new_amount < 0 {
+                panic_with_error!(&env, ContractError::AllocationError);
+            }
+
+            // Bookkeeping-only today: the full amount is moved internally
+            // (actual == gross). Once rebalance performs real yield-source
+            // withdrawals, pass the call's returned amount here instead —
+            // `min_out` is already the real security boundary either way.
+            let actual_received = if leg.delta < 0 { -leg.delta } else { 0 };
+            if leg.delta < 0 && actual_received < leg.min_out {
+                panic_with_error!(&env, ContractError::LegSlippageExceeded);
+            }
+
+            set_source_allocation(&env, &leg.source_id, new_amount);
+
+            emit_event(
+                &env,
+                VAULT,
+                REBAL_LEG,
+                caller.clone(),
+                RebalanceLegExecutedEventData {
+                    source_id: leg.source_id.clone(),
+                    delta: leg.delta,
+                    amount_out: actual_received,
+                    min_out: leg.min_out,
+                },
+            );
+
+            applied.push_back(leg);
+        }
+
+        if net_delta < 0 {
+            let current_reserves = get_vault_liquid_reserves(&env);
+            set_vault_liquid_reserves(&env, current_reserves - net_delta);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::LastRebalanceAt, &now);
+
+        emit_event(
+            &env,
+            VAULT,
+            REBAL_CMP,
+            caller,
+            RebalanceCompletedEventData {
+                plan_hash,
+                total_value_moved: total_moved,
+                // Realised slippage is 0 in the current bookkeeping-only
+                // model (actual == gross always). Once live yield-source
+                // withdrawals are wired in, compute this from the gap
+                // between expected and actual `amount_out` per leg.
+                realized_slippage_bps: 0,
+            },
+        );
+
+        applied
+    }
+
+    /// Admin: tighten the per-leg slippage ceiling. Bounded by the
+    /// compile-time [`rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING`] — stored
+    /// configuration can only ever be equal to or stricter than that
+    /// ceiling, never looser.
+    pub fn set_max_leg_slippage_bps(env: Env, caller: Address, bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        if bps == 0 || bps > rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxLegSlippageBps, &bps);
+    }
+
+    pub fn get_max_leg_slippage_bps(env: Env) -> u32 {
+        get_max_leg_slippage_bps(&env)
+    }
+
+    /// Admin: cap the fraction of vault assets a single `execute_rebalance`
+    /// call may move.
+    pub fn set_max_rebalance_value_bps(env: Env, caller: Address, bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        if bps == 0 || bps > 10_000 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxRebalanceValueBps, &bps);
+    }
+
+    pub fn get_max_rebalance_value_bps(env: Env) -> u32 {
+        get_max_rebalance_value_bps(&env)
+    }
+
+    /// Compute the `plan_hash` `execute_rebalance` expects for an arbitrary
+    /// `legs` vector. `plan_rebalance` already returns this for the current
+    /// live plan; this exists for callers constructing or inspecting a plan
+    /// independently (e.g. off-chain tooling, tests).
+    pub fn compute_plan_checksum(_env: Env, legs: Vec<RebalanceLeg>) -> u64 {
+        rebalance::checksum(&legs)
+    }
+
     /// Operator hook used by deposit/yield-routing flows to record that a
     /// known amount has been deployed to a specific yield source. Keeps the
     /// vault's per-source bookkeeping in sync with off-chain settlement.
-    pub fn record_source_allocation(env: Env, caller: Address, source_id: Symbol, amount: i128) {
+    ///
+    /// Returns `true` when the allocation was recorded and `false` when the
+    /// source was skipped because it is not `Active` (paused, degraded,
+    /// deprecated) or its registry lookup failed. Skipping is silent-by-return
+    /// rather than a panic so a caller recording several sources in sequence
+    /// is not aborted by one unhealthy source — the same blast-radius rule
+    /// `rebalance` follows.
+    pub fn record_source_allocation(
+        env: Env,
+        caller: Address,
+        source_id: Symbol,
+        amount: i128,
+    ) -> bool {
         require_initialized(&env);
         caller.require_auth();
         if !AccessControl::has_role(&env, &caller, Role::Admin)
@@ -1628,7 +2755,36 @@ impl VaultContract {
         if amount < 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
+
+        // With a registry configured, refuse to grow bookkeeping for a source
+        // that is not healthy. Without one, keep pre-adapter behaviour.
+        if let Some(registry_id) = get_yield_registry(&env) {
+            let args: Vec<Val> = soroban_sdk::vec![&env, source_id.clone().into_val(&env)];
+            let healthy = matches!(
+                env.try_invoke_contract::<SourceStatus, ContractError>(
+                    &registry_id,
+                    &Symbol::new(&env, "get_source_status"),
+                    args,
+                ),
+                Ok(Ok(SourceStatus::Active))
+            );
+            if !healthy {
+                emit_event_with_sym(
+                    &env,
+                    VAULT,
+                    SOURCE_SKIPPED,
+                    source_id,
+                    SourceSkippedEventData {
+                        attempted_delta: amount,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+                return false;
+            }
+        }
+
         set_source_allocation(&env, &source_id, amount);
+        true
     }
 
     pub fn collect_fees(env: Env, caller: Address) {
@@ -1653,7 +2809,10 @@ impl VaultContract {
             // that are owed to queued withdrawal requests.
             let current_reserves = get_vault_liquid_reserves(&env);
             let reserved = get_liquid_reserved(&env);
-            let available = current_reserves.saturating_sub(reserved);
+            // Signed saturating subtraction can still produce a negative value.
+            // Clamp exhausted reserves to zero so fee collection is a no-op
+            // instead of attempting an invalid negative token transfer.
+            let available = current_reserves.saturating_sub(reserved).max(0);
             let collectable = fees.min(available);
 
             if collectable == 0 {
@@ -1686,6 +2845,154 @@ impl VaultContract {
 
             set_vault_liquid_reserves(&env, current_reserves - collectable);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Early-exit penalty escrow distribution (issue #805)
+    // -----------------------------------------------------------------------
+
+    /// Permissionlessly split the accumulated penalty escrow between
+    /// remaining depositors and the treasury by `depositor_share_bps`.
+    /// Gated by a minimum amount (anti-spam) and a cooldown (rate limit),
+    /// mirroring the existing rebalance cooldown pattern. Atomic: if the
+    /// treasury transfer fails, the whole call reverts and the escrow is
+    /// left untouched (Soroban aborts all state changes from this
+    /// invocation on panic, so there is no way to zero the escrow without
+    /// the transfer having already succeeded).
+    pub fn distribute_penalties(env: Env, _caller: Address) -> PenaltyDistributedEventData {
+        with_reentrancy_guard(env, Self::distribute_penalties_internal)
+    }
+
+    fn distribute_penalties_internal(env: Env) -> PenaltyDistributedEventData {
+        require_initialized(&env);
+
+        let escrow = get_penalty_escrow(&env);
+        let min_amount = get_min_penalty_distribution_amount(&env);
+        if escrow < min_amount {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
+        let now = env.ledger().timestamp();
+        let cooldown = get_penalty_distribution_cooldown(&env);
+        let last: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::LastPenaltyDistributionAt)
+            .unwrap_or(0);
+        if last != 0 && now < last + cooldown {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
+
+        let depositor_share_bps = get_depositor_share_bps(&env);
+        let (depositor_amount, treasury_amount, dust) =
+            nester_common::fees::split_penalty(escrow, depositor_share_bps);
+
+        if treasury_amount > 0 {
+            let config = get_fee_config(&env);
+            let token_address = self::VaultContract::get_token(env.clone());
+            transfer_tokens(
+                &env,
+                &token_address,
+                &env.current_contract_address(),
+                &config.treasury_address,
+                &treasury_amount,
+            );
+            invoke_allowed::<()>(
+                &env,
+                &config.treasury_address,
+                &Symbol::new(&env, "receive_fees"),
+                (treasury_amount,).into_val(&env),
+            );
+        }
+
+        if depositor_amount > 0 {
+            // Credit remaining depositors through the same mechanism that
+            // already prices every share (`TotalAssets` / vault-token share
+            // price) rather than a bespoke bump — anyone who withdraws
+            // before this call is unaffected (they were paid out against
+            // the pre-distribution price), and anyone still holding shares
+            // benefits proportionally the next time their balance is priced.
+            let total_assets = get_total_assets(&env);
+            let new_total_assets = total_assets
+                .checked_add(depositor_amount)
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+            set_total_assets(&env, new_total_assets);
+            sync_vault_token_total_assets(&env);
+        }
+
+        // Dust from independent rounding of both slices is retained in the
+        // escrow rather than force-assigned to either side — never lost,
+        // just carried into the next round.
+        set_penalty_escrow(&env, dust);
+        env.storage()
+            .instance()
+            .set(&DataKey::LastPenaltyDistributionAt, &now);
+
+        let result = PenaltyDistributedEventData {
+            depositor_amount,
+            treasury_amount,
+            retained_dust: dust,
+            timestamp: now,
+        };
+
+        emit_event(
+            &env,
+            VAULT,
+            PNLTY_DST,
+            env.current_contract_address(),
+            result.clone(),
+        );
+
+        result
+    }
+
+    pub fn get_penalty_escrow(env: Env) -> i128 {
+        get_penalty_escrow(&env)
+    }
+
+    pub fn get_penalty_config(env: Env) -> PenaltyConfig {
+        PenaltyConfig {
+            depositor_share_bps: get_depositor_share_bps(&env),
+            min_distribution_amount: get_min_penalty_distribution_amount(&env),
+            distribution_cooldown: get_penalty_distribution_cooldown(&env),
+        }
+    }
+
+    /// Admin: set the depositor slice of every future penalty distribution.
+    /// The treasury's slice (`10_000 - depositor_share_bps`) is hard-capped
+    /// at the compile-time [`nester_common::MAX_TREASURY_SHARE_BPS`], so
+    /// `depositor_share_bps` must be at least `10_000 -
+    /// MAX_TREASURY_SHARE_BPS` — no admin configuration can send more than
+    /// that ceiling to the treasury.
+    pub fn set_depositor_share_bps(env: Env, caller: Address, bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        let min_depositor_share = 10_000u32.saturating_sub(nester_common::MAX_TREASURY_SHARE_BPS);
+        if bps < min_depositor_share || bps > 10_000 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::DepositorShareBps, &bps);
+    }
+
+    pub fn set_min_penalty_dist_amount(env: Env, caller: Address, amount: i128) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        if amount < 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::MinPenaltyDistributionAmount, &amount);
+    }
+
+    pub fn set_penalty_dist_cooldown(env: Env, caller: Address, seconds: u64) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::PenaltyDistributionCooldown, &seconds);
     }
 
     /// Deposit funds into the vault.
@@ -1728,6 +3035,16 @@ impl VaultContract {
         user.require_auth();
         accrue_management_fee(&env);
 
+        // Validate the exchange-rate state before moving funds. In particular,
+        // a live share supply backed by zero assets is insolvent and must not
+        // fall back to the bootstrap 1:1 rate.
+        let _validated_conversion = conversion::assets_to_shares_down(
+            amount,
+            get_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e));
+
         let token_address = self::VaultContract::get_token(env.clone());
         let contract_address = env.current_contract_address();
 
@@ -1766,6 +3083,14 @@ impl VaultContract {
             &env.ledger().timestamp(),
         );
 
+        // Tenure starts on a user's first deposit and is never reset by
+        // subsequent deposits — only a full exit resets it (see
+        // `withdraw_internal`). This rewards long-tenured behaviour instead
+        // of punishing it every time a user tops up their position.
+        if !has_first_deposit_at(&env, &user) {
+            set_first_deposit_at(&env, &user, env.ledger().timestamp());
+        }
+
         emit_event(
             &env,
             VAULT,
@@ -1787,7 +3112,12 @@ impl VaultContract {
         new_user_shares
     }
 
-    pub fn process_emergency_queue(env: Env) {
+    /// Drains the legacy asset-amount queue used by [`Self::emergency_withdraw`]'s
+    /// insufficient-liquidity fallback. Distinct from the fair, share-based
+    /// queue added in issue #814 (see [`Self::process_emergency_queue`]);
+    /// kept as-is since `emergency_withdraw` is a separate, simpler
+    /// paused-only exit path with its own tests.
+    pub fn drain_legacy_emergency_queue(env: Env) {
         with_reentrancy_guard(env, Self::process_emergency_queue_internal)
     }
 
@@ -1887,13 +3217,17 @@ impl VaultContract {
         let mut total_fee = 0_i128;
 
         // 1. Performance fee applies only to realized gain above user cost basis.
+        // Rate is tenure-tiered when a schedule is configured (issue #813),
+        // evaluated at the user's tenure *now* — the same "take it when you
+        // touch it" timing the vault already uses for withdrawals, just with
+        // a tiered rate instead of a flat one. See `harvest_internal` for the
+        // equivalent choice on the claim-yield path.
         let yield_part = assets_to_withdraw - principal_to_remove;
         if yield_part > 0 {
-            let perf_fee = nester_common::fees::calculate_performance_fee(
-                yield_part,
-                config.performance_fee_bps,
-            )
-            .unwrap_or_else(|e| panic_with_error!(&env, e));
+            let performance_fee_bps = effective_performance_fee_bps(&env, &user, &config);
+            let perf_fee =
+                nester_common::fees::calculate_performance_fee(yield_part, performance_fee_bps)
+                    .unwrap_or_else(|e| panic_with_error!(&env, e));
             total_fee = total_fee
                 .checked_add(perf_fee)
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
@@ -1916,12 +3250,18 @@ impl VaultContract {
             .instance()
             .get(&DataKey::MinLockPeriod)
             .unwrap_or(0);
-        if env.ledger().timestamp() < deposit_time + min_lock {
-            let early_fee = nester_common::fees::calculate_withdrawal_fee(
-                assets_to_withdraw,
-                config.early_withdrawal_fee_bps,
-            )
-            .unwrap_or_else(|e| panic_with_error!(&env, e));
+        // A tenure-tiered exit schedule (issue #813) is a continuous curve
+        // over the whole tenure domain and supersedes the binary min-lock
+        // gate below — its own long-tenure tiers taper to a low floor, so it
+        // doesn't need the gate to avoid over-charging long-held positions.
+        // With no tiers configured, behaviour is unchanged: the flat fee
+        // only applies inside the lock window.
+        let exit_tiers_configured = !get_exit_tiers(&env).is_empty();
+        if exit_tiers_configured || env.ledger().timestamp() < deposit_time + min_lock {
+            let exit_fee_bps = effective_exit_fee_bps(&env, &user, &config);
+            let early_fee =
+                nester_common::fees::calculate_withdrawal_fee(assets_to_withdraw, exit_fee_bps)
+                    .unwrap_or_else(|e| panic_with_error!(&env, e));
             total_fee = total_fee
                 .checked_add(early_fee)
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
@@ -1952,6 +3292,14 @@ impl VaultContract {
         set_total_assets(&env, total_assets - assets_to_withdraw);
 
         set_user_principal(&env, &user, current_principal - principal_to_remove);
+
+        // A full exit resets tenure; a partial withdrawal keeps it — a user
+        // who fully exits and later returns starts the tiered schedule
+        // fresh, but topping up an existing position never costs them their
+        // accumulated tenure discount (issue #813).
+        if new_user_shares == 0 {
+            clear_first_deposit_at(&env, &user);
+        }
 
         let current_reserves = get_vault_liquid_reserves(&env);
         set_vault_liquid_reserves(&env, current_reserves - assets_to_withdraw);
@@ -2043,6 +3391,14 @@ impl VaultContract {
         };
         set_total_assets(&env, total_assets - burned_assets);
         set_user_principal(&env, &user, 0);
+
+        // The emergency fee was never transferred to the user nor reflected
+        // as a reduction to `TotalAssets` beyond `burned_assets` — it was
+        // simply left inside the vault's real balance, untracked. Escrow it
+        // explicitly (issue #805) so it can be split between remaining
+        // depositors and the treasury instead of quietly inflating nobody's
+        // accounted balance.
+        charge_penalty(&env, &user, fee, PenaltyReason::EmergencyExit, shares);
 
         emit_event(
             &env,
@@ -2183,6 +3539,156 @@ impl VaultContract {
     }
 
     // -----------------------------------------------------------------------
+    // Fair-ordering emergency withdrawal queue (issue #814)
+    // -----------------------------------------------------------------------
+
+    /// Queue a fair, FIFO-ordered emergency withdrawal for `shares`. Calling
+    /// this again while a request is already open extends it rather than
+    /// creating a second queue position (see [`queue::request`]).
+    pub fn request_emergency_withdrawal(env: Env, user: Address, shares: i128) -> QueueEntry {
+        require_initialized(&env);
+        user.require_auth();
+
+        let balance = get_shares(&env, &user);
+        let entry = queue::request(&env, &user, shares, balance);
+
+        emit_event(
+            &env,
+            VAULT,
+            EMRG_REQD,
+            user.clone(),
+            EmergencyRequestedEventData {
+                user,
+                seq: entry.seq,
+                shares_requested: entry.shares_requested,
+            },
+        );
+
+        entry
+    }
+
+    /// Cancel `user`'s open emergency-queue request. Any unfilled shares were
+    /// never burned, so they are already sitting in the user's balance —
+    /// this call is bookkeeping only, no asset transfer.
+    pub fn cancel_emergency_request(env: Env, user: Address) -> i128 {
+        require_initialized(&env);
+        user.require_auth();
+
+        let seq_before = queue::position(&env, &user).seq;
+        let shares_returned = queue::cancel(&env, &user);
+
+        emit_event(
+            &env,
+            VAULT,
+            EMRG_CANCL,
+            user.clone(),
+            EmergencyCancelledEventData {
+                user,
+                seq: seq_before,
+                shares_returned,
+            },
+        );
+
+        shares_returned
+    }
+
+    /// Permissionlessly drive the fair emergency queue forward. Anyone may
+    /// call this — exits do not depend on operator liveness. `max_entries`
+    /// is capped by [`queue::MAX_PROCESS_ENTRIES`] regardless of the value
+    /// requested, so a single call can never exceed the tx resource budget.
+    pub fn process_emergency_queue(env: Env, caller: Address, max_entries: u32) -> u32 {
+        with_reentrancy_guard(env, |env| {
+            Self::process_fair_queue_internal(env, caller, max_entries)
+        })
+    }
+
+    fn process_fair_queue_internal(env: Env, _caller: Address, max_entries: u32) -> u32 {
+        require_initialized(&env);
+
+        let available_liquidity = get_vault_liquid_reserves(&env);
+        let plan = queue::plan_fills(&env, max_entries, available_liquidity, |shares| {
+            vault_token_client(&env).amount_for_shares(&shares)
+        });
+
+        let token_address = self::VaultContract::get_token(env.clone());
+        let contract_address = env.current_contract_address();
+        let mut processed: u32 = 0;
+
+        for planned in plan.iter() {
+            // Self-heal against a user whose balance shrank after enqueuing
+            // (e.g. a transfer of vault-token shares elsewhere): never burn
+            // more than they currently hold.
+            let current_balance = get_shares(&env, &planned.user);
+            let fill_shares = planned.fill_shares.min(current_balance);
+            if fill_shares <= 0 {
+                continue;
+            }
+
+            let burned_assets =
+                vault_token_client(&env).burn_for_withdrawal(&planned.user, &fill_shares);
+            transfer_tokens(
+                &env,
+                &token_address,
+                &contract_address,
+                &planned.user,
+                &burned_assets,
+            );
+
+            let reserves = get_vault_liquid_reserves(&env);
+            set_vault_liquid_reserves(&env, reserves - burned_assets);
+
+            let total_assets = get_total_assets(&env);
+            set_total_assets(&env, total_assets - burned_assets);
+
+            let fully_filled = queue::apply_fill(&env, planned.seq, fill_shares);
+            processed += 1;
+
+            emit_event(
+                &env,
+                VAULT,
+                EMRG_FILL,
+                planned.user.clone(),
+                EmergencyFilledEventData {
+                    user: planned.user.clone(),
+                    seq: planned.seq,
+                    fill_shares,
+                    fill_assets: burned_assets,
+                    fully_filled,
+                },
+            );
+        }
+
+        sync_vault_token_total_assets(&env);
+        processed
+    }
+
+    /// Caller's position in the fair emergency queue: sequence number,
+    /// entries/shares strictly ahead, and how much of their own request has
+    /// already been filled. Bounded-cost — see [`queue::MAX_POSITION_SCAN`].
+    pub fn get_queue_position(env: Env, user: Address) -> QueuePosition {
+        queue::position(&env, &user)
+    }
+
+    /// O(1) aggregate queue stats backed by running counters, not iteration.
+    pub fn get_queue_stats(env: Env) -> QueueStats {
+        let available_liquidity = get_vault_liquid_reserves(&env);
+        queue::stats(&env, available_liquidity)
+    }
+
+    /// Admin: configure the per-entry fill cap (bps of a round's available
+    /// liquidity) that any single queue entry may absorb per
+    /// `process_emergency_queue` call. Bounded to (0, 10_000].
+    pub fn set_max_fill_share_bps(env: Env, caller: Address, bps: u32) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        queue::set_max_fill_share_bps(&env, bps);
+    }
+
+    pub fn get_max_fill_share_bps(env: Env) -> u32 {
+        queue::max_fill_share_bps(&env)
+    }
+
+    // -----------------------------------------------------------------------
     // View functions
     // -----------------------------------------------------------------------
 
@@ -2200,7 +3706,12 @@ impl VaultContract {
         if amount <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
-        vault_token_client(&env).shares_for_deposit(&amount)
+        conversion::assets_to_shares_down(
+            amount,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
     /// Returns the **gross**, pre-fee asset value of `shares` (the raw
@@ -2220,7 +3731,85 @@ impl VaultContract {
         if shares <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
-        vault_token_client(&env).amount_for_shares(&shares)
+        conversion::shares_to_assets_down(
+            shares,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e))
+    }
+
+    /// Convert assets to shares at the current exchange rate. Since this is the
+    /// amount the caller would receive, a non-zero remainder rounds down.
+    pub fn convert_to_shares(env: Env, assets: i128) -> i128 {
+        require_initialized(&env);
+        conversion::assets_to_shares_down(
+            assets,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e))
+    }
+
+    /// Convert shares to assets at the current exchange rate. Since this is the
+    /// amount the caller would receive, a non-zero remainder rounds down.
+    pub fn convert_to_assets(env: Env, shares: i128) -> i128 {
+        require_initialized(&env);
+        conversion::shares_to_assets_down(
+            shares,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or_else(|e| panic_with_error!(&env, e))
+    }
+
+    /// Total underlying assets currently backing outstanding shares.
+    pub fn total_assets(env: Env) -> i128 {
+        require_initialized(&env);
+        get_net_total_assets(&env)
+    }
+
+    /// Maximum assets accepted by one deposit. Returns zero rather than
+    /// reverting when deposits are unavailable.
+    pub fn max_deposit(env: Env, _user: Address) -> i128 {
+        if !env.storage().instance().has(&DataKey::Token) || is_paused(&env) {
+            return 0;
+        }
+        let cap: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxDeposit)
+            .unwrap_or(i128::MAX);
+        if cap <= 0 {
+            return 0;
+        }
+        // Refuse deposits in the insolvent live-supply state.
+        let total_shares = vault_token_client(&env).total_supply();
+        if total_shares > 0 && get_net_total_assets(&env) == 0 {
+            return 0;
+        }
+        cap
+    }
+
+    /// Maximum gross assets currently withdrawable by `user`.
+    pub fn max_withdraw(env: Env, user: Address) -> i128 {
+        max_withdrawable_assets(&env, &user)
+    }
+
+    /// Maximum shares currently redeemable by `user`.
+    pub fn max_redeem(env: Env, user: Address) -> i128 {
+        let max_assets = max_withdrawable_assets(&env, &user);
+        if max_assets == 0 {
+            return 0;
+        }
+        let balance = get_shares(&env, &user);
+        conversion::assets_to_shares_down(
+            max_assets,
+            get_net_total_assets(&env),
+            vault_token_client(&env).total_supply(),
+        )
+        .unwrap_or(0)
+        .min(balance)
     }
 
     /// Returns the amount the caller actually receives after all fees —
@@ -2349,11 +3938,10 @@ impl VaultContract {
         let config = get_fee_config(&env);
         let yield_part = assets_to_withdraw - principal_to_remove;
         if yield_part > 0 {
-            preview.performance_fee_deducted = nester_common::fees::calculate_performance_fee(
-                yield_part,
-                config.performance_fee_bps,
-            )
-            .unwrap_or(0);
+            let performance_fee_bps = effective_performance_fee_bps(&env, &user, &config);
+            preview.performance_fee_deducted =
+                nester_common::fees::calculate_performance_fee(yield_part, performance_fee_bps)
+                    .unwrap_or(0);
         }
 
         let vault_deposit_time: u64 = env
@@ -2368,12 +3956,12 @@ impl VaultContract {
             .instance()
             .get(&DataKey::MinLockPeriod)
             .unwrap_or(0);
-        if env.ledger().timestamp() < deposit_time + min_lock {
-            preview.early_withdrawal_fee_deducted = nester_common::fees::calculate_withdrawal_fee(
-                assets_to_withdraw,
-                config.early_withdrawal_fee_bps,
-            )
-            .unwrap_or(0);
+        let exit_tiers_configured = !get_exit_tiers(&env).is_empty();
+        if exit_tiers_configured || env.ledger().timestamp() < deposit_time + min_lock {
+            let exit_fee_bps = effective_exit_fee_bps(&env, &user, &config);
+            preview.early_withdrawal_fee_deducted =
+                nester_common::fees::calculate_withdrawal_fee(assets_to_withdraw, exit_fee_bps)
+                    .unwrap_or(0);
         }
 
         preview.net_amount_received = assets_to_withdraw
@@ -2439,7 +4027,63 @@ impl VaultContract {
             .get(&DataKey::CircuitBreakerConfig)
             .expect("CB config missing")
     }
+
+    // -----------------------------------------------------------------------
+    // Upgradeability & Schema Migration
+    // -----------------------------------------------------------------------
+
+    /// Proposes a new WASM upgrade for the vault.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_VAULT (48 hours).
+    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &admin,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_VAULT,
+            eta,
+        );
+    }
+
+    /// Cancels a pending WASM upgrade for the vault.
+    ///
+    /// Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, admin: Address) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &admin);
+    }
+
+    /// Executes a matured WASM upgrade for the vault.
+    ///
+    /// Execution is permissionless after maturity.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
+
+    /// Retrieves pending upgrade details if present.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
+    }
+
+    /// Returns current contract schema version.
+    pub fn get_schema_version(env: Env) -> u32 {
+        nester_common::Upgrade::get_schema_version(&env)
+    }
+
+    /// Bumps schema version if needed (idempotent).
+    pub fn migrate(env: Env) -> u32 {
+        let current = nester_common::Upgrade::get_schema_version(&env);
+        let target = 1u32;
+        if current < target {
+            nester_common::Upgrade::set_schema_version(&env, target);
+            target
+        } else {
+            current
+        }
+    }
 }
+
 
 // ---------------------------------------------------------------------------
 // Tests

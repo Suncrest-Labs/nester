@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, BytesN, Env, IntoVal, Symbol, Val, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Env, IntoVal, Symbol, Val, Vec};
 
 /// Helper to emit a standardized Nester event.
 ///
@@ -23,6 +23,30 @@ pub fn emit_event_with_sym(
 ) {
     env.events().publish((contract, action, entity), data);
 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct UpgradeProposedEventData {
+    pub wasm_hash: BytesN<32>,
+    pub eta: u64,
+    pub proposer: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct UpgradeCancelledEventData {
+    pub wasm_hash: BytesN<32>,
+    pub cancelled_by: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct UpgradeExecutedEventData {
+    pub wasm_hash: BytesN<32>,
+    pub executed_by: Address,
+    pub execution_timestamp: u64,
+}
+
 
 /// Data payload for the `value_attested` event emitted on every accepted
 /// attested APY or TVL update.

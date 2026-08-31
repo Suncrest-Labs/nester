@@ -57,8 +57,10 @@ func TestPortfolioHandlerSummaryIntegration(t *testing.T) {
 	if _, err := vaultService.UpdateAllocations(context.Background(), service.UpdateAllocationsInput{
 		VaultID: vaultA.ID,
 		Allocations: []vault.Allocation{
-			{Protocol: "aave", Amount: decimal.RequireFromString("60.00"), APY: decimal.RequireFromString("4.00"), AllocatedAt: time.Now().UTC()},
-			{Protocol: "compound", Amount: decimal.RequireFromString("60.00"), APY: decimal.RequireFromString("6.00"), AllocatedAt: time.Now().UTC().Add(time.Second)},
+			// Allocation amounts are percentage weights and must sum to 100;
+			// the summary totals below come from the recorded deposits.
+			{Protocol: "aave", Amount: decimal.RequireFromString("50.00"), APY: decimal.RequireFromString("4.00"), AllocatedAt: time.Now().UTC()},
+			{Protocol: "compound", Amount: decimal.RequireFromString("50.00"), APY: decimal.RequireFromString("6.00"), AllocatedAt: time.Now().UTC().Add(time.Second)},
 		},
 	}); err != nil {
 		t.Fatalf("UpdateAllocations(vaultA) error = %v", err)
@@ -83,8 +85,8 @@ func TestPortfolioHandlerSummaryIntegration(t *testing.T) {
 	if _, err := vaultService.UpdateAllocations(context.Background(), service.UpdateAllocationsInput{
 		VaultID: vaultB.ID,
 		Allocations: []vault.Allocation{
-			{Protocol: "angle", Amount: decimal.RequireFromString("100.00"), APY: decimal.RequireFromString("3.25"), AllocatedAt: time.Now().UTC()},
-			{Protocol: "yield", Amount: decimal.RequireFromString("130.50"), APY: decimal.RequireFromString("5.10"), AllocatedAt: time.Now().UTC().Add(time.Second)},
+			{Protocol: "angle", Amount: decimal.RequireFromString("40.00"), APY: decimal.RequireFromString("3.25"), AllocatedAt: time.Now().UTC()},
+			{Protocol: "yield", Amount: decimal.RequireFromString("60.00"), APY: decimal.RequireFromString("5.10"), AllocatedAt: time.Now().UTC().Add(time.Second)},
 		},
 	}); err != nil {
 		t.Fatalf("UpdateAllocations(vaultB) error = %v", err)

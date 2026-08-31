@@ -48,3 +48,18 @@ type Repository interface {
 	LatestPerActiveVault(ctx context.Context) ([]Snapshot, error)
 	CountDepositors(ctx context.Context, vaultID uuid.UUID) (int, error)
 }
+
+// FormatUSD formats a decimal value as a truncated (floor) 2-decimal USD string.
+//
+// Unlike decimal.StringFixed(2), which applies banker's rounding, this always
+// truncates toward zero so that displayed balances never overstate the true value.
+// e.g. FormatUSD(1234.56789) → "1234.56", not "1234.57".
+func FormatUSD(d decimal.Decimal) string {
+	return d.Truncate(2).StringFixed(2)
+}
+
+// FormatUSDC formats a decimal value as a full 6-decimal USDC string, truncated (not rounded).
+func FormatUSDC(d decimal.Decimal) string {
+	return d.Truncate(6).StringFixed(6)
+}
+

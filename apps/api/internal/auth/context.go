@@ -11,6 +11,16 @@ type User struct {
 	WalletAddress string
 	Scopes        []string
 	Roles         []string
+	SessionID     string
+	// ServiceName identifies the calling service on requests authenticated
+	// with the shared service API key. Empty for ordinary user sessions.
+	//
+	// The key carries no identity of its own, so without this an audit log
+	// can say a request was made by "some holder of the service key" and
+	// nothing more (nester#1149). It is self-asserted, not authenticated:
+	// good enough to tell well-behaved callers apart in logs, not an
+	// authorization signal.
+	ServiceName string
 }
 
 // HasScope reports whether the user holds the given scope.

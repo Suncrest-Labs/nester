@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { config } from "@/lib/config";
+import { safeStorage } from "@/lib/storage";
 
 export type Currency = "USD" | "GBP" | "EUR" | "NGN";
 export type Theme = "light" | "dark" | "system";
@@ -59,7 +60,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const [isDarkMode, setIsDarkMode] = useState(false);
 
     useEffect(() => {
-        const savedCurrency = localStorage.getItem("nester_currency") as Currency;
+        // #1233: safeStorage never throws (private browsing, full quota) and
+        // falls back to the in-memory map instead of crashing this provider.
+        // getRaw/setRaw (not get/set) — this key predates safeStorage and
+        // was never JSON-encoded; get's JSON.parse would reject the existing
+        // bare-string value on disk and wipe every returning user's saved
+        // currency.
+        const savedCurrency = safeStorage.getRaw("nester_currency") as Currency | null;
         if (savedCurrency && EXCHANGE_RATES[savedCurrency]) {
             const timer = setTimeout(() => setCurrencyState(savedCurrency), 0);
             return () => clearTimeout(timer);
@@ -69,9 +76,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     useEffect(() => {
         if (typeof window === "undefined") return;
 
+        // #1233: safeStorage never throws — a throwing accessor falls back
+        // to the in-memory map, so this always resolves rather than
+        // crashing the provider on mount. getRaw, not get, for the same
+        // bare-string-on-disk reason as nester_currency above.
         const saved =
-            (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) ??
-            (localStorage.getItem(LEGACY_THEME_KEY) as Theme | null) ??
+            (safeStorage.getRaw(THEME_STORAGE_KEY) as Theme | null) ??
+            (safeStorage.getRaw(LEGACY_THEME_KEY) as Theme | null) ??
             "light";
         const resolved: Theme =
             saved === "light" || saved === "dark" || saved === "system" ? saved : "light";
@@ -98,14 +109,18 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     const setCurrency = (val: Currency) => {
+        // Persist before updating state (#1233): safeStorage.setRaw never
+        // throws, so state and persistence cannot disagree the way they
+        // could if a raw localStorage.setItem threw after state already
+        // changed.
+        safeStorage.setRaw("nester_currency", val);
         setCurrencyState(val);
-        localStorage.setItem("nester_currency", val);
     };
 
     const setTheme = (val: Theme) => {
+        safeStorage.setRaw(THEME_STORAGE_KEY, val);
+        safeStorage.remove(LEGACY_THEME_KEY);
         setThemeState(val);
-        localStorage.setItem(THEME_STORAGE_KEY, val);
-        localStorage.removeItem(LEGACY_THEME_KEY);
         applyThemeClass(val);
         setIsDarkMode(resolveDark(val));
     };

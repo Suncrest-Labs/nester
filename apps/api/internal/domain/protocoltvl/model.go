@@ -30,8 +30,15 @@ type Repository interface {
 	SnapshotAt(ctx context.Context, slug string, at time.Time) (*Snapshot, error)
 	// LatestSnapshot returns the most recent snapshot for slug, or (nil, nil).
 	LatestSnapshot(ctx context.Context, slug string) (*Snapshot, error)
+	// ListSince returns every snapshot for slug at or after since, oldest
+	// first — the time series predictive deterioration scoring (#857)
+	// computes trend/velocity indicators from.
+	ListSince(ctx context.Context, slug string, since time.Time) ([]Snapshot, error)
 	// CanAlert returns true when no alert has been sent for slug within AlertCooldown.
 	CanAlert(ctx context.Context, slug string) (bool, error)
 	// RecordAlert marks that an alert was just sent for slug.
 	RecordAlert(ctx context.Context, slug string) error
 }
+
+
+

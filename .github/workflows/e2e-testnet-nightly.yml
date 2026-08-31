@@ -1,0 +1,98 @@
+name: Nightly testnet E2E
+
+# The deposit/withdraw journey runs against real deployed contracts and needs
+# a funded account, so it cannot gate every pull request. Nightly is the
+# cadence the issue (#1100) allows for exactly that reason.
+#
+# Required configuration, as repository secrets/variables:
+#   TESTNET_WALLET_ADDRESS — funded Stellar testnet account (secret)
+#   VAULT_ID               — deployed vault contract ID on testnet (variable)
+#   STAGING_URL            — deployed dapp to drive (variable); defaults to a
+#                            locally built app when unset.
+#
+# When the wallet and vault are not configured the spec skips itself rather
+# than failing, so a repository without testnet infrastructure stays green.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: "Base URL to run against (overrides the STAGING_URL variable)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deposit-withdraw:
+    name: Deposit / withdraw journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/dapp/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Only needed when driving a locally served build. With STAGING_URL set
+      # the workflow tests the deployed app instead and this is wasted work,
+      # so it is skipped.
+      - name: Build dapp
+        if: ${{ !inputs.staging_url && !vars.STAGING_URL }}
+        run: pnpm build
+
+      - name: Start dapp
+        if: ${{ !inputs.staging_url && !vars.STAGING_URL }}
+        run: |
+          pnpm start -p 3001 &
+          npx wait-on http://localhost:3001 --timeout 120000
+
+      - name: Run deposit/withdraw journey
+        env:
+          TESTNET_WALLET_ADDRESS: ${{ secrets.TESTNET_WALLET_ADDRESS }}
+          VAULT_ID: ${{ vars.VAULT_ID }}
+          STAGING_URL: ${{ inputs.staging_url || vars.STAGING_URL }}
+          CI: "true"
+        run: |
+          # Skip rather than fail. This runs on a nightly schedule, so a
+          # hard failure means a red build every night until someone
+          # provisions testnet credentials — which trains people to ignore
+          # the notification rather than act on it. A notice is visible in
+          # the run summary without being a false alarm, and matches the
+          # spec's own skip guard.
+          if [ -z "$TESTNET_WALLET_ADDRESS" ]; then
+            echo "::notice::TESTNET_WALLET_ADDRESS is not configured; skipping the testnet E2E run."
+            echo "Set it under Settings → Secrets and variables → Actions. See docs/ci/secrets.md."
+            exit 0
+          fi
+
+          pnpm test:e2e:testnet
+
+      # Uploaded on failure only: the trace and screenshots are what identify
+      # which step of the journey broke, per the issue's acceptance criteria.
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/dapp/frontend/playwright-report
+            apps/dapp/frontend/test-results
+          retention-days: 14

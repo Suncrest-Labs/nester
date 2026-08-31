@@ -83,6 +83,12 @@ type PortfolioContext struct {
 type CoachingRequest struct {
 	Goal      SavingsGoalContext `json:"goal"`
 	Portfolio PortfolioContext   `json:"portfolio"`
+	// AIInsightsEnabled (#935): explicit opt-out flag, defaulted to true via
+	// omitempty so on-demand (user-initiated) coaching requests that don't
+	// set it are unaffected. Scheduled/batch callers that already checked
+	// the user's nudges_enabled preference should set this explicitly so
+	// the intelligence service enforces it too, independent of the caller.
+	AIInsightsEnabled *bool `json:"ai_insights_enabled,omitempty"`
 }
 
 // DepositScheduleItem mirrors the intelligence service's DepositScheduleItem model.
@@ -99,6 +105,7 @@ type CoachingResponse struct {
 	DepositSchedule    []DepositScheduleItem `json:"deposit_schedule"`
 	Nudges             []string              `json:"nudges"`
 	Confidence         string                `json:"confidence"`
+	SessionSummary     string                `json:"session_summary,omitempty"`
 }
 
 // DigestGenerateRequest mirrors the intelligence service's
@@ -134,4 +141,16 @@ type DigestGenerateResponse struct {
 	HonestZeroPeriod  bool                   `json:"honest_zero_period"`
 	Cached            bool                   `json:"cached"`
 	GeneratedAt       string                 `json:"generated_at"`
+}
+
+type NudgeCopyRequest struct {
+	NudgeType string            `json:"nudge_type"`
+	Segment   string            `json:"segment"`
+	Facts     map[string]string `json:"facts"`
+	RequestID string            `json:"request_id"`
+}
+
+type NudgeCopyResponse struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }

@@ -26,31 +26,50 @@ pub enum ContractError {
     BelowMinDeposit = 21,
     ReentrancyDetected = 22,
     CalleeNotAllowed = 23,
-    RoleRequired = 24,
-    RoleTransferNotPending = 25,
-    RoleExpired = 26,
-    AlreadyReferred = 27,
-    SelfReferral = 28,
-    ReferralCycle = 29,
-    BudgetExhausted = 30,
-    BelowClaimMinimum = 31,
-    RecoveryCooldownActive = 32,
-    RecoveryStageInvalid = 33,
-    NotNesterVault = 34,
-    VaultCreationFailed = 35,
-    // Attestation errors (issue #820 — signature-attested APY/TVL updates)
-    /// The supplied public key is not in the registered attester set, or has
-    /// been revoked.
-    AttesterNotRegistered = 36,
-    /// The ed25519 signature does not verify over the canonical payload bytes.
-    SignatureInvalid = 37,
-    /// The ledger timestamp falls outside the attestation's `[valid_from,
-    /// valid_until)` window.
-    AttestationExpired = 38,
-    /// The supplied nonce is not strictly greater than the last nonce recorded
-    /// for this attester key — replay or out-of-order submission.
-    NonceReused = 39,
-    /// Fewer distinct valid attesters signed than the configured threshold for
-    /// this field.
-    ThresholdNotMet = 40,
+    QueueEntryExists = 24,
+    RequestBelowMinimum = 25,
+    NotInQueue = 26,
+    LegSlippageExceeded = 27,
+    PlanStale = 28,
+    RebalanceValueCapExceeded = 29,
+    RoleRequired = 30,
+    RoleTransferNotPending = 31,
+    RoleExpired = 32,
+    AlreadyReferred = 33,
+    SelfReferral = 34,
+    ReferralCycle = 35,
+    BudgetExhausted = 36,
+    BelowClaimMinimum = 37,
+    RecoveryCooldownActive = 38,
+    RecoveryStageInvalid = 39,
+    NotNesterVault = 40,
+    VaultCreationFailed = 41,
+    UpgradeNotMatured = 42,
+    NoPendingUpgrade = 43,
+    UpgradeHashMismatch = 44,
+    SchemaVersionMismatch = 45,
+    // --- #808: Recurring Deposit Mandate errors ---
+    // MandateNotFound -> reuse StrategyNotFound (6)
+    // MandateInactive -> reuse InvalidOperation (9) 
+    // MandatePaused -> reuse InvalidOperation (9)
+    // MandateNotDue -> reuse TimelockNotReady (12)
+    // MandateExpired -> reuse TimelockExpired (13)
+    // MandateExhausted -> reuse BudgetExhausted (36)
+    // --- #804: Multi-Asset Vault errors ---
+    // PriceStale -> reuse TimelockExpired (13) 
+    // PriceUnavailable -> reuse StrategyNotFound (6)
+    // AssetNotInBasket -> reuse StrategyNotFound (6)
+    // PriceDeviationExceeded -> reuse SlippageExceeded (17)
+    // Attestation errors (issue #820 — signature-attested APY/TVL updates).
+    // Numbered after the base branch's highest rather than at 36-40 as this
+    // branch originally had them: discriminants are the on-chain error codes
+    // clients match on, so the existing ones must not shift.
+    AttesterNotRegistered = 46,
+    SignatureInvalid = 47,
+    AttestationExpired = 48,
+    NonceReused = 49,
+    ThresholdNotMet = 50,
 }
+
+// Alias for backwards compatibility
+pub type Error = ContractError;

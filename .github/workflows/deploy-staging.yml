@@ -1,0 +1,426 @@
+name: "Deploy to Staging"
+
+# Triggers:
+# - Manual workflow dispatch (allows ad-hoc deploys with optional smoke test skip)
+# - Automatic on push to main/dev (can be customized per team policy)
+on:
+  workflow_dispatch:
+    inputs:
+      skip_smoke_tests:
+        description: "Skip smoke test gating (emergency override, use with caution)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+  # Uncomment to auto-trigger on push to main (requires separate CD config)
+  # push:
+  #   branches:
+  #     - main
+  #   paths-ignore:
+  #     - 'docs/**'
+  #     - '**.md'
+
+concurrency:
+  # Allow one deploy at a time to avoid conflicts
+  group: staging-deployment
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_TAG: staging-${{ github.sha }}
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # Detect changes (reuse shared logic from CI)
+  # ────────────────────────────────────────────────────────────────────
+  changes:
+    name: "Detect changes"
+    runs-on: ubuntu-latest
+    outputs:
+      dapp: ${{ steps.filter.outputs.dapp }}
+      api: ${{ steps.filter.outputs.api }}
+      contracts: ${{ steps.filter.outputs.contracts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ github.event_name == 'push' && github.event.before || '' }}
+          filters: |
+            dapp:
+              - 'apps/dapp/**'
+              - 'packages/shared/**'
+            api:
+              - 'apps/api/**'
+              - 'packages/shared/**'
+            contracts:
+              - 'packages/contracts/**'
+
+  # ────────────────────────────────────────────────────────────────────
+  # Build dApp frontend
+  # ────────────────────────────────────────────────────────────────────
+  build-dapp:
+    name: "Build dApp"
+    needs: changes
+    if: needs.changes.outputs.dapp == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build dApp
+        run: pnpm --filter @nester/dapp build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.STAGING_API_URL || 'https://api-staging.nester.dev/api/v1' }}
+          NEXT_PUBLIC_WS_URL: ${{ vars.STAGING_WS_URL || 'wss://api-staging.nester.dev/ws' }}
+          NEXT_PUBLIC_STELLAR_NETWORK: "Test SDF Network ; September 2015"
+          NEXT_PUBLIC_STELLAR_RPC_URL: "https://soroban-testnet.stellar.org"
+          NEXT_PUBLIC_STELLAR_HORIZON_URL: "https://horizon-testnet.stellar.org"
+
+      - name: Upload dApp artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dapp-build
+          path: apps/dapp/frontend/.next/
+          retention-days: 1
+
+  # ────────────────────────────────────────────────────────────────────
+  # Build API
+  # ────────────────────────────────────────────────────────────────────
+  build-api:
+    name: "Build API"
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.22"
+          cache-dependency-path: "apps/api/go.sum"
+
+      - name: Build API
+        run: |
+          cd apps/api
+          go build -o nester-api ./cmd/api
+          go build -o nester-signer ./cmd/signer
+
+      - name: Run API tests
+        run: |
+          cd apps/api
+          go test -race -timeout 120s -short ./...
+
+      - name: Upload API artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-build
+          path: |
+            apps/api/nester-api
+            apps/api/nester-signer
+          retention-days: 1
+
+  # ────────────────────────────────────────────────────────────────────
+  # Deploy to staging environment
+  # ────────────────────────────────────────────────────────────────────
+  deploy:
+    name: "Deploy to Staging"
+    needs: [build-dapp, build-api]
+    if: |
+      always() &&
+      (needs.build-dapp.result == 'success' || needs.build-dapp.result == 'skipped') &&
+      (needs.build-api.result == 'success' || needs.build-api.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      staging_url: ${{ steps.deploy.outputs.url }}
+      deployment_id: ${{ steps.deploy.outputs.deployment_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required secrets
+        env:
+          STAGING_DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$STAGING_DEPLOY_TOKEN" ]; then
+            echo "::error::STAGING_DEPLOY_TOKEN is not configured. This secret is required to deploy to staging."
+            echo "Set it in GitHub repository settings: Settings → Secrets and variables → Actions → STAGING_DEPLOY_TOKEN"
+            echo "See docs/ci/secrets.md for details."
+            exit 1
+          fi
+
+      - name: Download dApp artifacts
+        if: needs.build-dapp.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: dapp-build
+          path: apps/dapp/frontend/.next/
+
+      - name: Download API artifacts
+        if: needs.build-api.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: api-build
+          path: apps/api/
+
+      - name: Deploy to staging
+        id: deploy
+        env:
+          STAGING_DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+          STAGING_ENDPOINT: ${{ vars.STAGING_ENDPOINT || 'https://deploy-api.staging.nester.dev' }}
+        run: |
+          # This is a placeholder; replace with actual deploy script/tool
+          # Examples: Kubernetes, Docker Swarm, serverless deployment, etc.
+          echo "Deploying to staging environment..."
+
+          # Example: Deploy via kubectl
+          # kubectl set image deployment/nester-dapp \
+          #   dapp=gcr.io/nester/dapp:${{ env.IMAGE_TAG }} \
+          #   -n staging
+
+          # For now, simulate successful deployment
+          echo "url=https://staging.nester.dev" >> $GITHUB_OUTPUT
+          echo "deployment_id=$(date +%s)" >> $GITHUB_OUTPUT
+          echo "Deployment complete: https://staging.nester.dev"
+
+      - name: Wait for staging services
+        run: |
+          # Wait for health checks to pass
+          for i in {1..30}; do
+            if curl -s https://staging.nester.dev/health > /dev/null; then
+              echo "Staging services healthy"
+              exit 0
+            fi
+            echo "Waiting for staging services ($i/30)..."
+            sleep 2
+          done
+          echo "Staging services did not become healthy"
+          exit 1
+
+  # ────────────────────────────────────────────────────────────────────
+  # SMOKE TEST GATING JOB
+  # ────────────────────────────────────────────────────────────────────
+  # This job runs AFTER deploy succeeds and FAILS the workflow if smoke
+  # tests do not pass, preventing promotion to production.
+  # ────────────────────────────────────────────────────────────────────
+  smoke-test:
+    name: "Smoke Tests (Gating)"
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.event.inputs.skip_smoke_tests != 'true'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @nester/dapp exec playwright install chromium --with-deps
+
+      - name: Run smoke tests
+        id: smoke
+        env:
+          # Staging environment configuration
+          STAGING_URL: ${{ needs.deploy.outputs.staging_url || 'https://staging.nester.dev' }}
+          SMOKE_TEST: "1"
+          SMOKE_TEST_WALLET_SECRET: ${{ secrets.SMOKE_TEST_WALLET_SECRET }}
+
+          # Optional: Testnet overrides if staging uses different network
+          # NEXT_PUBLIC_STELLAR_NETWORK: "Test SDF Network ; September 2015"
+          # NEXT_PUBLIC_STELLAR_RPC_URL: "https://soroban-testnet.stellar.org"
+          # NEXT_PUBLIC_STELLAR_HORIZON_URL: "https://horizon-testnet.stellar.org"
+        run: |
+          if [ -z "$SMOKE_TEST_WALLET_SECRET" ]; then
+            echo "::error::SMOKE_TEST_WALLET_SECRET is not configured. This secret is required for smoke tests."
+            echo "Set it in GitHub repository settings: Settings → Secrets and variables → Actions → SMOKE_TEST_WALLET_SECRET"
+            echo "See docs/ci/secrets.md for details."
+            exit 1
+          fi
+
+          cd apps/dapp/frontend
+
+          # `--run` is a Vitest flag; Playwright rejects it with "unknown
+          # option" before running a single test. The JSON reporter also
+          # needs an explicit output path or nothing is written to disk.
+          set +e
+          PLAYWRIGHT_JSON_OUTPUT_NAME=smoke-result.json \
+          npx playwright test tests/smoke.spec.ts \
+            --reporter=html,json,list
+          TEST_EXIT_CODE=$?
+          set -e
+
+          # Capture immediately after the command; any intervening
+          # statement overwrites $? and would mask a real failure.
+          echo "test_exit_code=$TEST_EXIT_CODE" >> $GITHUB_OUTPUT
+          exit $TEST_EXIT_CODE
+
+      - name: Extract smoke result summary
+        if: always()
+        id: summary
+        run: |
+          # Parse smoke-result.json if available
+          if [ -f "apps/dapp/frontend/smoke-result.json" ]; then
+            RESULT=$(cat apps/dapp/frontend/smoke-result.json)
+            PASSED=$(echo "$RESULT" | jq '[.suites[]?.specs[]?.tests[]?.results[]? | select(.status=="passed")] | length')
+            FAILED=$(echo "$RESULT" | jq '[.suites[]?.specs[]?.tests[]?.results[]? | select(.status!="passed" and .status!="skipped")] | length')
+            DURATION=$(echo "$RESULT" | jq '[.suites[]?.specs[]?.tests[]?.results[]?.duration // 0] | add // 0')
+            DURATION_SEC=$(($DURATION / 1000))
+            
+            if [ "$FAILED" -eq 0 ]; then
+              STATUS="PASS"
+              SUMMARY="✓ All smoke tests passed ($PASSED steps, ${DURATION_SEC}s)"
+            else
+              STATUS="FAIL"
+              FAILED_STEP=$(echo "$RESULT" | jq -r '[.suites[]?.specs[]? | select(.ok==false) | .title][0] // "unknown"')
+              SUMMARY="✗ Smoke tests failed at '$FAILED_STEP' ($PASSED/$((PASSED+FAILED)) steps, ${DURATION_SEC}s)"
+            fi
+            
+            echo "status=$STATUS" >> $GITHUB_OUTPUT
+            echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+            
+            # Write to job summary
+            echo "## Smoke Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Run ID**: $(echo "$RESULT" | jq -r '.runId')" >> $GITHUB_STEP_SUMMARY
+            echo "**Started**: $(echo "$RESULT" | jq -r '.startedAt')" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Step Details" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "$RESULT" | jq -r '.steps[] | "[\(.status)] \(.name): \(.message) (\(.durationMs)ms)"' >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "status=UNKNOWN" >> $GITHUB_OUTPUT
+            echo "summary=Could not parse smoke-result.json" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results-${{ github.run_id }}
+          path: |
+            apps/dapp/frontend/playwright-report/
+            apps/dapp/frontend/test-results/
+            apps/dapp/frontend/smoke-result.json
+          retention-days: 30
+
+      - name: Comment on deployment PR (if applicable)
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = "${{ steps.summary.outputs.status }}";
+            const summary = "${{ steps.summary.outputs.summary }}";
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### Smoke Test Gating\n\n${summary}\n\n[View detailed results](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+            });
+
+      - name: Notify Slack on failure
+        if: failure() || needs.smoke-test.result != 'success'
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "🚨 Staging Deployment Smoke Tests Failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Smoke Test Failure Alert*\n${{ steps.summary.outputs.summary }}\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOYMENT_WEBHOOK }}
+
+      - name: Enforce smoke test gating
+        if: (failure() || needs.smoke-test.result != 'success') && github.event.inputs.skip_smoke_tests != 'true'
+        run: |
+          echo "❌ Smoke tests failed. Deployment is gated."
+          echo ""
+          echo "To promote after fixing issues:"
+          echo "1. Review smoke test failures in the artifact"
+          echo "2. Deploy fixes and re-run this workflow"
+          echo "3. Or manually approve override if transient (see runbook)"
+          exit 1
+
+  # ────────────────────────────────────────────────────────────────────
+  # Promotion gate (prevents accidental production deployments)
+  # ────────────────────────────────────────────────────────────────────
+  promotion-gate:
+    name: "Promotion Gate"
+    runs-on: ubuntu-latest
+    needs: [deploy, smoke-test]
+    if: always()
+    steps:
+      - name: Check deployment and smoke test status
+        run: |
+          DEPLOY_RESULT="${{ needs.deploy.result }}"
+          SMOKE_RESULT="${{ needs.smoke-test.result }}"
+
+          if [ "$DEPLOY_RESULT" != "success" ]; then
+            echo "❌ Deployment failed (status: $DEPLOY_RESULT)"
+            exit 1
+          fi
+
+          if [ "$SMOKE_RESULT" = "failure" ]; then
+            echo "❌ Smoke tests failed - promotion blocked"
+            exit 1
+          fi
+
+          if [ "$SMOKE_RESULT" = "skipped" ]; then
+            echo "⚠️  Smoke tests were skipped - promotion allowed but not recommended"
+          fi
+
+          echo "✅ All checks passed - promotion to production allowed"
+
+      - name: Report status
+        if: success()
+        run: |
+          echo "Deployment: ${{ needs.deploy.result }}"
+          echo "Smoke Tests: ${{ needs.smoke-test.result }}"
+          echo "Status: Ready for production promotion"
+
+  # ────────────────────────────────────────────────────────────────────
+  # Optional: Auto-promote to production if all gates pass
+  # ────────────────────────────────────────────────────────────────────
+  # Uncomment and configure to enable automatic production promotions
+  # ────────────────────────────────────────────────────────────────────
+  # promote-to-production:
+  #   name: "Promote to Production"
+  #   runs-on: ubuntu-latest
+  #   needs: [smoke-test, promotion-gate]
+  #   if: success() && github.ref == 'refs/heads/main'
+  #   steps:
+  #     - name: Trigger production deployment
+  #       run: |
+  #         echo "Promoting to production..."
+  #         # Trigger production deployment workflow or script here

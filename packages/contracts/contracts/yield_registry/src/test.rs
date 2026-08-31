@@ -36,7 +36,7 @@ fn blend_id(env: &Env) -> Symbol {
 }
 
 fn register_default(client: &YieldRegistryContractClient, env: &Env, admin: &Address, id: &Symbol) {
-    client.register_source(admin, id, &Address::generate(env), &ProtocolType::Lending);
+    client.register_source(admin, id, &Address::generate(env), &None, &ProtocolType::Lending);
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ fn register_source_sets_default_performance_fields() {
     let (client, admin) = setup(&env);
     let addr = Address::generate(&env);
 
-    client.register_source(&admin, &aave_id(&env), &addr, &ProtocolType::Lending);
+    client.register_source(&admin, &aave_id(&env), &addr, &None, &ProtocolType::Lending);
 
     let s = client.get_source(&aave_id(&env));
     assert_eq!(s.status, SourceStatus::Active);
@@ -93,6 +93,7 @@ fn register_duplicate_id_panics() {
         &admin,
         &aave_id(&env),
         &Address::generate(&env),
+        &None,
         &ProtocolType::Staking,
     );
 }
@@ -108,6 +109,7 @@ fn non_admin_cannot_register_source() {
         &outsider,
         &aave_id(&env),
         &Address::generate(&env),
+        &None,
         &ProtocolType::Lending,
     );
 }
@@ -315,12 +317,14 @@ fn get_sources_by_type_filters_correctly() {
         &admin,
         &aave_id(&env),
         &Address::generate(&env),
+        &None,
         &ProtocolType::Lending,
     );
     client.register_source(
         &admin,
         &blend_id(&env),
         &Address::generate(&env),
+        &None,
         &ProtocolType::Staking,
     );
 
@@ -415,9 +419,7 @@ fn test_apy_update_exceeds_threshold_rejected() {
     client.update_apy(&admin, &aave_id(&env), &1_000);
 
     // +6000 bps exceeds the 5000-bps threshold and must be rejected.
-    assert!(client
-        .try_update_apy(&admin, &aave_id(&env), &7_000)
-        .is_err());
+    client.update_apy(&admin, &aave_id(&env), &7_000);
 
     // The rejected update must not have mutated stored state.
     assert_eq!(
@@ -426,6 +428,7 @@ fn test_apy_update_exceeds_threshold_rejected() {
             .current_apy_bps,
         1_000
     );
+    assert_eq!(client.get_source_failure_count(&aave_id(&env)), 1);
 }
 
 #[test]
@@ -456,9 +459,13 @@ fn test_admin_can_override_deviation_guard() {
     client.update_apy(&admin, &aave_id(&env), &1_000);
 
     // Sanity: the guarded path rejects this jump (dev 7000 > 5000).
-    assert!(client
-        .try_update_apy(&admin, &aave_id(&env), &8_000)
-        .is_err());
+    client.update_apy(&admin, &aave_id(&env), &8_000);
+    assert_eq!(
+        client
+            .get_source_performance(&aave_id(&env))
+            .current_apy_bps,
+        1_000
+    );
 
     // The admin emergency override bypasses the guard.
     client.update_apy_override(&admin, &aave_id(&env), &8_000);
@@ -496,9 +503,7 @@ fn test_apy_update_at_exact_threshold_boundary() {
     client.update_apy(&admin, &aave_id(&env), &1_000);
 
     // One bps PAST the threshold (dev 5001) is rejected — leaves state at 1000.
-    assert!(client
-        .try_update_apy(&admin, &aave_id(&env), &6_001)
-        .is_err());
+    client.update_apy(&admin, &aave_id(&env), &6_001);
     assert_eq!(
         client
             .get_source_performance(&aave_id(&env))
@@ -535,9 +540,7 @@ fn test_threshold_is_configurable_from_storage() {
     assert_eq!(client.get_apy_deviation_threshold(), 1_000);
 
     // A +1500 jump passed under the default 5000 but now exceeds the new 1000.
-    assert!(client
-        .try_update_apy(&admin, &aave_id(&env), &2_500)
-        .is_err());
+    client.update_apy(&admin, &aave_id(&env), &2_500);
     assert_eq!(
         client
             .get_source_performance(&aave_id(&env))
@@ -579,6 +582,39 @@ fn test_set_threshold_above_max_apy_rejected() {
 }
 
 #[test]
+fn consecutive_deviation_rejections_require_explicit_recovery() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let id = aave_id(&env);
+    register_default(&client, &env, &admin, &id);
+
+    client.set_apy_deviation_threshold(&admin, &100);
+    client.set_failure_threshold(&admin, &2);
+    client.update_apy(&admin, &id, &500);
+
+    // The configured threshold is the tolerated failure count, so the next
+    // failure crosses it and degrades the source.
+    for expected_count in 1..=3 {
+        client.update_apy(&admin, &id, &900);
+        assert_eq!(client.get_source_failure_count(&id), expected_count);
+    }
+
+    assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+    assert_eq!(client.get_active_sources().len(), 0);
+    assert_eq!(client.get_source_performance(&id).current_apy_bps, 500);
+
+    // A subsequent valid reading may update performance, but must not make
+    // the source eligible for allocation again without an admin decision.
+    client.update_apy(&admin, &id, &550);
+    assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+    assert_eq!(client.get_active_sources().len(), 0);
+
+    client.recover_source(&admin, &id);
+    assert_eq!(client.get_source_status(&id), SourceStatus::Active);
+    assert_eq!(client.get_active_sources().len(), 1);
+}
+
+#[test]
 fn status_and_update_emit_events() {
     let env = Env::default();
     let (client, admin) = setup(&env);
@@ -589,4 +625,341 @@ fn status_and_update_emit_events() {
     client.update_apy(&admin, &aave_id(&env), &999);
 
     assert!(env.events().all().len() > before);
+}
+
+// ---------------------------------------------------------------------------
+// Adapter-backed sources (#812)
+//
+// A local mock adapter is used rather than nester-test-utils: that crate
+// depends on this one, so a dev-dependency back would be a cycle.
+// ---------------------------------------------------------------------------
+
+mod adapter_backed {
+    use super::*;
+    use nester_common::adapters::{AdapterApy, ApyConfidence};
+    use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error};
+
+    #[contracttype]
+    #[derive(Clone)]
+    enum MockKey {
+        Apy,
+        Broken,
+    }
+
+    /// Minimal stand-in for a real adapter: reports whatever APY reading the
+    /// test configures, or reverts on demand.
+    #[contract]
+    pub struct MockAdapter;
+
+    #[contractimpl]
+    impl MockAdapter {
+        pub fn set_apy(env: Env, apy_bps: u32, derived: bool, unavailable: bool) {
+            let confidence = if unavailable {
+                ApyConfidence::Unavailable
+            } else if derived {
+                ApyConfidence::Derived
+            } else {
+                ApyConfidence::ProtocolReported
+            };
+            env.storage()
+                .instance()
+                .set(&MockKey::Apy, &AdapterApy { apy_bps, confidence });
+        }
+
+        pub fn set_broken(env: Env, broken: bool) {
+            env.storage().instance().set(&MockKey::Broken, &broken);
+        }
+
+        pub fn current_apy(env: Env) -> AdapterApy {
+            let broken: bool = env
+                .storage()
+                .instance()
+                .get(&MockKey::Broken)
+                .unwrap_or(false);
+            if broken {
+                panic_with_error!(&env, nester_common::ContractError::InvalidOperation);
+            }
+            env.storage()
+                .instance()
+                .get(&MockKey::Apy)
+                .unwrap_or(AdapterApy {
+                    apy_bps: 0,
+                    confidence: ApyConfidence::Unavailable,
+                })
+        }
+    }
+
+    fn setup_with_adapter(
+        env: &Env,
+    ) -> (
+        YieldRegistryContractClient<'_>,
+        Address,
+        MockAdapterClient<'_>,
+        Symbol,
+    ) {
+        let (client, admin) = setup(env);
+        let adapter_id = env.register_contract(None, MockAdapter);
+        let adapter = MockAdapterClient::new(env, &adapter_id);
+        let id = aave_id(env);
+        client.register_source(
+            &admin,
+            &id,
+            &Address::generate(env),
+            &Some(adapter_id),
+            &ProtocolType::Lending,
+        );
+        (client, admin, adapter, id)
+    }
+
+    #[test]
+    fn registered_source_starts_with_unknown_apy() {
+        let env = Env::default();
+        let (client, _admin, _adapter, id) = setup_with_adapter(&env);
+        let perf = client.get_source_performance(&id);
+        assert_eq!(perf.apy_confidence, ApyConfidence::Unavailable);
+        assert_eq!(perf.current_apy_bps, 0);
+    }
+
+    #[test]
+    fn refresh_pulls_apy_without_any_role() {
+        let env = Env::default();
+        let (client, _admin, adapter, id) = setup_with_adapter(&env);
+        adapter.set_apy(&640, &false, &false);
+
+        // No caller argument at all — the pull is permissionless.
+        let reading = client.refresh_apy_from_adapter(&id);
+        assert_eq!(reading.apy_bps, 640);
+        assert_eq!(reading.confidence, ApyConfidence::ProtocolReported);
+
+        let perf = client.get_source_performance(&id);
+        assert_eq!(perf.current_apy_bps, 640);
+        assert_eq!(perf.apy_confidence, ApyConfidence::ProtocolReported);
+        assert_eq!(perf.apy_history.len(), 1);
+    }
+
+    #[test]
+    fn unavailable_reading_marks_unknown_not_zero() {
+        let env = Env::default();
+        let (client, _admin, adapter, id) = setup_with_adapter(&env);
+        adapter.set_apy(&500, &false, &false);
+        client.refresh_apy_from_adapter(&id);
+
+        // Adapter loses confidence (e.g. position reset).
+        adapter.set_apy(&0, &false, &true);
+        client.refresh_apy_from_adapter(&id);
+
+        let perf = client.get_source_performance(&id);
+        assert_eq!(perf.apy_confidence, ApyConfidence::Unavailable);
+        // Value is retained, NOT zeroed — unknown is not zero.
+        assert_eq!(perf.current_apy_bps, 500);
+    }
+
+    #[test]
+    fn unknown_apy_sources_excluded_from_apy_filter() {
+        let env = Env::default();
+        let (client, _admin, adapter, id) = setup_with_adapter(&env);
+        adapter.set_apy(&0, &false, &true);
+        client.refresh_apy_from_adapter(&id);
+
+        // Unknown must never rank as if it were a real rate.
+        assert_eq!(client.get_sources_above_apy(&0).len(), 0);
+
+        adapter.set_apy(&300, &false, &false);
+        client.refresh_apy_from_adapter(&id);
+        assert_eq!(client.get_sources_above_apy(&0).len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")] // InvalidOperation
+    fn refresh_without_adapter_is_rejected() {
+        let env = Env::default();
+        let (client, admin) = setup(&env);
+        register_default(&client, &env, &admin, &blend_id(&env));
+        client.refresh_apy_from_adapter(&blend_id(&env));
+    }
+
+    #[test]
+    fn failing_adapter_increments_failure_count() {
+        let env = Env::default();
+        let (client, _admin, adapter, id) = setup_with_adapter(&env);
+        adapter.set_broken(&true);
+
+        // Must not revert: a panic would roll back the failure counter.
+        let reading = client.refresh_apy_from_adapter(&id);
+        assert_eq!(reading.confidence, ApyConfidence::Unavailable);
+        assert_eq!(client.get_source_failure_count(&id), 1);
+        // Still Active — one failure is under the threshold.
+        assert_eq!(client.get_source_status(&id), SourceStatus::Active);
+    }
+
+    #[test]
+    fn repeated_failures_flip_source_to_degraded() {
+        let env = Env::default();
+        let (client, _admin, adapter, id) = setup_with_adapter(&env);
+        adapter.set_broken(&true);
+
+        let threshold = client.get_failure_threshold();
+        for _ in 0..=threshold {
+            client.refresh_apy_from_adapter(&id);
+        }
+
+        assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+        assert!(client.get_source_failure_count(&id) > threshold);
+        assert_eq!(client.get_degraded_sources().len(), 1);
+    }
+
+    #[test]
+    fn degraded_source_is_not_active() {
+        let env = Env::default();
+        let (client, _admin, adapter, id) = setup_with_adapter(&env);
+        adapter.set_broken(&true);
+        for _ in 0..=client.get_failure_threshold() {
+            client.refresh_apy_from_adapter(&id);
+        }
+        assert_eq!(client.get_active_sources().len(), 0);
+    }
+
+    #[test]
+    fn recovery_requires_explicit_admin_action() {
+        let env = Env::default();
+        let (client, admin, adapter, id) = setup_with_adapter(&env);
+        adapter.set_broken(&true);
+        for _ in 0..=client.get_failure_threshold() {
+            client.refresh_apy_from_adapter(&id);
+        }
+        assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+
+        // A working adapter alone must NOT silently re-activate the source.
+        adapter.set_broken(&false);
+        adapter.set_apy(&420, &false, &false);
+        client.refresh_apy_from_adapter(&id);
+        assert_eq!(
+            client.get_source_status(&id),
+            SourceStatus::Degraded,
+            "recovery must never be automatic"
+        );
+
+        // Only an explicit admin call brings it back.
+        client.recover_source(&admin, &id);
+        assert_eq!(client.get_source_status(&id), SourceStatus::Active);
+        assert_eq!(client.get_source_failure_count(&id), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")] // InvalidOperation
+    fn recover_rejects_non_degraded_source() {
+        let env = Env::default();
+        let (client, admin, _adapter, id) = setup_with_adapter(&env);
+        client.recover_source(&admin, &id);
+    }
+
+    #[test]
+    fn successful_refresh_clears_failure_streak() {
+        let env = Env::default();
+        let (client, _admin, adapter, id) = setup_with_adapter(&env);
+        adapter.set_broken(&true);
+        client.refresh_apy_from_adapter(&id);
+        assert_eq!(client.get_source_failure_count(&id), 1);
+
+        adapter.set_broken(&false);
+        adapter.set_apy(&250, &false, &false);
+        client.refresh_apy_from_adapter(&id);
+        assert_eq!(client.get_source_failure_count(&id), 0);
+    }
+
+    #[test]
+    fn vault_reported_failures_also_degrade() {
+        let env = Env::default();
+        let (client, admin, _adapter, id) = setup_with_adapter(&env);
+        // The vault reports failures it observes while skipping a source.
+        for _ in 0..=client.get_failure_threshold() {
+            client.report_source_failure(&admin, &id);
+        }
+        assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+    }
+
+    #[test]
+    fn deviation_guard_applies_to_adapter_pulls() {
+        let env = Env::default();
+        let (client, admin, adapter, id) = setup_with_adapter(&env);
+        client.set_apy_deviation_threshold(&admin, &100);
+
+        adapter.set_apy(&500, &false, &false);
+        client.refresh_apy_from_adapter(&id);
+
+        // A compromised adapter must not be able to move APY arbitrarily. The
+        // reading is rejected and counted as a failure rather than reverting,
+        // so the failure accounting survives (a panic would roll it back).
+        adapter.set_apy(&9_000, &false, &false);
+        let reading = client.refresh_apy_from_adapter(&id);
+        assert_eq!(reading.confidence, ApyConfidence::Unavailable);
+        assert_eq!(client.get_source_performance(&id).current_apy_bps, 500);
+        assert_eq!(client.get_source_failure_count(&id), 1);
+
+        // The admin override remains the escape hatch.
+        client.update_apy_override(&admin, &id, &9_000);
+        assert_eq!(client.get_source_performance(&id).current_apy_bps, 9_000);
+    }
+
+    #[test]
+    fn adapter_can_be_attached_to_existing_source() {
+        let env = Env::default();
+        let (client, admin) = setup(&env);
+        let id = blend_id(&env);
+        register_default(&client, &env, &admin, &id);
+        assert_eq!(client.get_source_adapter(&id), None);
+
+        let adapter_id = env.register_contract(None, MockAdapter);
+        MockAdapterClient::new(&env, &adapter_id).set_apy(&700, &false, &false);
+        client.set_source_adapter(&admin, &id, &Some(adapter_id.clone()));
+
+        assert_eq!(client.get_source_adapter(&id), Some(adapter_id));
+        assert_eq!(client.refresh_apy_from_adapter(&id).apy_bps, 700);
+    }
+
+    #[test]
+    fn beyond_deviation_reading_counts_as_failure_not_revert() {
+        let env = Env::default();
+        let (client, admin, adapter, id) = setup_with_adapter(&env);
+        client.set_apy_deviation_threshold(&admin, &100);
+
+        adapter.set_apy(&500, &false, &false);
+        client.refresh_apy_from_adapter(&id);
+
+        // An adapter pinning a wild value must not be able to make this call
+        // revert forever while the source stays Active on a stale APY: each
+        // rejected reading counts as a failure and eventually degrades it.
+        adapter.set_apy(&9_000, &false, &false);
+        for _ in 0..=client.get_failure_threshold() {
+            let reading = client.refresh_apy_from_adapter(&id);
+            assert_eq!(reading.confidence, ApyConfidence::Unavailable);
+        }
+
+        assert_eq!(client.get_source_status(&id), SourceStatus::Degraded);
+        // The last known-good value is retained, never overwritten by garbage.
+        assert_eq!(client.get_source_performance(&id).current_apy_bps, 500);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Failure accounting on terminal states (#812)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn failures_do_not_override_terminal_states() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let id = aave_id(&env);
+    register_default(&client, &env, &admin, &id);
+
+    client.update_status(&admin, &id, &SourceStatus::Deprecated);
+
+    // Deprecated already keeps capital away; failures must not relabel it as
+    // Degraded, which would imply a recoverable condition.
+    for _ in 0..=client.get_failure_threshold() {
+        client.report_source_failure(&admin, &id);
+    }
+
+    assert_eq!(client.get_source_status(&id), SourceStatus::Deprecated);
+    assert!(client.get_source_failure_count(&id) > 0, "failures still counted");
 }

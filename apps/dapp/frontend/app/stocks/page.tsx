@@ -5,7 +5,10 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/app-shell";
+import { LoadingRegion } from "@/components/ui/skeleton/skeleton";
 import { useWallet } from "@/components/wallet-provider";
+import { getAccessToken } from "@/lib/auth/token-store";
+import { apiRequest } from "@/lib/api/client";
 import {
     ArrowUpRight,
     ArrowDownRight,
@@ -76,39 +79,41 @@ async function fetchAIPick(): Promise<AIPick | null> {
     }
 }
 
-async function fetchWatchlist(token: string): Promise<WatchlistItem[]> {
-    const res = await fetch(`${API_BASE}/api/v1/users/watchlist`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return [];
-    const json = await res.json();
-    return json.data ?? [];
+async function fetchWatchlist(): Promise<WatchlistItem[]> {
+    try {
+        const data = await apiRequest<WatchlistItem[]>("/users/watchlist");
+        return data ?? [];
+    } catch {
+        return [];
+    }
 }
 
-async function addToWatchlist(pool: YieldPool, token: string): Promise<WatchlistItem | null> {
-    const res = await fetch(`${API_BASE}/api/v1/users/watchlist`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-            pool_id: pool.pool,
-            pool_symbol: pool.symbol,
-            pool_project: pool.project,
-            pool_chain: pool.chain,
-            apy_at_save: pool.apy,
-            tvl_usd: pool.tvlUsd,
-        }),
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    return json.data ?? null;
+async function addToWatchlist(pool: YieldPool): Promise<WatchlistItem | null> {
+    try {
+        const data = await apiRequest<WatchlistItem>("/users/watchlist", {
+            method: "POST",
+            body: JSON.stringify({
+                pool_id: pool.pool,
+                pool_symbol: pool.symbol,
+                pool_project: pool.project,
+                pool_chain: pool.chain,
+                apy_at_save: pool.apy,
+                tvl_usd: pool.tvlUsd,
+            }),
+        });
+        return data ?? null;
+    } catch {
+        return null;
+    }
 }
 
-async function removeFromWatchlist(itemId: string, token: string): Promise<boolean> {
-    const res = await fetch(`${API_BASE}/api/v1/users/watchlist/${itemId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    return res.ok || res.status === 204;
+async function removeFromWatchlist(itemId: string): Promise<boolean> {
+    try {
+        await apiRequest<void>(`/users/watchlist/${itemId}`, { method: "DELETE" });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -249,12 +254,7 @@ export default function StocksPage() {
     const [errorPools, setErrorPools] = useState(false);
 
     // ── auth token helper ─────────────────────────────────────────────────────
-    // Attempt to read JWT from storage; falls back to empty string so watchlist
-    // calls silently fail and the user sees an empty list without an error.
-    const getToken = useCallback((): string => {
-        if (typeof window === "undefined") return "";
-        return localStorage.getItem("nester_token") ?? sessionStorage.getItem("nester_token") ?? "";
-    }, []);
+    const getToken = useCallback((): string => getAccessToken(), []);
 
     // ── fetch pools ───────────────────────────────────────────────────────────
     useEffect(() => {
@@ -286,10 +286,8 @@ export default function StocksPage() {
 
     // ── fetch watchlist ───────────────────────────────────────────────────────
     useEffect(() => {
-        if (!isConnected) return;
-        const token = getToken();
-        if (!token) return;
-        fetchWatchlist(token).then(setWatchlist);
+        if (!isConnected || !getToken()) return;
+        fetchWatchlist().then(setWatchlist);
     }, [isConnected, getToken]);
 
     // ── redirect if not connected ─────────────────────────────────────────────
@@ -315,16 +313,14 @@ export default function StocksPage() {
 
     // ── watchlist actions ─────────────────────────────────────────────────────
     const handleWatch = async (pool: YieldPool) => {
-        const token = getToken();
-        if (!token) return;
-        const item = await addToWatchlist(pool, token);
+        if (!getToken()) return;
+        const item = await addToWatchlist(pool);
         if (item) setWatchlist((prev) => [item, ...prev]);
     };
 
     const handleUnwatch = async (id: string) => {
-        const token = getToken();
-        if (!token) return;
-        const ok = await removeFromWatchlist(id, token);
+        if (!getToken()) return;
+        const ok = await removeFromWatchlist(id);
         if (ok) setWatchlist((prev) => prev.filter((w) => w.id !== id));
     };
 
@@ -490,7 +486,9 @@ export default function StocksPage() {
 
                 <div className="space-y-2">
                     {loadingPools ? (
-                        Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
+                        <LoadingRegion label="Loading yield opportunities" className="space-y-2">
+                            {Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)}
+                        </LoadingRegion>
                     ) : errorPools ? (
                         <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
                             <AlertTriangle className="h-6 w-6 text-black/25 dark:text-white/25" />

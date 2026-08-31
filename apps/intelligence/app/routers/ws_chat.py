@@ -1,11 +1,14 @@
 """WebSocket chat endpoint for Prometheus AI."""
 
+import uuid
 from typing import Any, Optional
 
 import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
+from app.models.preferences import ResponsePreferences
+from app.services import guardrails
 from app.services.prometheus import stream_chat
 
 router = APIRouter()
@@ -70,13 +73,46 @@ async def websocket_chat(websocket: WebSocket) -> None:
             if not message:
                 await websocket.send_json({"type": "error", "message": "message is required"})
                 continue
+            if len(message) > guardrails.MAX_USER_MESSAGE_CHARS:
+                await websocket.send_json(
+                    {"type": "error", "message": "message is too long"}
+                )
+                continue
 
-            async for chunk in stream_chat(user_id, message):
-                # Strip SSE "data: " prefix — WS clients get raw text
-                if chunk.startswith("data: "):
-                    chunk = chunk[6:].rstrip("\n")
-                if chunk:
-                    await websocket.send_text(chunk)
+            request_id = str(uuid.uuid4())
+            raw_preferences = data.get("preferences")
+            preferences: Optional[ResponsePreferences] = None
+            if isinstance(raw_preferences, dict):
+                try:
+                    preferences = ResponsePreferences(**raw_preferences)
+                except Exception:
+                    preferences = None
+
+            language: Optional[str] = data.get("language")
+
+            stream = stream_chat(
+                user_id,
+                message,
+                request_id=request_id,
+                preferences=preferences,
+                language=language,
+            )
+            try:
+                async for chunk in stream:
+                    # Strip SSE "data: " prefix -- WS clients get raw text
+                    if chunk.startswith("data: "):
+                        chunk = chunk[6:].rstrip("\n")
+                    if chunk:
+                        await websocket.send_text(chunk)
+            finally:
+                # If the client disconnects (or any other error interrupts
+                # the loop above) while a response is still streaming, close
+                # the generator explicitly rather than leaving it to garbage
+                # collection. This throws GeneratorExit into stream_chat at
+                # its current suspension point, unwinding the
+                # `async with client.messages.stream(...)` block immediately
+                # so we stop consuming (and paying for) tokens nobody reads.
+                await stream.aclose()
 
     except WebSocketDisconnect:
         pass

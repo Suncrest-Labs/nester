@@ -59,6 +59,15 @@ func NewPrometheusClient(cfg PrometheusConfig) *PrometheusClient {
 	}
 }
 
+// SetHTTPClient replaces the HTTP client used for outbound calls. It exists so
+// startup can install a metrics-instrumented transport; a nil client is
+// ignored so callers need not branch.
+func (c *PrometheusClient) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		c.httpClient = client
+	}
+}
+
 func (c *PrometheusClient) GetVaultRecommendations(ctx context.Context, vaultID string) ([]intelligence.Recommendation, error) {
 	key := fmt.Sprintf("vault:%s", vaultID)
 	if val, ok := c.getFromCache(key); ok {
@@ -185,6 +194,22 @@ func (c *PrometheusClient) GenerateDigest(ctx context.Context, request intellige
 	if err != nil {
 		c.recordFailure()
 		return nil, fmt.Errorf("failed to generate digest: %w", err)
+	}
+
+	return &response, nil
+}
+
+func (c *PrometheusClient) GenerateNudgeCopy(ctx context.Context, req intelligence.NudgeCopyRequest) (*intelligence.NudgeCopyResponse, error) {
+	if !c.canCall() {
+		return nil, fmt.Errorf("prometheus service unavailable (circuit open)")
+	}
+
+	endpoint := fmt.Sprintf("%s/intelligence/nudges/copy", c.cfg.BaseURL)
+	var response intelligence.NudgeCopyResponse
+	err := c.doPostRequest(ctx, endpoint, req, &response)
+	if err != nil {
+		c.recordFailure()
+		return nil, fmt.Errorf("failed to generate nudge copy: %w", err)
 	}
 
 	return &response, nil

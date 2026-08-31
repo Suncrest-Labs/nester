@@ -1,0 +1,29 @@
+name: Nightly contract property tests
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  share-accounting:
+    name: Randomized share accounting
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: packages/contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Deliberately omit PROPTEST_RNG_SEED: each nightly run explores a new
+      # set of sequences, while ci.yml supplies the reproducible merge gate.
+      - name: Run randomized share-accounting properties
+        env:
+          PROPTEST_CASES: "256"
+        run: cargo test -p nester-integration-tests property_tests -- --nocapture

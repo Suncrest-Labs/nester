@@ -1,14 +1,16 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Sparkles } from 'lucide-react'
+import { Sparkles, X } from 'lucide-react'
 import { intelligence, type PortfolioInsight } from '@/lib/api/intelligence'
 import { useWallet } from '@/components/wallet-provider'
+import { getInsightDismissKey } from './insightCard'
 
 export function PrometheusInsightsCard() {
   const { address } = useWallet()
   const [insights, setInsights] = useState<PortfolioInsight[]>([])
   const [loading, setLoading] = useState(true)
+  const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -34,6 +36,27 @@ export function PrometheusInsightsCard() {
 
   const latest = useMemo(() => insights[0], [insights])
   const weeklySummary = useMemo(() => insights[1], [insights])
+
+  const storageKey = useMemo(() => {
+    return latest ? getInsightDismissKey(latest.id, latest.title) : ''
+  }, [latest])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && storageKey) {
+      if (localStorage.getItem(storageKey) === 'true') {
+        setDismissed(true)
+      } else {
+        setDismissed(false)
+      }
+    }
+  }, [storageKey])
+
+  const handleDismiss = () => {
+    if (typeof window !== 'undefined' && storageKey) {
+      localStorage.setItem(storageKey, 'true')
+    }
+    setDismissed(true)
+  }
 
   const openChat = (prompt?: string) => {
     if (typeof window === 'undefined') return
@@ -71,14 +94,24 @@ export function PrometheusInsightsCard() {
         </button>
       </div>
 
-      {latest ? (
-        <div className="rounded-xl border border-black/[0.06] dark:border-white/[0.06] bg-black/[0.015] dark:bg-white/[0.015] p-4">
-          <p className="text-[12px] font-medium text-black dark:text-white">{latest.title}</p>
+      {latest && !dismissed ? (
+        <div className="relative rounded-xl border border-black/[0.06] dark:border-white/[0.06] bg-black/[0.015] dark:bg-white/[0.015] p-4">
+          <button
+            type="button"
+            onClick={handleDismiss}
+            aria-label="Dismiss insight"
+            className="absolute top-3 right-3 rounded-lg p-1 text-black/40 dark:text-white/40 hover:bg-black/5 dark:hover:bg-white/5 hover:text-black dark:hover:text-white transition-colors"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+          <p className="pr-6 text-[12px] font-medium text-black dark:text-white">{latest.title}</p>
           <p className="mt-1.5 text-[12px] leading-relaxed text-black/60 dark:text-white/60">{latest.body}</p>
           <p className="mt-2 text-[10px] text-black/45 dark:text-white/45">Confidence: {Math.round(latest.confidence * 100)}%</p>
         </div>
       ) : (
-        <p className="text-[12px] text-black/50 dark:text-white/50">No insight available yet. Ask Prometheus to generate one.</p>
+        <p className="text-[12px] text-black/50 dark:text-white/50">
+          {dismissed ? 'Insight dismissed.' : 'No insight available yet. Ask Prometheus to generate one.'}
+        </p>
       )}
 
       <div className="mt-4 rounded-xl border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-[#100F0F] p-4">

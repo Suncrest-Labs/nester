@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
@@ -25,7 +26,7 @@ var (
 const rebalanceEstimatedCompletionMS = int64(5000)
 
 const (
-	dashboardCacheTTL   = 2 * time.Minute
+	dashboardCacheTTL     = 2 * time.Minute
 	apyDropAlertThreshold = 0.20
 )
 
@@ -47,7 +48,7 @@ type AllocationWeightEntry struct {
 // integration is configured in-process.
 type NoopVaultChainInvoker struct{}
 
-func (NoopVaultChainInvoker) PauseVault(_ context.Context, _ string) error { return nil }
+func (NoopVaultChainInvoker) PauseVault(_ context.Context, _ string) error   { return nil }
 func (NoopVaultChainInvoker) UnpauseVault(_ context.Context, _ string) error { return nil }
 func (NoopVaultChainInvoker) RebalanceVault(_ context.Context, _ string) (string, error) {
 	return "", ErrChainNotConfigured
@@ -73,6 +74,17 @@ type AdminService struct {
 	dashboardCache   *admindomain.VaultHealthDashboard
 	dashboardCacheAt time.Time
 	dashboardCacheMu sync.RWMutex
+
+	// templateRepo backs the admin savings-goal-template catalog endpoints
+	// (#919). Nil until SetTemplateRepository is called by main wiring.
+	templateRepo savingsgoal.TemplateRepository
+}
+
+// SetTemplateRepository attaches the savings goal template repository so
+// admins can publish/edit/remove curated templates (#919) without a
+// redeploy.
+func (s *AdminService) SetTemplateRepository(repo savingsgoal.TemplateRepository) {
+	s.templateRepo = repo
 }
 
 func NewAdminService(

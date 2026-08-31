@@ -2,7 +2,7 @@
 use nester_access_control::{AccessControl, Role};
 use nester_common::{with_reentrancy_guard, CalleeAllowlist, ContractError};
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN, Env,
     Symbol, Vec,
 };
 
@@ -83,6 +83,7 @@ impl TreasuryContract {
         }
 
         AccessControl::initialize(&env, &admin);
+        nester_common::Upgrade::init_schema_version(&env, 1);
 
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage()
@@ -387,7 +388,72 @@ impl TreasuryContract {
         AccessControl::require_role(&env, &caller, Role::Admin);
         CalleeAllowlist::unregister(&env, &callee);
     }
+
+    pub fn grant_role(env: Env, grantor: Address, grantee: Address, role: Role) {
+        AccessControl::grant_role(&env, &grantor, &grantee, role);
+    }
+
+    pub fn has_role(env: Env, account: Address, role: Role) -> bool {
+        AccessControl::has_role(&env, &account, role)
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Upgradeability & Schema Migration
+    // -----------------------------------------------------------------------
+
+    /// Proposes a new WASM upgrade for the treasury.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_TREASURY (7 days).
+    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &admin,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_TREASURY,
+            eta,
+        );
+    }
+
+    /// Cancels a pending WASM upgrade for the treasury.
+    ///
+    /// Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, admin: Address) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &admin);
+    }
+
+    /// Executes a matured WASM upgrade for the treasury.
+    ///
+    /// Execution is permissionless after maturity.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
+
+    /// Retrieves pending upgrade details if present.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
+    }
+
+    /// Returns current contract schema version.
+    pub fn get_schema_version(env: Env) -> u32 {
+        nester_common::Upgrade::get_schema_version(&env)
+    }
+
+    /// Bumps schema version if needed (idempotent).
+    pub fn migrate(env: Env) -> u32 {
+        let current = nester_common::Upgrade::get_schema_version(&env);
+        let target = 1u32;
+        if current < target {
+            nester_common::Upgrade::set_schema_version(&env, target);
+            target
+        } else {
+            current
+        }
+    }
 }
+
 
 #[cfg(test)]
 mod test;

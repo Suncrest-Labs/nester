@@ -46,6 +46,23 @@ export AUTH_TOKEN='<dedicated-test-jwt>'
 
 Before a run, ensure rate limits are sized for the test source (or allowlist that source only in staging). Default per-IP API limits intentionally reject these traffic levels; treating those expected `429`s as a performance pass would invalidate the result.
 
+There are now **two** limits to size, and they reject for different reasons. The per-IP request-rate limits above count requests; the cost-weighted quota counts downstream work, so a workload weighted towards intelligence or chain routes exhausts it far sooner than its request count suggests — one relay call costs 25 units against a 300/minute budget. A `429` carrying `"reason":"QUOTA_EXHAUSTED"` is the quota, not the request-rate limiter.
+
+Opt out for the duration of a run, in order of preference:
+
+```bash
+# 1. Dedicated load-test environment: turn quotas off entirely.
+export RATELIMIT_QUOTA_ENABLED=false
+
+# 2. Shared environment where other traffic should stay metered: configure a
+#    bypass token on the API and send it from the load generator.
+export RATELIMIT_QUOTA_BYPASS_TOKEN='<secret>'
+#    then, in the k6 script: headers: { 'X-RateLimit-Bypass': __ENV.BYPASS }
+```
+
+Treat a bypass token as a credential — anyone holding it can spend the expensive
+dependencies without limit. See [API_COST_QUOTAS.md](API_COST_QUOTAS.md).
+
 ## Run and save evidence
 
 ```bash

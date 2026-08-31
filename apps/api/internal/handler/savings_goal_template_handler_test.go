@@ -34,11 +34,17 @@ func (m *mockGoalTemplateService) Get(ctx context.Context, userID, goalID uuid.U
 func (m *mockGoalTemplateService) List(ctx context.Context, userID uuid.UUID, category, status string, includeArchived bool) ([]savingsgoal.SavingsGoal, error) {
 	return nil, nil
 }
+func (m *mockGoalTemplateService) ListPaginated(ctx context.Context, userID uuid.UUID, filter service.SavingsGoalListFilter) ([]savingsgoal.SavingsGoal, int, error) {
+	return m.Goals, len(m.Goals), nil
+}
 func (m *mockGoalTemplateService) Update(ctx context.Context, userID, goalID uuid.UUID, in service.UpdateSavingsGoalInput) (savingsgoal.SavingsGoal, error) {
 	return savingsgoal.SavingsGoal{}, nil
 }
 func (m *mockGoalTemplateService) Delete(ctx context.Context, userID, goalID uuid.UUID) error {
 	return nil
+}
+func (m *mockGoalTemplateService) Restore(ctx context.Context, userID, goalID uuid.UUID) (savingsgoal.SavingsGoal, error) {
+	return savingsgoal.SavingsGoal{}, nil
 }
 func (m *mockGoalTemplateService) Summary(ctx context.Context, userID uuid.UUID) (savingsgoal.SavingsGoalsSummary, error) {
 	return savingsgoal.SavingsGoalsSummary{}, nil
@@ -109,6 +115,17 @@ func (m *mockGoalTemplateService) CreateFromTemplate(ctx context.Context, userID
 	}
 	m.Goals = append(m.Goals, goal)
 	return goal, nil
+}
+
+func (m *mockGoalTemplateService) UpdateNotes(_ context.Context, userID, goalID uuid.UUID, notes string) (savingsgoal.SavingsGoal, error) {
+	for i, g := range m.Goals {
+		if g.ID == goalID && g.UserID == userID {
+			g.Notes = notes
+			m.Goals[i] = g
+			return g, nil
+		}
+	}
+	return savingsgoal.SavingsGoal{}, savingsgoal.ErrGoalNotFound
 }
 
 func TestGoalTemplateHandler(t *testing.T) {
