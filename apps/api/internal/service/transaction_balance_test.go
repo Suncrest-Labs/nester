@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
 // fakeBalanceApplier records confirmed balance applications and can be made to
@@ -105,6 +106,73 @@ func TestConfirmedDeposit_CreditsBalanceThenMarksCompleted(t *testing.T) {
 	}
 	if applier.deposits[0].vaultID != tx.VaultID || !applier.deposits[0].amount.Equal(tx.Amount) || applier.deposits[0].hash != "dep-confirm" {
 		t.Errorf("unexpected deposit credit: %+v", applier.deposits[0])
+	}
+}
+
+// fakeConfirmedDepositCapEvaluator lets a test control whether a confirmed
+// deposit's launch-cap check reports an over-cap warning.
+type fakeConfirmedDepositCapEvaluator struct {
+	err error
+}
+
+func (f fakeConfirmedDepositCapEvaluator) EvaluateTotals(_ context.Context, _ uuid.UUID, _, _, _ decimal.Decimal) error {
+	return f.err
+}
+
+// TestConfirmedDeposit_RecordsVaultOwnerAndWarnsOverCap wires a vault lookup
+// and a ConfirmedDepositCapEvaluator to assert two things table-driven tests
+// elsewhere in this file don't cover: the credited userID is resolved from
+// the vault owner (not left zero-value), and an over-cap deposit still
+// credits the balance while surfacing the cap evaluator's error as a
+// non-fatal warning — "credit now, warn don't reject" for confirmed
+// on-chain deposits.
+func TestConfirmedDeposit_RecordsVaultOwnerAndWarnsOverCap(t *testing.T) {
+	tests := []struct {
+		name       string
+		checkerErr error
+	}{
+		{name: "under cap", checkerErr: nil},
+		{name: "over cap still credits and warns", checkerErr: errors.New("launch cap exceeded")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const hash = "dep-owner-cap"
+			ownerID := uuid.New()
+			tx := newPendingTx(transaction.TypeDeposit, hash, time.Minute)
+			repo := newFakeTransactionRepo(tx)
+
+			svc := NewTransactionService(repo, claimHorizonStub(t, hash, []horizonOperation{
+				paymentOp(claimVaultContract, "USDC", tx.Amount.String()),
+			}))
+			applier := &fakeBalanceApplier{}
+			svc.SetBalanceApplier(applier)
+			svc.SetVaultLookup(fakeVaultLookup{v: vault.Vault{
+				ID:              tx.VaultID,
+				UserID:          ownerID,
+				ContractAddress: claimVaultContract,
+				Currency:        "USDC",
+			}})
+			svc.SetCapsChecker(fakeConfirmedDepositCapEvaluator{err: tt.checkerErr})
+
+			if _, _, err := svc.ReconcileTransaction(context.Background(), tx); err != nil {
+				t.Fatalf("ReconcileTransaction: %v", err)
+			}
+
+			stored, err := repo.GetByHash(context.Background(), hash)
+			if err != nil {
+				t.Fatalf("GetByHash: %v", err)
+			}
+			if stored.Status != transaction.StatusCompleted {
+				t.Fatalf("status = %q, want completed", stored.Status)
+			}
+			if applier.depositCount() != 1 {
+				t.Fatalf("expected 1 deposit credit, got %d", applier.depositCount())
+			}
+			if applier.deposits[0].userID != ownerID {
+				t.Errorf("deposit userID = %v, want vault owner %v", applier.deposits[0].userID, ownerID)
+			}
+		})
 	}
 }
 

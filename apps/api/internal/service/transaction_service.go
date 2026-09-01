@@ -252,9 +252,17 @@ func (s *TransactionService) applyConfirmedBalance(ctx context.Context, model tr
 	// value, matching this path's pre-existing best-effort behaviour.
 	var userID uuid.UUID
 	if s.vaults != nil {
-		if v, err := s.vaults.GetVault(ctx, model.VaultID); err == nil {
-			userID = v.UserID
+		v, err := s.vaults.GetVault(ctx, model.VaultID)
+		if err != nil {
+			// Don't proceed with a zero-value userID on a lookup failure: that
+			// would silently skip the cap check, ledger posting, and correct
+			// audit attribution below. Returning the error here leaves the
+			// transaction pending so the caller's existing retry logic
+			// (ReconcileTransaction) re-attempts on the next poll instead of
+			// marking a broken transaction completed.
+			return fmt.Errorf("resolve vault owner for balance change: %w", err)
 		}
+		userID = v.UserID
 	}
 
 	switch model.Type {
