@@ -47,6 +47,32 @@ CREATE TABLE IF NOT EXISTS balance_audit_log (
 CREATE INDEX IF NOT EXISTS idx_balance_audit_log_vault_id ON balance_audit_log(vault_id, seq);
 CREATE INDEX IF NOT EXISTS idx_balance_audit_log_user_id ON balance_audit_log(user_id, seq);
 
+-- Restore the FKs even when the table already existed from a prior
+-- down/up cycle. down.sql drops these two constraints (but not the table
+-- itself) so a full-chain rollback doesn't block on migrations 002/001
+-- dropping vaults/users; the comment there claims the next migrate-up
+-- recreates them, but CREATE TABLE IF NOT EXISTS above is a no-op once the
+-- table exists, so without this block neither FK is ever restored and
+-- balance_audit_log silently starts accepting rows that reference
+-- nonexistent vaults/users. Idempotent via pg_constraint so re-running this
+-- migration (or running it fresh, when CREATE TABLE already declared these
+-- inline) never double-adds either constraint.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'balance_audit_log_vault_id_fkey'
+    ) THEN
+        ALTER TABLE balance_audit_log
+            ADD CONSTRAINT balance_audit_log_vault_id_fkey FOREIGN KEY (vault_id) REFERENCES vaults(id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'balance_audit_log_user_id_fkey'
+    ) THEN
+        ALTER TABLE balance_audit_log
+            ADD CONSTRAINT balance_audit_log_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id);
+    END IF;
+END $$;
+
 COMMENT ON TABLE balance_audit_log IS 'Append-only ledger of every balance-changing vault operation (nester#1124). No UPDATE/DELETE from application code.';
 
 -- Opening-balance entries for vaults that already existed (and may already
