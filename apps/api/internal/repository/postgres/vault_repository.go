@@ -516,6 +516,13 @@ func (r *VaultRepository) RecordDepositWithAudit(
 		return balanceaudit.Entry{}, err
 	}
 
+	// --- Ledger: post balanced double-entry within same DB transaction ---
+	if err := r.postDepositLedgerTx(ctx, tx, vaultID, record.UserID, record.Amount, record.TransactionHash); err != nil {
+		if !isLedgerTableMissing(err) {
+			return balanceaudit.Entry{}, fmt.Errorf("ledger deposit posting failed: %w", err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return balanceaudit.Entry{}, err
 	}
@@ -599,6 +606,13 @@ func (r *VaultRepository) RecordWithdrawalWithAudit(
 	inserted, err := appendBalanceAuditEntry(ctx, tx, auditTemplate)
 	if err != nil {
 		return balanceaudit.Entry{}, err
+	}
+
+	// --- Ledger: atomic posting ---
+	if err := r.postWithdrawalLedgerTx(ctx, tx, vaultID, record.UserID, record.Amount, record.TransactionHash); err != nil {
+		if !isLedgerTableMissing(err) {
+			return balanceaudit.Entry{}, fmt.Errorf("ledger withdrawal posting failed: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -717,6 +731,13 @@ func (r *VaultRepository) RecordHarvestWithAudit(
 	inserted, err := appendBalanceAuditEntry(ctx, tx, auditTemplate)
 	if err != nil {
 		return balanceaudit.Entry{}, err
+	}
+
+	// --- Ledger: atomic harvest posting (gross = net + fee) ---
+	if err := r.postHarvestLedgerTx(ctx, tx, input.VaultID, input.UserID, input.NetYield, input.PerformanceFee, "blend", input.TransactionHash); err != nil {
+		if !isLedgerTableMissing(err) {
+			return balanceaudit.Entry{}, fmt.Errorf("ledger harvest posting failed: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
