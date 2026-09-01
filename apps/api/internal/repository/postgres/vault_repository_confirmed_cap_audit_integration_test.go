@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -255,9 +256,5 @@ func TestApplyConfirmedDeposit_WarnsButStillCreditsOverGlobalCap(t *testing.T) {
 }
 
 func isCapExceeded(err error, target **caps.CapExceededError) bool {
-	ce, ok := err.(*caps.CapExceededError)
-	if ok {
-		*target = ce
-	}
-	return ok
+	return errors.As(err, target)
 }

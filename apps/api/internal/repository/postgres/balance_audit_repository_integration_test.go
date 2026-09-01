@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -130,10 +131,9 @@ func TestBalanceAuditRepositoryIntegration_ListByVault_Paginates(t *testing.T) {
 	}
 }
 
-// TestBalanceAuditRepositoryIntegration_ListByVault_NotFound confirms an
-// out-of-range offset against a vault with entries still surfaces its true
-// total rather than silently reporting zero (pagination must not mask that
-// the vault has history — only that this page of it is empty).
+// TestBalanceAuditRepositoryIntegration_ListByVault_UnknownVault confirms
+// that a vault id with no audit history at all (never any entries written)
+// returns balanceaudit.ErrNotFound rather than an empty, successful page.
 func TestBalanceAuditRepositoryIntegration_ListByVault_UnknownVault(t *testing.T) {
 	db := openIntegrationDB(t)
 	applyIntegrationMigrations(t, db)
@@ -143,7 +143,7 @@ func TestBalanceAuditRepositoryIntegration_ListByVault_UnknownVault(t *testing.T
 	ctx := context.Background()
 
 	_, _, err := auditRepo.ListByVault(ctx, uuid.New(), 10, 0)
-	if err != balanceaudit.ErrNotFound {
+	if !errors.Is(err, balanceaudit.ErrNotFound) {
 		t.Fatalf("ListByVault() error = %v, want balanceaudit.ErrNotFound", err)
 	}
 }
