@@ -1450,6 +1450,7 @@ func TestLoadLaunchCapWarnThresholdsValidation(t *testing.T) {
 		{name: "over 100 is out of range", value: "80,101", wantErr: true},
 		{name: "duplicate values not strictly increasing", value: "80,80", wantErr: true},
 		{name: "descending order rejected", value: "90,80", wantErr: true},
+		{name: "non-integer token rejected", value: "80,abc", wantErr: true},
 	}
 
 	for _, tt := range tests {
