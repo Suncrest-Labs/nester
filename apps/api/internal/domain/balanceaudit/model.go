@@ -52,6 +52,14 @@ func SystemActor(source string) string { return "system:" + source }
 // Entry is a single append-only row in balance_audit_log.
 type Entry struct {
 	ID uuid.UUID
+	// Seq is the monotonic insert-order sequence assigned by the
+	// balance_audit_log.seq column (migration 118). Unlike CreatedAt (set to
+	// NOW() at transaction start), Seq is only assigned — and only becomes
+	// visible to other transactions — when its own INSERT executes, so
+	// ordering by it, as ListByVault/ListByUser do, reflects true commit
+	// order even under concurrency, where CreatedAt values can be out of
+	// order. Zero for an entry that has not yet been persisted.
+	Seq int64
 	// VaultID identifies the vault whose balance changed.
 	VaultID uuid.UUID
 	// UserID is the vault owner, i.e. whose balance this is — distinct from

@@ -13,6 +13,17 @@
 -- the same growth rate as vault_transactions already sustains.
 CREATE TABLE IF NOT EXISTS balance_audit_log (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- seq: monotonic insert-order sequence, distinct from created_at.
+    -- created_at is set to NOW() at transaction *start*, not at commit/insert
+    -- visibility, so under concurrency two transactions can commit in a
+    -- different order than their created_at values suggest. Replaying
+    -- entries ordered by created_at can then hit ErrReconciliationGap even
+    -- though nothing is actually wrong (nester CodeRabbit finding). seq is
+    -- assigned by a sequence at INSERT time and is only ever visible once
+    -- its transaction commits, so ordering by seq reflects true commit order.
+    -- ListByVault/ListByUser order by this column; created_at is kept as-is
+    -- for audit metadata/display.
+    seq BIGSERIAL,
     vault_id UUID NOT NULL REFERENCES vaults(id),
     user_id UUID NOT NULL REFERENCES users(id),
     -- actor: who/what caused the change. The owning user's id as text for a
@@ -33,8 +44,8 @@ CREATE TABLE IF NOT EXISTS balance_audit_log (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_balance_audit_log_vault_id ON balance_audit_log(vault_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_balance_audit_log_user_id ON balance_audit_log(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_balance_audit_log_vault_id ON balance_audit_log(vault_id, seq);
+CREATE INDEX IF NOT EXISTS idx_balance_audit_log_user_id ON balance_audit_log(user_id, seq);
 
 COMMENT ON TABLE balance_audit_log IS 'Append-only ledger of every balance-changing vault operation (nester#1124). No UPDATE/DELETE from application code.';
 

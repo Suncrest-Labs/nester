@@ -59,13 +59,13 @@ func appendBalanceAuditEntry(ctx context.Context, q queryRowContexter, entry bal
 			id, vault_id, user_id, actor, operation, amount, balance_before, balance_after,
 			chain_reference, metadata
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING created_at
+		RETURNING seq, created_at
 	`
 	err := q.QueryRowContext(ctx, query,
 		entry.ID.String(), entry.VaultID.String(), entry.UserID.String(),
 		entry.Actor, string(entry.Operation), entry.Amount, entry.BalanceBefore, entry.BalanceAfter,
 		chainRef, nullableJSON(metadataJSON),
-	).Scan(&entry.CreatedAt)
+	).Scan(&entry.Seq, &entry.CreatedAt)
 	if err != nil {
 		return balanceaudit.Entry{}, err
 	}
@@ -84,10 +84,10 @@ func (r *BalanceAuditRepository) ListByVault(ctx context.Context, vaultID uuid.U
 
 	const query = `
 		SELECT id, vault_id, user_id, actor, operation, amount, balance_before, balance_after,
-		       chain_reference, metadata, created_at
+		       chain_reference, metadata, created_at, seq
 		FROM balance_audit_log
 		WHERE vault_id = $1
-		ORDER BY created_at ASC, id ASC
+		ORDER BY seq ASC
 		LIMIT $2 OFFSET $3
 	`
 	rows, err := r.db.QueryContext(ctx, query, vaultID.String(), limit, offset)
@@ -114,10 +114,10 @@ func (r *BalanceAuditRepository) ListByUser(ctx context.Context, userID uuid.UUI
 
 	const query = `
 		SELECT id, vault_id, user_id, actor, operation, amount, balance_before, balance_after,
-		       chain_reference, metadata, created_at
+		       chain_reference, metadata, created_at, seq
 		FROM balance_audit_log
 		WHERE user_id = $1
-		ORDER BY created_at ASC, id ASC
+		ORDER BY seq ASC
 		LIMIT $2 OFFSET $3
 	`
 	rows, err := r.db.QueryContext(ctx, query, userID.String(), limit, offset)
@@ -161,7 +161,7 @@ func scanBalanceAuditEntries(rows *sql.Rows, total int) ([]balanceaudit.Entry, e
 		if err := rows.Scan(
 			&idStr, &vaultIDStr, &userIDStr, &e.Actor, &operation,
 			&e.Amount, &e.BalanceBefore, &e.BalanceAfter,
-			&chainRef, &metadataJSON, &e.CreatedAt,
+			&chainRef, &metadataJSON, &e.CreatedAt, &e.Seq,
 		); err != nil {
 			return nil, err
 		}
