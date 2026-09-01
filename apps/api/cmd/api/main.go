@@ -627,6 +627,11 @@ func run() error {
 			)
 		})
 		vaultService.SetCapsChecker(capsChecker)
+		// Same caps enforced on the confirmed on-chain path, so a deposit that
+		// only gets caps-checked once it lands can't silently skip the check
+		// (nester CodeRabbit finding). See TransactionService.SetCapsChecker's
+		// doc comment for why this warns rather than blocks.
+		transactionService.SetCapsChecker(capsChecker)
 	}
 
 	// Append-only balance-change audit trail (#1124).

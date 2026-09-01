@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 // VaultBalanceApplier credits or debits a vault's balance for a transaction
@@ -25,8 +26,30 @@ import (
 // reports the transaction in a closed, successful ledger — never at submission
 // time (issue #496).
 type VaultBalanceApplier interface {
-	ApplyConfirmedDeposit(ctx context.Context, vaultID uuid.UUID, amount decimal.Decimal, txHash string) error
-	ApplyConfirmedWithdrawal(ctx context.Context, vaultID uuid.UUID, amount decimal.Decimal, txHash string) error
+	// ApplyConfirmedDeposit credits a confirmed on-chain deposit. capCheck, when
+	// non-nil, is evaluated against the launch caps but its result never blocks
+	// the credit — see the implementation's doc comment for why an
+	// already-confirmed on-chain deposit cannot simply be refused. A non-nil
+	// capWarning return means the deposit was credited despite exceeding a
+	// launch cap, and should be logged/alerted on by the caller.
+	ApplyConfirmedDeposit(
+		ctx context.Context,
+		vaultID uuid.UUID,
+		userID uuid.UUID,
+		amount decimal.Decimal,
+		txHash string,
+		capCheck func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error,
+	) (capWarning error, err error)
+	ApplyConfirmedWithdrawal(ctx context.Context, vaultID uuid.UUID, userID uuid.UUID, amount decimal.Decimal, txHash string) error
+}
+
+// ConfirmedDepositCapEvaluator is the transaction-safe cap evaluation used to
+// warn (never block) on a confirmed on-chain deposit that exceeds a launch
+// cap. Satisfied by *caps.Checker's EvaluateTotals. Declared here, rather than
+// importing domain/caps, to keep this package's dependency-free convention
+// (matching depositAuditRepository/capEvaluator in the vault service).
+type ConfirmedDepositCapEvaluator interface {
+	EvaluateTotals(ctx context.Context, userID uuid.UUID, amount, currentUserTotal, currentGlobalTotal decimal.Decimal) error
 }
 
 type TransactionService struct {
@@ -38,6 +61,19 @@ type TransactionService struct {
 	// can be checked against the vault's real contract address and currency
 	// (nester#1145). See SetVaultLookup.
 	vaults TransactionVaultLookup
+	// capsChecker evaluates a confirmed deposit against the launch caps
+	// (nester CodeRabbit finding: confirmed on-chain deposits previously
+	// bypassed the caps entirely). Optional: nil disables the check, same as
+	// the interactive deposit path. See SetCapsChecker.
+	capsChecker ConfirmedDepositCapEvaluator
+}
+
+// SetCapsChecker installs the launch-cap evaluator used to flag (not block —
+// see VaultBalanceApplier's doc comment) a confirmed on-chain deposit that
+// exceeds a launch cap. Production wires the same *caps.Checker instance used
+// by VaultService.SetCapsChecker.
+func (s *TransactionService) SetCapsChecker(checker ConfirmedDepositCapEvaluator) {
+	s.capsChecker = checker
 }
 
 type RegisterTransactionInput struct {
@@ -203,13 +239,45 @@ func (s *TransactionService) applyConfirmedBalance(ctx context.Context, model tr
 	if s.balance == nil {
 		return nil
 	}
+	if model.Type != transaction.TypeDeposit && model.Type != transaction.TypeWithdrawal {
+		return nil
+	}
+
+	// transaction.Transaction carries no user id of its own (it is keyed by
+	// vault + tx hash), so it is resolved from the vault here — the same
+	// lookup verifyConfirmedClaim already uses for deposits. Needed so the
+	// balance-audit entry records who the change belongs to, and so a
+	// deposit's cap check has a user to evaluate. When no lookup is wired
+	// (tests exercising only status transitions), userID stays the zero
+	// value, matching this path's pre-existing best-effort behaviour.
+	var userID uuid.UUID
+	if s.vaults != nil {
+		if v, err := s.vaults.GetVault(ctx, model.VaultID); err == nil {
+			userID = v.UserID
+		}
+	}
+
 	switch model.Type {
 	case transaction.TypeDeposit:
-		return s.balance.ApplyConfirmedDeposit(ctx, model.VaultID, model.Amount, model.TxHash)
-	case transaction.TypeWithdrawal:
-		return s.balance.ApplyConfirmedWithdrawal(ctx, model.VaultID, model.Amount, model.TxHash)
-	default:
-		return nil
+		var capCheck func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error
+		if s.capsChecker != nil {
+			capCheck = func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error {
+				return s.capsChecker.EvaluateTotals(ctx, userID, model.Amount, currentUserTotal, currentGlobalTotal)
+			}
+		}
+		capWarning, err := s.balance.ApplyConfirmedDeposit(ctx, model.VaultID, userID, model.Amount, model.TxHash, capCheck)
+		if capWarning != nil {
+			// Non-fatal: the deposit already happened on-chain and was
+			// credited regardless (see VaultBalanceApplier's doc comment).
+			// Logged loudly so it can be alerted on — this is the only
+			// enforcement point left once money has already moved on-chain.
+			logpkg.FromContext(ctx).Error("confirmed deposit exceeded launch cap",
+				"vault_id", model.VaultID, "user_id", userID, "amount", model.Amount.String(),
+				"tx_hash", model.TxHash, "error", capWarning)
+		}
+		return err
+	default: // transaction.TypeWithdrawal
+		return s.balance.ApplyConfirmedWithdrawal(ctx, model.VaultID, userID, model.Amount, model.TxHash)
 	}
 }
 
