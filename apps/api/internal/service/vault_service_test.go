@@ -627,80 +627,87 @@ func (s *stubCapsChecker) CheckDeposit(_ context.Context, userID uuid.UUID, amou
 	return s.err
 }
 
-// TestVaultServiceRecordDeposit_RejectsWhenCapExceeded verifies RecordDeposit
-// consults the caps checker before touching the chain or crediting a
-// balance, and that the rejection is surfaced as the checker's own error
-// (nester#1119).
-func TestVaultServiceRecordDeposit_RejectsWhenCapExceeded(t *testing.T) {
-	userID := uuid.New()
-	repository := newMemoryVaultRepository(userID)
-	svc := NewVaultService(repository)
-
-	created, err := svc.CreateVault(context.Background(), CreateVaultInput{
-		UserID:          userID,
-		ContractAddress: "CA123",
-		Currency:        "usdc",
-	})
-	if err != nil {
-		t.Fatalf("CreateVault() error = %v", err)
-	}
-
+// TestVaultServiceRecordDeposit_CapsChecker verifies RecordDeposit consults
+// the caps checker before touching the chain or crediting a balance
+// (nester#1119): a cap-exceeded rejection (or any other checker error) is
+// surfaced verbatim and leaves the balance untouched, while an approval lets
+// the deposit proceed exactly as it did before caps existed.
+func TestVaultServiceRecordDeposit_CapsChecker(t *testing.T) {
 	capErr := errors.New("deposit would exceed the per-user deposit cap")
-	checker := &stubCapsChecker{err: capErr}
-	svc.SetCapsChecker(checker)
+	otherErr := errors.New("caps service unavailable")
 
-	_, err = svc.RecordDeposit(context.Background(), RecordDepositInput{
-		VaultID: created.ID,
-		Amount:  decimal.RequireFromString("100"),
-	})
-	if !errors.Is(err, capErr) {
-		t.Fatalf("RecordDeposit() error = %v, want the caps checker's error", err)
-	}
-	if checker.callCount != 1 {
-		t.Fatalf("expected caps checker to be consulted exactly once, got %d", checker.callCount)
-	}
-
-	// Balance must be unchanged — the rejected deposit was never applied.
-	refreshed, getErr := repository.GetVault(context.Background(), created.ID)
-	if getErr != nil {
-		t.Fatalf("GetVault() error = %v", getErr)
-	}
-	if !refreshed.CurrentBalance.IsZero() {
-		t.Fatalf("expected balance to stay 0 after rejected deposit, got %s", refreshed.CurrentBalance)
-	}
-}
-
-// TestVaultServiceRecordDeposit_AllowsWhenUnderCap verifies a deposit the
-// caps checker approves proceeds exactly as it did before caps existed.
-func TestVaultServiceRecordDeposit_AllowsWhenUnderCap(t *testing.T) {
-	userID := uuid.New()
-	repository := newMemoryVaultRepository(userID)
-	svc := NewVaultService(repository)
-
-	created, err := svc.CreateVault(context.Background(), CreateVaultInput{
-		UserID:          userID,
-		ContractAddress: "CA123",
-		Currency:        "usdc",
-	})
-	if err != nil {
-		t.Fatalf("CreateVault() error = %v", err)
+	tests := []struct {
+		name        string
+		checkerErr  error
+		wantErr     error
+		wantBalance decimal.Decimal
+	}{
+		{
+			name:        "rejects when cap exceeded",
+			checkerErr:  capErr,
+			wantErr:     capErr,
+			wantBalance: decimal.Zero,
+		},
+		{
+			name:        "allows when under cap",
+			checkerErr:  nil,
+			wantErr:     nil,
+			wantBalance: decimal.RequireFromString("100"),
+		},
+		{
+			name:        "rejects on non-cap checker error",
+			checkerErr:  otherErr,
+			wantErr:     otherErr,
+			wantBalance: decimal.Zero,
+		},
 	}
 
-	checker := &stubCapsChecker{err: nil}
-	svc.SetCapsChecker(checker)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			userID := uuid.New()
+			repository := newMemoryVaultRepository(userID)
+			svc := NewVaultService(repository)
 
-	updated, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
-		VaultID: created.ID,
-		Amount:  decimal.RequireFromString("100"),
-	})
-	if err != nil {
-		t.Fatalf("RecordDeposit() error = %v", err)
-	}
-	if !updated.CurrentBalance.Equal(decimal.RequireFromString("100")) {
-		t.Fatalf("expected balance 100, got %s", updated.CurrentBalance)
-	}
-	if checker.callCount != 1 {
-		t.Fatalf("expected caps checker to be consulted exactly once, got %d", checker.callCount)
+			created, err := svc.CreateVault(context.Background(), CreateVaultInput{
+				UserID:          userID,
+				ContractAddress: "CA123",
+				Currency:        "usdc",
+			})
+			if err != nil {
+				t.Fatalf("CreateVault() error = %v", err)
+			}
+
+			checker := &stubCapsChecker{err: tt.checkerErr}
+			svc.SetCapsChecker(checker)
+
+			updated, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
+				VaultID: created.ID,
+				Amount:  decimal.RequireFromString("100"),
+			})
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("RecordDeposit() error = %v, want %v", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("RecordDeposit() error = %v", err)
+			}
+			if checker.callCount != 1 {
+				t.Fatalf("expected caps checker to be consulted exactly once, got %d", checker.callCount)
+			}
+
+			if tt.wantErr != nil {
+				// Balance must be unchanged — the rejected deposit was never applied.
+				refreshed, getErr := repository.GetVault(context.Background(), created.ID)
+				if getErr != nil {
+					t.Fatalf("GetVault() error = %v", getErr)
+				}
+				if !refreshed.CurrentBalance.Equal(tt.wantBalance) {
+					t.Fatalf("expected balance to stay %s after rejected deposit, got %s", tt.wantBalance, refreshed.CurrentBalance)
+				}
+			} else if !updated.CurrentBalance.Equal(tt.wantBalance) {
+				t.Fatalf("expected balance %s, got %s", tt.wantBalance, updated.CurrentBalance)
+			}
+		})
 	}
 }
 
