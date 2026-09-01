@@ -24,27 +24,39 @@ type fakeBalanceApplier struct {
 
 type balanceCall struct {
 	vaultID uuid.UUID
+	userID  uuid.UUID
 	amount  decimal.Decimal
 	hash    string
 }
 
-func (f *fakeBalanceApplier) ApplyConfirmedDeposit(_ context.Context, vaultID uuid.UUID, amount decimal.Decimal, hash string) error {
+func (f *fakeBalanceApplier) ApplyConfirmedDeposit(
+	ctx context.Context,
+	vaultID uuid.UUID,
+	userID uuid.UUID,
+	amount decimal.Decimal,
+	hash string,
+	capCheck func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error,
+) (error, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return f.err
+		return nil, f.err
 	}
-	f.deposits = append(f.deposits, balanceCall{vaultID, amount, hash})
-	return nil
+	var capWarning error
+	if capCheck != nil {
+		capWarning = capCheck(ctx, decimal.Zero, decimal.Zero)
+	}
+	f.deposits = append(f.deposits, balanceCall{vaultID, userID, amount, hash})
+	return capWarning, nil
 }
 
-func (f *fakeBalanceApplier) ApplyConfirmedWithdrawal(_ context.Context, vaultID uuid.UUID, amount decimal.Decimal, hash string) error {
+func (f *fakeBalanceApplier) ApplyConfirmedWithdrawal(_ context.Context, vaultID uuid.UUID, userID uuid.UUID, amount decimal.Decimal, hash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
-	f.withdrawals = append(f.withdrawals, balanceCall{vaultID, amount, hash})
+	f.withdrawals = append(f.withdrawals, balanceCall{vaultID, userID, amount, hash})
 	return nil
 }
 
