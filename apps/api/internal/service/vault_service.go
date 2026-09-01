@@ -650,6 +650,16 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 			capCheck = func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error {
 				return evaluator.EvaluateTotals(ctx, userID, amount, currentUserTotal, currentGlobalTotal)
 			}
+		} else if s.capsChecker != nil && !hasEvaluator {
+			// The installed CapsChecker can't supply a transactional cap
+			// check, so the atomic/advisory-lock evaluation below is
+			// skipped for this call, re-opening the TOCTOU window the
+			// atomic path exists to close. This should never happen with
+			// the production *caps.Checker (which does satisfy
+			// capEvaluator) — log loudly so a future CapsChecker
+			// implementation that doesn't can't regress this silently.
+			logpkg.FromContext(ctx).Error("caps checker does not support atomic transactional evaluation; TOCTOU guarantee not enforced for this deposit",
+				"vault_id", input.VaultID, "user_id", userID, "amount", amount.String())
 		}
 		if _, err := auditRepo.RecordDepositWithAudit(ctx, input.VaultID, record, capCheck, balanceaudit.Entry{
 			UserID:         userID,
