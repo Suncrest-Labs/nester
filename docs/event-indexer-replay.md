@@ -126,42 +126,99 @@ because the poller stops on error rather than skipping, the next pass retries.
 ## Not covered: ledger reorganisations
 
 **The replay guarantees above assume an append-only ledger history. Reorgs are
-out of scope for this harness and are not handled by `EventPoller`.**
+out of scope: `EventPoller` does not detect them, does not roll back, and does
+not replay.** This is a deliberate, accepted exposure (#1089), not an oversight,
+and this section states its cost precisely.
 
-This is a real gap, stated here rather than left implicit, because a document
-titled "Replay Guarantees" that silently omits the one replay case caused by
-the *chain* rather than the *delivery* would be misleading.
+### The exposure, concretely
 
-What exists today:
+If a ledger the indexer has already processed is replaced by the network:
 
-- `ReorgSafeIndexer` (`reorg_indexer.go`) and migration
-  `100_reorg_safe_indexer` (`ledger_checkpoints`, plus `tx_hash` /
-  `event_index` columns on `processed_events`) implement parent-hash
-  verification and checkpoint rollback.
-- **Neither has a non-test caller.** `EventPoller` does not reference
-  `ledger_checkpoints`, `parent_hash`, or `ReorgSafeIndexer`, and routing
-  production through the poller leaves that machinery unreached.
+1. The events from the orphaned ledger have already been applied. Each was a
+   committed `UPDATE vaults SET current_balance = current_balance + …`, so the
+   credit is durable and indistinguishable from a canonical one.
+2. Nothing ever revisits it. `processed_events` records the orphaned event's ID,
+   so even if the replacement ledger were re-fetched, the orphaned credit is
+   never reversed — dedup keeps state from being applied twice, not from being
+   applied wrongly.
+3. The replacement ledger's events are then applied *on top*. The vault ends up
+   credited for both the orphaned history and the canonical one.
 
-Two specific incompatibilities to resolve before the two can be joined:
+The financial shape of that is a **vault balance credited for a deposit that is
+not on the canonical chain**, permanently, with no error raised and no metric
+moved. A withdrawal against the inflated balance would move real value out
+against a credit that no longer exists on-chain. `current_balance CHECK (>= 0)`
+does not help: the error is a balance that is too *high*.
 
-1. **Cursor monotonicity blocks rewind.** `advanceCursorTx` uses `GREATEST`, so
-   the cursor can only move forward. A reorg requires moving it *backwards* to
-   the fork point. Any reorg integration must either bypass `advanceCursorTx`
-   for the rollback or make the rewind explicit and auditable, rather than
-   quietly dropping the monotonicity that protects the forward path.
-2. **`revertToCheckpoint` does not rewind the cursor at all.** It deletes
-   `processed_events` and `ledger_checkpoints` rows above the fork point, but
-   leaves `event_indexer.last_ledger` untouched. On its own that would delete
-   the dedup records while the cursor still points past them, so the reverted
-   events would never be re-fetched — the rollback would drop events rather
-   than replay them.
+The mitigating facts, stated so the risk can be weighed rather than assumed
+away: Stellar SCP reaches consensus per ledger and does not fork on the happy
+path, so this requires a genuine consensus-level failure rather than the routine
+probabilistic reorg of a proof-of-work chain. The exposure window is also
+bounded by `DefaultColdStartOffset` on a fresh deployment only — for a
+long-running indexer it is unbounded in principle.
 
-Until that integration lands, the indexer is correct on an append-only history
-and undefined under a reorg. Soroban/Stellar finality makes deep reorgs rare,
-which is presumably why this has not bitten yet, but "rare" is not "handled".
-Tracking this as follow-up work is deliberate: it is outside issue #1051's
-acceptance criteria, and folding an unreviewed reorg path into this change
-would weaken rather than strengthen the guarantees proven here.
+### Why it is not implemented
+
+Two structural blockers, either of which alone rules out a safe implementation
+today:
+
+1. **The indexer's data source carries no ledger hashes.** `EventPoller` reads
+   Soroban `getEvents` (`fetcher.go`), whose response has a ledger *sequence*
+   but neither a ledger hash nor a parent hash. Parent-hash verification — the
+   basis of every reorg-detection design — therefore cannot run at all without
+   adding a second RPC dependency (`getLedgers`) and a call per ledger.
+2. **Applied balance mutations are not invertible.** `applyEventMutation`
+   writes in-place deltas (`current_balance = current_balance + $1`) and stores
+   no per-event record of what it applied. Rolling back to a fork point would
+   require recomputing balances from an authoritative event log or recording a
+   compensating delta per event — a money-path schema change. Deleting
+   `processed_events` rows, which is all a checkpoint rollback can do today,
+   removes the dedup record while leaving the credit in place: strictly worse
+   than doing nothing, because the same event can then be applied twice.
+
+A third, softer reason: `advanceCursorTx` uses `GREATEST` so the cursor cannot
+move backwards. That is the easiest of the three to change, and the most
+dangerous to change casually — monotonicity is what stops out-of-order delivery
+from walking the cursor back over committed events.
+
+### What was removed
+
+Migration `100_reorg_safe_indexer` and `reorg_indexer.go` previously shipped a
+`ReorgSafeIndexer` implementing parent-hash verification and checkpoint
+rollback. **It never had a non-test caller**, and it could not have worked if
+wired up: `handleReorg` selected the first ledger below the current one that had
+*any* checkpoint as the "fork point" without comparing hashes — which is the
+mismatching ledger itself — and returned without replaying the batch it was
+handed, dropping those events.
+
+Dead code that looks like a safety mechanism is worse than an absent one,
+because an auditor reading `ledger_checkpoints` in the schema concludes reorgs
+are handled. So `reorg_indexer.go` and its test are deleted, and migration
+`108_drop_unused_reorg_checkpoints` drops the empty `ledger_checkpoints` table
+and the unused `idx_processed_events_dedup` index. The vestigial
+`processed_events.tx_hash` / `event_index` columns are left in place; nothing
+reads or writes them.
+
+### What re-introducing it would require
+
+In order, and none of it is small:
+
+1. A ledger-metadata source that returns `(sequence, hash, previous_hash)` —
+   Soroban `getLedgers`, added to `EventFetcher` alongside `FetchEvents`.
+2. A record of what each applied event did to a vault, so a rollback can invert
+   it: either per-event compensating deltas, or balances recomputed from
+   `processed_events` as a projection rather than mutated in place.
+3. An explicit, audited cursor rewind that does not weaken `GREATEST` for the
+   forward path.
+4. A finality threshold below which a ledger is never rewound, and a
+   depth beyond which the indexer halts for an operator rather than
+   rolling back silently.
+5. A deterministic integration test that replaces a previously-seen ledger and
+   asserts vault state converges to the canonical chain — the test the deleted
+   code never had.
+
+Until then the indexer is correct on an append-only history and undefined under
+a reorg, and that is a stated limitation rather than an implied guarantee.
 
 ## Integer precision
 

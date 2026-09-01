@@ -9,6 +9,8 @@
  * the /yield-opportunities API via useVaultMarkets.
  */
 
+import { getContractId } from "@/lib/contracts";
+
 export type SupportedAsset = "USDC" | "XLM";
 
 export interface VaultContract {
@@ -24,12 +26,20 @@ export interface VaultContract {
   managementFeePct: number;
   asset: SupportedAsset;
   supportedAssets: SupportedAsset[];
-  contractAddress: string;
-  contractXlmAddress?: string;
+  /**
+   * Deployed contract address, or null when the environment does not carry one.
+   *
+   * Null rather than "" (#1094): an empty string is indistinguishable from a
+   * real address at the type level, so every consumer silently passed it on to
+   * the transaction builder. Null makes the compiler point at each place that
+   * has to decide what "not deployed" means.
+   */
+  contractAddress: string | null;
+  contractXlmAddress?: string | null;
 }
 
-const VAULT_USDC_CONTRACT = process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID ?? "";
-const VAULT_XLM_CONTRACT = process.env.NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID ?? "";
+const VAULT_USDC_CONTRACT = getContractId("vault");
+const VAULT_XLM_CONTRACT = getContractId("vaultXlm");
 
 export const vaultContracts: VaultContract[] = [
   {

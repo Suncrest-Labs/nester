@@ -81,6 +81,9 @@ func TestSavingsGoalHandler_Coaching_ReturnsAIAssessment(t *testing.T) {
 	if provider.got.Goal.Currency != "USDC" || provider.got.Goal.ProgressPct != 34 {
 		t.Errorf("coaching request not built from goal correctly: %+v", provider.got.Goal)
 	}
+	if svc.goals[goalID].Notes != "You're 34% toward your goal." {
+		t.Errorf("goal Notes = %q, want %q", svc.goals[goalID].Notes, "You're 34% toward your goal.")
+	}
 }
 
 func TestSavingsGoalHandler_Coaching_UnconfiguredReturns503(t *testing.T) {

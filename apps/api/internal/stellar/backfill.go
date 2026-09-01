@@ -428,6 +428,7 @@ func fetchSorobanEventsRange(
 				ID         string         `json:"id"`
 				ContractID string         `json:"contractId"`
 				Ledger     uint64         `json:"ledger"`
+				TxHash     string         `json:"txHash"`
 				Topic      []interface{}  `json:"topic"`
 				Value      map[string]any `json:"value"`
 			} `json:"events"`
@@ -466,6 +467,7 @@ func fetchSorobanEventsRange(
 			EventType:  eventType,
 			Ledger:     raw.Ledger,
 			Data:       raw.Value,
+			TxHash:     raw.TxHash,
 		})
 		if raw.Ledger > maxLedgerSeen {
 			maxLedgerSeen = raw.Ledger

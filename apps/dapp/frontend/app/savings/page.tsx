@@ -32,6 +32,7 @@ import {
     TransactionTimeoutError,
     truncateTxHash,
 } from "@/lib/stellar/transaction";
+import { describeContractConfig, getContractId } from "@/lib/contracts";
 import SavingsChart from "@/components/analytics/SavingsChart";
 import { type APYHistoryPeriod } from "@/lib/api/vaults";
 import { useSavingsChartData } from "@/hooks/useSavingsChartData";
@@ -643,12 +644,19 @@ function DepositModal({
                                     if (!vault || !canSubmit || !address) return;
                                     setErrorMsg("");
                                     try {
-                                        const USDC_CONTRACT = process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID ?? "";
-                                        const XLM_CONTRACT = process.env.NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID ?? "";
-                                        const contractId = selectedAsset === "XLM" ? XLM_CONTRACT : USDC_CONTRACT;
+                                        // Resolved through lib/contracts.ts so the variable
+                                        // names match what deploy-testnet.sh writes, and so a
+                                        // missing address surfaces as a named variable rather
+                                        // than an empty contract id (#1094).
+                                        const contractId = getContractId(selectedAsset === "XLM" ? "vaultXlm" : "vault");
 
-                                        if (!/^C[A-Z0-9]{55}$/.test(contractId)) {
-                                            setErrorMsg("Vault contract not configured. Check environment variables.");
+                                        if (contractId === null) {
+                                            const { problems } = describeContractConfig([
+                                                selectedAsset === "XLM" ? "vaultXlm" : "vault",
+                                            ]);
+                                            setErrorMsg(
+                                                `Vault contract not configured. Set ${problems.map((p) => p.envVar).join(", ")}.`
+                                            );
                                             setTxState("error");
                                             return;
                                         }

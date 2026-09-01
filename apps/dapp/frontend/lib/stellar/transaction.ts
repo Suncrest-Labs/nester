@@ -10,6 +10,8 @@ import {
 } from "@stellar/stellar-sdk";
 
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
+import { readNetworkId } from "@/lib/storageKeys";
+import { assertValidContractId, getContractId } from "@/lib/contracts";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -17,27 +19,25 @@ import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
  * Resolve the active network. Exported so every module that builds or signs a
  * transaction agrees on it: a builder reading a different source than the
  * signer produces a transaction signed for the wrong passphrase.
+ *
+ * Routed through safeStorage (#1233) rather than raw localStorage: a
+ * throwing storage accessor (private browsing, full quota) must fall back to
+ * the safe explicit DEFAULT_NETWORK, never leave this undefined or crash the
+ * caller — every deposit/withdraw transaction is built against this value.
  */
 export const getCurrentNetwork = () => {
-  if (typeof window !== "undefined") {
-    const savedNetwork = localStorage.getItem("nester_network_id");
-    if (savedNetwork && (savedNetwork === "testnet" || savedNetwork === "mainnet")) {
-      return NETWORKS[savedNetwork];
-    }
-  }
-  return DEFAULT_NETWORK;
+  const savedNetwork = readNetworkId();
+  return savedNetwork ? NETWORKS[savedNetwork] : DEFAULT_NETWORK;
 };
 
-// These are set via environment variables so the contracts can be swapped
-// without code changes when moving from testnet to mainnet.
-export const VAULT_CONTRACT_ID =
-  process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID ?? "";
+// Contract addresses come from lib/contracts.ts, which validates them and
+// never substitutes "" for a missing value (#1094). These resolve to null when
+// unconfigured; a caller that must have one calls requireContractId instead.
+export const VAULT_CONTRACT_ID = getContractId("vault");
 
-export const VAULT_XLM_CONTRACT_ID =
-  process.env.NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID ?? "";
+export const VAULT_XLM_CONTRACT_ID = getContractId("vaultXlm");
 
-export const USDC_CONTRACT_ID =
-  process.env.NEXT_PUBLIC_USDC_CONTRACT_ID ?? "";
+export const USDC_CONTRACT_ID = getContractId("usdc");
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -202,7 +202,7 @@ export async function previewDeposit(params: DepositParams): Promise<{
       ? rawAmount
       : BigInt(Math.round(rawAmount * 10_000_000));
 
-    const contract = new Contract(contractId);
+    const contract = new Contract(assertValidContractId(contractId, "vault contract"));
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
       networkPassphrase: network.networkPassphrase,
@@ -274,7 +274,7 @@ export async function buildDepositTransaction(
     ? rawAmount
     : BigInt(Math.round(rawAmount * 10_000_000));
 
-  const contract = new Contract(contractId);
+  const contract = new Contract(assertValidContractId(contractId, "vault contract"));
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -328,7 +328,7 @@ export async function buildWithdrawTransaction(
     ? rawMinAssets
     : BigInt(Math.round(Number(rawMinAssets) * 10_000_000));
 
-  const contract = new Contract(contractId);
+  const contract = new Contract(assertValidContractId(contractId, "vault contract"));
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,

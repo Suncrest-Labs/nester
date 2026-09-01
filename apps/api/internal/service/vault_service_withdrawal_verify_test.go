@@ -194,6 +194,10 @@ func TestRecordWithdrawal_ExceedingPositionRejectedBeforeSubmit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateVault: %v", err)
 	}
+	// This test needs a funded position, not an operator-funded deposit, but
+	// a server-submitted deposit is refused by default now (nester#1152), so
+	// the setup opts in explicitly for this one vault.
+	svc.SetOperatorFundedDepositPolicy(allowOperatorFundedForTest(created.ID))
 	if _, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
 		VaultID: created.ID, Amount: decimal.RequireFromString("50"),
 	}); err != nil {

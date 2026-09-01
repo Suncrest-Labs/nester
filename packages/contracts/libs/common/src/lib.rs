@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod adapters;
+pub mod attestation;
 pub mod constants;
 pub mod errors;
 pub mod events;
@@ -10,6 +11,10 @@ pub mod storage;
 pub mod upgrade;
 
 pub use adapters::{AdapterApy, ApyConfidence, YieldAdapterClient};
+pub use attestation::{
+    build_payload_bytes, verify_attestation, Attestation, AttestedField, AttestationPayload,
+    FIELD_APY, FIELD_TVL,
+};
 pub use constants::*;
 pub use errors::ContractError;
 pub use events::*;

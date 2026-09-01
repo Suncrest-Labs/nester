@@ -978,10 +978,12 @@ def build_money_path_dashboard() -> dict[str, Any]:
             "none",
             {"h": 9, "w": 12, "x": 12, "y": 11},
             description=(
-                "completed vs failed. A healthy reconciler shows a flat "
-                "completed line and no failed line. failed means passes are "
-                "running but inspecting nothing — usually a database error on "
-                "the list-pending query."
+                "completed vs failed, summed across both loops (the tx "
+                "poller and the balance reconciler, nester#1082). A healthy "
+                "system shows a flat completed line and no failed line. "
+                "failed means passes are running but completing nothing — a "
+                "database error on the list-pending query, or the balance "
+                "sweep unable to list vaults or reach the chain."
             ),
         ),
         _timeseries(
@@ -1001,13 +1003,20 @@ def build_money_path_dashboard() -> dict[str, Any]:
         ),
         _timeseries(
             "Reconciler age over time",
-            [("reconcile:health:last_run_age_seconds", "last run age")],
+            [
+                ("reconcile:health:last_run_age_seconds", "tx poller age"),
+                ("reconcile:balance:last_run_age_seconds", "balance reconciler age"),
+            ],
             "s",
             {"h": 9, "w": 12, "x": 12, "y": 20},
             description=(
-                "Should sawtooth near zero, resetting every pass. A monotonic "
-                "climb means the poller stopped, and every integrity signal on "
-                "this board froze with it."
+                "Both loops should sawtooth near zero, resetting every pass. "
+                "A monotonic climb means that loop stopped, and its integrity "
+                "signals on this board froze with it. The tx poller pages "
+                "above 600 (15s interval); the balance reconciler "
+                "(nester#1082) pages above 1800 (5m interval). The series are "
+                "separate deliberately: one loop's health must not vouch for "
+                "the other's."
             ),
             thresholds=[
                 {"color": "green", "value": None},

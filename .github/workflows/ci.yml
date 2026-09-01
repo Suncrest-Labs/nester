@@ -27,9 +27,9 @@ jobs:
       shared: ${{ steps.filter.outputs.shared }}
       slo: ${{ steps.filter.outputs.slo }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@b41dfa943b1939b9b646f67753bfe35cf6e4de03 # v3.0.2
         id: filter
         with:
           # On push events, compare against the previous commit so the first
@@ -69,11 +69,11 @@ jobs:
     if: needs.changes.outputs.website == 'true' || needs.changes.outputs.shared == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4.1.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
         with:
           node-version: 20
           cache: pnpm
@@ -87,7 +87,6 @@ jobs:
       - name: Lint website
         run: pnpm --filter @nester/website lint
 
-
   intelligence:
     name: Intelligence (Python)
     needs: changes
@@ -97,9 +96,9 @@ jobs:
       run:
         working-directory: apps/intelligence
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.5.0
         with:
           python-version: "3.12"
 
@@ -117,18 +116,17 @@ jobs:
       - name: Test
         run: pytest
 
-
   dapp-frontend:
     name: Dapp Frontend (Next.js)
     needs: changes
     if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4.1.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
         with:
           node-version: 22
           cache: pnpm
@@ -136,9 +134,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # Gates on the security ruleset, which is what the step name promises
+      # and what nester#1236 asked for. Pointing it at the full `lint` surface
+      # made it fail on 47 pre-existing style and react-hooks errors in files
+      # no security change had touched — a gate that red-lines every unrelated
+      # PR gets switched back off, which is how it ended up non-blocking in
+      # the first place.
       - name: Lint (security rules)
-        run: pnpm --filter @nester/dapp run lint
+        run: pnpm --filter @nester/dapp run lint:security
+
+      # The full ruleset still runs and still reports; tightening the 47
+      # pre-existing errors is separate work, so it does not block a merge yet.
+      - name: Lint (full, non-blocking)
         continue-on-error: true
+        run: pnpm --filter @nester/dapp run lint
 
       - name: Build
         run: pnpm --filter @nester/dapp run build
@@ -216,7 +225,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install promtool and amtool
         run: |
@@ -270,7 +279,7 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
@@ -283,7 +292,7 @@ jobs:
       - name: Run gitleaks
         run: gitleaks detect --source . --no-git --redact --no-banner --config .gitleaks.toml
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
 
       - name: Install cargo-audit
@@ -295,7 +304,7 @@ jobs:
         run: cargo audit
         working-directory: packages/contracts
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.3.0
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
         with:
           go-version-file: apps/api/go.mod
@@ -303,7 +312,12 @@ jobs:
 
       - name: Install govulncheck
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # Pinned (#1221): see security-scanner-versions.env for why and the
+        # update cadence. Keep this in sync with security.yml's install step
+        # — both source the same file so they can't drift apart.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
       - name: Audit Go dependencies
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
@@ -313,10 +327,15 @@ jobs:
           OUTPUT=$(govulncheck ./... 2>&1)
           EXIT_CODE=$?
           echo "$OUTPUT"
+
+          # Validate .vulnignore unconditionally: an expired, malformed, or
+          # ownerless waiver fails the job regardless of scan results. The
+          # printed accepted IDs are used to filter findings below.
+          ACCEPTED=$(python3 "${{ github.workspace }}/scripts/validate_vulnignore.py" "${{ github.workspace }}/.vulnignore") || exit 1
+
           if [ $EXIT_CODE -eq 0 ]; then
             exit 0
           elif [ $EXIT_CODE -eq 3 ]; then
-            ACCEPTED="GO-2026-4316 GO-2026-5004 GO-2026-5037 GO-2026-5039"
             UNKNOWN=$(echo "$OUTPUT" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u | while read id; do
               echo "$ACCEPTED" | grep -qw "$id" || echo "$id"
             done)
@@ -332,7 +351,11 @@ jobs:
 
       - name: Install gosec
         if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        # Pinned (#1221): see security-scanner-versions.env for why and the
+        # update cadence.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
 
       # Enforcing gate (#1035). The backlog this previously tolerated is
       # cleared: gosec -severity medium reports zero issues. Findings that were
@@ -345,10 +368,10 @@ jobs:
         run: gosec -severity medium ./...
         working-directory: apps/api
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4.1.0
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
         with:
           node-version: 22
@@ -372,7 +395,7 @@ jobs:
         run: pnpm audit --audit-level=high || true
         working-directory: apps/dapp/frontend
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.5.0
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
         with:
           python-version: "3.12"
@@ -383,7 +406,57 @@ jobs:
 
       - name: Audit Python dependencies
         if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-        run: pip-audit -r requirements.txt
+        run: |
+          set +e
+          pip-audit -r requirements.txt --format json --output pip-audit-report.json
+          EXIT_CODE=$?
+          set -e
+
+          if [ ! -f pip-audit-report.json ]; then
+            echo "::error::pip-audit report missing"
+            exit 1
+          fi
+
+          # pip-audit exits 1 on findings and 2 on its own failure. Only the
+          # first is a result we can parse; the second means the scan never
+          # ran, and without this check a crashed scan reads as a clean one.
+          if [ "$EXIT_CODE" -gt 1 ]; then
+            echo "::error::pip-audit failed to run (exit $EXIT_CODE); treating as a failed scan"
+            exit "$EXIT_CODE"
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = Path("pip-audit-report.json")
+          findings = json.loads(report.read_text() or "[]")
+          # pip-audit --format json emits {"dependencies": [{"name":..,
+          # "vulns": [...]}, ...]}, not a flat list of vulnerabilities. Reading
+          # it as a list made len() count the dict's *keys* — reporting "Found
+          # 2 Python vulnerabilities" on a clean scan — and then iterating it
+          # yielded strings, so .get() raised AttributeError and failed the
+          # job unconditionally. Older pip-audit versions did return a list,
+          # so both shapes are accepted.
+          dependencies = findings.get("dependencies", []) if isinstance(findings, dict) else findings
+
+          vulns = []
+          for dep in dependencies:
+              if not isinstance(dep, dict):
+                  continue
+              for vuln in dep.get("vulns", []):
+                  vulns.append((dep.get("name", "unknown"), vuln))
+
+          if vulns:
+              print(f"::error::Found {len(vulns)} Python vulnerabilities")
+              for name, vuln in vulns:
+                  vid = vuln.get("id", "unknown")
+                  desc = str(vuln.get("description", ""))[:120]
+                  print(f"  {name} {vid}: {desc}")
+              raise SystemExit(1)
+
+          print("✓ No Python vulnerabilities detected")
+          PY
         working-directory: apps/intelligence
 
       - name: Run bandit
@@ -391,17 +464,48 @@ jobs:
         run: bandit -r app -ll
         working-directory: apps/intelligence
 
+      # semgrep/semgrep-action is archived, and the SHA this was pinned to
+      # does not exist upstream — the job aborted at "Set up job" with
+      # "unable to resolve action". Run the maintained CLI directly instead,
+      # pinned to a released version, which keeps the reproducibility this
+      # PR was after without depending on a dead action.
       - name: Semgrep SAST (TypeScript/Next.js)
         if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: >-
-            p/typescript
-            p/react
-            p/nextjs
-            p/secrets
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          pip install "semgrep==1.175.0"
+          semgrep scan --error --quiet --config p/typescript --config p/react --config p/nextjs --config p/secrets apps/dapp/frontend
+
+      - name: Check Semgrep cloud token status
+        if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          if [ -z "$SEMGREP_APP_TOKEN" ]; then
+            echo "::warning::SEMGREP_APP_TOKEN is not configured. Semgrep will run with reduced capabilities (local rules only, no cloud findings)."
+            echo "To enable cloud scanning, set SEMGREP_APP_TOKEN in GitHub repository settings."
+            echo "See docs/ci/secrets.md for details."
+          else
+            echo "✓ Semgrep cloud scanning enabled"
+          fi
+
+      - name: Typosquat detection (new npm dependencies)
+        if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+        # A fuzzy name-similarity heuristic must not be able to block an
+        # unrelated PR from merging; findings surface as warnings for manual
+        # review. See scripts/typosquat_check.py for the logic.
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # Detect typosquatting patterns in npm packages newly added to the
+          # dapp manifest. Compares the base manifest (merge base for PRs, the
+          # previous commit for pushes) against the head manifest and checks only
+          # dependencies added in this change set, using full scoped package
+          # names so a spoofed @attacker/react cannot hide behind a name
+          # collision with the unscoped "react".
+          python3 scripts/typosquat_check.py apps/dapp/frontend/package.json "$BASE_REF"
 
   api:
     name: API (Go)
@@ -444,9 +548,9 @@ jobs:
       # silently skips in CI even though the redis service below is running.
       REDIS_ADDR: localhost:6379
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.3.0
         with:
           go-version-file: apps/api/go.mod
           cache: true
@@ -469,6 +573,17 @@ jobs:
             echo "OK: No migration prefix collisions."
           fi
 
+      # Collision checking above proves the chain is well-named, not that it
+      # works. This applies every migration from scratch, seeds the result, then
+      # rolls the whole chain back down — reversibility breaks against data, not
+      # against an empty schema (issue #1123). A migration that cannot make the
+      # round trip fails the build; one that is deliberately irreversible has to
+      # say so with a `migration:irreversible` marker in its .down.sql.
+      - name: Check migration safety (up, seed, down)
+        env:
+          DATABASE_URL: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
+        run: go run -tags migrationsafety ./scripts/verify_migrations.go -dir migrations
+
       - name: Build
         run: go build ./...
 
@@ -490,6 +605,11 @@ jobs:
           TEST_DATABASE_DSN: postgres://nester:nester@localhost:5432/nester_test?sslmode=disable
         run: go test -race -timeout 900s -count=1 -p 1 ./...
 
+      - name: Test (property-based vault arithmetic)
+        env:
+          RAPID_CHECKS: "32"
+          RAPID_SEED: "29062026"
+        run: go test -timeout 60s -run PropertyBased -v ./internal/domain/vault
 
   contracts:
     name: Contracts (Rust)
@@ -500,15 +620,14 @@ jobs:
       run:
         working-directory: packages/contracts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: wasm32-unknown-unknown
 
       - name: Add wasm32-unknown-unknown target
         run: rustup target add wasm32-unknown-unknown
-
 
       - name: Build yield_registry WASM
         run: cargo build --release --target wasm32-unknown-unknown -p yield-registry-contract
@@ -557,3 +676,67 @@ jobs:
             exit 1
           fi
 
+  sbom:
+    name: SBOM Generation
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.3.0
+        with:
+          go-version-file: apps/api/go.mod
+
+      - name: Install cyclonedx-gomod (Go, pinned release)
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0
+
+      - name: Install syft (pinned release, checksum-verified)
+        run: |
+          SYFT_VERSION=1.50.0
+          ASSET="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "/tmp/${ASSET}" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${ASSET}"
+          curl -sSfL -o "/tmp/syft_${SYFT_VERSION}_checksums.txt" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
+          cd /tmp
+          grep "  ${ASSET}$" "syft_${SYFT_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "${ASSET}"
+          sudo mv /tmp/syft /usr/local/bin/syft
+
+      - name: Generate Go API SBOM
+        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
+        working-directory: apps/api
+        run: |
+          cyclonedx-gomod mod -json -output ../../sbom-api.json .
+          syft dir:. --output cyclonedx-json=../../sbom-api-syft.json
+
+      - name: Generate frontend SBOM (npm/pnpm)
+        if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+        working-directory: apps/dapp/frontend
+        run: |
+          # syft catalogs the pnpm lockfile directly. @cyclonedx/cyclonedx-npm
+          # dropped --pnpm support in v6, so the already-checksum-verified syft
+          # binary (installed above) is used for the frontend SBOM.
+          syft dir:. --output cyclonedx-json=../../../sbom-frontend.json
+
+      - name: Generate Python SBOM
+        if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
+        working-directory: apps/intelligence
+        run: |
+          syft dir:. --output cyclonedx-json=../../sbom-intelligence.json
+
+      - name: Generate contracts SBOM (Rust)
+        if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
+        working-directory: packages/contracts
+        run: |
+          syft dir:. --output cyclonedx-json=../../sbom-contracts.json
+
+      - name: Upload SBOM artifacts
+        # Only run when at least one SBOM-covered component changed; a docs- or
+        # website-only change generates no SBOMs and must not fail the job.
+        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.dapp == 'true' || needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-artifacts
+          path: sbom-*.json
+          if-no-files-found: error

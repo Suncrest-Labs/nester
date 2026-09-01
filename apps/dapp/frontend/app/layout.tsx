@@ -17,6 +17,7 @@ import { NetworkBanner } from "@/components/network/NetworkSelector";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
 import {
     E2E_HARNESS_CHANNELS,
+    E2E_HARNESS_TOKEN,
     E2E_HARNESS_ENABLED,
     E2E_HARNESS_HEARTBEAT_INTERVAL_MS,
     E2E_HARNESS_HEARTBEAT_TIMEOUT_MS,
@@ -99,6 +100,11 @@ export default function RootLayout({
                                                             channelsOverride={
                                                                 E2E_HARNESS_ENABLED
                                                                     ? E2E_HARNESS_CHANNELS
+                                                                    : undefined
+                                                            }
+                                                            tokenOverride={
+                                                                E2E_HARNESS_ENABLED
+                                                                    ? E2E_HARNESS_TOKEN
                                                                     : undefined
                                                             }
                                                             heartbeatInterval={

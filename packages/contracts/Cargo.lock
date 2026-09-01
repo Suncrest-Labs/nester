@@ -717,6 +717,7 @@ checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
 name = "lp_aggregator"
 version = "0.1.0"
 dependencies = [
+ "nester-test-utils",
  "soroban-sdk",
 ]
 
@@ -765,10 +766,12 @@ name = "nester-integration-tests"
 version = "0.1.0"
 dependencies = [
  "allocation-strategy-contract",
+ "ed25519-dalek",
  "nester-access-control",
  "nester-common",
  "nester-test-utils",
  "proptest",
+ "rand 0.8.5",
  "soroban-sdk",
  "treasury-contract",
  "vault-contract",

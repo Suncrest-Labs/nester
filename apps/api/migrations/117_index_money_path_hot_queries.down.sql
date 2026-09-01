@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_vault_transactions_vault_id_created_at;
+DROP INDEX IF EXISTS idx_vaults_user_id_status_live;
+DROP INDEX IF EXISTS idx_yield_harvests_vault_id_harvested_at;

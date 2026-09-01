@@ -18,6 +18,21 @@ export const E2E_HARNESS_ENABLED = process.env.NEXT_PUBLIC_E2E_HARNESS === "1";
 export const E2E_HARNESS_CHANNELS = ["vaults:global"];
 
 /**
+ * Token the harness authenticates its socket with.
+ *
+ * useWebSocket refuses to open a socket without a credential, and the real
+ * one is minted by a wallet signature — which a browser-driven test cannot
+ * produce. Seeding the token store instead does not work either: AuthProvider
+ * clears the stored session whenever no wallet is connected, so the token is
+ * wiped moments after the page loads and the socket closes with it.
+ *
+ * This value never reaches a deployed environment: it is only read when
+ * NEXT_PUBLIC_E2E_HARNESS is set, and the Playwright suite routes the socket
+ * to an in-process fake hub that never checks it. A real hub would reject it.
+ */
+export const E2E_HARNESS_TOKEN = "e2e-harness-token";
+
+/**
  * Heartbeat timings for the harness.
  *
  * Production pings every 30s and allows 10s for the pong, so a blackholed

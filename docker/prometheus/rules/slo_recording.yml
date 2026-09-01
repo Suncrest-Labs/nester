@@ -165,6 +165,79 @@ groups:
             )
 
   # ---------------------------------------------------------------------------
+  # Per-route availability (nester#1227)
+  # ---------------------------------------------------------------------------
+  #
+  # The aggregate api:availability:* series above answers "is the API healthy
+  # overall", and deposit/withdraw volume dominates it — a route that fails
+  # continuously can sit inside the aggregate's error budget indefinitely if
+  # it is not one of the high-volume money-path endpoints. This group answers
+  # the narrower question per route, using the same bounded `route` label the
+  # metrics middleware already resolves (internal/metrics/http.go) — a
+  # registered pattern or the constant "other", never an arbitrary client
+  # path, so `by (route)` here cannot mint an unbounded number of series.
+  #
+  # Deliberately NOT the full four-window burn-rate treatment the aggregate
+  # SLOs use: with ~93 routes, replicating that machinery per route would
+  # multiply the alert count by ~93 and produce dozens of near-duplicate
+  # pages during any real incident (the aggregate and the affected route
+  # would both page for the same root cause). Per-route detection instead
+  # uses a single absolute-threshold alert (slo_alerts.yml
+  # EndpointErrorRateHigh) — this recording group only needs the one ratio
+  # that alert reads, at the window the alert evaluates.
+  #
+  # `route="other"` is excluded, same reasoning as the aggregate: unmatched
+  # paths are scanner/probe traffic, not a service anyone is promised.
+  - name: slo_route_availability
+    interval: 30s
+    rules:
+      # Per-route needs a different shape than the aggregate's bare
+      # `- (... or vector(0))`: that pattern is correct only when the
+      # subtracted term is a single scalar-like (label-less) series, where
+      # "no 4xx at all" and "0 4xx" are the same result. Grouped `by (route)`,
+      # a route with traffic but zero 4xx has NO series in the 4xx
+      # sub-expression at all (not a zero-valued one), so a bare `-` between
+      # two `by (route)` vectors would silently drop that route from the
+      # result wherever the right side has no matching `route` — the exact
+      # opposite of the intent (a route's own healthy 4xx-free traffic must
+      # not make the route disappear from its own eligible-rate series).
+      # `(4xx or on (route) all * 0)` is the standard idiom for "subtract
+      # this optional per-group term, treating a missing group as zero": it
+      # produces a same-label-set zero series for every route present in
+      # `all` but absent from `4xx`, so the outer `-` always has a matching
+      # right-hand series for every route on the left.
+      - record: route:availability:eligible_rate1h
+        expr: |
+          sum by (route) (rate(nester_http_requests_total{route!="other"}[1h]))
+          -
+          (
+            sum by (route) (rate(nester_http_requests_total{route!="other",status_class="4xx"}[1h]))
+            or on (route)
+            sum by (route) (rate(nester_http_requests_total{route!="other"}[1h])) * 0
+          )
+
+      # No `or vector(0)` here (unlike the aggregate bad_rate1h): a route
+      # with zero 5xx traffic simply has no series in this result at all,
+      # which is correct — error_ratio_rate1h below is a division, so a
+      # route absent here produces no result for that route rather than a
+      # spurious 0, and EndpointErrorRateHigh only needs to evaluate routes
+      # that have some 5xx to possibly breach 20% of.
+      - record: route:availability:bad_rate1h
+        expr: |
+          sum by (route) (rate(nester_http_requests_total{route!="other",status_class="5xx"}[1h]))
+
+      # clamp_min for the same reason as the aggregate series: a route with no
+      # traffic in the window must read 0 error ratio, not NaN (which would
+      # compare false against every threshold and silently disable the
+      # alert). Floor is tighter than the aggregate's 0.001 (whole-API
+      # req/s) because a single low-traffic route can legitimately sit well
+      # under 1 req/s without being unhealthy.
+      - record: route:availability:error_ratio_rate1h
+        expr: |
+          route:availability:bad_rate1h
+          / clamp_min(route:availability:eligible_rate1h, 0.0001)
+
+  # ---------------------------------------------------------------------------
   # Deposit and withdrawal success rate
   # ---------------------------------------------------------------------------
   #
@@ -661,6 +734,15 @@ groups:
 
       - record: reconcile:health:failed_run_rate5m
         expr: sum(rate(nester_reconcile_runs_total{outcome="failed"}[5m]))
+
+      # Balance-reconciler liveness (nester#1082). The age gauge above belongs
+      # to the transaction poller and is reset every 15 seconds by its passes,
+      # so a dead vault-balance reconciler would hide behind it forever. The
+      # balance job publishes its own scrape-time age series — emitted only by
+      # the replica actually doing the work — recorded here for the same
+      # dashboard/pager symmetry as the rest of the group.
+      - record: reconcile:balance:last_run_age_seconds
+        expr: max(nester_reconcile_balance_last_run_age_seconds)
 
       # Pending submissions. Depth alone is ambiguous — a large queue that
       # drains is healthy — so the age of the oldest entry is the series the

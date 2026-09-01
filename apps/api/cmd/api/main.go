@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -27,7 +28,9 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/ledger"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/outbox"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
 	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
@@ -36,7 +39,9 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
+	"github.com/suncrestlabs/nester/apps/api/internal/objectstorage"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
+	"github.com/suncrestlabs/nester/apps/api/internal/reconciliation"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/retry"
@@ -52,7 +57,45 @@ import (
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
-var version = "dev"
+// version and commit identify the running build. Both are injected at link
+// time (see the ldflags in the Dockerfile and the release workflow); the
+// defaults are what a plain `go build` or `go run` produces locally.
+//
+// commit falls back to the VCS revision Go stamps into the build info, so a
+// binary built without explicit ldflags still reports what it was built from
+// rather than "unknown" (issue #1117).
+var (
+	version = "dev"
+	commit  = ""
+)
+
+// buildCommit returns the commit the binary was built from, preferring the
+// ldflags value and falling back to the VCS stamp Go records automatically.
+func buildCommit() string {
+	if commit != "" {
+		return commit
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	var revision, modified string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value
+		}
+	}
+	if revision == "" {
+		return "unknown"
+	}
+	if modified == "true" {
+		return revision + "-dirty"
+	}
+	return revision
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -96,6 +139,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// Stamp the build into the first log line so what is deployed can be read
+	// straight off the logs, not only from /health/detailed (issue #1117).
+	baseLogger.Info("starting nester api", "version", version, "commit", buildCommit())
 
 	// Created early (rather than just before ListenAndServe, as before) so
 	// components that need to release resources as soon as shutdown begins —
@@ -264,7 +311,13 @@ func run() error {
 	yieldHarvestService := service.NewYieldHarvestService(yieldHarvestRepository)
 	vaultService.SetYieldHarvestRecorder(yieldHarvestService)
 
+	// Ledger: authoritative double-entry bookkeeping source of truth
+	ledgerRepository := postgres.NewLedgerRepository(db)
+	ledgerService := service.NewLedgerService(ledgerRepository, db)
+	_ = ledgerService // wired for future use; portfolio reads via repo, postings via vault repo helpers
+
 	portfolioService := service.NewPortfolioService(vaultRepository)
+	portfolioService.SetLedgerRepository(ledgerRepository)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioService)
 
 	transactionRepository := postgres.NewTransactionRepository(db)
@@ -275,6 +328,12 @@ func run() error {
 	// Balance is moved only after a deposit/withdrawal is confirmed on-chain
 	// (issue #496); the vault repository applies it idempotently by tx hash.
 	transactionService.SetBalanceApplier(vaultRepository)
+	// A successful hash is not proof it paid this vault. The lookup supplies
+	// the vault's real contract address and currency so a confirmation is
+	// checked against the transaction's actual operations, and the credited
+	// amount is taken from the chain rather than the request body
+	// (nester#1145).
+	transactionService.SetVaultLookup(vaultRepository)
 	transactionHandler := handler.NewTransactionHandler(transactionService)
 	transactionHandler.SetVaultRepository(vaultRepository)
 
@@ -304,6 +363,25 @@ func run() error {
 	userHandler := handler.NewUserHandler(userService)
 	userVaultsSvc := service.NewUserVaultsService(vaultRepository)
 	userHandler.SetUserVaultsService(userVaultsSvc)
+
+	// KYC document storage (nester#1191). KYC_STORAGE_DIR defaults to a local
+	// directory rather than requiring a cloud object-storage decision to be
+	// made before the endpoint can accept uploads at all — see
+	// internal/objectstorage's package doc for why this is a real store, not
+	// a placeholder, and what a production cloud store would replace it
+	// with. Left unset (nil) only if the directory genuinely cannot be
+	// created, in which case submitKYC rejects uploads (503) rather than
+	// silently discarding them.
+	kycStorageDir := os.Getenv("KYC_STORAGE_DIR")
+	if kycStorageDir == "" {
+		kycStorageDir = "./data/kyc-documents"
+	}
+	kycStore, kycStoreErr := objectstorage.NewLocalDiskStore(kycStorageDir, handler.MaxKYCDocumentBytes, handler.KYCAllowedContentTypes)
+	if kycStoreErr != nil {
+		slog.Warn("KYC document storage unavailable — submitKYC will reject uploads until this is fixed", "error", kycStoreErr, "dir", kycStorageDir)
+	} else {
+		userHandler.SetKYCStore(kycStore)
+	}
 	notificationRepository := postgres.NewNotificationRepository(db)
 	notificationHandler := handler.NewNotificationHandler(notificationRepository)
 
@@ -392,6 +470,34 @@ func run() error {
 		baseLogger.Info("no signing configured: chain write operations are unavailable")
 	}
 
+	// Operator-funded deposits (nester#1152).
+	//
+	// A deposit with no user-signed tx_hash is submitted with the operator as
+	// both caller and depositing user, so it spends platform funds on the
+	// caller's behalf. Disabled unless explicitly configured, and even then
+	// only for allowlisted vaults under a per-deposit cap, with every use
+	// logged. A nil policy would refuse everything, but it is always
+	// installed so the refusals are logged rather than silent.
+	operatorFundedVaults, err := service.ParseOperatorFundedVaultIDs(cfg.Stellar().OperatorFundedDepositVaults())
+	if err != nil {
+		return fmt.Errorf("parse operator-funded deposit allowlist: %w", err)
+	}
+	operatorFundedCap, err := decimal.NewFromString(cfg.Stellar().OperatorFundedDepositMaxAmount())
+	if err != nil {
+		return fmt.Errorf("parse operator-funded deposit cap: %w", err)
+	}
+	vaultService.SetOperatorFundedDepositPolicy(service.NewOperatorFundedDepositPolicy(
+		cfg.Stellar().OperatorFundedDepositsEnabled(),
+		operatorFundedVaults,
+		operatorFundedCap,
+		baseLogger.WithGroup("operator-funded-deposits"),
+	))
+	if cfg.Stellar().OperatorFundedDepositsEnabled() {
+		baseLogger.Warn("operator-funded deposits are ENABLED: the API can spend platform funds on a user's behalf",
+			"allowlisted_vaults", len(operatorFundedVaults),
+			"per_deposit_cap", operatorFundedCap.String())
+	}
+
 	if cfg.Stellar().RPCURL() != "" {
 		vaultService.SetChainEventVerifier(service.NewStellarChainEventVerifier(cfg.Stellar().RPCURL()))
 	}
@@ -477,6 +583,17 @@ func run() error {
 	// Issue #1141: support tooling to inspect a user's money-path state.
 	adminHandler.SetMoneyPathServices(portfolioService, transactionService, auditLogger)
 
+	// Global pause switch for the money path (#1120). Gates deposits and
+	// withdrawals independently, persisted so an engaged switch survives a
+	// restart, and audit-logged on every change.
+	//
+	// Attached to vaultService rather than passed through its constructor so
+	// the many services built for tests and tooling keep working unchanged:
+	// a service with no gate allows everything, exactly as before.
+	moneyPathSwitchService := service.NewMoneyPathSwitchService(
+		postgres.NewMoneyPathSwitchRepository(db), auditLogger)
+	vaultService.SetMoneyPathSwitches(moneyPathSwitchService)
+
 	activityEventRepo := postgres.NewActivityEventRepository(db)
 	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)
 	nudgeOutcomeService := service.NewNudgeOutcomeService(nudgeHistoryRepo)
@@ -535,7 +652,7 @@ func run() error {
 		Goals:     valuation.NewGoalAllocationSource(postgres.NewSavingsGoalRepository(db)),
 		Oracle:    valuation.NewStaticOracle(nil),
 		Cache:     valuation.NewCache(30 * time.Second),
-		Notifier:  valuation.NewWSNotifier(wsHub),
+		Notifier:  valuation.NewWSNotifier(wsHub, baseLogger.WithGroup("valuation")),
 		Logger:    baseLogger.WithGroup("valuation"),
 	})
 	valuationHandler := handler.NewValuationHandler(valuationService)
@@ -744,22 +861,30 @@ func run() error {
 
 	depHTTPClient := &http.Client{Timeout: cfg.Startup().DependencyTimeout()}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", livenessHandler(&ready))
-	mux.HandleFunc("GET /healthz", livenessHandler(&ready))
-	mux.HandleFunc("GET /readyz", readinessHandler(&ready, pgPool, cfg.Database().ConnectionTimeout()))
-	mux.HandleFunc("GET /health/detailed", detailedHealthHandler(detailedHealthDeps{
+	healthDependencies := healthDeps{
 		ready:        &ready,
-		pgPool:       pgPool,
-		dbTimeout:    cfg.Database().ConnectionTimeout(),
+		pingDB:       pgPool.Ping,
+		poolStats:    pgxPoolStats(pgPool),
+		probeTimeout: cfg.Database().ConnectionTimeout(),
 		httpClient:   depHTTPClient,
 		horizonURL:   cfg.Stellar().HorizonURL(),
 		rpcURL:       cfg.Stellar().RPCURL(),
 		startedAt:    startedAt,
 		environment:  cfg.Environment(),
 		buildVersion: version,
+		buildCommit:  buildCommit(),
 		breakers:     chainBreakers.readers(),
-	}))
+	}
+	// Left nil when Redis is unconfigured, so readiness does not fail an
+	// instance that is deliberately running on the in-memory fallbacks.
+	if redisClient != nil {
+		healthDependencies.pingRedis = func(ctx context.Context) error {
+			return redisClient.Ping(ctx).Err()
+		}
+	}
+
+	mux := http.NewServeMux()
+	registerHealthRoutes(mux, healthDependencies)
 	yieldHarvestHandler := handler.NewYieldHarvestHandler(yieldHarvestService)
 	yieldHarvestHandler.Register(mux)
 
@@ -785,6 +910,7 @@ func run() error {
 	userHandler.Register(mux)
 	notificationHandler.Register(mux)
 	adminHandler.Register(mux)
+	handler.NewMoneyPathSwitchHandler(moneyPathSwitchService).Register(mux)
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
 	performanceHandler.Register(mux)
@@ -1006,23 +1132,39 @@ func run() error {
 	// Per-goal notification preferences (mute/digest frequency).
 	goalNotificationRepo := postgres.NewGoalNotificationRepository(db)
 	goalNotificationPrefSvc := service.NewGoalNotificationPreferenceService(goalNotificationRepo, savingsGoalRepo)
+	// The milestone notifier chain. Since #1049 it is driven by the outbox
+	// relay's queue job (registered on jobWorker further down) rather than
+	// called inline, so every member is handed the milestone's dedupe key
+	// and must be idempotent with respect to it — see GoalMilestoneNotifier.
+	goalMilestoneNotifier := service.CompositeGoalMilestoneNotifier{
+		Notifiers: []service.GoalMilestoneNotifier{
+			service.DispatcherGoalMilestoneNotifier{
+				Dispatcher:  notificationDispatcher2,
+				Preferences: goalNotificationRepo,
+			},
+			service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
+			service.WebhookGoalMilestoneNotifier{
+				Svc:    webhookSvc,
+				Logger: baseLogger.WithGroup("webhook-milestone"),
+			},
+		},
+	}
 	savingsGoalSvc := service.NewSavingsGoalService(
 		savingsGoalRepo,
 		vaultRepository,
-		service.CompositeGoalMilestoneNotifier{
-			Notifiers: []service.GoalMilestoneNotifier{
-				service.DispatcherGoalMilestoneNotifier{
-					Dispatcher:  notificationDispatcher2,
-					Preferences: goalNotificationRepo,
-				},
-				service.NudgeEngineGoalMilestoneNotifier{NudgeEngine: nudgeEngineSvc},
-				service.WebhookGoalMilestoneNotifier{Svc: webhookSvc},
-			},
-		},
+		goalMilestoneNotifier,
 	)
 	savingsGoalSvc.SetOutcomeRecorder(nudgeOutcomeService)
 	savingsGoalSvc.SetStreakRepository(savingsStreakRepo)
 	savingsGoalSvc.SetStreakNotifier(service.DispatcherStreakMilestoneNotifier{Dispatcher: notificationDispatcher2})
+	savingsGamificationRepo := postgres.NewSavingsGamificationRepository(db)
+	savingsGamificationSvc := service.NewSavingsGamificationService(
+		savingsGamificationRepo,
+		service.DispatcherGamificationNotifier{Dispatcher: notificationDispatcher2},
+	)
+	savingsGoalSvc.SetGamificationRecorder(savingsGamificationSvc)
+	savingsGamificationHandler := handler.NewSavingsGamificationHandler(savingsGamificationSvc)
+	savingsGamificationHandler.Register(mux)
 	savingsGoalSvc.SetTemplateRepository(goalTemplateRepo)
 	// Honor each goal's auto_compound preference when its vault is harvested (#task1).
 	vaultService.SetGoalYieldRouter(savingsGoalSvc)
@@ -1109,6 +1251,26 @@ func run() error {
 	defer cancelSavingsGoalPurge()
 	go savingsGoalPurgeJob.Run(savingsGoalPurgeCtx, 24*time.Hour)
 
+	// Data retention sweep (#1226): hard-deletes activity_events and
+	// nudge_dispatch_log (nudge_outcomes cascades) rows past their retention
+	// window — see docs/data-retention.md for the policy and
+	// DataRetentionConfig's defaults. Deliberately does NOT touch audit_logs,
+	// KYC records, or processed_events — the policy doc explains why each of
+	// those is out of scope for this job. Runs daily, leader-elected like the
+	// other sweep jobs, and audit-logs every deletion via the same
+	// auditLogger every other audited action in this file uses.
+	dataRetentionJob := scheduler.NewDataRetentionJob(
+		activityEventRepo,
+		nudgeHistoryRepo,
+		auditLogger,
+		scheduler.DataRetentionConfig{},
+		baseLogger.WithGroup("data-retention"),
+	)
+	dataRetentionJob.SetLeaderChecker(schedulerLeadership)
+	dataRetentionCtx, cancelDataRetention := context.WithCancel(context.Background())
+	defer cancelDataRetention()
+	go dataRetentionJob.Run(dataRetentionCtx, 24*time.Hour)
+
 	jobWorker := jobqueue.NewWorker(
 		jobQueueRepo,
 		jobqueue.Config{
@@ -1168,6 +1330,60 @@ func run() error {
 	// throttling is handled inside the handler via webhookLimiter, so a
 	// wide worker-level concurrency here is safe.
 	jobWorker.Register(service.WebhookDeliveryJobType, webhookDeliveryHandler, 0)
+
+	// Transactional outbox (#1049). The relay hands outbox rows to this same
+	// worker pool; these three handlers are the side effects it can route
+	// to. Registering them here — before Run — is what makes an event type
+	// routable at all: the relay dead-letters anything it has no route for,
+	// on the grounds that retrying cannot conjure a handler.
+	jobWorker.Register(service.GoalMilestoneJobType,
+		service.NewGoalMilestoneJobHandler(goalMilestoneNotifier, baseLogger.WithGroup("goal-milestone-job")), 0)
+	jobWorker.Register(service.WebhookFanoutJobType,
+		service.NewWebhookFanoutJobHandler(webhookSvc, baseLogger.WithGroup("webhook-fanout")), 0)
+	jobWorker.Register(notifications.NotificationSendJobType,
+		notifications.NewNotificationSendJobHandler(notificationDispatcher2), 0)
+
+	outboxRepo := postgres.NewOutboxRepository(db)
+	outboxMetrics := outbox.NewStdMetrics()
+	// Every relay instance runs: ClaimDue takes row locks with SKIP LOCKED,
+	// so instances divide the backlog rather than duplicating it, and a
+	// leader election here would only turn a horizontal scale-out into a
+	// single point of failure for every side effect in the system.
+	outboxRelay := outbox.NewRelay(
+		outboxRepo,
+		jobQueueClient,
+		jobQueueRepo,
+		outbox.Routes{
+			service.OutboxEventGoalMilestone:          service.GoalMilestoneJobType,
+			service.OutboxEventWebhookFanout:          service.WebhookFanoutJobType,
+			notifications.OutboxEventNotificationSend: notifications.NotificationSendJobType,
+		},
+		outbox.RelayConfig{
+			Enabled:       cfg.Outbox().Enabled(),
+			PollInterval:  cfg.Outbox().PollInterval(),
+			BatchSize:     cfg.Outbox().BatchSize(),
+			Lease:         cfg.Outbox().Lease(),
+			Backoff:       cfg.Outbox().Backoff(),
+			StatsInterval: cfg.Outbox().StatsInterval(),
+		},
+		baseLogger.WithGroup("outbox-relay"),
+		outboxMetrics,
+	)
+	outboxCtx, cancelOutbox := context.WithCancel(context.Background())
+	defer cancelOutbox()
+	go func() { _ = outboxRelay.Run(outboxCtx) }()
+
+	// Retention: without it the outbox only ever grows, on the write path of
+	// every domain transaction that inserts into it. Leader-gated because
+	// pruning from every instance is correct but wasteful.
+	outboxRetentionJob := outbox.NewRetentionJob(outboxRepo, outbox.RetentionConfig{
+		DispatchedRetention: cfg.Outbox().DispatchedRetention(),
+		DeadRetention:       cfg.Outbox().DeadRetention(),
+	}, baseLogger.WithGroup("outbox-retention"), outboxMetrics)
+	outboxRetentionJob.SetLeaderChecker(schedulerLeadership)
+	outboxRetentionCtx, cancelOutboxRetention := context.WithCancel(context.Background())
+	defer cancelOutboxRetention()
+	go outboxRetentionJob.Run(outboxRetentionCtx, cfg.Outbox().RetentionInterval())
 
 	harvestEngine := harvest.New(
 		harvest.Config{
@@ -1253,6 +1469,38 @@ func run() error {
 	defer cancelDigest()
 	go digestJob.Run(digestCtx)
 
+	// Ledger balance verification job: recomputes balances from raw entries and asserts equality
+	ledgerVerificationJob := scheduler.NewLedgerBalanceVerificationJob(
+		scheduler.VerificationConfig{Enabled: true, Interval: 10 * time.Minute},
+		ledgerRepository,
+		baseLogger.WithGroup("ledger-verification"),
+	)
+	ledgerVerificationJob.SetLeaderChecker(schedulerLeadership)
+	verificationCtx, cancelVerification := context.WithCancel(context.Background())
+	defer cancelVerification()
+	go ledgerVerificationJob.Run(verificationCtx)
+
+	// Ledger reconciliation job: compares ledger vault-pool vs on-chain and sum
+	// user positions vs share price.
+	chainReaderForLedger := &ledgerChainReaderAdapter{
+		contractReader: stellarpkg.NewContractReader(
+			cfg.Stellar().RPCURL(),
+			cfg.Stellar().NetworkPassphrase(),
+			"",
+		),
+	}
+	ledgerReconciliationJob := scheduler.NewLedgerReconciliationJob(scheduler.LedgerReconciliationDeps{
+		LedgerRepo:  ledgerRepository,
+		VaultLister: &reconciliationVaultListerAdapter{vaultRepo: vaultRepository},
+		ChainReader: chainReaderForLedger,
+		Logger:      baseLogger.WithGroup("ledger-reconciliation"),
+		Config:      ledgerDomainConfig(),
+	})
+	ledgerReconciliationJob.SetLeaderChecker(schedulerLeadership)
+	reconciliationCtx, cancelReconciliation := context.WithCancel(context.Background())
+	defer cancelReconciliation()
+	go ledgerReconciliationJob.Run(reconciliationCtx)
+
 	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
 	performanceSnapshotsHandler.Register(mux)
 
@@ -1319,6 +1567,28 @@ func run() error {
 		},
 		"authentication rate limit exceeded",
 	)
+	// authGuard hardens the same handshake beyond request rate (nester#1104):
+	// a per-wallet limit (the limiter above keys only on IP, so a distributed
+	// client could flood the challenge store for one wallet without tripping
+	// it), and a progressive lockout on repeated FAILURES tracked per wallet
+	// and per IP. Slowing down does not evade the lockout, because the backoff
+	// escalates with the failure count rather than resetting with time.
+	authLockoutCfg := middleware.AuthLockoutConfig{
+		Threshold: cfg.RateLimit().AuthFailureThreshold(),
+		Window:    cfg.RateLimit().AuthFailureWindow(),
+		Base:      cfg.RateLimit().AuthLockoutBase(),
+		Max:       cfg.RateLimit().AuthLockoutMax(),
+	}
+	authGuard := middleware.NewAuthGuard(
+		middleware.NewLimiter(redisClient, "authwallet", cfg.RateLimit().AuthLimit(), cfg.RateLimit().AuthWindow()),
+		middleware.NewAuthLockout(redisClient, "wallet", authLockoutCfg),
+		middleware.NewAuthLockout(redisClient, "ip", authLockoutCfg),
+		appMetrics,
+		[]middleware.AuthGuardStage{
+			{Stage: metrics.AuthStageChallenge, Route: middleware.RouteMatch{Method: http.MethodPost, Path: "/api/v1/auth/challenge"}},
+			{Stage: metrics.AuthStageVerify, Route: middleware.RouteMatch{Method: http.MethodPost, Path: "/api/v1/auth/verify"}},
+		},
+	).Middleware()
 	// settlementLimiter applies a strict per-user limit to settlement creation to
 	// prevent settlement spam. Placed after authentication so it keys by user ID.
 	settlementLimiter := middleware.SensitiveUserRouteLimiter(
@@ -1427,19 +1697,24 @@ func run() error {
 						middleware.IndexerFreshness(indexerFreshness)(
 							globalLimiter(
 								authRouteLimiter(
-									writeLimiter(
-										authenticator(
-											walletBinding(
-												idempotencyMiddleware(
-													costQuota(
-														settlementLimiter(
-															walletLimiter(
-																middleware.LimitRequestBody(1 * 1024 * 1024)(
-																	middleware.Logging(baseLogger)(
-																		middleware.Tracing(
-																			cfg.Tracing().ServiceName(),
-																			cfg.Tracing().LatencyThreshold(),
-																		)(mux),
+									// Inside the per-IP limiter so an already
+									// rate-limited request never reaches the
+									// lockout bookkeeping (nester#1104).
+									authGuard(
+										writeLimiter(
+											authenticator(
+												walletBinding(
+													idempotencyMiddleware(
+														costQuota(
+															settlementLimiter(
+																walletLimiter(
+																	middleware.LimitRequestBody(1 * 1024 * 1024)(
+																		middleware.Logging(baseLogger)(
+																			middleware.Tracing(
+																				cfg.Tracing().ServiceName(),
+																				cfg.Tracing().LatencyThreshold(),
+																			)(mux),
+																		),
 																	),
 																),
 															),
@@ -1500,6 +1775,58 @@ func run() error {
 		submissionReconciler.SetLeaderChecker(schedulerLeadership)
 		go submissionReconciler.Run(shutdownCtx)
 	}
+
+	// Vault-balance reconciliation (nester#1082). The scheduled safety net for
+	// the money path: reads the authoritative balance from each vault contract
+	// and compares it against vaults.current_balance, recording — never
+	// correcting — any divergence to the reconciliation audit tables, the log,
+	// and the divergence metric the ReconciliationDivergence alert pages on.
+	//
+	// The comparison happens in RAW STROOPS, the unit the event indexer stores
+	// (docs/event-indexer-replay.md; migration 103) — see
+	// stellarpkg.ContractReader.TotalAssetsStroops for why rescaling either
+	// side would hide bookkeeping errors.
+	//
+	// Like the submission reconciler above it needs no key material, runs on
+	// the shared leader gate so one instance sweeps, and stops the moment
+	// shutdown begins. RECONCILE_DRY_RUN rehearses a pass against production
+	// data without writing or alerting anything.
+	balanceReconciler := reconciliation.NewRunner(
+		reconciliation.RunnerConfig{
+			Enabled:  cfg.Reconciliation().Enabled(),
+			Interval: cfg.Reconciliation().Interval(),
+			DryRun:   cfg.Reconciliation().DryRun(),
+		},
+		reconciliation.NewPostgresRepository(db),
+		[]reconciliation.Comparator{
+			reconciliation.BalanceComparator{
+				Vaults: vaultRepository,
+				Chain:  stellarpkg.StroopsBalanceReader{Reader: contractReader},
+				// Severity thresholds are stroop-denominated because the
+				// comparison is: warn on any nonzero disagreement (with exact
+				// integer bookkeeping there is no acceptable dust), escalate
+				// to critical at 1 USDC (1e7 stroops). The dust tolerance is
+				// sub-integer so no whole-stroop difference can be waved off.
+				Classifier: reconciliation.Classifier{
+					DustTolerance:     decimal.RequireFromString("0.5"),
+					WarningThreshold:  decimal.NewFromInt(1),
+					CriticalThreshold: decimal.NewFromInt(10_000_000),
+				},
+				Logger: baseLogger.WithGroup("balance-reconciler"),
+			},
+		},
+		reconciliation.NewLogAlerter(baseLogger.WithGroup("balance-reconciler")),
+		baseLogger.WithGroup("balance-reconciler"),
+	)
+	balanceReconciler.SetLeaderChecker(schedulerLeadership)
+	balanceReconciler.SetMetrics(appMetrics)
+	// Liveness is a scrape-time series (freshness-collector pattern): a dead
+	// reconciler's age keeps climbing on the clock, and a non-leader replica
+	// emits nothing rather than a misleading idle age.
+	if err := appMetrics.RegisterBalanceReconcileAge(balanceReconciler.AgeSample); err != nil {
+		baseLogger.Error("failed to register balance reconcile age collector", "error", err)
+	}
+	go balanceReconciler.Run(shutdownCtx)
 
 	// Balance-freshness SLI (nester#1056, nester#1088): the indexer samples
 	// its own position against the network tip on every tick and publishes it
@@ -1791,36 +2118,44 @@ func livenessHandler(ready *atomic.Bool) http.HandlerFunc {
 	}
 }
 
-func readinessHandler(ready *atomic.Bool, db *repository.PostgresDB, timeout time.Duration) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		if !ready.Load() {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("draining"))
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
-		defer cancel()
-		if err := db.Ping(ctx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("database unavailable"))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}
+// healthProbe reports whether one dependency is reachable, returning nil when
+// it is.
+//
+// The health handlers take probes rather than concrete clients so the endpoint
+// contract can be exercised deterministically: a stub standing in for a
+// stopped PostgreSQL or Redis is enough, and no test has to actually stop one.
+type healthProbe func(ctx context.Context) error
+
+// poolStats is the subset of pgxpool.Stat that /health/detailed reports. Taken
+// as a snapshot function for the same reason as healthProbe: the handler never
+// needs a live pool, only the numbers.
+type poolStats struct {
+	MaxConns      int32
+	AcquiredConns int32
+	IdleConns     int32
+	TotalConns    int32
 }
 
-type detailedHealthDeps struct {
-	ready        *atomic.Bool
-	pgPool       *repository.PostgresDB
-	dbTimeout    time.Duration
+// healthDeps is everything the four health endpoints need.
+type healthDeps struct {
+	ready  *atomic.Bool
+	pingDB healthProbe
+	// pingRedis is nil when REDIS_ADDR is unset and the in-memory fallbacks
+	// are in use (see the redisClient construction in run): readiness then has
+	// no Redis to be blocked on.
+	pingRedis healthProbe
+	// poolStats may be nil, in which case /health/detailed reports zeroed pool
+	// counters rather than panicking.
+	poolStats    func() poolStats
+	probeTimeout time.Duration
+
 	httpClient   *http.Client
 	horizonURL   string
 	rpcURL       string
 	startedAt    time.Time
 	environment  string
 	buildVersion string
+	buildCommit  string
 
 	// breakers is keyed by upstream; nil entries mean that dependency is not
 	// guarded. The probes below deliberately do NOT go through these clients:
@@ -1830,6 +2165,81 @@ type detailedHealthDeps struct {
 	// "reachable, but breaker still open" is exactly what tells an operator
 	// recovery is one probe away.
 	breakers map[metrics.Upstream]*breaker.Breaker
+}
+
+// registerHealthRoutes wires the liveness, readiness, and diagnostic health
+// endpoints onto mux.
+//
+// /healthz is the canonical liveness path (#1042). It is the sibling of
+// /readyz, and the path the internal metrics listener already serves on its
+// own port (metrics.NewServer), so the whole fleet answers liveness at one
+// name. /health is a permanent alias — it is what the compose healthcheck, the
+// staging smoke tests, and the deployed probes were pointed at, and both paths
+// are the same handler, so they cannot drift apart.
+//
+// Routing lives in one function, called by run and by the contract test, so a
+// route that moves in production cannot leave the test asserting the old one.
+func registerHealthRoutes(mux *http.ServeMux, deps healthDeps) {
+	mux.HandleFunc("GET /healthz", livenessHandler(deps.ready))
+	mux.HandleFunc("GET /health", livenessHandler(deps.ready))
+	mux.HandleFunc("GET /readyz", readinessHandler(deps))
+	mux.HandleFunc("GET /health/detailed", detailedHealthHandler(deps))
+}
+
+// readinessHandler reports whether this instance should be sent traffic.
+//
+// It fails closed on every dependency the instance cannot serve correct
+// responses without: PostgreSQL, and — when configured — Redis, which backs
+// the token-revocation cache and the distributed rate limiters, so an instance
+// that has lost it would honour revoked sessions and under-count limits. A
+// pool that is saturated rather than down surfaces identically: the ping
+// blocks waiting for a free connection and probeTimeout turns that into a
+// failure.
+func readinessHandler(deps healthDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if !deps.ready.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("draining"))
+			return
+		}
+		dbCtx, dbCancel := context.WithTimeout(r.Context(), deps.probeTimeout)
+		dbErr := deps.pingDB(dbCtx)
+		dbCancel()
+		if dbErr != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("database unavailable"))
+			return
+		}
+		// Each probe gets its own budget. Sharing one deadline would let a
+		// slow-but-healthy database consume it and report Redis as down.
+		if deps.pingRedis != nil {
+			redisCtx, redisCancel := context.WithTimeout(r.Context(), deps.probeTimeout)
+			redisErr := deps.pingRedis(redisCtx)
+			redisCancel()
+			if redisErr != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("redis unavailable"))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}
+}
+
+// pgxPoolStats adapts the live pgxpool statistics to the snapshot
+// /health/detailed reports.
+func pgxPoolStats(db *repository.PostgresDB) func() poolStats {
+	return func() poolStats {
+		stat := db.Pool.Stat()
+		return poolStats{
+			MaxConns:      stat.MaxConns(),
+			AcquiredConns: stat.AcquiredConns(),
+			IdleConns:     stat.IdleConns(),
+			TotalConns:    stat.TotalConns(),
+		}
+	}
 }
 
 type dependencyStatus struct {
@@ -1890,48 +2300,106 @@ type dbStatus struct {
 	TotalConns    int32  `json:"total_conns"`
 }
 
+// redisStatus is reported separately from dependencyStatus because Redis is
+// optional: an instance with REDIS_ADDR unset runs on in-memory fallbacks and
+// is healthy, which "ok" alone cannot distinguish from a Redis that answered.
+type redisStatus struct {
+	OK            bool   `json:"ok"`
+	Configured    bool   `json:"configured"`
+	LatencyMillis int64  `json:"latency_ms,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
 type detailedHealthResponse struct {
 	Status      string           `json:"status"`
 	Environment string           `json:"environment"`
 	Version     string           `json:"version"`
+	Commit      string           `json:"commit"`
 	UptimeSecs  int64            `json:"uptime_seconds"`
 	Database    dbStatus         `json:"database"`
+	Redis       redisStatus      `json:"redis"`
 	Horizon     dependencyStatus `json:"horizon"`
 	SorobanRPC  dependencyStatus `json:"soroban_rpc"`
 	GeneratedAt time.Time        `json:"generated_at"`
 }
 
-func detailedHealthHandler(deps detailedHealthDeps) http.HandlerFunc {
+// safeDependencyError reduces a dependency failure to a coarse reason that
+// reveals nothing about how this service reaches that dependency.
+//
+// /health/detailed is unauthenticated (see middleware.ProductionAuthRules), and
+// driver errors are not fit to publish: a pgx dial failure carries the DSN's
+// user, host, and database name; a go-redis failure carries the resolved
+// address; an upstream HTTP probe echoes back up to 512 bytes of the remote
+// body. The operator reads the real error in the logs — the public payload
+// says only whether the dependency answered, and whether it ran out of time.
+func safeDependencyError(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "timeout"
+	default:
+		return "unavailable"
+	}
+}
+
+// safeProbeError is safeDependencyError for the Stellar probes, which report
+// failure as a pre-formatted string rather than an error. That string can
+// contain the upstream's own response body, so none of it is echoed.
+func safeProbeError(res stellarpkg.HealthResult) string {
+	if res.OK {
+		return ""
+	}
+	return "unavailable"
+}
+
+func detailedHealthHandler(deps healthDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resp := detailedHealthResponse{
 			Status:      "ok",
 			Environment: deps.environment,
 			Version:     deps.buildVersion,
+			Commit:      deps.buildCommit,
 			UptimeSecs:  int64(time.Since(deps.startedAt).Seconds()),
 			GeneratedAt: time.Now().UTC(),
 		}
 
-		// A health endpoint is what you call when things are already broken,
-		// so it must not panic on a dependency it was handed as nil.
-		if deps.pgPool != nil {
-			dbCtx, dbCancel := context.WithTimeout(r.Context(), deps.dbTimeout)
-			dbStart := time.Now()
-			dbErr := deps.pgPool.Ping(dbCtx)
+		// A nil pingDB means "no database wired into this handler" rather than
+		// "the database is healthy": report it as unavailable instead of
+		// dereferencing nil, so a misconfigured build fails the probe loudly
+		// rather than serving a 200 that claims a database it never checked.
+		dbStart := time.Now()
+		dbErr := errors.New("database probe unavailable")
+		if deps.pingDB != nil {
+			dbCtx, dbCancel := context.WithTimeout(r.Context(), deps.probeTimeout)
+			dbErr = deps.pingDB(dbCtx)
 			dbCancel()
-			stat := deps.pgPool.Pool.Stat()
-			resp.Database = dbStatus{
-				OK:            dbErr == nil,
-				LatencyMillis: time.Since(dbStart).Milliseconds(),
-				MaxConns:      stat.MaxConns(),
-				AcquiredConns: stat.AcquiredConns(),
-				IdleConns:     stat.IdleConns(),
-				TotalConns:    stat.TotalConns(),
-			}
-			if dbErr != nil {
-				resp.Database.Error = dbErr.Error()
-			}
-		} else {
-			resp.Database = dbStatus{Error: "database pool is not configured"}
+		}
+		var stat poolStats
+		if deps.poolStats != nil {
+			stat = deps.poolStats()
+		}
+		resp.Database = dbStatus{
+			OK:            dbErr == nil,
+			LatencyMillis: time.Since(dbStart).Milliseconds(),
+			Error:         safeDependencyError(dbErr),
+			MaxConns:      stat.MaxConns,
+			AcquiredConns: stat.AcquiredConns,
+			IdleConns:     stat.IdleConns,
+			TotalConns:    stat.TotalConns,
+		}
+
+		// An unconfigured Redis is a supported single-instance mode, not a
+		// fault: report it as healthy but unconfigured rather than probing nil.
+		resp.Redis = redisStatus{OK: true, Configured: deps.pingRedis != nil}
+		if deps.pingRedis != nil {
+			redisCtx, redisCancel := context.WithTimeout(r.Context(), deps.probeTimeout)
+			redisStart := time.Now()
+			redisErr := deps.pingRedis(redisCtx)
+			redisCancel()
+			resp.Redis.OK = redisErr == nil
+			resp.Redis.LatencyMillis = time.Since(redisStart).Milliseconds()
+			resp.Redis.Error = safeDependencyError(redisErr)
 		}
 
 		hStart := time.Now()
@@ -1939,7 +2407,7 @@ func detailedHealthHandler(deps detailedHealthDeps) http.HandlerFunc {
 		resp.Horizon = dependencyStatus{
 			OK:             hRes.OK,
 			Endpoint:       hRes.Endpoint,
-			Error:          hRes.Error,
+			Error:          safeProbeError(hRes),
 			LatencyMillis:  time.Since(hStart).Milliseconds(),
 			LatestLedger:   hRes.LatestLedger,
 			CircuitBreaker: newBreakerStatus(deps.breakers[metrics.UpstreamHorizon]),
@@ -1950,20 +2418,23 @@ func detailedHealthHandler(deps detailedHealthDeps) http.HandlerFunc {
 		resp.SorobanRPC = dependencyStatus{
 			OK:             rRes.OK,
 			Endpoint:       rRes.Endpoint,
-			Error:          rRes.Error,
+			Error:          safeProbeError(rRes),
 			LatencyMillis:  time.Since(rStart).Milliseconds(),
 			LatestLedger:   rRes.LatestLedger,
 			CircuitBreaker: newBreakerStatus(deps.breakers[metrics.UpstreamSorobanRPC]),
 		}
 
-		// An open breaker is a degraded dependency even when the probe above
+		// Redis only counts against this instance when it is configured; the
+		// in-memory fallback path has nothing to lose.
+		redisDown := resp.Redis.Configured && !resp.Redis.OK
+		// An open breaker is "degraded" even when the probe alongside it
 		// succeeded, because callers are still being shed until the next probe
 		// closes it. It does not affect the HTTP status: chain dependencies
 		// have never gated readiness here, and making an open breaker return
 		// 503 would evict the pod from its load balancer over an upstream
 		// outage — turning the partial failure into the total one this feature
-		// exists to prevent. Only the database and draining do that.
-		degraded := !resp.Database.OK || !resp.Horizon.OK || !resp.SorobanRPC.OK ||
+		// exists to prevent. Only the database, Redis, and draining do that.
+		degraded := !resp.Database.OK || redisDown || !resp.Horizon.OK || !resp.SorobanRPC.OK ||
 			breakerDegraded(resp.Horizon.CircuitBreaker) ||
 			breakerDegraded(resp.SorobanRPC.CircuitBreaker)
 		draining := !deps.ready.Load()
@@ -1974,8 +2445,12 @@ func detailedHealthHandler(deps detailedHealthDeps) http.HandlerFunc {
 			resp.Status = "degraded"
 		}
 
+		// The 503 set matches /readyz: Postgres and (when configured) Redis are
+		// the dependencies this instance cannot serve correct responses without.
+		// Horizon and Soroban RPC degrade individual routes, so they report
+		// "degraded" at 200 rather than pulling the instance out of rotation.
 		status := http.StatusOK
-		if draining || !resp.Database.OK {
+		if draining || !resp.Database.OK || redisDown {
 			status = http.StatusServiceUnavailable
 		}
 
@@ -2006,4 +2481,68 @@ func pingStellarDependencies(logger *slog.Logger, cfg *config.Config) error {
 	}
 
 	return nil
+}
+
+// ledgerChainReaderAdapter wraps stellar ContractReader to implement
+// ledger.ChainReader for the reconciliation job.
+type ledgerChainReaderAdapter struct {
+	contractReader *stellarpkg.ContractReader
+}
+
+func (a *ledgerChainReaderAdapter) ReadVaultBalance(ctx context.Context, contractAddress string) (int64, error) {
+	if a.contractReader == nil {
+		return 0, fmt.Errorf("contract reader not configured")
+	}
+	dec, err := a.contractReader.VaultBalance(ctx, contractAddress)
+	if err != nil {
+		return 0, err
+	}
+	// Convert decimal USDC to stroops int64.
+	return dec.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart(), nil
+}
+
+func (a *ledgerChainReaderAdapter) ReadTotalSharesTimesPrice(ctx context.Context, contractAddress string) (int64, error) {
+	if a.contractReader == nil {
+		return 0, nil
+	}
+	// total_shares*share_price is total assets, which the contract exposes
+	// directly.
+	dec, err := a.contractReader.TotalAssets(ctx, contractAddress)
+	if err != nil {
+		return 0, nil // skip this check if not available
+	}
+	return dec.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart(), nil
+}
+
+// reconciliationVaultListerAdapter adapts the vault repository to
+// scheduler.ReconciliationVaultLister.
+type reconciliationVaultListerAdapter struct {
+	vaultRepo *postgres.VaultRepository
+}
+
+func (a *reconciliationVaultListerAdapter) ListActiveForReconciliation(ctx context.Context) ([]scheduler.ReconcileVaultInfo, error) {
+	if a.vaultRepo == nil {
+		return nil, nil
+	}
+	vaults, err := a.vaultRepo.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]scheduler.ReconcileVaultInfo, 0, len(vaults))
+	for _, v := range vaults {
+		out = append(out, scheduler.ReconcileVaultInfo{
+			ID:              v.ID,
+			ContractAddress: v.ContractAddress,
+			Currency:        v.Currency,
+		})
+	}
+	return out, nil
+}
+
+func ledgerDomainConfig() ledger.ReconciliationConfig {
+	return ledger.ReconciliationConfig{
+		Enabled:          true,
+		Interval:         5 * time.Minute,
+		ToleranceStroops: 1_000_000, // 0.1 USDC
+	}
 }

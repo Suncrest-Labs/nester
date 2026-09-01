@@ -3,7 +3,7 @@
 /**
  * verify-prd-refs.js
  * 
- * Validates LAUNCH_READINESS_REGISTER.md by checking that:
+ * Validates docs/launch-readiness-register.md by checking that:
  * 1. All "Resolved" entries have non-empty Evidence fields
  * 2. All Evidence references point to existing files/tests/PRs
  * 3. Evidence follows consistent formatting
@@ -24,7 +24,7 @@ const path = require('path');
 // Configuration
 // ============================================================================
 
-const REGISTER_PATH = path.join(__dirname, '..', 'LAUNCH_READINESS_REGISTER.md');
+const REGISTER_PATH = path.join(__dirname, '..', 'docs', 'launch-readiness-register.md');
 const EVIDENCE_JSON_PATH = path.join(__dirname, '..', 'docs', 'launch-readiness-evidence.json');
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -293,7 +293,7 @@ function generateReport(entries, validationResults) {
 function main() {
   let exitCode = 0;
   
-  console.log('🔍 Verifying LAUNCH_READINESS_REGISTER.md...\n');
+  console.log('🔍 Verifying docs/launch-readiness-register.md...\n');
   
   // Read register file
   if (!fs.existsSync(REGISTER_PATH)) {

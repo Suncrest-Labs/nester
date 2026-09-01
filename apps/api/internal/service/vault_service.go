@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/moneypath"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
 )
@@ -59,12 +60,12 @@ func (c *sharePriceCache) invalidate(id uuid.UUID) {
 }
 
 type SharePriceResponse struct {
-	VaultID       string `json:"vault_id"`
-	SharesPerUSDC string `json:"shares_per_usdc"`
-	USDCPerShare  string `json:"usdc_per_share"`
-	TotalShares   string `json:"total_shares"`
+	VaultID         string `json:"vault_id"`
+	SharesPerUSDC   string `json:"shares_per_usdc"`
+	USDCPerShare    string `json:"usdc_per_share"`
+	TotalShares     string `json:"total_shares"`
 	TotalAssetsUSDC string `json:"total_assets_usdc"`
-	AsOfLedger    int64  `json:"as_of_ledger"`
+	AsOfLedger      int64  `json:"as_of_ledger"`
 }
 
 type ConvertRequest struct {
@@ -81,9 +82,16 @@ type ConvertResponse struct {
 // Implementations invoke the Soroban vault contract; the noop is used when
 // no operator secret is configured.
 type VaultDepositInvoker interface {
+	// DepositToVault takes an ASSET amount in stroops (1 unit = 10^7).
 	DepositToVault(ctx context.Context, contractAddress string, amountStroops int64) error
+	// WithdrawFromVault takes a SHARE amount in stroops, NOT assets: the
+	// value is forwarded to preview_withdraw_net and to the contract's
+	// share-denominated withdraw. Callers holding an asset amount must
+	// convert it first — see resolveWithdrawalShares (nester#1151).
 	WithdrawFromVault(ctx context.Context, contractAddress string, sharesStroops int64, slippageBps int) (txHash string, err error)
+	// PreviewDeposit maps ASSET stroops in to SHARE stroops out.
 	PreviewDeposit(ctx context.Context, contractAddress string, amountStroops int64) (int64, error)
+	// PreviewWithdraw maps SHARE stroops in to ASSET stroops out.
 	PreviewWithdraw(ctx context.Context, contractAddress string, sharesStroops int64) (int64, error)
 	HarvestVault(ctx context.Context, contractAddress, userAddress string, compound bool) (string, error)
 	// EmergencyWithdrawAll triggers the vault contract's emergency_withdraw_all
@@ -124,8 +132,12 @@ type HarvestResult struct {
 }
 
 type VaultService struct {
-	repository             vault.Repository
-	depositInvoker         VaultDepositInvoker
+	repository     vault.Repository
+	depositInvoker VaultDepositInvoker
+	// operatorFundedDeposits gates deposits that would spend the shared
+	// operator account. A nil policy refuses them all, which is the correct
+	// default: the wallet-signed path does not need it (nester#1152).
+	operatorFundedDeposits *OperatorFundedDepositPolicy
 	chainVerifier          ChainEventVerifier
 	defaultHarvestCompound bool
 	yieldRecorder          YieldHarvestRecorder
@@ -136,6 +148,32 @@ type VaultService struct {
 	// without it (tests, tooling) behaves exactly as before. Losing
 	// observability must never change the behaviour of the money path.
 	metrics *metrics.Metrics
+	// moneyPathSwitches gates deposits and withdrawals on the global pause
+	// switch (#1120). Optional: a nil gate allows everything, so a service
+	// built without one (tests, tooling) behaves as it did before the switch
+	// existed. Production wires it in SetMoneyPathSwitches.
+	moneyPathSwitches MoneyPathGate
+}
+
+// MoneyPathGate reports whether a money-path operation may proceed. Declared
+// here rather than taking *MoneyPathSwitchService so tests can substitute a
+// gate without a database.
+type MoneyPathGate interface {
+	EnsureAllowed(ctx context.Context, op moneypath.Operation) error
+}
+
+// SetMoneyPathSwitches installs the global pause gate.
+func (s *VaultService) SetMoneyPathSwitches(gate MoneyPathGate) {
+	s.moneyPathSwitches = gate
+}
+
+// ensureMoneyPathAllowed refuses the operation when its global switch is
+// engaged. A nil gate allows everything.
+func (s *VaultService) ensureMoneyPathAllowed(ctx context.Context, op moneypath.Operation) error {
+	if s.moneyPathSwitches == nil {
+		return nil
+	}
+	return s.moneyPathSwitches.EnsureAllowed(ctx, op)
 }
 
 // GoalYieldRouter lets VaultService honor a savings goal's per-goal
@@ -201,17 +239,17 @@ type RecordWithdrawalInput struct {
 }
 
 type RebalancePositionInput struct {
-	VaultID     uuid.UUID
-	UserID      uuid.UUID
+	VaultID      uuid.UUID
+	UserID       uuid.UUID
 	FromProtocol string
 	ToProtocol   string
-	Amount      decimal.Decimal
-	Currency    string
-	TxHash      string
+	Amount       decimal.Decimal
+	Currency     string
+	TxHash       string
 }
 
 type RebalancePositionResult struct {
-	Vault              vault.Vault
+	Vault               vault.Vault
 	FromProtocolBalance decimal.Decimal
 	ToProtocolBalance   decimal.Decimal
 }
@@ -229,6 +267,13 @@ func NewVaultService(repository vault.Repository) *VaultService {
 // Call this after NewVaultService when an operator key is available.
 func (s *VaultService) SetDepositInvoker(invoker VaultDepositInvoker) {
 	s.depositInvoker = invoker
+}
+
+// SetOperatorFundedDepositPolicy installs the gate for deposits funded from
+// the shared operator account. Leaving it unset refuses every such deposit
+// (nester#1152).
+func (s *VaultService) SetOperatorFundedDepositPolicy(policy *OperatorFundedDepositPolicy) {
+	s.operatorFundedDeposits = policy
 }
 
 // ChainEventVerifier looks up a transaction hash and returns the matching
@@ -355,6 +400,13 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 	startedAt := time.Now()
 	defer func() { recordFlow(s.metrics, metrics.FlowDeposit, startedAt, err) }()
 
+	// Global pause (#1120). Checked before any validation so an engaged
+	// switch stops the operation regardless of what was submitted, and
+	// before the chain is touched.
+	if err := s.ensureMoneyPathAllowed(ctx, moneypath.OperationDeposit); err != nil {
+		return vault.Vault{}, err
+	}
+
 	if input.VaultID == uuid.Nil {
 		return vault.Vault{}, vault.ErrInvalidVault
 	}
@@ -384,6 +436,20 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 	}
 
 	if txHash == "" && s.depositInvoker != nil {
+		// No tx_hash means nothing was signed by the user, so this deposit
+		// would be submitted with the operator as both caller and depositing
+		// user — spending platform funds on the caller's behalf. Without a
+		// gate that made POST /vaults/{id}/deposit a value transfer bounded
+		// only by the operator's balance (nester#1152).
+		//
+		// The supported path is the wallet-signed one: the client signs its
+		// own deposit and supplies the tx_hash, which the chain verifier
+		// checks below. Anything else has to be explicitly allowlisted,
+		// capped, and audit-logged.
+		if err := s.operatorFundedDeposits.Authorize(ctx, input.VaultID, userID, input.Amount); err != nil {
+			return vault.Vault{}, err
+		}
+
 		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
 		if err := s.depositInvoker.DepositToVault(ctx, existing.ContractAddress, stroops); err != nil {
 			if strings.Contains(err.Error(), "#21") {
@@ -625,6 +691,13 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 	startedAt := time.Now()
 	defer func() { recordFlow(s.metrics, metrics.FlowWithdrawal, startedAt, err) }()
 
+	// Global pause (#1120), independent of the deposit switch: the common
+	// incident response is to stop money entering while still letting users
+	// take theirs out.
+	if err := s.ensureMoneyPathAllowed(ctx, moneypath.OperationWithdrawal); err != nil {
+		return vault.Vault{}, err
+	}
+
 	if input.VaultID == uuid.Nil {
 		return vault.Vault{}, vault.ErrInvalidVault
 	}
@@ -650,6 +723,12 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 	// made the guard opt-out: any request carrying tx_hash bypassed it, and
 	// when no verifier is configured nothing re-checks afterwards, so a
 	// forged hash drove current_balance negative.
+	//
+	// This read is NOT serialised against concurrent withdrawals — it is a
+	// fast-fail so we never submit a doomed on-chain call. The authoritative
+	// check re-runs inside repository.RecordWithdrawal under a row lock
+	// (SELECT ... FOR UPDATE), which is what makes concurrent withdrawals of
+	// the same position safe (nester#1084).
 	if existing.CurrentBalance.LessThan(input.Amount) {
 		return vault.Vault{}, vault.ErrWithdrawalExceedsPosition
 	}
@@ -667,15 +746,35 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 	}
 
 	txHash := strings.TrimSpace(input.TxHash)
+	// Shares actually burned on chain, when this call submitted the
+	// transaction itself. Zero means "not known from a submission" and the
+	// share figure falls back to the share-price computation below.
+	submittedShares := decimal.Zero
 	// A client-supplied hash means the withdraw already landed on-chain
 	// (wallet-signed). Do not submit again.
 	if txHash == "" && s.depositInvoker != nil {
-		stroops := input.Amount.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
-		submitted, err := s.depositInvoker.WithdrawFromVault(ctx, existing.ContractAddress, stroops, input.SlippageBps)
+		// WithdrawFromVault's second parameter is SHARES in stroops, not
+		// assets: it is forwarded to preview_withdraw_net and to the
+		// contract's share-denominated withdraw. Passing asset stroops here
+		// burned the wrong number of shares whenever the share price was not
+		// exactly 1.0 — taking materially more or less than the user asked
+		// for, while the database recorded the requested amount either way
+		// (nester#1151).
+		sharesStroops, err := s.resolveWithdrawalShares(ctx, existing, input.Amount)
+		if err != nil {
+			return vault.Vault{}, err
+		}
+
+		submitted, err := s.depositInvoker.WithdrawFromVault(ctx, existing.ContractAddress, sharesStroops, input.SlippageBps)
 		if err != nil {
 			return vault.Vault{}, fmt.Errorf("on-chain withdrawal failed: %w", err)
 		}
 		txHash = strings.TrimSpace(submitted)
+		// The contract burned sharesStroops and returned the corresponding
+		// assets. Record what the chain actually did rather than what was
+		// requested; when a verifier is configured the block below replaces
+		// this with the emitted event, which is better still.
+		submittedShares = decimal.NewFromInt(sharesStroops).Div(stroopsPerUnit)
 	}
 
 	amount := input.Amount
@@ -704,6 +803,12 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 
 	sharePrice := vault.ComputeSharePrice(existing)
 	shares := amount.Div(sharePrice).Round(6)
+	// Prefer the share count the chain actually burned over one re-derived
+	// from the price: the recorded withdrawal must reflect what happened on
+	// chain, not what was requested (nester#1151).
+	if submittedShares.IsPositive() {
+		shares = submittedShares.Round(6)
+	}
 
 	record := vault.TransactionRecord{
 		UserID:               userID,
@@ -720,6 +825,69 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 	return s.repository.GetVault(ctx, input.VaultID)
 }
 
+// stroopsPerUnit is the fixed-point scale Soroban uses for asset and share
+// amounts: 1 unit = 10^7 stroops.
+var stroopsPerUnit = decimal.NewFromInt(10_000_000)
+
+// resolveWithdrawalShares converts a requested ASSET amount into the SHARE
+// amount, in stroops, to burn on chain.
+//
+// The contract's withdraw is share-denominated, so a user asking to take out
+// 100 USDC from a vault whose shares are worth 1.25 USDC each must burn 80
+// shares, not 100. Passing the asset figure straight through was the bug this
+// fixes (nester#1151).
+//
+// Two steps, because neither alone is sufficient:
+//
+//  1. Convert at the vault's current share price. This is a local estimate
+//     derived from recorded balances.
+//  2. Refine it against the contract's own preview_withdraw, which is
+//     authoritative and accounts for fees the local price does not model. One
+//     correction is applied by scaling the estimate by the ratio of requested
+//     to previewed assets; a second preview is not worth the extra round trip,
+//     and the slippage guard inside WithdrawFromVault is what ultimately
+//     bounds the result.
+//
+// When the preview is unavailable the share-price estimate stands on its own:
+// failing the withdrawal outright would make an unreachable read-only RPC
+// block users from their funds, and the on-chain slippage guard still bounds
+// what a mis-estimate can cost.
+func (s *VaultService) resolveWithdrawalShares(
+	ctx context.Context,
+	existing vault.Vault,
+	assetAmount decimal.Decimal,
+) (int64, error) {
+	sharePrice := vault.ComputeSharePrice(existing)
+	if sharePrice.Sign() <= 0 {
+		return 0, vault.ErrInvalidSharePrice
+	}
+
+	shares := assetAmount.Div(sharePrice)
+	sharesStroops := shares.Mul(stroopsPerUnit).Round(0).IntPart()
+	if sharesStroops <= 0 {
+		return 0, vault.ErrInvalidAmount
+	}
+
+	previewedStroops, err := s.depositInvoker.PreviewWithdraw(ctx, existing.ContractAddress, sharesStroops)
+	if err != nil || previewedStroops <= 0 {
+		// Preview unavailable (or a noop invoker, which returns zero): the
+		// share-price estimate is the best available answer.
+		return sharesStroops, nil
+	}
+
+	previewedAssets := decimal.NewFromInt(previewedStroops)
+	requestedAssets := assetAmount.Mul(stroopsPerUnit)
+	corrected := decimal.NewFromInt(sharesStroops).
+		Mul(requestedAssets).
+		Div(previewedAssets).
+		Round(0).
+		IntPart()
+	if corrected <= 0 {
+		return sharesStroops, nil
+	}
+	return corrected, nil
+}
+
 // DeleteVault soft-deletes a vault so it is excluded from future reads.
 func (s *VaultService) DeleteVault(ctx context.Context, vaultID uuid.UUID) error {
 	if vaultID == uuid.Nil {
@@ -731,38 +899,6 @@ func (s *VaultService) DeleteVault(ctx context.Context, vaultID uuid.UUID) error
 	}
 
 	return s.repository.SoftDeleteVault(ctx, vaultID)
-}
-
-const (
-	defaultVaultListLimit = 20
-	maxVaultListLimit     = 100
-)
-
-// ListVaultsInput carries validated pagination params for the public list endpoint.
-type ListVaultsInput struct {
-	Limit  int
-	Offset int
-	Status string
-}
-
-// ListVaults returns a paginated slice of all non-deleted vaults.
-func (s *VaultService) ListVaults(ctx context.Context, input ListVaultsInput) ([]vault.Vault, int, error) {
-	limit := input.Limit
-	if limit <= 0 {
-		limit = defaultVaultListLimit
-	}
-	if limit > maxVaultListLimit {
-		limit = maxVaultListLimit
-	}
-	offset := input.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	return s.repository.ListVaults(ctx, vault.ListFilter{
-		Limit:  limit,
-		Offset: offset,
-		Status: input.Status,
-	})
 }
 
 type HarvestVaultInput struct {
@@ -1054,6 +1190,18 @@ func (s *VaultService) EmergencyWithdraw(ctx context.Context, input EmergencyWit
 }
 
 func (s *VaultService) RebalancePosition(ctx context.Context, input RebalancePositionInput) (RebalancePositionResult, error) {
+	// Global pause (#1120). A rebalance moves funds between protocols and
+	// reaches the chain, so an engaged switch has to stop it too — gating
+	// only deposits and withdrawals left this path open while the money
+	// path was supposed to be halted. Bound to the withdrawal switch
+	// because that is the side the funds leave from.
+	//
+	// EmergencyWithdraw is deliberately left ungated: blocking the
+	// emergency exit during an incident is backwards.
+	if err := s.ensureMoneyPathAllowed(ctx, moneypath.OperationWithdrawal); err != nil {
+		return RebalancePositionResult{}, err
+	}
+
 	if input.VaultID == uuid.Nil || input.UserID == uuid.Nil {
 		return RebalancePositionResult{}, vault.ErrInvalidVault
 	}
@@ -1103,12 +1251,12 @@ func (s *VaultService) RebalancePosition(ctx context.Context, input RebalancePos
 	}
 
 	err = s.repository.RecordRebalance(ctx, vault.RebalanceRecordInput{
-		VaultID:              input.VaultID,
-		UserID:               input.UserID,
-		FromProtocol:         input.FromProtocol,
-		ToProtocol:           input.ToProtocol,
-		Amount:               input.Amount,
-		TransactionHash:      input.TxHash,
+		VaultID:         input.VaultID,
+		UserID:          input.UserID,
+		FromProtocol:    input.FromProtocol,
+		ToProtocol:      input.ToProtocol,
+		Amount:          input.Amount,
+		TransactionHash: input.TxHash,
 	}, withdrawRecord, depositRecord)
 	if err != nil {
 		return RebalancePositionResult{}, err
@@ -1131,7 +1279,7 @@ func (s *VaultService) RebalancePosition(ctx context.Context, input RebalancePos
 	}
 
 	return RebalancePositionResult{
-		Vault:              updatedVault,
+		Vault:               updatedVault,
 		FromProtocolBalance: fromBalance,
 		ToProtocolBalance:   toBalance,
 	}, nil

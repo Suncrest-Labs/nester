@@ -379,6 +379,30 @@ nester_indexer_lag_seconds <= nester_indexer_staleness_budget_seconds
 nester_indexer_lag_last_sample_age_seconds
 ```
 
+### Reconciliation
+
+Emitted by the two loops that compare our record of the money path against
+the chain: the transaction poller (#1108, `internal/service/transaction_poller.go`)
+and the vault-balance reconciler (#1082, `internal/reconciliation/runner.go`).
+Alerted on by the money-path integrity group
+(`docs/observability/runbooks/money-path-integrity.md`).
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `nester_reconcile_runs_total` | Counter | `outcome` (`completed`/`failed`) | Reconciliation passes, both loops. `failed` means a pass aborted before completing — a false-clean divergence count. |
+| `nester_reconcile_divergences_total` | Counter | `kind` (`missing`/`extra`/`mismatch`/`stuck`) | Findings where our record and the chain disagree. One increment per finding. The kind vocabulary mirrors `reconciliation.DiscrepancyType`. |
+| `nester_reconcile_last_run_age_seconds` | Gauge | none | Seconds since the transaction poller completed a pass. Aged by a ticker in `main.go`; reset on each pass. |
+| `nester_reconcile_balance_last_run_age_seconds` | Gauge | none | Seconds since the vault-balance reconciler finished a sweep, derived at scrape time (pull collector, same reasoning as indexer freshness). **Absent** on non-leader replicas and when the reconciler is not running — absence pages via `BalanceReconciliationMetricsAbsent`. |
+
+**Cardinality:** every label is a closed compile-time set. Divergences are
+deliberately unlabelled by vault, user, or hash — the structured logs and the
+`reconciliation_findings` table are the join key from a firing alert to the
+affected records.
+
+**Why two age series.** `RecordReconcileRun` resets the poller's gauge every
+15 seconds, so a vault-balance reconciler sharing it could die invisibly
+behind a healthy poller (and vice versa). Each loop's liveness stands alone.
+
 ### Runtime
 
 The standard Go and process collectors are registered: `go_goroutines`,

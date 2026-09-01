@@ -87,6 +87,51 @@ Emitted when a yield source is removed.
 - **Topics**: `(REGISTRY, SOURCE_REMOVED, source_id: Symbol)`
 - **Data**: `{}`
 
+### VAL_ATT (value_attested)
+Emitted on every accepted attested APY or TVL update (via `update_apy_attested` or
+`update_tvl_attested`).  This event is the primary post-hoc audit record: given the
+full event log anyone can re-verify that each accepted value was signed by the parties
+the registry trusted at that moment.
+
+- **Topics**: `(REGISTRY, VAL_ATT, source_id: Symbol)`
+- **Data**:
+    ```rust
+    {
+        source_id: Symbol,
+        /// 0x01 = APY, 0x02 = TVL
+        field_tag: u32,
+        /// Accepted value — apy_bps cast to i128 for APY; tvl for TVL
+        value: i128,
+        /// ed25519 public keys (BytesN<32>) of all attesters whose
+        /// signatures were counted toward the threshold
+        attester_keys: Vec<BytesN<32>>,
+        /// Nonces used by each attester (parallel array with attester_keys)
+        nonces: Vec<u64>,
+        /// Ledger timestamp at which the update was accepted
+        accepted_at: u64,
+    }
+    ```
+
+**Canonical payload encoding** (what attesters sign):
+
+| Offset | Length | Field |
+|--------|--------|-------|
+| 0 | 32 | `contract_address` — last 32 bytes of the Soroban `ScAddress` XDR |
+| 32 | 4 | `source_id_len` — big-endian u32, byte length of the symbol string |
+| 36 | N | `source_id` — UTF-8 bytes of the Symbol (N ≤ 9 for `symbol_short!`) |
+| 36+N | 1 | `field_tag` — `0x01` (APY) or `0x02` (TVL) |
+| 37+N | 4 | `value_u32` — big-endian u32 `apy_bps` (APY path); `0` for TVL |
+| 41+N | 16 | `value_i128` — big-endian i128 `tvl` (TVL path); `0` for APY |
+| 57+N | 8 | `valid_from` — big-endian u64 Unix timestamp, inclusive |
+| 65+N | 8 | `valid_until` — big-endian u64 Unix timestamp, exclusive |
+| 73+N | 8 | `nonce` — big-endian u64, must exceed last-seen nonce per attester |
+
+Total payload length: **81 + N bytes**.
+
+Including the contract address in the payload means a signature for testnet
+cannot be replayed on mainnet.  The nonce and validity window together prevent
+capture-and-replay attacks against a running network.
+
 ## Allocation Strategy Events (Contract Symbol: `STRATEGY`)
 
 ### WEIGHTS_UPDATED

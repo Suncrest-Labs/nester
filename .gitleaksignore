@@ -12,3 +12,11 @@
 21375a8f698129cdb27366bb37b6b48630cdcb65:apps/api/internal/config/redact_test.go:generic-api-key:23
 21375a8f698129cdb27366bb37b6b48630cdcb65:apps/api/internal/config/redact_test.go:generic-api-key:29
 21375a8f698129cdb27366bb37b6b48630cdcb65:apps/api/internal/config/redact_test.go:generic-api-key:30
+
+# docs/security/ci-gates.md contains code examples demonstrating gosec
+# violations and their fixes. Lines 251 and 254 show intentional anti-patterns
+# (hardcoded credentials) for teaching purposes. These are marked with #nosec
+# comments and serve no actual credential purpose; they are documentation
+# fixtures only.
+9a48343dfb9f86641dbdc3971ab93d353a960f2a:docs/security/ci-gates.md:generic-api-key:251
+9a48343dfb9f86641dbdc3971ab93d353a960f2a:docs/security/ci-gates.md:generic-api-key:254

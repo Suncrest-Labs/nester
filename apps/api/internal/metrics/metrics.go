@@ -70,6 +70,10 @@ type Metrics struct {
 	// in rpc.go. These count logical calls, where the outbound collectors
 	// above count HTTP attempts.
 	rpc *rpcCollectors
+
+	// Auth challenge/verify hardening (nester#1104). Defined in
+	// authlockout.go.
+	auth *authCollectors
 }
 
 // New builds the registry and registers every collector on it.
@@ -159,8 +163,9 @@ func New() *Metrics {
 			Help:      "Total outbound HTTP requests that failed before a response, by upstream and error kind.",
 		}, []string{"upstream", "kind"}),
 
-		slo: newSLOCollectors(),
-		rpc: newRPCCollectors(),
+		slo:  newSLOCollectors(),
+		rpc:  newRPCCollectors(),
+		auth: newAuthCollectors(),
 	}
 
 	registry.MustRegister(
@@ -177,6 +182,7 @@ func New() *Metrics {
 
 	registry.MustRegister(m.slo.collectors()...)
 	registry.MustRegister(m.rpc.collectors()...)
+	registry.MustRegister(m.auth.collectors()...)
 
 	// Process and Go runtime collectors: goroutine count, heap, GC pauses,
 	// open file descriptors, CPU. Free to collect and the first thing anyone

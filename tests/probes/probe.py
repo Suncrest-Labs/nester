@@ -447,6 +447,30 @@ def main(argv: list[str] | None = None) -> int:
         _require_safe_target(config)
         names = select_probes(config)
     except ProbeAbort as exc:
+        # Write failure metrics before exiting so alerting can report the
+        # misconfiguration.
+        #
+        # Reported under its own name rather than borrowing "balance": a
+        # synthetic balance failure is indistinguishable from a real balance
+        # outage on the dashboard, so a misconfigured probe run would page
+        # whoever is on call for a problem that does not exist. A distinct
+        # series lets the alert rule say "the probes are broken" instead.
+        fallback_result = ProbeResult(
+            name="probe_configuration",
+            success=False,
+            duration_seconds=0.0,
+            reason="configuration",
+            timestamp=time.time(),
+            detail=str(exc)[:200],
+        )
+        exposition = render([fallback_result], config.environment or "unknown")
+        if args.output:
+            try:
+                with open(args.output, "w", encoding="utf-8") as handle:
+                    handle.write(exposition)
+            except OSError as write_err:
+                print(f"Failed to write metrics: {write_err}", file=sys.stderr)
+        
         # Exit 2, distinct from a probe failure (1), so a misconfiguration is
         # never mistaken for an outage.
         print(f"probe aborted: {exc}", file=sys.stderr)

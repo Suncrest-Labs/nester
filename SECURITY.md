@@ -73,6 +73,67 @@ Every role transfer is two-step (`transfer_role` / `accept_role`, cancellable vi
 
 **On-chain roles vs application roles:** the RBAC above lives entirely in the Soroban contracts. The `user_roles` tables in the API's Postgres migrations are a separate, application-level authorization layer (who can see what in the dashboard) and do not confer any on-chain authority — do not conflate the two when reasoning about contract security.
 
+## Attester Signing Key Separation (issue #820 — signature-attested APY/TVL)
+
+The `update_apy_attested` and `update_tvl_attested` registry functions require every value to
+be signed by one or more registered ed25519 attester keys before it is accepted on-chain.
+This converts "trust the caller" into "verify the data" and makes every accepted value
+independently auditable via the `VAL_ATT` event log.
+
+**The attester signing key MUST be distinct from the Stellar transaction-submitting (fee-paying) key.**
+
+This requirement is not advisory — it is the security boundary the feature is built on:
+
+- The **transaction key** pays Stellar fees and authorises the `update_apy_attested` call. It
+  is exposed to the Stellar network on every submission. Compromise of this key lets an attacker
+  submit transactions, but without a valid attester signature the on-chain contract will reject
+  the value.
+- The **attester key** signs the canonical payload (contract address, source id, field, value,
+  validity window, nonce). It never touches the Stellar network directly. Compromise of this
+  key lets an attacker forge signatures, but without the transaction key no on-chain call can
+  be submitted.
+
+If the same key plays both roles, attestation adds nothing — a compromise gives the attacker
+both halves simultaneously. The registry can be updated to any value with a single key, exactly
+as before.
+
+### Implementation requirements for the backend attester
+
+The Go APY push pipeline (`apps/api/internal/service/apy_service.go`,
+`apps/api/internal/service/performance/apy_refresh.go`) is responsible for signing attestations
+before submitting registry updates via `apps/api/internal/stellar/invoker.go`.
+
+- The attester private key **must** be stored in the same secret store as the AES cipher keys
+  (see `apps/api/internal/crypto/account_cipher.go` and `apps/api/internal/rotation/rotation.go`),
+  **never** in a plain environment variable.
+- The attester key versioning **must** follow the same rotation scheme used for cipher keys:
+  versioned labels (e.g. `attester-v1`, `attester-v2`), non-destructive rotation, with old
+  public keys revoked from the registry only after no in-flight attestations using them remain.
+- The configuration entry for the attester key lives in `apps/api/internal/config/config.go`
+  under the same section as the cipher key configuration. The field name is
+  `ATTESTER_SIGNING_KEY` (env: `API_ATTESTER_SIGNING_KEY`). It holds the base64-encoded
+  raw ed25519 private key (32 bytes).
+- The fee-paying Stellar key is already managed separately in config. Do **not** derive the
+  attester key from it or store them together.
+
+### Canonical payload encoding (summary — full spec in `EVENTS.md → VAL_ATT`)
+
+Every attester signature covers:
+- The **registry contract address** — so a signature for testnet cannot be replayed on mainnet.
+- The **source id** and **field tag** (APY vs TVL) — so a signature for one source/field cannot
+  be used for another.
+- The **exact value** — so a captured attestation cannot be altered.
+- A **validity window** (`valid_from` / `valid_until`) — so a captured-but-old signature has a
+  bounded lifetime.
+- A **monotonic nonce** per attester — so the same signature cannot be submitted twice.
+
+### Break-glass path
+
+If all attesters become unavailable, the protocol can still mark any source `Paused` or
+`Deprecated` via `update_status`, which requires only the normal Admin/Operator role — no
+attestation. This means an attester outage can never become a protocol outage: sources can
+always be paused to stop capital allocation while the attester infrastructure is restored.
+
 ## Circuit Breaker (issue #817)
 
 The vault trips itself automatically rather than waiting for an operator to notice a problem. Four independently-configurable conditions escalate a graded severity (`Normal` → `Throttled` → `DepositsHalted` → `FullHalt`):
@@ -144,6 +205,87 @@ When encryption is extended to a new domain, existing plaintext rows are backfil
 
 Plaintext is never dropped in the same step that introduces ciphertext.
 
+## Supply-Chain Security
+
+Nester implements defence-in-depth for software supply-chain security, covering all ecosystems in the monorepo (Go, npm, Rust Cargo, Python pip, and CI/containers).
+
+### Software Bill of Materials (SBOM)
+
+Every CI build generates a CycloneDX-format SBOM for each deployable artifact affected by the change set:
+- **Go API**: `cyclonedx-gomod` generates the Go module SBOM
+- **Frontend (npm/pnpm)**: `syft` generates the pnpm dependency tree SBOM (catalogs `pnpm-lock.yaml` directly)
+- **Intelligence (Python)**: `syft` generates the Python package SBOM
+- **Contracts (Rust)**: `syft` generates the Rust crate SBOM
+
+SBOM generation is mandatory for the artifacts touched by a build: a generator failure fails the job, and the artifact upload is configured with `if-no-files-found: error` so a build with missing SBOMs cannot go green. SBOMs are uploaded as build artifacts and retained per build, so any deployed version has an exact, queryable record of its dependency contents.
+
+### Dependency Pinning and Integrity
+
+All package dependencies are pinned to exact versions with integrity verification:
+- **Go**: `go.sum` with checksum database (`GOSUMDB`) verification
+- **npm**: Lockfile (`pnpm-lock.yaml`) with integrity hashes; CI uses `--frozen-lockfile` to reject unrecorded changes
+- **Rust**: `Cargo.lock` with verified crate checksums
+- **Python**: `requirements.txt` version pins audited by `pip-audit` in CI
+
+CI fails the build if integrity verification fails for any ecosystem. CI tooling is pinned as well: third-party GitHub Actions are pinned to immutable commit SHAs (see below) and the SBOM generators (`cyclonedx-gomod`, `syft`) are installed from exact release versions, with downloaded binaries verified against published checksums.
+
+### CI Action Pinning
+
+All third-party GitHub Actions are pinned to immutable commit SHAs rather than mutable version tags. A `@v4` tag can be repointed by the action owner; a SHA cannot. Each SHA is annotated with the equivalent semver tag for readability.
+
+The following actions are pinned across all workflows:
+- `actions/checkout`, `actions/setup-node`, `actions/setup-go`, `actions/setup-python`
+- `pnpm/action-setup`, `dorny/paths-filter`, `dtolnay/rust-toolchain`
+- `github/codeql-action/*`, `semgrep/semgrep-action`, `dependabot/fetch-metadata`
+- `actions/upload-artifact`
+
+### Provenance Verification
+
+Where available, dependencies and actions with build provenance/attestations are preferred and verified:
+- **GitHub Actions**: Official `actions/*` and `github/*` actions publish signed attestations via `attestations.write` permission
+- **npm packages**: Packages with provenance attestations (via npm registry) are preferred
+- **Go modules**: Go checksum database (`sum.golang.org`) provides transparency log verification
+
+Coverage is documented and reviewed as part of new-dependency introduction.
+
+### Vulnerability Scanning Gates
+
+Automated vulnerability scanning runs on every PR and push across all ecosystems:
+
+| Scanner | Ecosystem | Policy |
+|---------|-----------|--------|
+| `gitleaks` | Secrets | No secrets in any commit |
+| `govulncheck` | Go (api) | Known critical/high blocks; accepted vulns must be waived in `.vulnignore` with a future review date, owner, and status |
+| `gosec` | Go (api) | Medium+ severity; warnings only |
+| `cargo-audit` | Rust (contracts) | All advisories; warnings only |
+| `pnpm audit` | npm (dapp/website) | Moderate+ fails; warnings only |
+| `pip-audit` | Python (intelligence) | Any reported finding fails with JSON report |
+| `bandit` | Python (intelligence) | High-confidence issues |
+| `semgrep` | TypeScript/Next.js | OSS + Pro rules (TypeScript, React, Next.js, secrets) |
+| `CodeQL` | Go, JS/TS, Python | All queries, security-extended suite |
+
+A known vulnerability in a production dependency blocks the merge/release until remediated or explicitly waived.
+
+### Typosquat Detection
+
+New npm dependencies are automatically checked for typosquatting patterns (Levenshtein distance ≤ 2 from known popular packages) during CI. Suspicious matches are surfaced as warnings for manual review before merge.
+
+### Dependency Introduction Control
+
+Adding a new dependency follows this gated process:
+1. Dependabot or developer proposes the change in a PR
+2. CI runs vulnerability scans across all ecosystems
+3. Typosquat detection checks the new package name
+4. For significant additions, a brief review of the package's provenance and health is required
+5. The PR must pass all CI gates before merge
+
+### Waiver Process
+
+`.vulnignore` is the single source of truth for accepted vulnerabilities and is enforced by CI:
+- Every entry requires a documented justification, a time-bounded review date (`Review date: YYYY-MM-DD`), an owner, and a status
+- CI parses `.vulnignore` when filtering vulnerability-scan results and fails the build if any waiver is expired, malformed, or ownerless
+- Waivers are auditable and reviewed as part of the release process; permanent silent suppressions are not permitted
+
 ## Known and Accepted Vulnerabilities
 
 We maintain a list of known vulnerabilities in our dependency chain that we have assessed and accepted based on their risk profile:
@@ -152,7 +294,7 @@ We maintain a list of known vulnerabilities in our dependency chain that we have
 |----|--------|----------|--------|--------|
 | **GO-2026-4316** | `github.com/go-chi/chi` | Medium | Open redirect in unused `RedirectSlashes` middleware. Transitive dependency via `github.com/stellar/go-stellar-sdk`. Middleware not used in codebase. Waiting for upstream fix. | Accepted |
 
-**Mitigation strategy:** Our CI/CD pipeline (`govulncheck` step in `.github/workflows/security.yml`) explicitly allows known accepted vulnerabilities and only fails on new or unreviewed vulnerabilities.
+**Mitigation strategy:** Our CI/CD pipeline (`govulncheck` steps in `.github/workflows/ci.yml` and `.github/workflows/security.yml`) reads the waiver list from `.vulnignore`, only allows vulnerabilities explicitly waived there, fails on any new or unreviewed vulnerability, and fails the build if a waiver is expired, malformed, or ownerless.
 
 To report a vulnerability not listed here, see [Reporting a Vulnerability](#reporting-a-vulnerability) above.
 

@@ -268,12 +268,13 @@ func applyIndexedEventWithCursor(
 // ledger order.
 //
 // That monotonicity assumes an append-only ledger history. A reorg needs the
-// cursor moved BACKWARDS to the fork point, which GREATEST forbids, so the
-// reorg machinery in reorg_indexer.go cannot be wired to this path as-is —
-// see "Not covered: ledger reorganisations" in docs/event-indexer-replay.md
-// for the two incompatibilities to resolve first. Do not simply drop GREATEST
-// to enable a rewind: it is what stops out-of-order delivery from walking the
-// cursor backwards over already-committed events.
+// cursor moved BACKWARDS to the fork point, which GREATEST forbids. Reorg
+// handling is an accepted, documented exposure rather than a gap to be closed
+// here (#1089): see "Not covered: ledger reorganisations" in
+// docs/event-indexer-replay.md for the concrete risk and the prerequisites.
+// Do not simply drop GREATEST to enable a rewind: it is what stops
+// out-of-order delivery from walking the cursor backwards over
+// already-committed events.
 func advanceCursorTx(ctx context.Context, tx *sql.Tx, ledger uint64) error {
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO system_state (key, value, updated_at)

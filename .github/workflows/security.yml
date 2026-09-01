@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - uses: pnpm/action-setup@v4
 
@@ -50,7 +50,7 @@ jobs:
       # "Path Validation Error: Path(s) specified in the action for caching
       # do(es) not exist" even when every audit step passed.
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
         with:
           node-version: 22
 
@@ -82,16 +82,23 @@ jobs:
         working-directory: ${{ matrix.module }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.3.0
         with:
           go-version-file: ${{ matrix.module }}/go.mod
           cache: true
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # Pinned (#1221): an unpinned @latest means whatever the registry
+        # serves at that moment runs in CI with repository context, and a
+        # rerun of a green build can turn red with no line changed. The pin
+        # lives in security-scanner-versions.env so ci.yml and this workflow
+        # can't drift apart; see that file for the update cadence.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
       - name: Run govulncheck
         run: |
@@ -99,16 +106,19 @@ jobs:
           OUTPUT=$(govulncheck ./... 2>&1)
           EXIT_CODE=$?
           echo "$OUTPUT"
-          
+
+          # Validate .vulnignore unconditionally: an expired, malformed, or
+          # ownerless waiver fails the job regardless of scan results. The
+          # printed accepted IDs are used to filter findings below.
+          ACCEPTED=$(python3 "${{ github.workspace }}/scripts/validate_vulnignore.py" "${{ github.workspace }}/.vulnignore") || exit 1
+
           # Exit code 0 = no vulnerabilities
           # Exit code 1 = error running govulncheck
           # Exit code 3 = vulnerabilities found
-          
+
           if [ $EXIT_CODE -eq 0 ]; then
             exit 0
           elif [ $EXIT_CODE -eq 3 ]; then
-            # Allow if every reported vuln ID is in the accepted list
-            ACCEPTED="GO-2026-4316 GO-2026-5004 GO-2026-5037 GO-2026-5039"
             UNKNOWN=$(echo "$OUTPUT" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u | while read id; do
               echo "$ACCEPTED" | grep -qw "$id" || echo "$id"
             done)
@@ -130,10 +140,10 @@ jobs:
         working-directory: packages/contracts
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -149,10 +159,10 @@ jobs:
         working-directory: apps/intelligence
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.5.0
         with:
           python-version: "3.12"
 
@@ -164,7 +174,8 @@ jobs:
         # failure of this step — the report is still written and the severity
         # gates below decide what blocks. Only a missing report is fatal, and
         # the gates raise on that themselves.
-        run: pip-audit -r requirements.txt --format json --output pip-audit-report.json || true
+        continue-on-error: true
+        run: pip-audit -r requirements.txt --format json --output pip-audit-report.json
 
       - name: Warn on moderate vulnerabilities
         run: |
@@ -201,7 +212,10 @@ jobs:
               print("No moderate Python vulnerabilities detected")
           PY
 
-      - name: Fail on high and critical vulnerabilities
+      - name: Fail on any reported vulnerability
+        # pip-audit JSON does not expose severity or cvss fields, so filtering
+        # on them would silently drop every finding and let a vulnerable
+        # dependency pass. Fail on any reported finding instead.
         run: |
           python - <<'PY'
           import json
@@ -218,13 +232,7 @@ jobs:
 
           for dep in dependencies:
               for vuln in dep.get("vulns", []):
-                  severity = str(vuln.get("severity", "")).lower()
-                  cvss = vuln.get("cvss")
-                  if severity in {"high", "critical"}:
-                      vulns.append(vuln)
-                      continue
-                  if isinstance(cvss, (int, float)) and cvss >= 7.0:
-                      vulns.append(vuln)
+                  vulns.append(vuln)
 
           if vulns:
               print(f"Found {len(vulns)} high/critical Python vulnerabilities")
@@ -232,7 +240,7 @@ jobs:
                   print(f"  {vuln.get('id', 'unknown')}: {vuln.get('description', '')[:120]}")
               raise SystemExit(1)
 
-          print("No high/critical Python vulnerabilities detected")
+          print("No Python vulnerabilities detected")
           PY
 
   codeql:
@@ -244,15 +252,15 @@ jobs:
         language: ["go", "javascript-typescript", "python"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
         with:
           languages: ${{ matrix.language }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3

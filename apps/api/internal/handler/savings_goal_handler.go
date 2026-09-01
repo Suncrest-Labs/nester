@@ -44,6 +44,7 @@ type SavingsGoalManager interface {
 	ListContributions(ctx context.Context, userID, goalID uuid.UUID, params listquery.PageParams) ([]savingsgoal.GoalContribution, int, string, error)
 	ListTemplates(ctx context.Context) ([]savingsgoal.GoalTemplate, error)
 	CreateFromTemplate(ctx context.Context, userID uuid.UUID, in service.CreateFromTemplateInput) (savingsgoal.SavingsGoal, error)
+	UpdateNotes(ctx context.Context, userID, goalID uuid.UUID, notes string) (savingsgoal.SavingsGoal, error)
 }
 
 type SavingsGoalHandler struct {
@@ -331,11 +332,23 @@ func (h *SavingsGoalHandler) coaching(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadGateway, response.Err(http.StatusBadGateway, "UPSTREAM_ERROR", err.Error()))
 		return
 	}
+	if result != nil && result.ProgressAssessment != "" {
+		if _, err := h.svc.UpdateNotes(r.Context(), userID, goalID, result.ProgressAssessment); err != nil {
+			logpkg.FromContext(r.Context()).Error("failed to persist coaching summary to goal notes", "goal_id", goalID, "error", err.Error())
+		}
+	}
 	response.WriteJSON(w, http.StatusOK, response.OK(result))
 }
 
 // goalCoachingRequest builds the intelligence service request payload from an
 // already-progress-enriched savings goal.
+//
+// TargetAmount/CurrentAmount are converted to float64 deliberately, not by a
+// discarded return value (#1223): intelligence.SavingsGoalContext mirrors the
+// intelligence service's pydantic model, which declares these fields as
+// floats, so float64 is genuinely required at this boundary. The discarded
+// exactness flag is safe to ignore here — coaching narrative/milestones are
+// informational, not the source of truth for a user's balance.
 func goalCoachingRequest(goal savingsgoal.SavingsGoal) intelligence.CoachingRequest {
 	targetAmount, _ := goal.TargetAmount.Float64()
 	currentAmount, _ := goal.CurrentAmount.Float64()

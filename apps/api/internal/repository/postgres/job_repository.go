@@ -203,6 +203,24 @@ func (r *JobRepository) Heartbeat(ctx context.Context, id uuid.UUID, leasedUntil
 	return nil
 }
 
+// JobStatus returns a job's current status. It exists for the transactional
+// outbox relay (#1049), which holds an aggregate's next side effect until the
+// job carrying the current one is terminal, and so has to be able to read that
+// state back. Deliberately not part of jobqueue.Repository: the worker pool
+// has no use for it, and widening that port would force every in-memory fake
+// of it to grow a method it never calls.
+func (r *JobRepository) JobStatus(ctx context.Context, id uuid.UUID) (jobqueue.Status, error) {
+	var status string
+	err := r.db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = $1`, id).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", jobqueue.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return jobqueue.Status(status), nil
+}
+
 // Stats returns aggregate queue counters plus per-type live depth.
 func (r *JobRepository) Stats(ctx context.Context, now time.Time) (jobqueue.Stats, error) {
 	var s jobqueue.Stats

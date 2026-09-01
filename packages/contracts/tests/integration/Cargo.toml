@@ -21,3 +21,5 @@ yield-registry-contract      = { path = "../../contracts/yield_registry" }
 allocation-strategy-contract = { path = "../../contracts/allocation_strategy" }
 proptest                     = "1.4"
 treasury-contract            = { path = "../../contracts/treasury" }
+ed25519-dalek                = { version = "=2.1.1", features = ["rand_core"] }
+rand                         = { version = "0.8" }

@@ -60,6 +60,15 @@ pub enum ContractError {
     // PriceUnavailable -> reuse StrategyNotFound (6)
     // AssetNotInBasket -> reuse StrategyNotFound (6)
     // PriceDeviationExceeded -> reuse SlippageExceeded (17)
+    // Attestation errors (issue #820 — signature-attested APY/TVL updates).
+    // Numbered after the base branch's highest rather than at 36-40 as this
+    // branch originally had them: discriminants are the on-chain error codes
+    // clients match on, so the existing ones must not shift.
+    AttesterNotRegistered = 46,
+    SignatureInvalid = 47,
+    AttestationExpired = 48,
+    NonceReused = 49,
+    ThresholdNotMet = 50,
 }
 
 // Alias for backwards compatibility

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -49,9 +50,10 @@ func serveDetailedHealth(t *testing.T, breakers map[metrics.Upstream]*breaker.Br
 	var ready atomic.Bool
 	ready.Store(true)
 
-	handler := detailedHealthHandler(detailedHealthDeps{
+	handler := detailedHealthHandler(healthDeps{
 		ready:        &ready,
-		dbTimeout:    time.Millisecond,
+		pingDB:       func(context.Context) error { return nil },
+		probeTimeout: time.Millisecond,
 		httpClient:   &http.Client{Timeout: time.Millisecond},
 		horizonURL:   "http://127.0.0.1:1/horizon",
 		rpcURL:       "http://127.0.0.1:1/rpc",
@@ -133,9 +135,10 @@ func TestOpenBreakerDegradesStatusWithoutFailingReadiness(t *testing.T) {
 	var ready atomic.Bool
 	ready.Store(true)
 
-	handler := detailedHealthHandler(detailedHealthDeps{
+	handler := detailedHealthHandler(healthDeps{
 		ready:        &ready,
-		dbTimeout:    time.Millisecond,
+		pingDB:       func(context.Context) error { return nil },
+		probeTimeout: time.Millisecond,
 		httpClient:   &http.Client{Timeout: time.Millisecond},
 		horizonURL:   "http://127.0.0.1:1/horizon",
 		rpcURL:       "http://127.0.0.1:1/rpc",

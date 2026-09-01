@@ -1,6 +1,7 @@
 package stellar
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/stellar/go/strkey"
@@ -418,7 +420,54 @@ type rpcResponse[T any] struct {
 // getTransaction are reads and are retried; sendTransaction is not, and never
 // can be here — see idempotentRPCMethods.
 func (c *ContractInvoker) rpcCall(ctx context.Context, method string, params, result any) error {
-	return c.rpc.call(ctx, method, params, result)
+	// One span per JSON-RPC round trip so the trace waterfall separates
+	// simulate, submit, and each poll of getTransaction. Neither params nor
+	// the response body is recorded: both carry transaction XDR.
+	ctx, span := startRPCSpan(ctx, method)
+	defer span.End()
+
+	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: 1, Method: method, Params: params})
+	if err != nil {
+		telemetry.RecordError(span, err)
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.rpcURL, bytes.NewReader(body))
+	if err != nil {
+		telemetry.RecordError(span, err)
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		wrapped := fmt.Errorf("rpc %s: %w", method, err)
+		telemetry.RecordError(span, wrapped)
+		return wrapped
+	}
+	defer resp.Body.Close()
+
+	span.SetAttributes(semconv.HTTPResponseStatusCode(resp.StatusCode))
+
+	// A non-2xx response is an outage, not a result (#1090). Decoding it anyway
+	// is how a 500 carrying a JSON-RPC-shaped body becomes a *successful* call
+	// that returns a zero value: sendTransaction reports no error and an empty
+	// transaction hash, so a submission is recorded that the chain never saw
+	// and reconciliation has no hash to look up; simulateTransaction reports an
+	// empty simulation, so a write is signed and submitted unsimulated.
+	//
+	// The body is deliberately not included in the error, for the same reason
+	// nothing else in this function records it: it carries transaction XDR.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		wrapped := fmt.Errorf("rpc %s: unexpected status %d", method, resp.StatusCode)
+		telemetry.RecordError(span, wrapped)
+		return wrapped
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		telemetry.RecordError(span, err)
+		return err
+	}
+	return nil
 }
 
 func (c *ContractInvoker) simulate(ctx context.Context, txB64 string) (simulateResult, error) {

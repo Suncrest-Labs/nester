@@ -68,6 +68,12 @@ func (r *ContractReader) rebuildRPC() {
 
 // TotalAssets calls the vault_token total_assets() view and converts the i128
 // return value (7-decimal stroops) to a decimal USDC amount.
+//
+// NOT for reconciliation: this method returns DISPLAY units, and *ContractReader
+// therefore satisfies reconciliation.VaultBalanceReader with the wrong unit.
+// Reconciliation compares against vaults.current_balance, which stores raw
+// stroops — wire StroopsBalanceReader there, never this reader directly, or
+// every vault diverges by a factor of 1e7.
 func (r *ContractReader) TotalAssets(ctx context.Context, contractAddress string) (decimal.Decimal, error) {
 	return r.VaultBalance(ctx, contractAddress)
 }
@@ -80,6 +86,42 @@ func (r *ContractReader) VaultBalance(ctx context.Context, contractAddress strin
 	}
 	// Soroban vault amounts are stored in 7-decimal stroops (Stellar standard).
 	return decimal.NewFromInt(raw).Shift(-7), nil
+}
+
+// TotalAssetsStroops calls the vault_token total_assets() view and returns the
+// i128 value as raw stroops, without the display rescale TotalAssets applies.
+//
+// This is the reconciliation read (nester#1082). The event indexer stores
+// vault balances "as emitted" — raw stroop integers, not display USDC (see
+// docs/event-indexer-replay.md fixture rule 7 and migration 103, which widened
+// vaults.current_balance specifically so i128 stroop amounts round-trip
+// exactly). Comparing that column against the chain therefore has to happen in
+// stroops: rescaling either side would turn an exact integer comparison into a
+// decimal one and hide single-stroop bookkeeping errors — the exact class of
+// divergence reconciliation exists to catch.
+//
+// Known bound: simulateI128 rejects values outside int64 (~9.2e18 stroops,
+// ~922 billion USDC). A vault past that errors here rather than reporting a
+// truncated balance; the balance comparator logs and skips it each pass, so
+// the bound is visible in the logs, never silently wrong.
+func (r *ContractReader) TotalAssetsStroops(ctx context.Context, contractAddress string) (decimal.Decimal, error) {
+	raw, err := r.simulateI128(ctx, contractAddress, "total_assets", nil)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return decimal.NewFromInt(raw), nil
+}
+
+// StroopsBalanceReader adapts ContractReader to the reconciliation package's
+// VaultBalanceReader interface (TotalAssets) while keeping the raw-stroops
+// unit contract documented on TotalAssetsStroops. The reconciliation engine
+// asks for "total assets" and must receive the same unit the database stores.
+type StroopsBalanceReader struct {
+	Reader *ContractReader
+}
+
+func (s StroopsBalanceReader) TotalAssets(ctx context.Context, contractAddress string) (decimal.Decimal, error) {
+	return s.Reader.TotalAssetsStroops(ctx, contractAddress)
 }
 
 // SourceAPYBPS calls yield_registry get_source_performance(id) and returns
