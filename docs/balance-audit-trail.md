@@ -1,12 +1,13 @@
 # Balance audit trail (nester#1124)
 
-Every balance-changing vault operation (deposit, withdrawal, harvest) appends
-one row to `balance_audit_log` (migration `apps/api/migrations/108_create_balance_audit_log.up.sql`):
+Every balance-changing vault operation that this PR wires up (deposit,
+withdrawal, harvest) appends one row to `balance_audit_log` (migration
+`apps/api/migrations/118_create_balance_audit_log.up.sql`):
 
 | column           | meaning                                              |
 |------------------|-------------------------------------------------------|
 | `actor`          | who caused the change — a user id, or `system:<job>` for a background job (e.g. `system:harvest`) |
-| `operation`      | `deposit` / `withdrawal` / `harvest` / `rebalance_*` / `emergency_withdraw` |
+| `operation`      | `deposit` / `withdrawal` / `harvest` today; `rebalance_*` / `emergency_withdraw` are defined as operation values but not yet written by any code path — tracked as follow-up work |
 | `amount`         | magnitude of the change                                |
 | `balance_before` | vault `current_balance` immediately before             |
 | `balance_after`  | vault `current_balance` immediately after              |
