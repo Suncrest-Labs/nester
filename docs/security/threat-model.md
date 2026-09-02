@@ -59,7 +59,7 @@ coaching, and vault recommendations.
 
 - Transport: HTTPS
 - Authentication: SEP-53 challenge-response → JWT issuance
-- Controls: CORS, rate limiting (global/auth/write/wallet/settlement), request body size limit (1 MB), security headers
+- Controls: CORS, rate limiting (global/auth/write/wallet), request body size limit (1 MB), security headers
 
 ### TB2: Go API ↔ PostgreSQL
 
@@ -126,8 +126,6 @@ coaching, and vault recommendations.
 | GET | `/api/v1/transactions/{hash}` | Get transaction by hash |
 | GET | `/api/v1/transactions` | List user transactions |
 | GET | `/api/v1/portfolio/summary` | Portfolio summary |
-| POST | `/api/v1/settlements` | Create settlement |
-| PATCH | `/api/v1/settlements/{id}` | Update settlement |
 | GET | `/api/v1/savings-goals/*` | Savings goals CRUD |
 | POST | `/api/v1/savings-goals` | Create savings goal |
 
@@ -227,7 +225,6 @@ coaching, and vault recommendations.
 | Auth | 10/min | IP | Challenge + verify |
 | Write | 20/min | IP | POST/PUT/PATCH/DELETE |
 | Wallet | 60/min | Wallet address | Vault operations |
-| Settlement | 5/min | User ID | Settlement creation |
 | Rebalance | 3/hr | — | Admin rebalance |
 
 - Redis-backed (distributed), falls back to in-memory when Redis unavailable

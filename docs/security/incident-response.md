@@ -300,7 +300,6 @@ Rotate these if the API host was compromised, since they shared its environment:
 |---|---|
 | `AUTH_JWT_SECRET` | **Logs out every user.** No per-token revocation exists. Accept it — a forged token is undetectable, so rotation is the only remedy |
 | `DATABASE_DSN` | Requires an API restart |
-| `FLUTTERWAVE_SECRET_KEY`, `PAYSTACK_SECRET_KEY` | Rotate in the provider dashboard first |
 | `INTELLIGENCE_SERVICE_API_KEY`, `NESTER_SERVICE_API_KEY` | Update on both sides together |
 | `ACCOUNT_CIPHER_KEYS` | See D.3 — different procedure, do not simply replace |
 
