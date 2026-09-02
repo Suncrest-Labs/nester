@@ -115,47 +115,10 @@ services:
       NEXT_PUBLIC_API_URL: http://localhost:8080/api/v1
       NEXT_PUBLIC_WS_URL: ws://localhost:8080/ws
       NEXT_PUBLIC_NETWORK: testnet
-      INTELLIGENCE_SERVICE_URL: http://intelligence:8000
     volumes:
       - ./apps/dapp/frontend:/app
       - /app/node_modules
       - /app/.next
-
-  intelligence:
-    build:
-      context: ./apps/intelligence
-    ports:
-      - "127.0.0.1:8000:8000"
-    env_file:
-      # Optional: a fresh clone has no .env yet, and a hard requirement here
-      # makes every `docker compose` command fail to parse — even ones that
-      # never start this service.
-      - path: ./apps/intelligence/.env
-        required: false
-    environment:
-      INTELLIGENCE_REDIS_URL: redis://redis:6379/0
-      # See the api service above for why the endpoint is not localhost and
-      # why the sample ratio is 1.0 under the collector.
-      INTELLIGENCE_TRACING_ENABLED: ${INTELLIGENCE_TRACING_ENABLED:-false}
-      INTELLIGENCE_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      INTELLIGENCE_OTEL_EXPORTER_OTLP_INSECURE: "true"
-      INTELLIGENCE_TRACING_SAMPLE_RATIO: ${INTELLIGENCE_TRACING_SAMPLE_RATIO:-1.0}
-      # SLI exposition (nester#1056). Enabled by default because these are the
-      # unsampled counters an error budget is computed from; a service whose
-      # SLI stops being recorded reports a perfect success rate rather than an
-      # outage. The token is empty locally, which disables the scrape auth
-      # check — set it in any environment where the port is reachable.
-      INTELLIGENCE_METRICS_ENABLED: ${INTELLIGENCE_METRICS_ENABLED:-true}
-      INTELLIGENCE_METRICS_TOKEN: ${INTELLIGENCE_METRICS_TOKEN:-}
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
   # --- Local observability: tracing (nester#1054) -----------------------
   #
@@ -172,10 +135,10 @@ services:
   # ordinary development.
   #
   # To send traces, run the app services with tracing switched on:
-  #     TRACING_ENABLED=true INTELLIGENCE_TRACING_ENABLED=true   #       docker compose --profile observability up
+  #     TRACING_ENABLED=true   #       docker compose --profile observability up
   #
   # Then open the Jaeger UI at http://localhost:16686 and pick the
-  # "nester-api" or "nester-intelligence" service.
+  # "nester-api" service.
   jaeger:
     image: jaegertracing/all-in-one:1.62.0
     profiles: ["observability"]

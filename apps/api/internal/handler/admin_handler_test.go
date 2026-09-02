@@ -16,7 +16,6 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
@@ -80,7 +79,6 @@ func newAdminHandlerStubService(vaultID uuid.UUID) *adminHandlerStubService {
 				ID:             userID,
 				WalletAddress:  "GADMINWALLET",
 				DisplayName:    "Admin User",
-				KYCStatus:      user.KYCStatusVerified,
 				VaultCount:     1,
 				TotalDeposited: decimal.RequireFromString("1000.00"),
 				CreatedAt:      now,

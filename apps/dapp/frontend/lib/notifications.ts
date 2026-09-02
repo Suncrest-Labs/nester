@@ -8,7 +8,6 @@ export type NotificationType =
     | "breaker_trip"
     | "deposit_confirmed"
     | "withdrawal_processed"
-    | "ai_alert"
     | "rebalance_event"
     | "goal_milestone"
     | "nudge_recommendation"
@@ -66,7 +65,7 @@ export const CATEGORY_METADATA: Record<
     },
     nudge: {
         label: "Nudges & Milestones",
-        description: "Goal milestone achievements, Prometheus AI recommendations, and promotional updates.",
+        description: "Goal milestone achievements, savings nudges, and promotional updates.",
         alwaysOn: false,
     },
 };
@@ -110,7 +109,6 @@ export function mapTypeToCategoryAndPriority(type: NotificationType): {
         case "withdrawal_processed":
         case "rebalance_event":
             return { category: "transactional", priority: "transactional" };
-        case "ai_alert":
         case "goal_milestone":
         case "nudge_recommendation":
         case "promotional":
@@ -160,19 +158,6 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         actionUrl: "/vaults",
         actionLabel: "View Vault",
         mergedIds: ["seed-2"],
-    },
-    {
-        id: "seed-3",
-        type: "ai_alert",
-        category: "nudge",
-        priority: "nudge",
-        title: "Prometheus Alert",
-        message: "Prometheus: Your Balanced Vault APY dropped to 7.2%. Consider reviewing.",
-        timestamp: isoMinutesAgo(56),
-        read: false,
-        actionUrl: "/savings",
-        actionLabel: "Review Strategy",
-        mergedIds: ["seed-3"],
     },
     {
         id: "seed-4",

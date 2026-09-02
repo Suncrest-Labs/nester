@@ -39,7 +39,6 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
-	"github.com/suncrestlabs/nester/apps/api/internal/objectstorage"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
 	"github.com/suncrestlabs/nester/apps/api/internal/reconciliation"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
@@ -348,31 +347,8 @@ func run() error {
 
 	userRepository := postgres.NewUserRepository(db)
 	userService := service.NewUserService(userRepository)
-	if accountCipher != nil {
-		userService.WithCipher(accountCipher)
-	}
 	userHandler := handler.NewUserHandler(userService)
-	userVaultsSvc := service.NewUserVaultsService(vaultRepository)
-	userHandler.SetUserVaultsService(userVaultsSvc)
 
-	// KYC document storage (nester#1191). KYC_STORAGE_DIR defaults to a local
-	// directory rather than requiring a cloud object-storage decision to be
-	// made before the endpoint can accept uploads at all — see
-	// internal/objectstorage's package doc for why this is a real store, not
-	// a placeholder, and what a production cloud store would replace it
-	// with. Left unset (nil) only if the directory genuinely cannot be
-	// created, in which case submitKYC rejects uploads (503) rather than
-	// silently discarding them.
-	kycStorageDir := os.Getenv("KYC_STORAGE_DIR")
-	if kycStorageDir == "" {
-		kycStorageDir = "./data/kyc-documents"
-	}
-	kycStore, kycStoreErr := objectstorage.NewLocalDiskStore(kycStorageDir, handler.MaxKYCDocumentBytes, handler.KYCAllowedContentTypes)
-	if kycStoreErr != nil {
-		slog.Warn("KYC document storage unavailable — submitKYC will reject uploads until this is fixed", "error", kycStoreErr, "dir", kycStorageDir)
-	} else {
-		userHandler.SetKYCStore(kycStore)
-	}
 	notificationRepository := postgres.NewNotificationRepository(db)
 	notificationHandler := handler.NewNotificationHandler(notificationRepository)
 
@@ -1016,26 +992,8 @@ func run() error {
 
 	// Savings goals
 	savingsGoalRepo := postgres.NewSavingsGoalRepository(db)
-	// Intelligence proxy (forwards to Python service)
-	intelURL := cfg.Intelligence().ServiceURL()
-	intelProxy := service.NewIntelligenceProxy(intelURL, cfg.Intelligence().Timeout())
-	intelProxy.SetHTTPClient(appMetrics.InstrumentClient(
-		&http.Client{Timeout: cfg.Intelligence().Timeout()}, metrics.UpstreamIntelligence,
-	))
-	prometheusClient := service.NewPrometheusClient(service.PrometheusConfig{
-		BaseURL: intelURL,
-		APIKey:  cfg.Intelligence().ServiceAPIKey(),
-		Timeout: cfg.Intelligence().Timeout(),
-	})
-	// The relay carries the Anthropic-backed intelligence calls, which are
-	// the slowest thing in any request path that touches them.
-	prometheusClient.SetHTTPClient(appMetrics.InstrumentClient(
-		&http.Client{Timeout: cfg.Intelligence().Timeout()}, metrics.UpstreamAnthropic,
-	))
-
 	nudgeCopyGen := service.CompositeCopyGenerator{
 		Template: nudge.TemplateCopyGenerator{},
-		LLM:      service.LLMCopyGenerator{Client: prometheusClient},
 	}
 
 	savingsStreakRepo := postgres.NewSavingsStreakRepository(db)
@@ -1408,52 +1366,6 @@ func run() error {
 	)
 	vaultHandler.SetRebalanceRateLimiter(rebalanceRateLimiter)
 
-	intelligenceHandler := handler.NewIntelligenceHandler(intelProxy, prometheusClient)
-	intelligenceHandler.Register(mux)
-
-	// AI progress coaching (#112): on-demand endpoint plus a weekly background nudge.
-	savingsGoalHandler.SetCoachingProvider(prometheusClient)
-	goalCoachingScheduler := service.NewGoalCoachingScheduler(
-		savingsGoalRepo,
-		prometheusClient,
-		nudgeNotificationDispatcher,
-		baseLogger.WithGroup("goal-coaching"),
-		nudgeHistoryRepo,
-	)
-	goalCoachingCtx, cancelGoalCoaching := context.WithCancel(context.Background())
-	defer cancelGoalCoaching()
-	go goalCoachingScheduler.Run(goalCoachingCtx, 7*24*time.Hour)
-
-	intelRelay := service.NewRelayHandler(http.DefaultClient, service.RelayConfig{
-		BaseURL: intelURL,
-		APIKey:  cfg.Intelligence().ServiceAPIKey(),
-		Timeout: cfg.Intelligence().Timeout(),
-	})
-	intelligenceRelayHandler := handler.NewIntelligenceRelayHandler(intelRelay)
-	intelligenceRelayHandler.Register(mux)
-
-	// Periodic financial insight digest (#859): a deterministic ledger
-	// source endpoint (consumed by the intelligence service via the relay),
-	// a cache/audit table, and a leader-elected daily job that generates and
-	// delivers a digest once per user per completed period.
-	digestRepository := postgres.NewDigestRepository(db)
-	digestLedgerService := service.NewDigestLedgerService(savingsGoalRepo, yieldHarvestRepository, savingsStreakRepo)
-	digestHandler := handler.NewDigestHandler(digestLedgerService, digestRepository)
-	digestHandler.Register(mux)
-
-	digestJob := scheduler.NewDigestJob(
-		scheduler.DigestJobConfig{Enabled: true, Interval: 24 * time.Hour},
-		notificationRepository,
-		digestRepository,
-		prometheusClient,
-		nudgeNotificationDispatcher,
-		baseLogger.WithGroup("digest"),
-	)
-	digestJob.SetLeaderChecker(schedulerLeadership)
-	digestCtx, cancelDigest := context.WithCancel(context.Background())
-	defer cancelDigest()
-	go digestJob.Run(digestCtx)
-
 	// Ledger balance verification job: recomputes balances from raw entries and asserts equality
 	ledgerVerificationJob := scheduler.NewLedgerBalanceVerificationJob(
 		scheduler.VerificationConfig{Enabled: true, Interval: 10 * time.Minute},
@@ -1488,11 +1400,6 @@ func run() error {
 
 	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
 	performanceSnapshotsHandler.Register(mux)
-
-	toolAuditRepo := postgres.NewToolAuditRepository(db)
-	toolAuditSvc := service.NewToolAuditService(toolAuditRepo)
-	toolAuditHandler := handler.NewToolAuditHandler(toolAuditSvc)
-	toolAuditHandler.Register(mux)
 
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
 
@@ -1592,9 +1499,9 @@ func run() error {
 
 	// costQuota meters downstream *work* per authenticated user, where the
 	// limiters above meter request *count* per IP. Both apply: a caller can
-	// sit well inside 100 requests/minute while saturating Anthropic,
-	// DeFiLlama and Soroban RPC, because a relay call and a profile read are
-	// not the same request.
+	// sit well inside 100 requests/minute while saturating DeFiLlama and
+	// Soroban RPC, because an expensive call and a profile read are not the
+	// same request.
 	//
 	// Placed after the authenticator so it keys by user (falling back to IP
 	// for anything still anonymous), and after idempotencyMiddleware so a

@@ -39,7 +39,6 @@ type Config struct {
 	server               ServerConfig
 	database             DatabaseConfig
 	stellar              StellarConfig
-	intelligence         IntelligenceConfig
 	allocation           AllocationConfig
 	redis                RedisConfig
 	auth                 AuthConfig
@@ -258,12 +257,6 @@ type AllocationConfig struct {
 	minWeightPercent int
 }
 
-type IntelligenceConfig struct {
-	baseURL       string
-	serviceAPIKey string
-	timeout       time.Duration
-}
-
 type AuthConfig struct {
 	secret                  string
 	serviceAPIKey           string
@@ -360,11 +353,7 @@ func Load() (*Config, error) {
 			withdrawalSlippageBps:          loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
 			harvestDefaultCompound:         loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
 		},
-		intelligence: IntelligenceConfig{
-			baseURL:       loader.stringDefault("INTELLIGENCE_BASE_URL", loader.stringDefault("INTELLIGENCE_SERVICE_URL", "http://localhost:8000")),
-			serviceAPIKey: loader.stringDefault("INTELLIGENCE_SERVICE_API_KEY", ""),
-			timeout:       loader.durationDefault("INTELLIGENCE_TIMEOUT", loader.durationDefault("INTELLIGENCE_SERVICE_TIMEOUT", 10*time.Second)),
-		},
+
 		allocation: AllocationConfig{
 			minWeightPercent: loader.intDefault("MIN_ALLOCATION_WEIGHT", 5),
 		},
@@ -413,7 +402,7 @@ func Load() (*Config, error) {
 
 			// 300 cost units/minute. An ordinary read costs 1, so normal
 			// browsing never approaches it (the global 100 req/min per IP
-			// binds first); an intelligence relay call costs 25, so the
+			// binds first); the most expensive calls cost 25, so the
 			// quota is what actually bounds the expensive traffic.
 			// Deliberately per-environment: staging can run tighter.
 			quotaEnabled:     loader.boolDefault("RATELIMIT_QUOTA_ENABLED", true),
@@ -626,26 +615,6 @@ func (c Config) Stellar() StellarConfig {
 
 func (c Config) Allocation() AllocationConfig {
 	return c.allocation
-}
-
-func (c Config) Intelligence() IntelligenceConfig {
-	return c.intelligence
-}
-
-func (i IntelligenceConfig) BaseURL() string {
-	return i.baseURL
-}
-
-func (i IntelligenceConfig) ServiceURL() string {
-	return i.baseURL
-}
-
-func (i IntelligenceConfig) ServiceAPIKey() string {
-	return i.serviceAPIKey
-}
-
-func (i IntelligenceConfig) Timeout() time.Duration {
-	return i.timeout
 }
 
 func (s StellarConfig) USDCIssuer() string {

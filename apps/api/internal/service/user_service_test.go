@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -52,26 +51,6 @@ func (m *mockUserRepository) GetRoles(_ context.Context, _ uuid.UUID) ([]string,
 	return []string{}, nil
 }
 
-func (m *mockUserRepository) SaveKYCDocument(_ context.Context, _ *user.KYCDocument, _ *user.EncryptedKYCDoc) error {
-	return nil
-}
-
-func (m *mockUserRepository) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, *user.EncryptedKYCDoc, error) {
-	return nil, nil, errors.New("no kyc document found")
-}
-
-func (m *mockUserRepository) UpdateKYCStatus(_ context.Context, userID uuid.UUID, status user.KYCStatus, reason *string, reviewedAt *time.Time) error {
-	u, err := m.GetByID(context.Background(), userID)
-	if err != nil {
-		return err
-	}
-	u.KYCStatus = status
-	u.KYCRejectionReason = reason
-	u.KYCReviewedAt = reviewedAt
-	m.users[userID] = u
-	return nil
-}
-
 func (m *mockUserRepository) UpdateProfile(_ context.Context, id uuid.UUID, patch user.ProfilePatch) (*user.User, error) {
 	u, err := m.GetByID(context.Background(), id)
 	if err != nil {
@@ -102,9 +81,6 @@ func TestUserService_RegisterUser(t *testing.T) {
 	}
 	if u.ID == uuid.Nil {
 		t.Errorf("expected generated UUID")
-	}
-	if u.KYCStatus != user.KYCStatusUnverified {
-		t.Errorf("expected unverified kyc status")
 	}
 
 	// Test duplicate wallet

@@ -44,13 +44,3 @@ scrape_configs:
         labels:
           service: api
 
-  # The intelligence service serves a single port, so its exposition is
-  # bearer-token guarded rather than isolated on a second listener. The local
-  # profile leaves INTELLIGENCE_METRICS_TOKEN empty, which disables the check;
-  # a deployed environment sets it and adds the matching authorization here.
-  - job_name: nester-intelligence
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["intelligence:8000"]
-        labels:
-          service: intelligence

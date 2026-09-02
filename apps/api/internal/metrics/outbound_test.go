@@ -134,7 +134,7 @@ func TestOutboundNeverLabelsSecrets(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	client := m.InstrumentClient(&http.Client{Timeout: 5 * time.Second}, UpstreamAnthropic)
+	client := m.InstrumentClient(&http.Client{Timeout: 5 * time.Second}, UpstreamDeFiLlama)
 
 	const secret = "sk-ant-super-secret-key"
 	req, err := http.NewRequest(http.MethodPost, upstream.URL+"/v1/messages?api_key="+secret, strings.NewReader(`{}`))
@@ -264,7 +264,7 @@ func TestInstrumentClientPreservesExistingTransport(t *testing.T) {
 		}, nil
 	})
 
-	client := m.InstrumentClient(&http.Client{Transport: base}, UpstreamIntelligence)
+	client := m.InstrumentClient(&http.Client{Transport: base}, UpstreamCoinGecko)
 
 	resp, err := client.Get("http://example.invalid/health")
 	if err != nil {
@@ -276,7 +276,7 @@ func TestInstrumentClientPreservesExistingTransport(t *testing.T) {
 		t.Fatal("the original transport was replaced instead of wrapped")
 	}
 	if got := counterValue(t, m.Registry(), "nester_outbound_requests_total", map[string]string{
-		"upstream": "intelligence",
+		"upstream": "coingecko",
 	}); got != 1 {
 		t.Fatalf("expected the wrapped request to be counted, got %v", got)
 	}

@@ -1,0 +1,7 @@
+# Local-only: 3001 is already taken on this machine by another app, so publish
+# the dapp on 3002 instead. Not committed; docker-compose.override.yml is
+# picked up automatically by `docker compose`.
+services:
+  frontend:
+    ports:
+      - "127.0.0.1:3002:3001"

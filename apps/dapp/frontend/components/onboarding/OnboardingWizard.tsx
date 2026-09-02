@@ -2,10 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, X, ChevronRight, ChevronLeft } from "lucide-react";
+import { X, ChevronRight, ChevronLeft } from "lucide-react";
 import { profileApi, type RiskProfile } from "@/lib/api/profile";
-import type { VaultRecommendationPlan } from "@/lib/api/intelligence";
-import { getStoredToken } from "@/lib/api/client";
 import { CreateVaultWizard } from "@/components/vault/CreateVaultWizard";
 import { cn } from "@/lib/utils";
 
@@ -64,8 +62,6 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
   const [goalText, setGoalText] = useState("");
   const [riskAnswers, setRiskAnswers] = useState<RiskProfile[]>([]);
   const [riskProfile, setRiskProfile] = useState<RiskProfile>("moderate");
-  const [recommendation, setRecommendation] = useState<VaultRecommendationPlan | null>(null);
-  const [loadingRec, setLoadingRec] = useState(false);
   const [showCreateVault, setShowCreateVault] = useState(false);
   const [error, setError] = useState("");
 
@@ -74,7 +70,6 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
       setStep(1);
       setGoalText("");
       setRiskAnswers([]);
-      setRecommendation(null);
       setError("");
     }
   }, [open]);
@@ -99,37 +94,12 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
     onClose();
   };
 
-  const loadRecommendation = async () => {
+  const loadRecommendation = () => {
     const profile = scoreRiskProfile(riskAnswers);
     setRiskProfile(profile);
-    setLoadingRec(true);
-    setError("");
-    try {
-      const token = getStoredToken();
-      const res = await fetch("/api/v1/recommend/vault", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          risk_tolerance: profile,
-          time_horizon_months: profile === "aggressive" ? 36 : profile === "moderate" ? 18 : 12,
-          initial_deposit_usdc: 500,
-          savings_goal: goalText,
-        }),
-      });
-      if (!res.ok) throw new Error("Recommendation failed");
-      const plan = (await res.json()) as VaultRecommendationPlan;
-      setRecommendation(plan);
-      setStep(3);
-    } catch {
-      setError("Could not load a personalized recommendation. You can still explore vaults.");
-      setStep(3);
-    } finally {
-      setLoadingRec(false);
-    }
+    setStep(3);
   };
+
 
   if (!open) return null;
 
@@ -221,37 +191,22 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
 
             {step === 3 && (
               <div>
-                {loadingRec && (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Sparkles className="h-4 w-4 animate-pulse" />
-                    Prometheus is building your recommendation…
-                  </div>
-                )}
                 {error && <p className="text-sm text-amber-700">{error}</p>}
-                {recommendation && (
-                  <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 text-sm">
-                    <p className="text-xs uppercase tracking-widest text-muted-foreground">
-                      Risk profile: {riskProfile}
-                    </p>
-                    <ul className="mt-3 space-y-2">
-                      {recommendation.recommended_vaults.map((v) => (
-                        <li key={v.vault_id} className="flex justify-between gap-2">
-                          <span>{v.rationale.slice(0, 60)}…</span>
-                          <span className="font-medium shrink-0">{v.allocation_pct}%</span>
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="mt-3 text-muted-foreground">
-                      Expected yield: ~${recommendation.expected_yield_usdc.toFixed(0)} USDC
-                    </p>
-                  </div>
-                )}
+                <div className="rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-4 text-sm">
+                  <p className="text-xs uppercase tracking-widest text-muted-foreground">
+                    Risk profile: {riskProfile}
+                  </p>
+                  <p className="mt-3 text-muted-foreground">
+                    Vaults are tiered Conservative / Balanced / Growth — pick the
+                    tier that matches your profile, or create your own vault.
+                  </p>
+                </div>
               </div>
             )}
 
             {step === 4 && (
               <p className="text-sm text-muted-foreground">
-                Launch the vault wizard to deploy your recommended strategy on Stellar.
+                Launch the vault wizard to deploy your strategy on Stellar.
               </p>
             )}
 
@@ -272,7 +227,7 @@ export function OnboardingWizard({ open, onClose, onComplete }: Props) {
                     disabled={step === 2 && riskAnswers.length < 3}
                     onClick={() => {
                       if (step === 1) setStep(2);
-                      else void loadRecommendation();
+                      else loadRecommendation();
                     }}
                     className="flex items-center gap-1 rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background disabled:opacity-40"
                   >

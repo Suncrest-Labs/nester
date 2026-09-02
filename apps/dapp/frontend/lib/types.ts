@@ -39,7 +39,6 @@ export interface PortfolioStats {
     totalBalance: number;
     totalYieldEarned: number;
     activeVaults: number;
-    prometheusInsights: number;
 }
 
 export type LoadingState = "loading" | "error" | "success" | "empty";

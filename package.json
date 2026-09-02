@@ -7,8 +7,7 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "website": "turbo run dev --filter=@nester/website",
-    "dapp": "turbo run dev --filter=@nester/dapp",
-    "intelligence": "turbo run dev --filter=@nester/intelligence"
+    "dapp": "turbo run dev --filter=@nester/dapp"
   },
   "devDependencies": {
     "turbo": "^2.3.3"

@@ -20,7 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       website: ${{ steps.filter.outputs.website }}
-      intelligence: ${{ steps.filter.outputs.intelligence }}
       dapp: ${{ steps.filter.outputs.dapp }}
       api: ${{ steps.filter.outputs.api }}
       contracts: ${{ steps.filter.outputs.contracts }}
@@ -46,8 +45,6 @@ jobs:
               - 'apps/website/**'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
-            intelligence:
-              - 'apps/intelligence/**'
             dapp:
               - 'apps/dapp/**'
             api:
@@ -86,35 +83,6 @@ jobs:
 
       - name: Lint website
         run: pnpm --filter @nester/website lint
-
-  intelligence:
-    name: Intelligence (Python)
-    needs: changes
-    if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/intelligence
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.5.0
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install ruff mypy pytest
-
-      - name: Lint
-        run: ruff check .
-
-      - name: Type check
-        run: mypy app
-
-      - name: Test
-        run: pytest
 
   dapp-frontend:
     name: Dapp Frontend (Next.js)
@@ -395,75 +363,6 @@ jobs:
         run: pnpm audit --audit-level=high || true
         working-directory: apps/dapp/frontend
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5.5.0
-        if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-        with:
-          python-version: "3.12"
-
-      - name: Install Python audit tools
-        if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-        run: pip install pip-audit bandit
-
-      - name: Audit Python dependencies
-        if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-        run: |
-          set +e
-          pip-audit -r requirements.txt --format json --output pip-audit-report.json
-          EXIT_CODE=$?
-          set -e
-
-          if [ ! -f pip-audit-report.json ]; then
-            echo "::error::pip-audit report missing"
-            exit 1
-          fi
-
-          # pip-audit exits 1 on findings and 2 on its own failure. Only the
-          # first is a result we can parse; the second means the scan never
-          # ran, and without this check a crashed scan reads as a clean one.
-          if [ "$EXIT_CODE" -gt 1 ]; then
-            echo "::error::pip-audit failed to run (exit $EXIT_CODE); treating as a failed scan"
-            exit "$EXIT_CODE"
-          fi
-
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          report = Path("pip-audit-report.json")
-          findings = json.loads(report.read_text() or "[]")
-          # pip-audit --format json emits {"dependencies": [{"name":..,
-          # "vulns": [...]}, ...]}, not a flat list of vulnerabilities. Reading
-          # it as a list made len() count the dict's *keys* — reporting "Found
-          # 2 Python vulnerabilities" on a clean scan — and then iterating it
-          # yielded strings, so .get() raised AttributeError and failed the
-          # job unconditionally. Older pip-audit versions did return a list,
-          # so both shapes are accepted.
-          dependencies = findings.get("dependencies", []) if isinstance(findings, dict) else findings
-
-          vulns = []
-          for dep in dependencies:
-              if not isinstance(dep, dict):
-                  continue
-              for vuln in dep.get("vulns", []):
-                  vulns.append((dep.get("name", "unknown"), vuln))
-
-          if vulns:
-              print(f"::error::Found {len(vulns)} Python vulnerabilities")
-              for name, vuln in vulns:
-                  vid = vuln.get("id", "unknown")
-                  desc = str(vuln.get("description", ""))[:120]
-                  print(f"  {name} {vid}: {desc}")
-              raise SystemExit(1)
-
-          print("✓ No Python vulnerabilities detected")
-          PY
-        working-directory: apps/intelligence
-
-      - name: Run bandit
-        if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-        run: bandit -r app -ll
-        working-directory: apps/intelligence
-
       # semgrep/semgrep-action is archived, and the SHA this was pinned to
       # does not exist upstream — the job aborted at "Set up job" with
       # "unable to resolve action". Run the maintained CLI directly instead,
@@ -719,12 +618,6 @@ jobs:
           # binary (installed above) is used for the frontend SBOM.
           syft dir:. --output cyclonedx-json=../../../sbom-frontend.json
 
-      - name: Generate Python SBOM
-        if: needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.shared == 'true'
-        working-directory: apps/intelligence
-        run: |
-          syft dir:. --output cyclonedx-json=../../sbom-intelligence.json
-
       - name: Generate contracts SBOM (Rust)
         if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
         working-directory: packages/contracts
@@ -734,7 +627,7 @@ jobs:
       - name: Upload SBOM artifacts
         # Only run when at least one SBOM-covered component changed; a docs- or
         # website-only change generates no SBOMs and must not fail the job.
-        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.dapp == 'true' || needs.changes.outputs.intelligence == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
+        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.dapp == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom-artifacts

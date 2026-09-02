@@ -32,7 +32,6 @@ const (
 	sentinelDSN           = "postgres://user:SENTINEL-db-password-not-real@host:5432/db"
 	sentinelOperatorSeed  = "SENTINEL-stellar-operator-seed-not-real"
 	sentinelServiceAPIKey = "SENTINEL-service-api-key-not-real"
-	sentinelIntelKey      = "SENTINEL-intelligence-key-not-real"
 	sentinelCipherKey     = "SENTINEL-bank-cipher-key-not-real"
 	sentinelFingerprint   = "SENTINEL-fingerprint-key-not-real"
 	sentinelAccountKey    = "SENTINEL-account-cipher-key-not-real"
@@ -43,7 +42,7 @@ const (
 var allSentinels = []string{
 	sentinelJWTSecret, sentinelDSN, sentinelOperatorSeed,
 	sentinelServiceAPIKey,
-	sentinelIntelKey, sentinelCipherKey, sentinelFingerprint,
+	sentinelCipherKey, sentinelFingerprint,
 	sentinelAccountKey,
 }
 
@@ -73,11 +72,7 @@ func configWithSecrets() Config {
 			rpcURL:            "https://soroban-testnet.stellar.org",
 			networkPassphrase: "Test SDF Network ; September 2015",
 		},
-		intelligence: IntelligenceConfig{
-			baseURL:       "http://intelligence:8000",
-			serviceAPIKey: sentinelIntelKey,
-			timeout:       10 * time.Second,
-		},
+
 		accountCipher: AccountCipherConfig{
 			activeVersion:  "v1",
 			keys:           map[string]string{"v1": sentinelAccountKey},
@@ -120,7 +115,6 @@ func TestNestedConfigFormattingNeverLeaksSecrets(t *testing.T) {
 		"AuthConfig":          cfg.auth,
 		"DatabaseConfig":      cfg.database,
 		"StellarConfig":       cfg.stellar,
-		"IntelligenceConfig":  cfg.intelligence,
 		"AccountCipherConfig": cfg.accountCipher,
 	}
 

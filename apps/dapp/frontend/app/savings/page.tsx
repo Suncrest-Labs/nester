@@ -38,7 +38,6 @@ import { type APYHistoryPeriod } from "@/lib/api/vaults";
 import { useSavingsChartData } from "@/hooks/useSavingsChartData";
 import { useSavingsGoals } from "@/hooks/useSavingsGoals";
 import { useYieldOpportunities } from "@/hooks/useYieldOpportunities";
-import { intelligenceApi, type SavingsPlanResponse } from "@/lib/api/intelligence";
 import {
   SAVINGS_VAULT_DEFINITIONS,
   type SavingsVault,
@@ -57,170 +56,6 @@ const TYPE_ICONS: Record<SavingsVaultType, React.ElementType> = {
     "stablecoin-yield": BarChart2,
     custom: Sliders,
 };
-
-// ── Create Plan Modal ─────────────────────────────────────────────────────────
-
-function CreatePlanModal({
-    onClose,
-}: {
-    onClose: () => void;
-}) {
-    const [goal, setGoal] = useState("5000");
-    const [months, setMonths] = useState("18");
-    const [contribution, setContribution] = useState("250");
-    const [loading, setLoading] = useState(false);
-    const [plan, setPlan] = useState<SavingsPlanResponse | null>(null);
-
-    const handleCreate = async () => {
-        setLoading(true);
-        try {
-            const res = await intelligenceApi.createSavingsPlan({
-                goal_usdc: parseFloat(goal),
-                time_horizon_months: parseInt(months),
-                max_monthly_contribution_usdc: parseFloat(contribution),
-            });
-            setPlan(res);
-        } catch (err) {
-            console.error("Failed to create plan:", err);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <AnimatePresence>
-            <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 bg-black/25 backdrop-blur-sm"
-                onClick={onClose}
-            />
-            <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="fixed inset-x-4 top-20 z-50 mx-auto max-w-2xl rounded-3xl bg-white dark:bg-[#100F0F] p-8 shadow-2xl sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="plan-modal-title"
-            >
-                <div className="flex items-center justify-between mb-6">
-                    <h2 id="plan-modal-title" className="text-xl font-bold text-black dark:text-white">Create a Personalised Savings Plan</h2>
-                    <button onClick={onClose} aria-label="Close" className="rounded-full p-2 hover:bg-black/5 dark:hover:bg-white/5">
-                        <X className="h-5 w-5" />
-                    </button>
-                </div>
-
-                {!plan ? (
-                    <div className="space-y-6">
-                        <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-                            <div>
-                                <label className="mb-2 block text-xs font-bold text-black/60 dark:text-white/60 uppercase">Savings Goal (USDC)</label>
-                                <input
-                                    type="number"
-                                    value={goal}
-                                    onChange={(e) => setGoal(e.target.value)}
-                                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 text-sm outline-none focus:border-black/25 dark:focus:border-white/25 text-black dark:text-white"
-                                />
-                            </div>
-                            <div>
-                                <label className="mb-2 block text-xs font-bold text-black/60 dark:text-white/60 uppercase">Time Horizon (Months)</label>
-                                <input
-                                    type="number"
-                                    value={months}
-                                    onChange={(e) => setMonths(e.target.value)}
-                                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 text-sm outline-none focus:border-black/25 dark:focus:border-white/25 text-black dark:text-white"
-                                />
-                            </div>
-                            <div>
-                                <label className="mb-2 block text-xs font-bold text-black/60 dark:text-white/60 uppercase">Max Monthly Contribution</label>
-                                <input
-                                    type="number"
-                                    value={contribution}
-                                    onChange={(e) => setContribution(e.target.value)}
-                                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 text-sm outline-none focus:border-black/25 dark:focus:border-white/25 text-black dark:text-white"
-                                />
-                            </div>
-                        </div>
-                        <button
-                            onClick={handleCreate}
-                            disabled={loading}
-                            className="w-full rounded-xl bg-black dark:bg-blue-600 py-4 text-sm font-bold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
-                        >
-                            {loading ? "Generating Plan..." : "Generate Personalised Plan"}
-                        </button>
-                    </div>
-                ) : (
-                    <div className="space-y-6">
-                        <div className={cn(
-                            "rounded-2xl p-5 border",
-                            plan.achievable ? "bg-emerald-50 border-emerald-100" : "bg-amber-50 border-amber-100"
-                        )}>
-                            <p className={cn(
-                                "text-sm font-medium leading-relaxed",
-                                plan.achievable ? "text-emerald-800" : "text-amber-800"
-                            )}>
-                                {plan.narrative}
-                            </p>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="rounded-2xl bg-black/[0.02] dark:bg-white/[0.02] p-4">
-                                <p className="text-[10px] font-bold text-black/40 dark:text-white/40 uppercase">Required Deposit</p>
-                                <p className="text-xl font-bold text-black dark:text-white">${plan.required_monthly_deposit}/mo</p>
-                            </div>
-                            <div className="rounded-2xl bg-black/[0.02] dark:bg-white/[0.02] p-4">
-                                <p className="text-[10px] font-bold text-black/40 dark:text-white/40 uppercase">Total Yield Earned</p>
-                                <p className="text-xl font-bold text-black dark:text-white text-emerald-600">+${plan.total_yield_earned}</p>
-                            </div>
-                        </div>
-
-                        <div className="max-h-48 overflow-y-auto rounded-2xl border border-black/5 dark:border-white/5">
-                            <table className="w-full text-left text-[11px]">
-                                <thead className="sticky top-0 bg-white dark:bg-[#100F0F] border-b border-black/5 dark:border-white/5">
-                                    <tr>
-                                        <th className="px-4 py-2 font-bold text-black/40 dark:text-white/40 uppercase">Month</th>
-                                        <th className="px-4 py-2 font-bold text-black/40 dark:text-white/40 uppercase">Deposit</th>
-                                        <th className="px-4 py-2 font-bold text-black/40 dark:text-white/40 uppercase">Yield</th>
-                                        <th className="px-4 py-2 font-bold text-black/40 dark:text-white/40 uppercase">Balance</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-black/5">
-                                    {plan.monthly_schedule.map((entry) => (
-                                        <tr key={entry.month}>
-                                            <td className="px-4 py-2 font-medium text-black/60 dark:text-white/60">{entry.month}</td>
-                                            <td className="px-4 py-2 text-black dark:text-white">${entry.deposit}</td>
-                                            <td className="px-4 py-2 text-emerald-600">+${entry.yield_earned}</td>
-                                            <td className="px-4 py-2 font-bold text-black dark:text-white">${entry.expected_balance}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div className="flex gap-3">
-                            <button
-                                onClick={() => setPlan(null)}
-                                className="flex-1 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-bold text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5"
-                            >
-                                Adjust Parameters
-                            </button>
-                            {plan.achievable && (
-                                <button
-                                    onClick={onClose}
-                                    className="flex-1 rounded-xl bg-black dark:bg-blue-600 py-3 text-xs font-bold text-white hover:opacity-75"
-                                >
-                                    Activate This Plan
-                                </button>
-                            )}
-                        </div>
-                    </div>
-                )}
-            </motion.div>
-        </AnimatePresence>
-    );
-}
 
 // ── Info Tooltip ──────────────────────────────────────────────────────────────
 
@@ -922,7 +757,6 @@ export default function SavingsPage() {
     const [selectedVault, setSelectedVault] = useState<SavingsVault | null>(null);
     const [viewMode, setViewMode] = useState<"products" | "goals">("products");
     const [showHowItWorks, setShowHowItWorks] = useState(false);
-    const [planModalOpen, setPlanModalOpen] = useState(false);
     const [goalModalOpen, setGoalModalOpen] = useState(false);
 
     const { data: yieldData, isLoading: yieldLoading, isError: yieldError } = useYieldOpportunities();
@@ -957,7 +791,7 @@ export default function SavingsPage() {
                         </div>
                         <div className="flex items-center gap-2">
                             <button
-                                onClick={() => setPlanModalOpen(true)}
+                                onClick={() => setGoalModalOpen(true)}
                                 className="flex items-center gap-2 rounded-xl bg-black dark:bg-blue-600 px-5 py-2.5 text-xs font-bold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
                             >
                                 <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1089,7 +923,7 @@ export default function SavingsPage() {
                 {/* ── Goals view or Vault grid ───────────────────────────────── */}
                 {viewMode === "goals" ? (
                     <SavingsGoalsSection
-                        onCreateGoal={() => setPlanModalOpen(true)}
+                        onCreateGoal={() => setGoalModalOpen(true)}
                     />
                 ) : (
                     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
@@ -1125,7 +959,6 @@ export default function SavingsPage() {
                 })()}
 
             <DepositModal vault={selectedVault} onClose={() => setSelectedVault(null)} />
-            {planModalOpen && <CreatePlanModal onClose={() => setPlanModalOpen(false)} />}
             {goalModalOpen && <CreateGoalModal onClose={() => setGoalModalOpen(false)} />}
         </AppShell>
     );
