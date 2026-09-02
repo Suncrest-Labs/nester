@@ -107,10 +107,14 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/admin/users", RequireRole: "admin"},
 
 	// ── Yields (public) ───────────────────────────────────────────────
-	// NOTE: prefix rule "/api/v1/yields/" requires trailing slash; the
-	// exact path "/api/v1/yields" (no slash) falls through to protected.
+	// Discovery is readable without a wallet. The bare list path is the one
+	// the dApp calls, and it is the case a trailing-slash-only prefix rule
+	// silently left protected, so it is asserted explicitly here.
+	{Method: "GET", Path: "/api/v1/yields", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/00000000-0000-0000-0000-000000000000", Public: true},
+	{Method: "GET", Path: "/api/v1/yield-opportunities", Public: true},
+	{Method: "GET", Path: "/api/v1/yield-opportunities/compare", Public: true},
 
 	// ── Money-path pause switches (#1120) ──────────────────────────────
 	{Method: "GET", Path: "/api/v1/admin/money-path/switches", RequireRole: "admin"},
@@ -227,16 +231,17 @@ var authzMatrix = []AuthzRoute{
 	{Method: "POST", Path: "/api/v1/webhooks"},
 	{Method: "POST", Path: "/api/v1/webhooks/deliveries/00000000-0000-0000-0000-000000000000/redeliver"},
 
-	// yield-opportunities
-	{Method: "GET", Path: "/api/v1/yield-opportunities"},
-	{Method: "GET", Path: "/api/v1/yield-opportunities/compare"},
-
 	// yields
-	{Method: "DELETE", Path: "/api/v1/yields/bookmarks/aave-v3", Public: true},
+	//
+	// The bookmark reads sit under the public GET prefix, so the middleware
+	// lets them through; the handler resolves the caller from the auth
+	// context and answers 401 without one, which is where per-user access
+	// is actually enforced. The writes carry no public rule at all.
+	{Method: "DELETE", Path: "/api/v1/yields/bookmarks/aave-v3"},
 	{Method: "GET", Path: "/api/v1/yields/aave-v3/apy-history", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/bookmarks", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/harvests", Public: true},
-	{Method: "POST", Path: "/api/v1/yields/bookmarks", Public: true},
+	{Method: "POST", Path: "/api/v1/yields/bookmarks"},
 }
 
 // TestAuthorizationMatrix verifies the three-way authorization contract for

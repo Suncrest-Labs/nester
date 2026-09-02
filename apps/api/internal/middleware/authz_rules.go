@@ -23,7 +23,19 @@ func ProductionAuthRules() []RouteRule {
 		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/refresh", Public: true},
 		// No blanket "/api/v1/auth/" rule: logout, logout-all, and sessions
 		// must stay protected and fall through to the "/api/v1/" catch-all.
-		{PathPrefix: "/api/v1/yields/", Public: true},
+		// Yield discovery is readable without a wallet: a visitor browses
+		// protocols, APYs and TVL before deciding to connect. The prefix has
+		// no trailing slash so it also covers the exact "/api/v1/yields"
+		// list path, which is what the dApp calls — with a trailing slash
+		// that path fell through to the catch-all below and answered 401,
+		// leaving the Yields page empty for signed-out visitors.
+		//
+		// GET only: the bookmark writes under this prefix stay protected.
+		// The per-user bookmark reads it does cover resolve the caller from
+		// the auth context themselves and 401 without one (see
+		// YieldBookmarkHandler.userID), so nothing per-user is exposed here.
+		{Method: http.MethodGet, PathPrefix: "/api/v1/yields", Public: true},
+		{Method: http.MethodGet, PathPrefix: "/api/v1/yield-opportunities", Public: true},
 		{PathPrefix: "/api/v1/savings-goals/shared/", Public: true},
 		// Whether deposits or withdrawals are halted, and the operator's
 		// reason. Public because a signed-out visitor sees the same outage
