@@ -4,7 +4,6 @@ import { useWallet } from "@/components/wallet-provider";
 import { useAuth } from "@/components/auth-provider";
 import { usePortfolio, type PortfolioPosition } from "@/components/portfolio-provider";
 import { useVaults, type VaultWithPerf } from "@/hooks/useVaults";
-import { useSettlements } from "@/hooks/useSettlements";
 import { AppShell } from "@/components/app-shell";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -31,7 +30,7 @@ import { WithdrawModal } from "@/components/vault-action-modals";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
 import { YieldComparisonChart, type ProtocolApyPoint, type ProtocolSnapshot } from "@/components/analytics/YieldComparisonChart";
-import { PositionsSkeleton, ActivitySkeleton } from "@/components/skeletons/page-skeletons";
+import { PositionsSkeleton } from "@/components/skeletons/page-skeletons";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -113,23 +112,26 @@ export default function PortfolioPage() {
     
     // Live API hooks
     const { vaults, isLoading: vaultsLoading } = useVaults(userId ?? undefined);
-    const { settlements, isLoading: settlementsLoading } = useSettlements(userId);
 
     const positions = useMemo(() => {
         return vaults.filter(v => parseFloat(v.current_balance) > 0).map(vaultToPosition);
     }, [vaults]);
 
-    const transactions = useMemo(() => settlements.map((s) => ({
-        id: s.id,
-        type: "Settlement" as const,
-        vaultName: `${s.currency} Settlement`,
-        asset: s.currency,
-        amount: s.amount,
-        status: (s.status === "confirmed" ? "Confirmed" : s.status === "failed" ? "Failed" : "Pending") as "Confirmed" | "Pending" | "Failed",
-        timestamp: s.created_at,
-        isOnChain: false,
-        txHash: undefined as string | undefined,
-    })), [settlements]);
+    const transactions = useMemo(
+        () =>
+            [] as {
+                id: string;
+                type: string;
+                vaultName: string;
+                asset: string;
+                amount: string;
+                status: "Confirmed" | "Pending" | "Failed";
+                timestamp: string;
+                isOnChain: boolean;
+                txHash: string | undefined;
+            }[],
+        [],
+    );
 
     const { prices: tokenPrices } = useTokenPrices();
     const { currentNetwork } = useNetwork();
@@ -449,9 +451,7 @@ export default function PortfolioPage() {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -8 }}
                     >
-                        {settlementsLoading ? (
-                            <ActivitySkeleton />
-                        ) : recentTx.length === 0 ? (
+                        {recentTx.length === 0 ? (
                             <div
                                 data-testid="activity-empty-state"
                                 className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]"

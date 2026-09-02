@@ -106,23 +106,6 @@ func (s StellarConfig) LogValue() slog.Value {
 }
 
 // ---------------------------------------------------------------------------
-// BankConfig
-// ---------------------------------------------------------------------------
-
-func (b BankConfig) String() string {
-	return fmt.Sprintf(
-		"BankConfig{paystackKey:%q flutterwaveKey:%q}",
-		redact(b.paystackKey), redact(b.flutterwaveKey),
-	)
-}
-
-func (b BankConfig) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("paystack_key", redact(b.paystackKey)),
-		slog.String("flutterwave_key", redact(b.flutterwaveKey)),
-	)
-}
-
 // ---------------------------------------------------------------------------
 // AccountCipherConfig
 // ---------------------------------------------------------------------------
@@ -178,12 +161,12 @@ func (r RateLimitConfig) String() string {
 	return fmt.Sprintf(
 		"RateLimitConfig{globalLimit:%d globalWindow:%s writeLimit:%d writeWindow:%s "+
 			"walletLimit:%d walletWindow:%s rebalanceLimit:%d rebalanceWindow:%s "+
-			"authLimit:%d authWindow:%s settlementLimit:%d settlementWindow:%s "+
+			"authLimit:%d authWindow:%s "+
 			"trustedProxyCount:%d quotaEnabled:%t quotaLimit:%d quotaWindow:%s "+
 			"quotaBypassToken:%q}",
 		r.globalLimit, r.globalWindow, r.writeLimit, r.writeWindow,
 		r.walletLimit, r.walletWindow, r.rebalanceLimit, r.rebalanceWindow,
-		r.authLimit, r.authWindow, r.settlementLimit, r.settlementWindow,
+		r.authLimit, r.authWindow,
 		r.trustedProxyCount, r.quotaEnabled, r.quotaLimit, r.quotaWindow,
 		redact(r.quotaBypassToken),
 	)
@@ -201,8 +184,6 @@ func (r RateLimitConfig) LogValue() slog.Value {
 		slog.Duration("rebalance_window", r.rebalanceWindow),
 		slog.Int("auth_limit", r.authLimit),
 		slog.Duration("auth_window", r.authWindow),
-		slog.Int("settlement_limit", r.settlementLimit),
-		slog.Duration("settlement_window", r.settlementWindow),
 		slog.Int("trusted_proxy_count", r.trustedProxyCount),
 		slog.Bool("quota_enabled", r.quotaEnabled),
 		slog.Int("quota_limit", r.quotaLimit),
@@ -222,9 +203,9 @@ func (r RateLimitConfig) LogValue() slog.Value {
 
 func (c Config) String() string {
 	return fmt.Sprintf(
-		"Config{environment:%q bankAccountCipherKey:%q auth:%s database:%s stellar:%s bank:%s intelligence:%s accountCipher:%s}",
+		"Config{environment:%q bankAccountCipherKey:%q auth:%s database:%s stellar:%s intelligence:%s accountCipher:%s}",
 		c.environment, redact(c.bankAccountCipherKey),
-		c.auth, c.database, c.stellar, c.bank, c.intelligence, c.accountCipher,
+		c.auth, c.database, c.stellar, c.intelligence, c.accountCipher,
 	)
 }
 
@@ -235,7 +216,6 @@ func (c Config) LogValue() slog.Value {
 		slog.Any("auth", c.auth),
 		slog.Any("database", c.database),
 		slog.Any("stellar", c.stellar),
-		slog.Any("bank", c.bank),
 		slog.Any("intelligence", c.intelligence),
 		slog.Any("account_cipher", c.accountCipher),
 	)

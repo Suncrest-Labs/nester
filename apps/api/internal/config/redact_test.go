@@ -31,8 +31,6 @@ const (
 	sentinelJWTSecret     = "SENTINEL-jwt-secret-not-a-real-secret"
 	sentinelDSN           = "postgres://user:SENTINEL-db-password-not-real@host:5432/db"
 	sentinelOperatorSeed  = "SENTINEL-stellar-operator-seed-not-real"
-	sentinelPaystack      = "SENTINEL-paystack-key-not-real"
-	sentinelFlutterwave   = "SENTINEL-flutterwave-key-not-real"
 	sentinelServiceAPIKey = "SENTINEL-service-api-key-not-real"
 	sentinelIntelKey      = "SENTINEL-intelligence-key-not-real"
 	sentinelCipherKey     = "SENTINEL-bank-cipher-key-not-real"
@@ -44,7 +42,7 @@ const (
 // them survive into rendered output.
 var allSentinels = []string{
 	sentinelJWTSecret, sentinelDSN, sentinelOperatorSeed,
-	sentinelPaystack, sentinelFlutterwave, sentinelServiceAPIKey,
+	sentinelServiceAPIKey,
 	sentinelIntelKey, sentinelCipherKey, sentinelFingerprint,
 	sentinelAccountKey,
 }
@@ -74,10 +72,6 @@ func configWithSecrets() Config {
 			horizonURL:        "https://horizon-testnet.stellar.org",
 			rpcURL:            "https://soroban-testnet.stellar.org",
 			networkPassphrase: "Test SDF Network ; September 2015",
-		},
-		bank: BankConfig{
-			paystackKey:    sentinelPaystack,
-			flutterwaveKey: sentinelFlutterwave,
 		},
 		intelligence: IntelligenceConfig{
 			baseURL:       "http://intelligence:8000",
@@ -126,7 +120,6 @@ func TestNestedConfigFormattingNeverLeaksSecrets(t *testing.T) {
 		"AuthConfig":          cfg.auth,
 		"DatabaseConfig":      cfg.database,
 		"StellarConfig":       cfg.stellar,
-		"BankConfig":          cfg.bank,
 		"IntelligenceConfig":  cfg.intelligence,
 		"AccountCipherConfig": cfg.accountCipher,
 	}

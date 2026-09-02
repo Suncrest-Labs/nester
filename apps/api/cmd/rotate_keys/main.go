@@ -1,5 +1,5 @@
-// Command rotate_keys re-encrypts stored bank account numbers under the active
-// key version. It is safe to run repeatedly (idempotent) and safe to interrupt
+// Command rotate_keys re-encrypts stored KYC document ciphertext under the
+// active key version. It is safe to run repeatedly (idempotent) and safe to interrupt
 // (resumable): rows already on the active key version are skipped, and each row
 // is committed as it is rotated.
 //
@@ -72,7 +72,6 @@ func run() error {
 	db := stdlib.OpenDBFromPool(pgPool.Pool)
 	defer db.Close()
 
-	bankRepo := postgres.NewBankAccountRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 
 	ctx := context.Background()
@@ -83,20 +82,6 @@ func run() error {
 	}
 
 	start := time.Now()
-
-	// Rotate bank account ciphertext
-	bankStats, err := rotation.NewRotator(bankRepo, cipher).Run(ctx, rotation.Options{
-		BatchSize: *batchSize,
-		Logger:    logger,
-	})
-	if err != nil {
-		return fmt.Errorf("bank account rotation failed after %d rows rotated: %w", bankStats.Rotated, err)
-	}
-
-	logger.Info("bank account rotation done",
-		"rotated", bankStats.Rotated,
-		"pending_at_start", bankStats.Pending,
-	)
 
 	// Rotate KYC document ciphertext
 	kycStore := &kycRotationStore{repo: userRepo}
@@ -110,7 +95,6 @@ func run() error {
 
 	logger.Info("rotation finished",
 		"active_version", acCfg.ActiveVersion(),
-		"bank_accounts_rotated", bankStats.Rotated,
 		"kyc_documents_rotated", kycStats.Rotated,
 		"duration", time.Since(start).String(),
 	)

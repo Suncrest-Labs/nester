@@ -14,7 +14,6 @@ type TransactionType string
 const (
 	TypeDeposit    TransactionType = "deposit"
 	TypeWithdrawal TransactionType = "withdrawal"
-	TypeSettlement TransactionType = "settlement"
 )
 
 type TransactionStatus string

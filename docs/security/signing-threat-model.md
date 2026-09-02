@@ -167,7 +167,7 @@ and *fast emergency* rotation realistic.
 
 ### 2.6 Provider and service credentials
 
-`FLUTTERWAVE_SECRET_KEY`, `PAYSTACK_SECRET_KEY`, `INTELLIGENCE_SERVICE_API_KEY`, `NESTER_SERVICE_API_KEY`, `REDIS_ADDR` (and any credentials embedded in it).
+`INTELLIGENCE_SERVICE_API_KEY`, `NESTER_SERVICE_API_KEY`, `REDIS_ADDR` (and any credentials embedded in it).
 
 | Field | Value |
 |---|---|

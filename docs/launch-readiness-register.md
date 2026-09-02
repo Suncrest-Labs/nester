@@ -148,21 +148,6 @@ Status: Resolved | Open | Needs more info
 - **Evidence:** test: apps/api/internal/stellar/poller_test.go::TestIntegrationReplay_DuplicateDelivery, test: apps/api/internal/stellar/poller_test.go::TestIntegrationReplay_RepeatedFullReplay, migration: apps/api/migrations/022_create_processed_events_table.sql
 - **Notes:** ON CONFLICT DO NOTHING with event_id PK
 
-#### [API-26] SECURITY BOLA settlement
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Extract user_id from JWT, not request body. Issue: docs/backlog/security-bola-settlement.md
-
-#### [API-27] SECURITY settlement enumeration
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Return 404 (not 403) for non-owner. Issue: docs/backlog/security-settlement-enumeration.md
-
-#### [API-28] SECURITY settlement 403 oracle
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Return 404 for both missing and non-owned. Issue: docs/backlog/security-settlement-403.md
-
 #### [API-29] GetRoles uuid type
 - **Status:** Open
 - **Evidence:** —
@@ -199,8 +184,8 @@ Status: Resolved | Open | Needs more info
 
 #### [DB-02] Migrations 005-006
 - **Status:** Resolved
-- **Evidence:** migration: apps/api/migrations/005_create_allocations_table.sql, migration: apps/api/migrations/006_create_settlements_table.sql
-- **Notes:** Allocations and settlements tables
+- **Evidence:** migration: apps/api/migrations/005_create_allocations_table.sql
+- **Notes:** Allocations table (settlements were removed with the offramp; migration 118 drops the table)
 
 #### [DB-10] seed.sql schema mismatch
 - **Status:** Open

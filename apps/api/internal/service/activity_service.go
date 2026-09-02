@@ -9,7 +9,7 @@ import (
 )
 
 // ActivityService is a thin pass-through over activity.Repository, matching
-// the service-per-domain convention used elsewhere (e.g. SettlementService).
+// the service-per-domain convention used elsewhere.
 type ActivityService struct {
 	repo activity.Repository
 }

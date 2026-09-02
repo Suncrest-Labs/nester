@@ -337,23 +337,14 @@ func run() error {
 	transactionHandler := handler.NewTransactionHandler(transactionService)
 	transactionHandler.SetVaultRepository(vaultRepository)
 
-	bankAccountRepository := postgres.NewBankAccountRepository(db)
 	var accountCipher *cryptopkg.AccountCipher
 	if ac := cfg.AccountCipher(); ac.Configured() {
 		cipher, cipherErr := cryptopkg.NewAccountCipherWithKeys(ac.ActiveVersion(), ac.Keys(), ac.FingerprintKey())
 		if cipherErr != nil {
-			return fmt.Errorf("bank account cipher: %w", cipherErr)
+			return fmt.Errorf("account cipher: %w", cipherErr)
 		}
 		accountCipher = cipher
 	}
-
-	paystackResolver := service.NewPaystackResolver(cfg.Bank().PaystackKey())
-	flutterwaveResolver := service.NewFlutterwaveResolver(cfg.Bank().FlutterwaveKey())
-	bankService := service.NewBankService(paystackResolver, flutterwaveResolver)
-	bankHandler := handler.NewBankHandler(bankService)
-
-	bankAccountService := service.NewBankAccountService(bankAccountRepository, accountCipher, bankService)
-	bankAccountHandler := handler.NewBankAccountHandler(bankAccountService)
 
 	userRepository := postgres.NewUserRepository(db)
 	userService := service.NewUserService(userRepository)
@@ -384,10 +375,6 @@ func run() error {
 	}
 	notificationRepository := postgres.NewNotificationRepository(db)
 	notificationHandler := handler.NewNotificationHandler(notificationRepository)
-
-	settlementRepository := postgres.NewSettlementRepository(db)
-	settlementService := service.NewSettlementService(settlementRepository, bankAccountService)
-	settlementHandler := handler.NewSettlementHandler(settlementService, userService)
 
 	adminRepository := postgres.NewAdminRepository(db)
 	goalTemplateRepo := postgres.NewGoalTemplateRepository(db)
@@ -507,7 +494,6 @@ func run() error {
 		vaultRepository,
 		chainInvoker,
 		cfg.Stellar().HorizonURL(),
-		cfg.SettlementProviderURL(),
 		cfg.Stellar().AllocationStrategyAddress(),
 		cfg.Allocation().MinWeightPercent(),
 	)
@@ -899,10 +885,9 @@ func run() error {
 	portfolioHandler.Register(mux)
 	valuationHandler.Register(mux)
 	transactionHandler.Register(mux)
-	settlementHandler.Register(mux)
 
-	// Unified activity feed (deposits/withdrawals/rebalances/settlements/
-	// yield harvests) backing the dApp's transaction-history page.
+	// Unified activity feed (deposits/withdrawals/rebalances/yield harvests)
+	// backing the dApp's transaction-history page.
 	activityRepository := postgres.NewActivityRepository(db)
 	activityService := service.NewActivityService(activityRepository)
 	activityHandler := handler.NewActivityHandler(activityService)
@@ -1112,7 +1097,7 @@ func run() error {
 	// at-least-once/backoff/dead-letter guarantees as harvest and recurring
 	// deposits. accountCipher may be nil (unconfigured deployment) — Register
 	// then fails with service.ErrWebhookCipherNotConfigured rather than
-	// panicking, matching bankaccount_service.go's convention.
+	// panicking.
 	webhookRepo := postgres.NewWebhookRepository(db)
 	webhookDeliveryRepo := postgres.NewWebhookDeliveryRepository(db)
 	webhookSvc := service.NewWebhookService(webhookRepo, webhookDeliveryRepo, accountCipher, jobQueueClient)
@@ -1509,9 +1494,6 @@ func run() error {
 	toolAuditHandler := handler.NewToolAuditHandler(toolAuditSvc)
 	toolAuditHandler.Register(mux)
 
-	bankHandler.Register(mux)
-	bankAccountHandler.Register(mux)
-
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
 
 	// APY snapshot scheduler and history endpoint (apySnapshotRepo is
@@ -1589,15 +1571,6 @@ func run() error {
 			{Stage: metrics.AuthStageVerify, Route: middleware.RouteMatch{Method: http.MethodPost, Path: "/api/v1/auth/verify"}},
 		},
 	).Middleware()
-	// settlementLimiter applies a strict per-user limit to settlement creation to
-	// prevent settlement spam. Placed after authentication so it keys by user ID.
-	settlementLimiter := middleware.SensitiveUserRouteLimiter(
-		middleware.NewLimiter(redisClient, "settlement", cfg.RateLimit().SettlementLimit(), cfg.RateLimit().SettlementWindow()),
-		[]middleware.RouteMatch{
-			{Method: http.MethodPost, Path: "/api/v1/settlements"},
-		},
-		"settlement rate limit exceeded",
-	)
 	// idempotencyMiddleware (#835) makes the designated write endpoints safe
 	// to retry: a client-supplied Idempotency-Key header is required on
 	// them, and a repeated key returns the original stored response instead
@@ -1706,15 +1679,13 @@ func run() error {
 												walletBinding(
 													idempotencyMiddleware(
 														costQuota(
-															settlementLimiter(
-																walletLimiter(
-																	middleware.LimitRequestBody(1 * 1024 * 1024)(
-																		middleware.Logging(baseLogger)(
-																			middleware.Tracing(
-																				cfg.Tracing().ServiceName(),
-																				cfg.Tracing().LatencyThreshold(),
-																			)(mux),
-																		),
+															walletLimiter(
+																middleware.LimitRequestBody(1 * 1024 * 1024)(
+																	middleware.Logging(baseLogger)(
+																		middleware.Tracing(
+																			cfg.Tracing().ServiceName(),
+																			cfg.Tracing().LatencyThreshold(),
+																		)(mux),
 																	),
 																),
 															),

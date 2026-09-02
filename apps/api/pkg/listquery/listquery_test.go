@@ -3,9 +3,7 @@ package listquery_test
 import (
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/suncrestlabs/nester/apps/api/pkg/listquery"
 )
 
@@ -35,19 +33,6 @@ func TestParsePageRejectsHighPerPage(t *testing.T) {
 	r := httptest.NewRequest("GET", "/?per_page=500", nil)
 	if _, err := listquery.ParsePage(r); err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-func TestSettlementCursorRoundTrip(t *testing.T) {
-	id := uuid.New()
-	created := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	token := listquery.EncodeSettlementCursor(created, id)
-	decoded, err := listquery.DecodeSettlementCursor(token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !decoded.CreatedAt.Equal(created) || decoded.ID != id {
-		t.Fatalf("cursor mismatch: %+v", decoded)
 	}
 }
 

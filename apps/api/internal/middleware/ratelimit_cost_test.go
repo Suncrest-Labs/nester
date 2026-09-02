@@ -93,7 +93,7 @@ func TestOrdinaryRoutesCostTheDefault(t *testing.T) {
 		{http.MethodGet, "/api/v1/transactions"},
 		{http.MethodPost, "/api/v1/users/watchlist"},
 		{http.MethodPatch, "/api/v1/users/profile"},
-		{http.MethodGet, "/api/v1/settlements"},
+		{http.MethodGet, "/api/v1/activity"},
 		{http.MethodGet, "/health"},
 	}
 	for _, rt := range ordinary {

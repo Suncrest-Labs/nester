@@ -281,7 +281,6 @@ func resetYieldCycleTables(t *testing.T, db *sql.DB) {
 	const stmt = `TRUNCATE TABLE
 		apy_history,
 		vault_performance_snapshots,
-		settlements,
 		vault_transactions,
 		allocations,
 		vaults,

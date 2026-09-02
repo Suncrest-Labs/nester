@@ -19,8 +19,7 @@ import (
 // applyTransactionMigrations applies the minimal set of migrations needed for
 // transaction repository integration tests. We wipe every table in the public
 // schema before applying so re-runs against a reused DB don't trip on
-// non-idempotent statements like 006_create_settlements_table or
-// 003_create_transactions_table.
+// non-idempotent statements like 003_create_transactions_table.
 func applyTransactionMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 	// The full migration chain in numeric order — see testutil.ApplyAllMigrations

@@ -301,7 +301,7 @@ func TestRecurringDepositJobIntegration_SecondOccurrenceSucceeds(t *testing.T) {
 
 func resetSavingsScheduleTables(t *testing.T, db *sql.DB) {
 	t.Helper()
-	if _, err := db.Exec(`TRUNCATE TABLE savings_schedules, savings_goals, settlements, allocations, vaults, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE savings_schedules, savings_goals, allocations, vaults, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE failed: %v", err)
 	}
 }

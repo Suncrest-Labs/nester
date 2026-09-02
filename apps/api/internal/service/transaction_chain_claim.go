@@ -203,9 +203,8 @@ func (s *TransactionService) lookupHorizonOperations(ctx context.Context, hash s
 // client claimed, and returns the amount actually moved on-chain.
 //
 // Only deposits are value claims against the vault's contract address: a
-// withdrawal moves value *out* of the vault to the user's own account, and a
-// settlement moves no vault balance at all, so neither is checked here and
-// both keep their recorded amount.
+// withdrawal moves value *out* of the vault to the user's own account, so it
+// is not checked here and keeps its recorded amount.
 func (s *TransactionService) verifyConfirmedClaim(ctx context.Context, model transaction.Transaction) (verifiedChainAmount, string, error) {
 	if s.vaults == nil || s.balance == nil {
 		// Claim verification is not wired (see SetVaultLookup) or no balance

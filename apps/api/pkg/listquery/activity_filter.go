@@ -19,15 +19,15 @@ import (
 // Sort is fixed to created_at (the only sort the page uses) since the feed
 // unions five differently-shaped tables.
 type ActivityListParams struct {
-	Types   []string // normalized lowercase event types, e.g. "deposit"
-	Status  string   // normalized lowercase status, e.g. "completed", "" = any
-	VaultID string
-	From    *time.Time
-	To      *time.Time
-	Cursor  string
+	Types    []string // normalized lowercase event types, e.g. "deposit"
+	Status   string   // normalized lowercase status, e.g. "completed", "" = any
+	VaultID  string
+	From     *time.Time
+	To       *time.Time
+	Cursor   string
 	Backward bool
-	Limit   int
-	Search  string
+	Limit    int
+	Search   string
 }
 
 // activityTypeDisplayToInternal maps the Title-Case labels FilterBar.tsx
@@ -36,7 +36,6 @@ var activityTypeDisplayToInternal = map[string]string{
 	"Deposit":      "deposit",
 	"Withdrawal":   "withdrawal",
 	"Rebalance":    "rebalance",
-	"Settlement":   "settlement",
 	"Yield Earned": "yield_earned",
 }
 

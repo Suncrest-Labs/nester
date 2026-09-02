@@ -33,15 +33,6 @@ func seedActivityFixtures(t *testing.T, db *sql.DB, userID, vaultID uuid.UUID) {
 	`, uuid.New().String(), vaultID.String(), userID.String(), base.Add(3*time.Hour))
 
 	mustExec(t, db, `
-		INSERT INTO settlements (
-			id, user_id, vault_id, amount, currency, fiat_currency, fiat_amount, exchange_rate,
-			destination_type, destination_provider, destination_account_number, destination_account_name,
-			status, notes, created_at
-		) VALUES ($1, $2, $3, 25, 'USDC', 'NGN', 37500, 1500,
-			'bank_transfer', 'bank', '0123456789', 'Ada Lovelace', 'confirmed', 'rent settlement payout', $4)
-	`, uuid.New().String(), userID.String(), vaultID.String(), base.Add(4*time.Hour))
-
-	mustExec(t, db, `
 		INSERT INTO yield_harvests (id, user_id, vault_id, amount, currency, harvested_at)
 		VALUES ($1, $2, $3, 5, 'USDC', $4)
 	`, uuid.New().String(), userID.String(), vaultID.String(), base.Add(5*time.Hour))
@@ -68,8 +59,8 @@ func TestActivityRepositoryIntegration_UnionAndOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(items) != 5 {
-		t.Fatalf("got %d items, want 5 (deposit, withdrawal, rebalance, settlement, yield_earned)", len(items))
+	if len(items) != 4 {
+		t.Fatalf("got %d items, want 4 (deposit, withdrawal, rebalance, yield_earned)", len(items))
 	}
 	if next != "" || prev != "" {
 		t.Fatalf("expected no cursors when the whole feed fits on one page, got next=%q prev=%q", next, prev)
@@ -78,7 +69,6 @@ func TestActivityRepositoryIntegration_UnionAndOrdering(t *testing.T) {
 	// Most recent first: yield_earned (base+5h) ... deposit (base+1h).
 	wantOrder := []activity.EventType{
 		activity.EventYieldEarned,
-		activity.EventSettlement,
 		activity.EventRebalance,
 		activity.EventWithdrawal,
 		activity.EventDeposit,
@@ -108,16 +98,16 @@ func TestActivityRepositoryIntegration_TypeFilter(t *testing.T) {
 	repo := NewActivityRepository(db)
 	items, _, _, err := repo.List(context.Background(), userID, activity.ListFilter{
 		Limit: 10,
-		Types: []activity.EventType{activity.EventDeposit, activity.EventSettlement},
+		Types: []activity.EventType{activity.EventDeposit, activity.EventWithdrawal},
 	})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
 	if len(items) != 2 {
-		t.Fatalf("got %d items, want 2 (deposit + settlement only)", len(items))
+		t.Fatalf("got %d items, want 2 (deposit + withdrawal only)", len(items))
 	}
 	for _, it := range items {
-		if it.Type != activity.EventDeposit && it.Type != activity.EventSettlement {
+		if it.Type != activity.EventDeposit && it.Type != activity.EventWithdrawal {
 			t.Fatalf("unexpected type in filtered result: %q", it.Type)
 		}
 	}
@@ -223,8 +213,8 @@ func TestActivityRepositoryIntegration_KeysetPaginationForwardAndBackward(t *tes
 		}
 		cursor = next
 	}
-	if len(forward) != 5 {
-		t.Fatalf("forward walk collected %d items, want 5", len(forward))
+	if len(forward) != 4 {
+		t.Fatalf("forward walk collected %d items, want 4", len(forward))
 	}
 	seen := map[uuid.UUID]bool{}
 	for _, it := range forward {

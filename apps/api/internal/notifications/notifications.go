@@ -40,8 +40,6 @@ import (
 type EventType string
 
 const (
-	EventSettlementCompleted       EventType = "settlement_completed"
-	EventSettlementFailed          EventType = "settlement_failed"
 	EventDepositConfirmed          EventType = "deposit_confirmed"
 	EventYieldMilestone            EventType = "yield_milestone"
 	EventVaultAPYDrop              EventType = "vault_apy_drop"
@@ -104,7 +102,6 @@ const (
 var safetyEvents = map[EventType]bool{
 	EventProtocolHealthAlert: true,
 	EventVaultPaused:         true,
-	EventSettlementFailed:    true,
 }
 
 var promotionalEvents = map[EventType]bool{
@@ -136,8 +133,6 @@ const (
 // computes the union of channels per event, then filters by the user's
 // preferences.
 var eventChannelMatrix = map[EventType][]ChannelKind{
-	EventSettlementCompleted:          {ChannelEmail, ChannelWebSocket, ChannelPush},
-	EventSettlementFailed:             {ChannelEmail, ChannelWebSocket, ChannelPush},
 	EventDepositConfirmed:             {ChannelEmail, ChannelWebSocket, ChannelPush},
 	EventYieldMilestone:               {ChannelPush},
 	EventVaultAPYDrop:                 {ChannelEmail, ChannelPush},
@@ -601,7 +596,7 @@ func (d *Dispatcher) Send(
 //     never blocks the websocket fan-out, and vice versa (this dispatcher
 //     intentionally delivers to every eligible channel simultaneously
 //     rather than a single preferred channel, since e.g.
-//     EventSettlementCompleted wants email+push+in-app together, not
+//     EventDepositConfirmed wants email+push+in-app together, not
 //     "whichever one works"). Per-channel fallback still applies: if Push
 //     or Email fails, WebSocket is attempted as a live fallback (skipped if
 //     already attempted as part of the normal matrix). Failed Email/Push
