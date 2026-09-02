@@ -305,7 +305,7 @@ Every quarter (or before major release), re-verify all entries:
 1. **Run script**: Catch any broken references
 2. **Spot-check**: Manually verify 10–20 entries
 3. **Update**: Add new entries for recent features/bugs
-4. **Upgrade dependencies**: Pin and test new SDK versions (e.g., Anthropic)
+4. **Upgrade dependencies**: Pin and test new SDK versions (e.g., Stellar SDK)
 
 ---
 
@@ -345,16 +345,16 @@ Every quarter (or before major release), re-verify all entries:
 
 ### Fixing a Bug in Register
 
-**Scenario:** You fix [B-03] BOLA vulnerability in initiateSettlement.
+**Scenario:** You fix a BOLA vulnerability in getSavingsGoal.
 
-1. Create branch: `git checkout -b fix/bola-settlement`
+1. Create branch: `git checkout -b fix/bola-savings-goal`
 2. Fix code: extract user_id from JWT, not request body
-3. Write test: `TestInitiateSettlement_BOLA_RejectsOtherUserID`
-4. PR: `fix(api): prevent BOLA in initiateSettlement`
+3. Write test: `TestGetSavingsGoal_BOLA_RejectsOtherUserID`
+4. PR: `fix(api): prevent BOLA in getSavingsGoal`
 5. Once merged, update register [API-26]:
    ```markdown
    - **Status:** Resolved
-   - **Evidence:** test: apps/api/internal/handler/settlement_handler_test.go::TestInitiateSettlement_BOLA_RejectsOtherUserID, pr: #342
+   - **Evidence:** test: apps/api/internal/handler/savings_goal_handler_test.go::TestGetSavingsGoal_BOLA_RejectsOtherUserID, pr: #342
    - **Notes:** BOLA fixed: user_id now extracted from JWT auth context, not request body
    ```
 6. Commit register: `git commit -am "chore: mark [API-26] BOLA fixed (Closes #342)"`

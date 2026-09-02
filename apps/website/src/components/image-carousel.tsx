@@ -4,7 +4,7 @@ import Image from "next/image"
 
 const baseItems = [
     { src: "/logos/blend.svg",     alt: "Blend",     bg: "#dcdcdc" },
-    { src: "/logos/moneygram.png", alt: "MoneyGram", bg: "#dcdcdc" },
+    { src: "/logos/phoenix.png",   alt: "Phoenix",   bg: "#dcdcdc" },
     { src: "/logos/Stellar.png",   alt: "Stellar",   bg: "#dcdcdc" },
     { src: "/logos/usdc.svg",      alt: "USDC",      bg: "#dcdcdc" },
     { src: "/logos/aquarius.svg",  alt: "Aquarius",  bg: "#dcdcdc" },

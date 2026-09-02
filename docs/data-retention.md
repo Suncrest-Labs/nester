@@ -7,14 +7,12 @@ it's exempt from deletion (and why), and how deletion is enforced.
 
 The schema accumulates per-user history with no expiry: `activity_events`,
 `nudge_dispatch_log`, `nudge_outcomes`, `audit_logs`, `processed_events`,
-performance snapshots, and KYC records including identity fields and
-document references. Nothing in the tree deleted any of it before this
+and performance snapshots. Nothing in the tree deleted any of it before this
 policy, and there was no account-deletion path.
 
-Two problems follow from that. Operationally, tables that only grow
-eventually dominate backup and restore times. Legally, KYC identity data with
-no stated retention period and no deletion mechanism is the kind of thing
-that is much cheaper to design now than to retrofit under a deadline.
+The problem that follows from that is operational: tables that only grow
+eventually dominate backup and restore times, and a retention decision is
+much cheaper to design now than to retrofit under a deadline.
 
 Audit logs deliberately should not be deletable on request — that is a
 reason to write the policy down, not a reason to have none.
@@ -31,7 +29,7 @@ land the first real enforcement mechanism (`internal/scheduler/data_retention.go
 — see that file's doc comment for the mechanics).
 
 The remaining categories are genuinely harder — a user-initiated
-account-deletion path, KYC erasure-vs-anonymisation rules, and backup
+account-deletion path and backup
 retention are cross-cutting concerns each substantial enough to warrant their
 own implementation and its own review, not something to bolt onto a
 first-pass retention sweep. Marking a policy **Stated, not yet enforced**
@@ -48,7 +46,6 @@ answer to work from instead of having to make the call under a deadline.
 | Audit logs | `audit_logs` | Indefinite | None — exempt by design | Exempt (see below) |
 | Processed chain events | `processed_events` | 90 days | Not yet implemented | Stated, not yet enforced |
 | Performance snapshots | performance snapshot tables | 2 years | Not yet implemented | Stated, not yet enforced |
-| KYC identity + documents | `users.kyc_*`, `kyc_documents` | Regulatory minimum + account lifetime | Not yet implemented — anonymisation, not erasure | Stated, not yet enforced |
 | Account deletion (user-initiated) | cross-table | N/A — see below | Not yet implemented | Stated, not yet enforced |
 
 ### Activity events — 180 days, enforced
@@ -129,41 +126,6 @@ high-resolution points after `RawRetention` — currently 30 days by default —
 while keeping rolled-up minute/hour/day aggregates) and needs its cutoff
 reconciled against that existing mechanism rather than introduced as an
 independent, possibly-conflicting deletion path.
-
-### KYC identity and documents — regulatory minimum + account lifetime, not yet enforced
-
-`users.kyc_status`/`kyc_submitted_at`/`kyc_reviewed_at`/`kyc_rejection_reason`
-and `kyc_documents` (`full_name`, `date_of_birth`, `country`,
-`front_object_key`, `back_object_key` — migrations 032, 069, 107) are the
-category this document's introduction calls out as the one where a written
-policy matters most. Proposed retention is the regulatory minimum for KYC
-recordkeeping in the jurisdictions this product operates in, or the life of
-the account plus that minimum after closure — whichever is longer. That
-number is deliberately NOT filled in here: it depends on which
-jurisdiction's AML/KYC recordkeeping rules actually apply, which is a legal
-determination this document should not make unilaterally on a "just get
-something in writing" pass.
-
-What IS decided, and matters for the eventual implementation: **this is
-anonymisation, not erasure**. Unlike `activity_events`, a KYC record cannot
-simply be hard-deleted at end of retention while the account and its
-transaction history remain — the compliance trail (that this user was
-verified, when, and against what standard) needs to survive even after the
-underlying PII is removed. The eventual job should null/redact
-`full_name`/`date_of_birth`/`country`/the document object keys (and delete
-the referenced objects from `objectstorage`) while leaving the row's
-existence, `kyc_status`, and timestamps intact.
-
-Note on current encryption state (checked while writing this policy, not
-assumed): `kyc_documents.id_number` and the document object keys are
-encrypted at rest via `crypto.AccountCipher` (migration 069). `full_name` and
-`date_of_birth` (migration 107) are currently PLAINTEXT — migration 107's own
-comment records this as a deliberate, considered follow-up, not an oversight,
-but it means "destroy the encryption key material" is NOT yet a valid
-erasure mechanism for those two columns specifically; an eventual retention
-job must either wait for them to join the AccountCipher-encrypted set, or
-explicitly `UPDATE ... SET full_name = NULL, date_of_birth = NULL` as part of
-anonymisation rather than assuming a key-destruction shortcut covers them.
 
 ### Account deletion (user-initiated) — not yet enforced
 

@@ -124,7 +124,7 @@ the real series count is a small multiple of the route count.
 
 **Buckets:** `0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10` seconds.
 Chosen for this workload rather than library defaults: handlers that call
-Soroban RPC, Horizon, or the Anthropic relay routinely land in the 250ms–5s
+Soroban RPC or Horizon routinely land in the 250ms–5s
 range, and that band needs resolution. The 10s bucket plus `+Inf` keeps
 timeouts visible.
 
@@ -229,11 +229,11 @@ client's existing transport.
 | `nester_outbound_errors_total` | Counter | `upstream`, `kind` | Failures before any response. |
 
 `upstream` values: `soroban_rpc`, `horizon`, `coingecko`, `defillama`,
-`anthropic_relay`, `intelligence`, `other`.
+`other`.
 
 `kind` values: `timeout`, `canceled`, `dns`, `connect`, `other`.
 
-**Cardinality:** bounded by the constants — 7 upstreams × 10 methods × 6
+**Cardinality:** bounded by the constants — 5 upstreams × 10 methods × 6
 classes worst case, far less in practice.
 
 Transport failures are counted separately from status codes because they

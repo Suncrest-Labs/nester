@@ -1,8 +1,8 @@
 # Cost-weighted rate limit quotas
 
 The limiters in `apps/api/internal/middleware/ratelimit.go` count requests. That
-is the wrong unit for this API. A profile read and an intelligence relay call
-that fans out to Anthropic, CoinGecko, DeFiLlama and Soroban RPC both count as
+is the wrong unit for this API. A profile read and a multi-protocol APY
+comparison that fans out to CoinGecko, DeFiLlama and Soroban RPC both count as
 one, so a caller can sit comfortably inside 100 requests/minute while saturating
 every expensive dependency we have — and the limiter will not notice, because it
 is measuring the wrong thing.
@@ -22,10 +22,7 @@ Anything not listed costs `DefaultRouteCost` (1).
 | `CostSimulation` | 3 | In-process projection or scenario run over fetched data |
 | `CostChainRead` | 4 | Soroban simulation — preview deposit/withdraw, share price |
 | `CostAggregation` | 6 | Multi-protocol APY comparison, TVL rollups |
-| `CostIntelligenceRead` | 8 | Model-backed read behind a cache |
 | `CostChainWrite` | 10 | Soroban contract invocation — deposit, withdraw, harvest, rebalance |
-| `CostLLMAnalysis` | 15 | A bounded model call — analyze, coaching, savings plan |
-| `CostLLMRelay` | 25 | The chat relay: a model call plus model-driven tool fan-out |
 
 The numbers are a fan-out ordering, not a latency budget. They only need to be
 right relative to each other, and they are deliberately coarse so that re-tuning
@@ -127,7 +124,7 @@ Per environment, so staging can run tighter limits than production:
 | `RATELIMIT_QUOTA_BYPASS_TOKEN` | *(empty)* | Per-request opt-out; disabled when empty |
 
 At 300/minute an ordinary session never notices — the global 100 requests/minute
-per IP binds first — while the quota allows 12 relay calls or 30 chain writes per
+per IP binds first — while the quota allows 30 chain writes per
 minute. Tightening staging is the cheapest way to find out whether clients
 actually honour `Retry-After` before production does.
 

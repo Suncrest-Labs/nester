@@ -424,7 +424,7 @@ indexer, and the freshness signal knows nothing about why the indexer stopped.
 | `POST /api/v1/admin/sync-events` | **no** | Operator recovery action; blocking it during an incident would remove a tool the runbook depends on |
 | `POST /api/v1/admin/backfill` | **no** | Same, and it is already bounded by its own sequential loop |
 | `/health/detailed` probes | **no** | Diagnostic; must report the upstream's real state |
-| CoinGecko, DeFiLlama, Anthropic relay, intelligence | **no** | Out of scope for this issue |
+| CoinGecko, DeFiLlama | **no** | Out of scope for this issue |
 
 The admin exclusions are a deliberate trade: an operator running a recovery
 backfill can still saturate an upstream that live traffic is being shed from.

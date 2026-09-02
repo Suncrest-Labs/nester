@@ -21,8 +21,6 @@ export const docsNav: DocSection[] = [
         children: [
             { title: "Savings Layer", slug: "savings-layer" },
             { title: "Yield Layer", slug: "yield-layer" },
-            { title: "Off-Ramp Layer", slug: "offramp-layer" },
-            { title: "AI Intelligence", slug: "ai-layer" },
         ],
     },
     {
@@ -33,7 +31,6 @@ export const docsNav: DocSection[] = [
             { title: "Vault Contract", slug: "vault-contract" },
             { title: "Vault Share Token", slug: "vault-token" },
             { title: "Yield Adapters", slug: "yield-adapters" },
-            { title: "Escrow & Settlement", slug: "escrow" },
         ],
     },
     {
@@ -43,7 +40,6 @@ export const docsNav: DocSection[] = [
             { title: "Overview", slug: "api-overview" },
             { title: "Vault Endpoints", slug: "vault-api" },
             { title: "Position Endpoints", slug: "position-api" },
-            { title: "Off-Ramp Endpoints", slug: "offramp-api" },
         ],
     },
     {
@@ -52,14 +48,6 @@ export const docsNav: DocSection[] = [
         children: [
             { title: "Wallet Integration", slug: "wallet-integration" },
             { title: "Transaction Signing", slug: "transaction-signing" },
-        ],
-    },
-    {
-        title: "PROMETHEUS AI",
-        slug: "prometheus",
-        children: [
-            { title: "Overview", slug: "prometheus-overview" },
-            { title: "API Reference", slug: "prometheus-api" },
         ],
     },
     {
@@ -77,9 +65,9 @@ export const docsContent: Record<string, { title: string; content: string }> = {
         title: "Introduction",
         content: `# What is Nester?
 
-Nester is a **decentralized savings and liquidity protocol** built on Stellar/Soroban that automates crypto savings by diversifying deposits across multiple yield sources, while enabling instant fiat settlements.
+Nester is a **decentralized, crypto-first savings and yield investment protocol** built on Stellar/Soroban. It automates crypto savings by diversifying vault deposits across multiple yield sources, with a live portfolio view and on-chain auto-invest.
 
-> A decentralized protocol that optimizes user deposits through diversified yield strategies and aggregated liquidity routes, providing instant swaps, fiat access, and a unified experience between DeFi earnings and real-world finance.
+> A decentralized protocol that optimizes user deposits through diversified yield strategies — giving everyday savers institutional-grade returns without ever giving up custody of their funds.
 
 ## The Problem
 
@@ -87,28 +75,31 @@ Most people who hold stablecoins face a frustrating dilemma:
 
 - Leave USDC/USDT idle in a wallet earning **0%**
 - Navigate the bewildering maze of DeFi protocols — learning about smart contracts, managing gas fees, tracking APYs across dozens of platforms
-- Traditional off-ramps are **slow** (2-5 days), **expensive** (3-8% fees), and **risky** (P2P scams)
+- Manually rebalancing between protocols is tedious, error-prone, and easy to abandon
 
 For 99% of people, this complexity means their money sits idle, losing value to inflation.
 
 ## The Solution
 
-Nester rests on **four integrated pillars**:
+Nester rests on **three integrated pillars**:
 
 | Pillar | Purpose | Status |
 |--------|---------|--------|
-| **Stablecoin Savings** | Automated vault-based yield on USDC/USDT/DAI | Stage 1 (MVP) |
-| **Automated Yield** | Multi-asset yield optimization (XLM, BTC, ETH) | Post-MVP |
-| **Off-Ramp** | Instant crypto → fiat via banking APIs | Stage 2 |
-| **Prometheus AI** | Personalized financial intelligence via Claude | Ongoing |
+| **Smart Vaults** | Tiered, vault-based yield on stablecoins: Conservative (6–8% APY), Balanced (8–12%), Growth (12–18%) | v1 |
+| **Live Portfolio** | Positions, P&L, and performance tracking in real time | v1 |
+| **Auto-Invest** | On-chain recurring deposit mandates that execute automatically | v1 |
 
-## Target Markets
+## Non-Custodial by Design
 
-Nester primarily targets emerging markets where crypto-to-fiat friction is highest:
+Nester never takes custody of user funds. Deposits sit in Soroban smart contracts, and users connect with their own Stellar wallets — **Freighter**, **LOBSTR**, or **xBull**. Withdrawals go straight back to the user's wallet at any time.
 
-- **Nigeria** (NGN) — primary launch market
-- **Ghana** (GHS) — post-beta rollout
-- **Kenya** (KES) — post-beta rollout
+## Roadmap
+
+| Version | Scope |
+|---------|-------|
+| **v1** | Smart Vaults, live portfolio, auto-invest mandates |
+| **v2** | In-app swaps and recurring buys |
+| **v3** | Fiat onramp widget, MPC embedded wallets, curated baskets |
 
 ## Tech Stack
 
@@ -116,7 +107,6 @@ Nester primarily targets emerging markets where crypto-to-fiat friction is highe
 Blockchain:    Stellar / Soroban (Rust smart contracts)
 Backend:       Go + Chi router + PostgreSQL (Supabase)
 Frontend:      Next.js 16 + Tailwind v4 + StellarWalletsKit
-Intelligence:  Python + FastAPI + Claude API
 Mobile:        React Native (future)
 \`\`\`
 `,
@@ -126,7 +116,7 @@ Mobile:        React Native (future)
         title: "Architecture Overview",
         content: `# Architecture Overview
 
-Nester follows a layered architecture separating concerns across clients, backend services, blockchain, and external integrations.
+Nester follows a layered architecture separating concerns across clients, backend services, and the blockchain.
 
 ## System Diagram
 
@@ -146,31 +136,23 @@ Nester follows a layered architecture separating concerns across clients, backen
 │  │           API Gateway (Go + Chi Router)                │  │
 │  │                                                       │  │
 │  │  ┌─────────────┐ ┌──────────────┐ ┌───────────────┐  │  │
-│  │  │ Vault       │ │ Off-Ramp     │ │ User / Auth   │  │  │
-│  │  │ Manager     │ │ Orchestrator │ │ Service       │  │  │
+│  │  │ Vault       │ │ Portfolio    │ │ User / Auth   │  │  │
+│  │  │ Manager     │ │ Service      │ │ Service       │  │  │
 │  │  └─────────────┘ └──────────────┘ └───────────────┘  │  │
 │  │  ┌─────────────┐ ┌──────────────┐ ┌───────────────┐  │  │
-│  │  │ Yield       │ │ LP Matching  │ │ Event         │  │  │
-│  │  │ Router      │ │ & Aggregator │ │ Listener      │  │  │
+│  │  │ Yield       │ │ Auto-Invest  │ │ Event         │  │  │
+│  │  │ Router      │ │ Scheduler    │ │ Listener      │  │  │
 │  │  └─────────────┘ └──────────────┘ └───────────────┘  │  │
-│  │  ┌─────────────┐ ┌──────────────┐ ┌───────────────┐  │  │
-│  │  │ Rebalancer  │ │ Fiat Gateway │ │ AML /         │  │  │
-│  │  │ Service     │ │ (Paystack)   │ │ Compliance    │  │  │
-│  │  └─────────────┘ └──────────────┘ └───────────────┘  │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                              │                              │
-│  ┌───────────────────────────▼───────────────────────────┐  │
-│  │        Prometheus Intelligence (Python + FastAPI)      │  │
-│  │                                                       │  │
-│  │  Vault Strategy    Portfolio      Market Intelligence  │  │
-│  │  Analyzer          Analyzer       (DeFiLlama, etc.)   │  │
-│  │  Conversational AI              Risk Scoring           │  │
+│  │  ┌─────────────┐                                     │  │
+│  │  │ Rebalancer  │                                     │  │
+│  │  │ Service     │                                     │  │
+│  │  └─────────────┘                                     │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                              │                              │
 │  ┌───────────────────────────▼───────────────────────────┐  │
 │  │              PostgreSQL (Supabase)                     │  │
 │  │  users │ vaults │ positions │ shares │ yield_snapshots │  │
-│  │  transactions │ events │ lp_providers │ offramp_reqs   │  │
+│  │  transactions │ events │ auto_invest_mandates          │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                                │
@@ -184,9 +166,9 @@ Nester follows a layered architecture separating concerns across clients, backen
 │  │  Deploy/manage         deposit / withdraw / position   │  │
 │  │  vault instances       nVault share token mint/burn    │  │
 │  │                        maturity & penalty logic        │  │
-│  │  Escrow/Settlement     Yield Source Adapters           │  │
-│  │  Off-ramp lock         Blend / Kamino / Aave           │  │
-│  │  release / refund      deposit / withdraw / balanceOf  │  │
+│  │  Auto-Invest Mandates  Yield Source Adapters           │  │
+│  │  recurring deposit     Blend / Kamino / Aave           │  │
+│  │  authorization         deposit / withdraw / balanceOf  │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  Stellar Network: Horizon API / Soroban RPC                 │
@@ -218,32 +200,30 @@ User clicks "Deposit 1000 USDC into Balanced Vault"
 └─────────────────┘     └──────────────────┘
 \`\`\`
 
-## Data Flow: Off-Ramp
+## Data Flow: Auto-Invest
 
 \`\`\`
-User clicks "Withdraw ₦500,000 to GTBank"
+User authorizes "Deposit 200 USDC into Balanced Vault weekly"
     │
     ▼
 ┌──────────────┐    ┌────────────────┐    ┌─────────────┐
-│ Frontend     │───▶│ Go Backend     │───▶│ LP Matcher   │
-│ POST         │    │ Validate KYC   │    │ Find best    │
-│ /settlements │    │ Lock escrow    │    │ GTBank node  │
+│ Frontend     │───▶│ Go Backend     │───▶│ Scheduler   │
+│ POST         │    │ Validate +     │    │ Registers   │
+│ /mandates    │    │ store mandate  │    │ next run    │
 └──────────────┘    └───────┬────────┘    └──────┬──────┘
-                            │                     │
+                            │                     │ every cycle
                             ▼                     ▼
                    ┌────────────────┐    ┌─────────────┐
-                   │ Soroban        │    │ Paystack    │
-                   │ Escrow.lock()  │    │ API         │
-                   │ Reserve USDC   │    │ Transfer    │
-                   └────────────────┘    │ ₦500,000    │
-                                         └──────┬──────┘
-                            ┌────────────────────┘
-                            ▼
-                   ┌────────────────┐    ┌─────────────┐
-                   │ Webhook        │───▶│ Soroban     │
-                   │ transfer.ok    │    │ release()   │
-                   │                │    │ USDC → LP   │
-                   └────────────────┘    └─────────────┘
+                   │ Soroban        │───▶│ Vault       │
+                   │ Mandate        │    │ deposit()   │
+                   │ authorization  │    │ shares mint │
+                   └────────────────┘    └──────┬──────┘
+                                                │
+                   ┌────────────────┐           │
+                   │ Event Listener │◀──────────┘
+                   │ Index deposit  │
+                   │ Update position│
+                   └────────────────┘
 \`\`\`
 
 ## Project Structure
@@ -255,8 +235,7 @@ nester/
 │   ├── dapp/
 │   │   ├── frontend/         # DApp (Next.js 16 + npm)
 │   │   └── contracts/        # Soroban smart contracts (Rust)
-│   ├── api/                  # API Gateway (Go + Chi + PostgreSQL)
-│   └── intelligence/         # Prometheus AI (Python + FastAPI)
+│   └── api/                  # API Gateway (Go + Chi + PostgreSQL)
 ├── packages/
 │   └── contracts/            # Shared contract types/ABIs
 └── mobile/                   # React Native app (future)
@@ -269,14 +248,13 @@ nester/
 CREATE TABLE users (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     wallet_addr  TEXT UNIQUE NOT NULL,
-    kyc_status   TEXT DEFAULT 'none', -- none | pending | approved
     created_at   TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE TABLE vaults (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name         TEXT NOT NULL,         -- "Conservative", "Balanced", etc.
-    vault_type   TEXT NOT NULL,         -- conservative | balanced | growth | defi500
+    vault_type   TEXT NOT NULL,         -- conservative | balanced | growth
     contract_id  TEXT NOT NULL,         -- Soroban contract address
     total_shares NUMERIC DEFAULT 0,
     total_assets NUMERIC DEFAULT 0,
@@ -303,16 +281,14 @@ CREATE TABLE yield_snapshots (
     recorded_at  TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE offramp_requests (
+CREATE TABLE auto_invest_mandates (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id      UUID REFERENCES users(id),
+    vault_id     UUID REFERENCES vaults(id),
     amount_usd   NUMERIC NOT NULL,
-    amount_fiat  NUMERIC NOT NULL,
-    currency     TEXT NOT NULL,         -- NGN | GHS | KES
-    bank_code    TEXT NOT NULL,
-    account_num  TEXT NOT NULL,
-    status       TEXT DEFAULT 'pending', -- pending | escrowed | settled | failed | refunded
-    tx_hash      TEXT,
+    cadence      TEXT NOT NULL,          -- daily | weekly | monthly
+    status       TEXT DEFAULT 'active',  -- active | paused | cancelled
+    next_run_at  TIMESTAMPTZ NOT NULL,
     created_at   TIMESTAMPTZ DEFAULT now()
 );
 \`\`\`
@@ -332,7 +308,6 @@ Get the Nester monorepo running locally in under 5 minutes.
 - **npm** ≥ 9 (for dapp frontend)
 - **Rust** + \`soroban-cli\` (for smart contracts)
 - **Go** ≥ 1.22 (for API backend)
-- **Python** ≥ 3.11 (for intelligence service)
 
 ## Clone & Install
 
@@ -348,14 +323,6 @@ cd apps/api && go mod download && cd ../..
 
 # DApp frontend (npm)
 cd apps/dapp/frontend && npm install && cd ../../..
-
-# Intelligence (Python)
-cd apps/intelligence
-python -m venv venv
-# On macOS/Linux: source venv/bin/activate
-# On Windows: venv\\Scripts\\activate
-pip install -r requirements.txt
-cd ../..
 \`\`\`
 
 ## Run Development Servers
@@ -369,9 +336,6 @@ cd apps/api && go run cmd/api/main.go
 
 # DApp frontend — runs on localhost:3001
 cd apps/dapp/frontend && npm run dev
-
-# Intelligence — runs on localhost:8081 (with venv active)
-cd apps/intelligence && python -m uvicorn app.main:app --port 8081 --reload
 \`\`\`
 
 ## Build & Verify
@@ -381,7 +345,6 @@ cd apps/intelligence && python -m uvicorn app.main:app --port 8081 --reload
 pnpm --filter @nester/website build && pnpm --filter @nester/website lint
 cd apps/dapp/frontend && npm run build && npm run lint && cd ../../..
 cd apps/api && go test ./... && cd ../..
-cd apps/intelligence && pytest && ruff check . && mypy app tests && cd ../..
 \`\`\`
 
 ## Smart Contracts (Soroban)
@@ -405,9 +368,9 @@ soroban contract deploy \\
 ## Environment Variables
 
 \`\`\`bash
-# apps/intelligence/.env
-ANTHROPIC_API_KEY=sk-ant-xxx
+# apps/api/.env
 DATABASE_URL=postgresql://user:pass@host:5432/nester
+SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 \`\`\`
 `,
     },
@@ -447,8 +410,8 @@ User deposits 1,000 USDC
 | Vault | Target APY | Risk Profile | Strategy |
 |-------|-----------|--------------|----------|
 | **Conservative** | 6–8% | Minimal | Battle-tested lending protocols only |
-| **Balanced** | 8–11% | Moderate | Lending + selected liquidity pools |
-| **Growth** | 11–15% | Higher | Newer strategies with strict risk controls |
+| **Balanced** | 8–12% | Moderate | Lending + selected liquidity pools |
+| **Growth** | 12–18% | Higher | Newer strategies with strict risk controls |
 | **DeFi500** | Variable | Diversified | Index fund of top DeFi protocols, monthly rebalanced |
 
 ## Share Token Model
@@ -518,7 +481,7 @@ Separate from the stablecoin savings, the Automated Yield Layer lets users earn 
 
 \`\`\`
 XLM  → Auto-stake (8% base) + Liquidity provision (12% with IL risk)
-       AI allocates: 60% staking, 40% LP based on market conditions
+       Strategy engine allocates: 60% staking, 40% LP based on market conditions
 
 BTC  → Wrapped to Stellar-compatible token
        Deployed to Bitcoin-backed lending protocols (4–6% APY)
@@ -540,9 +503,9 @@ Portfolio example:
   10% USDC — Balanced Vault (stability anchor)
 \`\`\`
 
-## AI-Driven Rebalancing
+## Automated Rebalancing
 
-Prometheus monitors drift from target allocations:
+The rebalancer monitors drift from target allocations and surfaces alerts in your portfolio:
 
 \`\`\`
 Alert: "XLM now represents 45% of your portfolio (target: 30%).
@@ -550,189 +513,8 @@ Alert: "XLM now represents 45% of your portfolio (target: 30%).
         Consider rebalancing to reduce concentration risk.
         Suggested action: Sell 30% of XLM position → Balanced Vault"
 
-[Approve]  [Dismiss]  [Ask Prometheus]
+[Approve]  [Dismiss]
 \`\`\`
-`,
-    },
-
-    "offramp-layer": {
-        title: "Off-Ramp Layer",
-        content: `# Off-Ramp Layer
-
-The Off-Ramp Layer enables instant crypto-to-fiat conversion with 3-second settlement via direct banking API integration.
-
-## Settlement Flow
-
-\`\`\`
-Step 1: User initiates off-ramp
-  POST /offramp/request
-  { amount: 1000, currency: "NGN", bank_code: "058", account: "0123456789" }
-
-Step 2: Smart contract escrow
-  Vault.withdrawToEscrow(shares, destId)
-  → USDC locked in escrow contract
-
-Step 3: LP matching
-  System selects optimal liquidity node:
-  - Same bank preference (GTBank → GTBank LP for 3s settlement)
-  - Sufficient fiat balance
-  - Highest reliability score
-
-Step 4: Fiat transfer (automated)
-  Paystack API → initiate_transfer({
-    recipient: resolved_account,
-    amount: 1_565_000,  // NGN equivalent
-    currency: "NGN"
-  })
-
-Step 5: Confirmation
-  Webhook: transfer.success
-  → Backend calls Escrow.releaseAfterSettlement()
-  → USDC released from escrow to LP node
-  → User's bank account credited
-
-Step 6: Failure handling
-  If transfer fails or times out:
-  → Escrow.refundIfFailed()
-  → USDC returned to user's wallet
-  → No manual intervention needed
-\`\`\`
-
-## Settlement Times
-
-| Transfer Type | Expected Time |
-|---------------|--------------|
-| Same-bank (e.g., GTBank → GTBank) | **3 seconds** |
-| Same-network (NIP — GTBank → Zenith) | **1–2 minutes** |
-| Cross-bank | **up to 5 minutes** |
-
-## Liquidity Node Model
-
-\`\`\`
-┌─────────────────────────────────────────┐
-│           Liquidity Node                 │
-│                                         │
-│  Operator stakes collateral (USDC)      │
-│  Maintains fiat balance in bank acct    │
-│  Connected via banking API              │
-│                                         │
-│  Revenue: 0.5% per transaction          │
-│  Penalty: Deprioritized + collateral    │
-│           slashed for repeated failures │
-└─────────────────────────────────────────┘
-\`\`\`
-
-## KYC-Lite Requirements
-
-Off-ramp users must complete lightweight identity verification:
-
-- Full name
-- BVN (Bank Verification Number) — Nigeria
-- NIN (National Identification Number) — Nigeria
-- Transaction limits applied based on verification level
-
-## Supported Currencies
-
-| Currency | Country | Banking Partner | Status |
-|----------|---------|----------------|--------|
-| NGN | Nigeria | Paystack, Moniepoint, Kuda | MVP |
-| GHS | Ghana | Paystack | Post-beta |
-| KES | Kenya | M-Pesa integration (planned) | Post-beta |
-`,
-    },
-
-    "ai-layer": {
-        title: "AI Intelligence (Prometheus)",
-        content: `# AI Intelligence Layer (Prometheus)
-
-Prometheus is Nester's AI-powered financial advisor, built on Claude API via a Python/FastAPI service.
-
-## Architecture
-
-\`\`\`
-┌────────────────────────────────────────────────┐
-│              Prometheus Service                 │
-│              Python + FastAPI                   │
-│                                                │
-│  ┌──────────────┐  ┌────────────────────────┐  │
-│  │ /chat        │  │ Claude API             │  │
-│  │ Conversational│  │ System prompt with     │  │
-│  │ endpoint     │──▶│ portfolio context,     │  │
-│  │              │  │ market data, user      │  │
-│  └──────────────┘  │ risk profile           │  │
-│                    └────────────────────────┘  │
-│  ┌──────────────┐  ┌────────────────────────┐  │
-│  │ /insights    │  │ Data Sources           │  │
-│  │ Auto-gen     │  │ DeFiLlama (TVL)        │  │
-│  │ weekly       │  │ CoinGecko (prices)     │  │
-│  └──────────────┘  │ On-chain analytics     │  │
-│                    │ Social sentiment        │  │
-│  ┌──────────────┐  └────────────────────────┘  │
-│  │ /risk-score  │                              │
-│  │ Portfolio    │                              │
-│  │ analysis     │                              │
-│  └──────────────┘                              │
-└────────────────────────────────────────────────┘
-\`\`\`
-
-## Example Interactions
-
-\`\`\`
-User: "I want to save $5,000 over the next year without much risk."
-
-Prometheus: "Based on your risk tolerance and timeline, I recommend
-the Balanced Vault:
-
-  • Expected return: $475 (9.5% APY)
-  • Risk level: Low-Medium
-  • Allocation: 40% Blend, 35% Kamino, 25% Aave
-  • Confidence: 87%
-
-The Conservative Vault would yield ~$350 (7% APY) with lower risk.
-The Growth Vault could yield ~$625 (12.5% APY) but with higher
-volatility exposure.
-
-[Deposit into Balanced Vault]  [Compare Vaults]  [Ask more]"
-\`\`\`
-
-## Chat API
-
-\`\`\`python
-# POST /intelligence/chat
-# Request
-{
-    "message": "Should I rebalance my portfolio?",
-    "wallet_address": "GBXYZ...",
-    "context": {
-        "positions": [
-            {"vault": "balanced", "shares": 1000, "value_usd": 1095},
-            {"asset": "XLM", "amount": 5000, "value_usd": 750}
-        ],
-        "total_value_usd": 1845
-    }
-}
-
-# Response
-{
-    "response": "Your portfolio is well-balanced at 59% stablecoins...",
-    "actions": [
-        {
-            "type": "rebalance",
-            "description": "Sell 10% XLM → Balanced Vault",
-            "params": {"from": "XLM", "to": "balanced", "amount_pct": 10}
-        }
-    ],
-    "confidence": 0.82,
-    "risk_score": 6.5
-}
-\`\`\`
-
-## Key Principles
-
-1. **AI never executes without user approval** — every action requires explicit confirmation
-2. **Context-aware** — responses consider your actual portfolio, not generic advice
-3. **Transparent reasoning** — AI explains why it recommends something
-4. **One-click execution** — approved recommendations trigger real transactions
 `,
     },
 
@@ -798,9 +580,6 @@ packages/contracts/
 ├── strategy/
 │   ├── Cargo.toml
 │   └── src/lib.rs        # Allocation strategy engine
-├── escrow/
-│   ├── Cargo.toml
-│   └── src/lib.rs        # Off-ramp escrow/settlement
 └── adapters/
     ├── blend/src/lib.rs   # Blend protocol adapter
     └── ...
@@ -1097,109 +876,6 @@ pub struct YieldSource {
 `,
     },
 
-    escrow: {
-        title: "Escrow & Settlement",
-        content: `# Escrow & Settlement Contract
-
-The escrow contract handles the critical lock-release cycle for off-ramp settlements.
-
-## Interface
-
-\`\`\`rust
-#[contract]
-pub struct Escrow;
-
-#[contractimpl]
-impl Escrow {
-    /// Lock funds in escrow for off-ramp settlement
-    pub fn lock(
-        env: Env,
-        user: Address,
-        amount: i128,
-        request_id: BytesN<32>,  // Unique off-ramp request ID
-    ) {
-        user.require_auth();
-        // Transfer USDC from user/vault to escrow
-        token::transfer(&env, &user, &env.current_contract_address(), amount);
-        // Store escrow record
-        Self::store_escrow(&env, request_id, EscrowRecord {
-            user: user.clone(),
-            amount,
-            status: EscrowStatus::Locked,
-            locked_at: env.ledger().timestamp(),
-        });
-        env.events().publish(
-            (symbol_short!("offramp"), symbol_short!("locked")),
-            (user, amount, request_id),
-        );
-    }
-
-    /// Release funds to LP after successful fiat settlement
-    /// Called by authorized backend settlement service
-    pub fn release_after_settlement(
-        env: Env,
-        authority: Address,
-        request_id: BytesN<32>,
-        lp_address: Address,
-    ) {
-        authority.require_auth();
-        Self::verify_settlement_authority(&env, &authority);
-
-        let record = Self::get_escrow(&env, request_id);
-        assert!(record.status == EscrowStatus::Locked, "not locked");
-
-        // Release USDC to liquidity provider
-        token::transfer(&env, &env.current_contract_address(), &lp_address, record.amount);
-
-        Self::update_status(&env, request_id, EscrowStatus::Settled);
-        env.events().publish(
-            (symbol_short!("offramp"), symbol_short!("settled")),
-            (record.user, record.amount, request_id),
-        );
-    }
-
-    /// Refund funds to user if settlement fails
-    pub fn refund_if_failed(
-        env: Env,
-        authority: Address,
-        request_id: BytesN<32>,
-    ) {
-        authority.require_auth();
-        Self::verify_settlement_authority(&env, &authority);
-
-        let record = Self::get_escrow(&env, request_id);
-        assert!(record.status == EscrowStatus::Locked, "not locked");
-
-        // Return USDC to user
-        token::transfer(&env, &env.current_contract_address(), &record.user, record.amount);
-
-        Self::update_status(&env, request_id, EscrowStatus::Refunded);
-        env.events().publish(
-            (symbol_short!("offramp"), symbol_short!("refunded")),
-            (record.user, record.amount, request_id),
-        );
-    }
-}
-\`\`\`
-
-## State Machine
-
-\`\`\`
-  ┌──────────┐
-  │  Locked   │ ← User initiates off-ramp
-  └────┬──────┘
-       │
-       ├──── Fiat transfer succeeds ───▶ ┌──────────┐
-       │                                  │ Settled  │
-       │                                  └──────────┘
-       │
-       └──── Fiat transfer fails ──────▶ ┌──────────┐
-              or timeout (30 min)         │ Refunded │
-                                          └──────────┘
-\`\`\`
-`,
-    },
-
     "api-overview": {
         title: "Backend API Overview",
         content: `# Backend API Overview
@@ -1244,7 +920,6 @@ func main() {
         r.Route("/vaults", vaultRoutes)
         r.Route("/positions", positionRoutes)
         r.Route("/yields", yieldRoutes)
-        r.Route("/offramp", offrampRoutes)
         r.Route("/users", userRoutes)
     })
 
@@ -1482,119 +1157,6 @@ curl "https://api.nester.finance/api/v1/vaults/vault_balanced_01/performance/his
 `,
     },
 
-    "offramp-api": {
-        title: "Off-Ramp Endpoints",
-        content: `# Off-Ramp API Endpoints
-
-## POST /api/v1/settlements
-
-Initiate a fiat withdrawal (off-ramp).
-
-\`\`\`bash
-curl -X POST https://api.nester.finance/api/v1/settlements \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer <token>" \\
-  -d '{
-    "vault_id": "vault_balanced_01",
-    "amount": "1000.00",
-    "currency": "USDC",
-    "fiat_currency": "NGN",
-    "fiat_amount": "1565000.00",
-    "exchange_rate": "1565.00",
-    "destination": {
-      "type": "bank_transfer",
-      "provider": "bank",
-      "account_number": "0123456789",
-      "account_name": "John Doe",
-      "bank_code": "058"
-    }
-  }'
-\`\`\`
-
-\`\`\`json
-{
-    "success": true,
-    "data": {
-        "id": "settlement_abc123_uuid",
-        "user_id": "user_id_uuid",
-        "vault_id": "vault_balanced_01",
-        "amount": "1000.000000",
-        "currency": "USDC",
-        "fiat_currency": "NGN",
-        "fiat_amount": "1565000.000000",
-        "exchange_rate": "1565.000000",
-        "destination": {
-            "type": "bank_transfer",
-            "provider": "bank",
-            "account_number": "0123456789",
-            "account_name": "John Doe",
-            "bank_code": "058"
-        },
-        "status": "initiated",
-        "created_at": "2026-06-02T12:00:00Z"
-    }
-}
-\`\`\`
-
-## GET /api/v1/settlements/{id}
-
-Track settlement progress.
-
-\`\`\`bash
-curl https://api.nester.finance/api/v1/settlements/settlement_abc123_uuid \\
-  -H "Authorization: Bearer <token>"
-\`\`\`
-
-\`\`\`json
-{
-    "success": true,
-    "data": {
-        "id": "settlement_abc123_uuid",
-        "user_id": "user_id_uuid",
-        "vault_id": "vault_balanced_01",
-        "amount": "1000.000000",
-        "currency": "USDC",
-        "fiat_currency": "NGN",
-        "fiat_amount": "1565000.000000",
-        "exchange_rate": "1565.000000",
-        "destination": {
-            "type": "bank_transfer",
-            "provider": "bank",
-            "account_number": "0123456789",
-            "account_name": "John Doe",
-            "bank_code": "058"
-        },
-        "status": "confirmed",
-        "created_at": "2026-06-02T12:00:00Z",
-        "completed_at": "2026-06-02T12:00:04Z"
-    }
-}
-\`\`\`
-
-## GET /api/v1/rates
-
-Get a conversion exchange rate before initiating off-ramp.
-
-\`\`\`bash
-curl "https://api.nester.finance/api/v1/rates?base=USDC&quote=NGN"
-\`\`\`
-
-\`\`\`json
-{
-    "success": true,
-    "data": {
-        "base": "USDC",
-        "quote": "NGN",
-        "rate": 1565.0,
-        "source": "paystack",
-        "fetched_at": "2026-06-02T12:00:00Z",
-        "expires_at": "2026-06-02T12:05:00Z"
-    }
-}
-\`\`\`
-`,
-    },
-
     "wallet-integration": {
         title: "Wallet Integration",
         content: `# Wallet Integration
@@ -1751,144 +1313,6 @@ function extractErrorMessage(err: unknown): string {
 `,
     },
 
-    "prometheus-overview": {
-        title: "Prometheus Overview",
-        content: `# Prometheus AI Overview
-
-Prometheus is Nester's AI intelligence service, built with Python + FastAPI and powered by the Claude API.
-
-## Service Architecture
-
-\`\`\`python
-# apps/intelligence/app/main.py
-from fastapi import FastAPI
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup: initialize Claude client, load market data
-    app.state.claude = anthropic.Anthropic()
-    app.state.market_data = MarketDataService()
-    yield
-    # Shutdown: cleanup
-
-app = FastAPI(title="Prometheus", lifespan=lifespan)
-
-app.include_router(chat_router, prefix="/intelligence")
-app.include_router(insights_router, prefix="/intelligence")
-app.include_router(risk_router, prefix="/intelligence")
-\`\`\`
-
-## System Prompt Strategy
-
-\`\`\`python
-def build_system_prompt(portfolio: dict, market: dict) -> str:
-    return f"""You are Prometheus, Nester's AI financial advisor.
-
-Current portfolio:
-{json.dumps(portfolio, indent=2)}
-
-Market conditions:
-{json.dumps(market, indent=2)}
-
-Rules:
-1. Never recommend executing trades without user approval
-2. Always explain your reasoning in plain language
-3. Provide confidence levels (0-100%) for recommendations
-4. Consider the user's risk tolerance and time horizon
-5. Flag any risks or concerns clearly
-6. Use specific numbers from the portfolio data
-"""
-\`\`\`
-
-## Data Sources
-
-| Source | Data | Update Frequency |
-|--------|------|-----------------|
-| DeFiLlama | Protocol TVL, yield rates | Every 5 minutes |
-| CoinGecko | Token prices, market caps | Every 1 minute |
-| Stellar Horizon | On-chain tx data, balances | Real-time |
-| Social APIs | Sentiment from Twitter/Reddit | Every 15 minutes |
-`,
-    },
-
-    "prometheus-api": {
-        title: "Prometheus API Reference",
-        content: `# Prometheus API Reference
-
-## POST /intelligence/chat
-
-Conversational AI endpoint.
-
-\`\`\`python
-# Request
-{
-    "message": "Should I move funds from Balanced to Growth vault?",
-    "wallet_address": "GBXYZ...",
-    "conversation_id": "conv_123"  # optional, for message history
-}
-
-# Response
-{
-    "response": "Based on current market conditions, I'd recommend staying in the Balanced Vault. Here's why:\\n\\n1. Growth Vault APY has dropped from 13.5% to 11.2% this week\\n2. Two of Growth's underlying protocols (Kamino, Aave) show elevated risk metrics\\n3. Your Balanced Vault is performing well at 9.5% APY with lower volatility\\n\\nI'd reconsider this move if Growth APY recovers above 13% with stable risk metrics.",
-    "actions": [],
-    "confidence": 0.78,
-    "sources": ["defillama", "vault_analytics"]
-}
-\`\`\`
-
-## GET /intelligence/insights/:wallet
-
-Get auto-generated insights for a wallet.
-
-\`\`\`python
-# Response
-{
-    "insights": [
-        {
-            "type": "optimization",
-            "title": "Idle USDC detected",
-            "message": "You have 2,500 USDC idle in your wallet. Depositing into the Balanced Vault would earn ~$237/year at current rates.",
-            "action": {
-                "type": "deposit",
-                "vault": "balanced",
-                "amount": 2500
-            },
-            "priority": "medium"
-        },
-        {
-            "type": "market_alert",
-            "title": "XLM momentum strong",
-            "message": "XLM is up 15% this week with DEX volumes increasing 40%. Consider allocating 10-15% to XLM automated yield.",
-            "priority": "low"
-        }
-    ],
-    "weekly_summary": "DeFi markets stable. No security incidents in Nester's integrated protocols. Your portfolio is performing 2.3% above benchmark.",
-    "generated_at": "2026-03-22T10:00:00Z"
-}
-\`\`\`
-
-## GET /intelligence/risk-score/:wallet
-
-Portfolio risk analysis.
-
-\`\`\`python
-# Response
-{
-    "risk_score": 6.5,        # 1-10 scale
-    "diversification": 4,     # 1-10 (higher = more diversified)
-    "concentration_risk": "XLM at 45% (recommended max: 30%)",
-    "volatility_30d": 12.5,   # portfolio volatility %
-    "recommendations": [
-        "Reduce XLM exposure from 45% to 30%",
-        "Move idle USDC to Balanced Vault",
-        "Consider adding ETH for diversification"
-    ]
-}
-\`\`\`
-`,
-    },
-
     testnet: {
         title: "Testnet Deployment",
         content: `# Testnet Deployment
@@ -2006,18 +1430,6 @@ jobs:
       - run: npm install
       - run: npm run build
 
-  intelligence:
-    name: Intelligence Service
-    runs-on: ubuntu-latest
-    defaults:
-      run: { working-directory: apps/intelligence }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci
-      - run: npm run build
-      - run: npm run lint
 \`\`\`
 
 ## Pre-Push Checklist
@@ -2030,9 +1442,6 @@ pnpm --filter @nester/website build && pnpm --filter @nester/website lint
 
 # 2. Dapp Frontend
 cd apps/dapp/frontend && npm run build && cd ../../..
-
-# 3. Intelligence
-cd apps/intelligence && npm run build && npm run lint && cd ../..
 \`\`\`
 
 ## Common CI Failures

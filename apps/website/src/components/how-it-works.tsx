@@ -25,27 +25,27 @@ const STEPS = [
     tab: "Funds auto-rebalance across protocols 24/7.",
   },
   {
-    id: "offramp",
+    id: "autoinvest",
     step: "03",
-    label: "Cash Out",
-    headline: "Local currency.\nThree seconds.\nZero friction.",
-    body: "Our distributed LP network routes fiat directly to your bank via live banking APIs. Same-bank transfers clear in 3 seconds. No P2P, no delays.",
-    tab: "Settle to any bank account in seconds.",
+    label: "Auto‑Invest",
+    headline: "Set it once.\nYour deposits\nrun themselves.",
+    body: "Authorize an on-chain recurring deposit mandate — an amount and a cadence — and Nester executes each deposit automatically, straight from your wallet into your chosen vault.",
+    tab: "Recurring deposits execute on-chain, automatically.",
   },
   {
-    id: "ai",
+    id: "portfolio",
     step: "04",
-    label: "AI‑Guided",
-    headline: "Prometheus:\nyour 24/7\nfinancial co‑pilot.",
-    body: "Prometheus reads your portfolio against live market data, protocol health and sentiment — then delivers plain-language recommendations with one-click execution.",
-    tab: "Personalized AI advice, always on.",
+    label: "Track Live",
+    headline: "Every position.\nEvery dollar.\nIn real time.",
+    body: "Your live portfolio tracks positions, P&L and performance across every vault — and because Nester is non-custodial, you can withdraw to your own wallet at any time.",
+    tab: "Live positions, P&L and performance, always on.",
   },
   {
     id: "architecture",
     step: "05",
     label: "The Stack",
     headline: "Four layers.\nOne seamless\ninfrastructure.",
-    body: "From deposit to yield to off-ramp — Nester\u2019s layered stack handles every step. Prometheus sits on top, monitoring risk, rebalancing funds, and routing payouts through our LP network in real time.",
+    body: "From deposit to yield to auto-invest — Nester\u2019s layered stack handles every step, while the live portfolio layer tracks positions, P&L, and performance in real time.",
     tab: "The complete architecture, end to end.",
   },
 ];
@@ -82,9 +82,8 @@ function Cursor({ x, y, clicking }: { x: number; y: number; clicking: boolean })
 ───────────────────────────────────────────────────────────────── */
 const vaultRows = [
   { name: "Conservative", apy: "6–8%",   bar: 38 },
-  { name: "Balanced",     apy: "8–11%",  bar: 62 },
-  { name: "Growth",       apy: "11–15%", bar: 84 },
-  { name: "DeFi500",      apy: "Index",  bar: 50 },
+  { name: "Balanced",     apy: "8–12%",  bar: 62 },
+  { name: "Growth",       apy: "12–18%", bar: 84 },
 ];
 
 function DepositScene({ playing }: { playing: boolean }) {
@@ -109,8 +108,8 @@ function DepositScene({ playing }: { playing: boolean }) {
     { x: 120, y: 118 },   // 1 hover balanced row
     { x: 120, y: 118 },   // 2 click
     { x: 120, y: 118 },   // 3 still
-    { x: 178, y: 278 },  // 4 hover button
-    { x: 178, y: 278 },  // 5 click button
+    { x: 178, y: 222 },  // 4 hover button
+    { x: 178, y: 222 },  // 5 click button
   ];
 
   const pos = cursorPos[Math.min(seq, cursorPos.length - 1)];
@@ -390,24 +389,20 @@ function OptimizeScene({ playing }: { playing: boolean }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   PANEL 3 — OFF-RAMP
+   PANEL 3 — AUTO-INVEST
    Uses inline JSX connectors between boxes — no broken SVG % paths.
 ───────────────────────────────────────────────────────────────── */
-const OFFRAMP_STEPS = [
+const AUTOINVEST_STEPS = [
   {
-    label: "Your Vault",  sub: "USDC locked in escrow",  value: "$1,000",
+    label: "Your Wallet", sub: "Weekly mandate authorized", value: "$200",
     logoSlot: null as React.ReactNode,
   },
   {
-    label: "LP Node",     sub: "GTBank API matched",      value: "GTBank",
-    logoSlot: (
-      <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0 border border-black/10">
-        <Image src="/GTBank_logo.svg.png" alt="GTBank" width={32} height={32} className="w-full h-full object-cover" />
-      </div>
-    ) as React.ReactNode,
+    label: "On-Chain Mandate", sub: "Recurring deposit executed", value: "Weekly",
+    logoSlot: null as React.ReactNode,
   },
   {
-    label: "Your Bank",   sub: "Transfer settled · done", value: "₦1,565,000",
+    label: "Balanced Vault", sub: "Position updated · earning", value: "+$200",
     logoSlot: null as React.ReactNode,
   },
 ];
@@ -450,7 +445,7 @@ function PipeConnector({ active, label }: { active: boolean; label?: string }) {
   );
 }
 
-function OfframpScene({ playing }: { playing: boolean }) {
+function AutoInvestScene({ playing }: { playing: boolean }) {
   const [step, setStep] = useState(-1);
   const [done, setDone] = useState(false);
 
@@ -465,7 +460,7 @@ function OfframpScene({ playing }: { playing: boolean }) {
   return (
     <div className="w-full select-none flex flex-col">
       {/* Pipeline: box → connector → box → connector → box */}
-      {OFFRAMP_STEPS.map((s, i) => (
+      {AUTOINVEST_STEPS.map((s, i) => (
         <React.Fragment key={s.label}>
           <motion.div
             initial={{ opacity: 0, x: -16 }}
@@ -513,10 +508,10 @@ function OfframpScene({ playing }: { playing: boolean }) {
           </motion.div>
 
           {/* Connector between boxes — ONLY between, not after last */}
-          {i < OFFRAMP_STEPS.length - 1 && (
+          {i < AUTOINVEST_STEPS.length - 1 && (
             <PipeConnector
               active={step > i}
-              label={i === 0 ? "~3 sec" : undefined}
+              label={i === 0 ? "on-chain" : undefined}
             />
           )}
         </React.Fragment>
@@ -530,8 +525,8 @@ function OfframpScene({ playing }: { playing: boolean }) {
           transition={{ duration: 0.35 }}
           className="mt-2 flex items-center justify-between rounded-xl border border-black/[0.08] bg-white/50 px-4 py-2.5"
         >
-          <span className="text-[9px] tracking-[0.15em] uppercase text-black/30 font-semibold">Network fee</span>
-          <span className="text-[11px] font-bold text-black/60 tabular-nums">0.5% · $5.00</span>
+          <span className="text-[9px] tracking-[0.15em] uppercase text-black/30 font-semibold">Next deposit</span>
+          <span className="text-[11px] font-bold text-black/60 tabular-nums">in 7 days · automatic</span>
         </motion.div>
       )}
     </div>
@@ -539,13 +534,13 @@ function OfframpScene({ playing }: { playing: boolean }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   PANEL 4 — AI  (typewriter chat + live portfolio metrics)
+   PANEL 4 — PORTFOLIO  (typewriter activity feed + live metrics)
 ───────────────────────────────────────────────────────────────── */
-const AI_MESSAGES = [
-  { role: "user", text: "Should I move to Growth vault now?" },
-  { role: "ai",   text: "Not yet. Balanced yields are stable at 9.5%. Growth carries elevated concentration risk this week." },
-  { role: "user", text: "What about my XLM position?" },
-  { role: "ai",   text: "XLM is 18% of your portfolio — above your 15% target. Consider selling 20% to lock in gains and rebalance." },
+const ACTIVITY_FEED = [
+  { role: "ai", text: "Auto-invest executed: $200 USDC deposited into Balanced Vault." },
+  { role: "ai", text: "Yield accrued: +$4.12 across Aave and Blend positions." },
+  { role: "ai", text: "Balanced Vault APY updated: 9.2% → 9.5%." },
+  { role: "ai", text: "Monthly P&L: +$38.40 (+0.6%) across all positions." },
 ];
 
 function TypedText({ text, active }: { text: string; active: boolean }) {
@@ -564,15 +559,15 @@ function TypedText({ text, active }: { text: string; active: boolean }) {
   return <>{displayed}</>;
 }
 
-function AiScene({ playing }: { playing: boolean }) {
+function PortfolioScene({ playing }: { playing: boolean }) {
   const [visibleMsgs, setVisibleMsgs] = useState(0);
   const [typing, setTyping] = useState(false);
 
   // metrics that "update"
-  const [riskScore, setRiskScore] = useState(3.2);
+  const [pnl, setPnl] = useState(34.28);
 
   useEffect(() => {
-    if (!playing) { setVisibleMsgs(0); setTyping(false); setRiskScore(3.2); return; }    setVisibleMsgs(0); setTyping(false); setRiskScore(3.2);    const timings = [400, 1800, 3400, 4800];
+    if (!playing) { setVisibleMsgs(0); setTyping(false); setPnl(34.28); return; }    setVisibleMsgs(0); setTyping(false); setPnl(34.28);    const timings = [400, 1800, 3400, 4800];
     const handles = timings.map((t, i) =>
       setTimeout(() => {
         setVisibleMsgs(i + 1);
@@ -580,13 +575,13 @@ function AiScene({ playing }: { playing: boolean }) {
         else setTyping(false);
       }, t)
     );
-    // risk score tick
-    const r1 = setTimeout(() => setRiskScore(3.6), 5200);
+    // P&L tick
+    const r1 = setTimeout(() => setPnl(38.4), 5200);
     return () => [...handles, r1].forEach(clearTimeout);
   }, [playing]);
 
   const metrics = [
-    { label: "Risk",       value: riskScore.toFixed(1) + " / 10" },
+    { label: "P&L (30d)",  value: "+$" + pnl.toFixed(2) },
     { label: "APY",        value: "9.5%" },
     { label: "Balance",    value: "$6,420" },
   ];
@@ -628,12 +623,12 @@ function AiScene({ playing }: { playing: boolean }) {
             transition={{ duration: 1.6, repeat: Infinity }}
             className="w-1.5 h-1.5 rounded-full bg-black inline-block"
           />
-          <span className="text-[10px] font-bold tracking-[0.15em] uppercase text-black/40">Prometheus</span>
+          <span className="text-[10px] font-bold tracking-[0.15em] uppercase text-black/40">Portfolio Activity</span>
         </div>
 
         {/* Messages */}
         <div className="flex flex-col gap-2.5 px-4 py-3" style={{ minHeight: 148 }}>
-          {AI_MESSAGES.slice(0, visibleMsgs).map((msg, i) => (
+          {ACTIVITY_FEED.slice(0, visibleMsgs).map((msg, i) => (
             <motion.div
               key={i}
               initial={{ opacity: 0, y: 8, scale: 0.97 }}
@@ -708,9 +703,9 @@ const ARCH_LAYERS = [
     ),
   },
   {
-    label: "OFFRAMP LAYER",
-    desc: "LP nodes route fiat via live banking APIs",
-    detail: "~3 sec",
+    label: "AUTO-INVEST LAYER",
+    desc: "On-chain mandates execute recurring deposits",
+    detail: "Weekly",
     color: "#facc15",
     icon: (
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
@@ -720,8 +715,8 @@ const ARCH_LAYERS = [
     ),
   },
   {
-    label: "AI LAYER",
-    desc: "Prometheus monitors risk, rebalances & advises",
+    label: "PORTFOLIO LAYER",
+    desc: "Live positions, P&L and performance tracking",
     detail: "24/7",
     color: "#6025f5",
     icon: (
@@ -733,7 +728,7 @@ const ARCH_LAYERS = [
   },
 ];
 
-const CONNECTOR_LABELS = ["funds diversify", "yield accrues", "data + signals"];
+const CONNECTOR_LABELS = ["funds diversify", "yield accrues", "positions update"];
 
 function ArchitectureScene({ playing }: { playing: boolean }) {
   const [activeLayer, setActiveLayer] = useState(-1);
@@ -857,7 +852,7 @@ function ArchitectureScene({ playing }: { playing: boolean }) {
         </React.Fragment>
       ))}
 
-      {/* Prometheus monitoring strip — appears after all layers active */}
+      {/* Portfolio monitoring strip — appears after all layers active */}
       {flowActive && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
@@ -872,12 +867,12 @@ function ArchitectureScene({ playing }: { playing: boolean }) {
               className="text-[8px] tracking-[0.2em] uppercase font-bold"
               style={{ color: "#6025f5", opacity: 0.6 }}
             >
-              Prometheus Monitoring
+              Portfolio Monitoring
             </motion.span>
             <span className="text-[8px] text-black/25 font-mono">all layers</span>
           </div>
           <div className="flex gap-1.5">
-            {["Savings", "Yield", "Offramp"].map((name, i) => (
+            {["Savings", "Yield", "Auto-Invest"].map((name, i) => (
               <motion.div
                 key={name}
                 initial={{ scaleX: 0 }}
@@ -907,8 +902,8 @@ function ScenePanel({ stepId, playing }: { stepId: string; playing: boolean }) {
   switch (stepId) {
     case "deposit":       return <DepositScene       playing={playing} />;
     case "optimize":      return <OptimizeScene      playing={playing} />;
-    case "offramp":       return <OfframpScene       playing={playing} />;
-    case "ai":            return <AiScene            playing={playing} />;
+    case "autoinvest":    return <AutoInvestScene    playing={playing} />;
+    case "portfolio":     return <PortfolioScene     playing={playing} />;
     case "architecture":  return <ArchitectureScene  playing={playing} />;
     default:              return null;
   }

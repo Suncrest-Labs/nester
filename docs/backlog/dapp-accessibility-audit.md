@@ -25,7 +25,7 @@ No formal accessibility audit has been conducted. The DApp may have WCAG 2.1 AA 
 
 ## Scope
 
-- Dashboard, vault detail, deposit modal, offramp form, portfolio page
+- Dashboard, vault detail, deposit modal, portfolio page
 - Navigation, form inputs, modals, notifications
 - Dark mode contrast
 

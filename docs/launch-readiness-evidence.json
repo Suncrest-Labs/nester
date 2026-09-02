@@ -163,7 +163,7 @@
     {
       "id": "DB-02",
       "title": "Migrations 005-006",
-      "evidence": "migration: apps/api/migrations/005_create_allocations_table.sql, migration: apps/api/migrations/006_create_settlements_table.sql"
+      "evidence": "migration: apps/api/migrations/005_create_allocations_table.sql"
     },
     {
       "id": "DAPP-01",

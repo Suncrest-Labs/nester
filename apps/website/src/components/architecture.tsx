@@ -2,22 +2,22 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Network, BrainCircuit, Landmark, Coins, ArrowRightLeft, ShieldCheck, Zap } from "lucide-react";
+import { Landmark, Coins, ArrowRightLeft, ShieldCheck, Zap, LineChart } from "lucide-react";
 
 const LAYERS = [
   {
-    id: "ai",
-    title: "Prometheus AI Layer",
-    subtitle: "The Brain of Nester",
-    icon: <BrainCircuit strokeWidth={1.5} size={28} />,
+    id: "vaults",
+    title: "Smart Vault Layer",
+    subtitle: "The Savings Core",
+    icon: <Landmark strokeWidth={1.5} size={28} />,
     color: "bg-[#111]",
     textColor: "text-[#f5f5f0]",
     borderColor: "border-[#333]",
-    description: "An intelligent routing engine that analyzes your financial goals in real-time. Prometheus continuously monitors market volatility, protocol TVL, and yield opportunities across the Stellar ecosystem to autonomously rebalance your portfolio.",
+    description: "Tiered, non-custodial savings vaults built on Soroban smart contracts. Choose Conservative (6–8% APY), Balanced (8–12%) or Growth (12–18%) to match your risk profile — deposits mint vault shares that track your exact stake, and you can withdraw to your own wallet at any time.",
     features: [
-      { icon: <ShieldCheck size={16} />, text: "Real-time risk scoring & rebalancing" },
-      { icon: <Zap size={16} />, text: "Automated yield hunting" },
-      { icon: <ArrowRightLeft size={16} />, text: "Conversational interface execution" }
+      { icon: <ShieldCheck size={16} />, text: "Three risk-tiered vaults, 6–18% target APY" },
+      { icon: <Zap size={16} />, text: "Non-custodial nVault share accounting" },
+      { icon: <ArrowRightLeft size={16} />, text: "Goal-based savings vaults" }
     ]
   },
   {
@@ -36,18 +36,18 @@ const LAYERS = [
     ]
   },
   {
-    id: "liquidity",
-    title: "Distributed Off-Ramp Network",
-    subtitle: "The Global Bridge",
-    icon: <Network strokeWidth={1.5} size={28} />,
+    id: "portfolio",
+    title: "Auto-Invest & Portfolio Layer",
+    subtitle: "Your Money on Autopilot",
+    icon: <LineChart strokeWidth={1.5} size={28} />,
     color: "bg-white",
     textColor: "text-[#111]",
     borderColor: "border-black/[0.08]",
-    description: "A decentralized mesh of Liquidity Providers (LPs) acting as specialized fiat nodes. When you request a withdrawal, the network routes it to the most optimal P2P node for instant, sub-3-second settlement to your local bank.",
+    description: "On-chain recurring deposit mandates keep your savings growing automatically — set an amount and cadence once, and deposits execute themselves. A live portfolio view tracks every position, P&L, and performance in real time.",
     features: [
-      { icon: <Landmark size={16} />, text: "Over-collateralized verified LPs" },
-      { icon: <Zap size={16} />, text: "Instant fiat settlement" },
-      { icon: <ArrowRightLeft size={16} />, text: "Zero exchange swap latency" }
+      { icon: <ArrowRightLeft size={16} />, text: "On-chain recurring deposit mandates" },
+      { icon: <LineChart size={16} />, text: "Live positions, P&L & performance" },
+      { icon: <Zap size={16} />, text: "Withdraw to your own wallet anytime" }
     ]
   }
 ];
@@ -102,7 +102,7 @@ export function Architecture() {
                        className={`absolute w-full left-0 cursor-pointer p-6 md:p-8 rounded-2xl shadow-xl border ${layer.borderColor} ${layer.color} ${layer.textColor} flex items-center gap-6`}
                        style={{ transformOrigin: "center bottom" }}
                      >
-                       <div className={`w-14 h-14 rounded-full flex items-center justify-center flex-shrink-0 ${layer.id === 'ai' ? 'bg-[#222]' : 'bg-black/[0.04]'}`}>
+                       <div className={`w-14 h-14 rounded-full flex items-center justify-center flex-shrink-0 ${layer.id === 'vaults' ? 'bg-[#222]' : 'bg-black/[0.04]'}`}>
                          {layer.icon}
                        </div>
                        <div>
