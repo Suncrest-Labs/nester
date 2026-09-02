@@ -6,12 +6,6 @@ updates:
       interval: daily
     open-pull-requests-limit: 0
 
-  - package-ecosystem: pip
-    directory: /apps/intelligence
-    schedule:
-      interval: daily
-    open-pull-requests-limit: 0
-
   - package-ecosystem: gomod
     directory: /apps/api
     schedule:

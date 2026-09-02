@@ -4,9 +4,9 @@
 Real-traffic SLIs cannot detect a flow that is broken while nobody is using
 it. That is the failure the issue calls out — "broken but generating no
 traffic ... nobody notices because nobody tried" — and it is the specific gap
-these probes fill. They exercise deposit, withdrawal, balance read, and an
-intelligence query on a schedule, so a broken path is discovered by us rather
-than by the first user who tries it on Monday morning.
+these probes fill. They exercise deposit, withdrawal, and balance read on a
+schedule, so a broken path is discovered by us rather than by the first user
+who tries it on Monday morning.
 
 Safety
 ------
@@ -23,8 +23,8 @@ independent guards keep that from ever being production:
    the dangerous case is one of them being wrong.
 
 3. Deposit and withdrawal probes require ``PROBE_ALLOW_MUTATIONS=true``. The
-   default run is read-only: balance and intelligence only. Moving funds is
-   opt-in per environment rather than implied by running the script.
+   default run is read-only: balance only. Moving funds is opt-in per
+   environment rather than implied by running the script.
 
 The probes use ordinary API credentials for a dedicated staging account. They
 are not privileged and cannot reach another user's vault.
@@ -89,14 +89,12 @@ class ProbeResult:
 @dataclass
 class Config:
     api_base_url: str
-    intelligence_base_url: str
     environment: str
     auth_token: str
     vault_id: str
     allow_mutations: bool
     probe_amount: str
     timeout: float
-    intelligence_token: str = ""
     selected: list[str] = field(default_factory=list)
 
 
@@ -127,7 +125,7 @@ def _require_safe_target(config: Config) -> None:
             "These probes create real transactions and must never run there."
         )
 
-    haystack = f"{config.api_base_url} {config.intelligence_base_url}".lower()
+    haystack = config.api_base_url.lower()
     for marker in FORBIDDEN_URL_MARKERS:
         if marker in haystack:
             raise ProbeAbort(
@@ -252,30 +250,6 @@ def probe_balance(config: Config) -> ProbeResult:
     return _run("balance", lambda: check())
 
 
-def probe_intelligence(config: Config) -> ProbeResult:
-    """Ask the intelligence service a grounded question.
-
-    Read-only. A refusal counts as success: the service answering "I don't
-    have that in your account data" is the guardrail working, and treating it
-    as a probe failure would page on correct behaviour. What is being checked
-    is that a response arrives and is well-formed.
-    """
-
-    def check() -> None:
-        payload = _request(
-            config,
-            "POST",
-            f"{config.intelligence_base_url}/intelligence/chat",
-            body={"message": "What is my current savings balance?"},
-            token=config.intelligence_token or config.auth_token,
-        )
-
-        if payload is None:
-            raise AssertionError("intelligence returned an empty body")
-
-    return _run("intelligence", lambda: check())
-
-
 def probe_deposit(config: Config) -> ProbeResult:
     """Deposit a minimal amount into the probe account's staging vault.
 
@@ -323,7 +297,6 @@ def probe_withdrawal(config: Config) -> ProbeResult:
 
 READ_ONLY_PROBES: dict[str, Callable[[Config], ProbeResult]] = {
     "balance": probe_balance,
-    "intelligence": probe_intelligence,
 }
 
 MUTATING_PROBES: dict[str, Callable[[Config], ProbeResult]] = {
@@ -390,10 +363,8 @@ def render(results: list[ProbeResult], environment: str) -> str:
 def build_config(args: argparse.Namespace) -> Config:
     return Config(
         api_base_url=os.environ.get("PROBE_API_BASE_URL", "").rstrip("/"),
-        intelligence_base_url=os.environ.get("PROBE_INTELLIGENCE_BASE_URL", "").rstrip("/"),
         environment=os.environ.get("PROBE_ENVIRONMENT", ""),
         auth_token=os.environ.get("PROBE_AUTH_TOKEN", ""),
-        intelligence_token=os.environ.get("PROBE_INTELLIGENCE_TOKEN", ""),
         vault_id=os.environ.get("PROBE_VAULT_ID", ""),
         allow_mutations=os.environ.get("PROBE_ALLOW_MUTATIONS", "").lower() == "true",
         probe_amount=os.environ.get("PROBE_AMOUNT", "0.01"),

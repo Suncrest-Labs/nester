@@ -5,7 +5,6 @@ import { check, sleep } from 'k6';
 // URLs and credentials deliberately come only from the environment. Never point
 // load tests at production or place real tokens/keys in this repository.
 export const apiBase = (__ENV.API_BASE_URL || 'http://localhost:8080/api/v1').replace(/\/$/, '');
-export const intelligenceBase = (__ENV.INTELLIGENCE_BASE_URL || 'http://localhost:8000/intelligence').replace(/\/$/, '');
 export const wsURL = __ENV.WS_URL || apiBase.replace(/^http/, 'ws').replace(/\/api\/v1$/, '/ws');
 export const authHeaders = __ENV.AUTH_TOKEN ? { Authorization: `Bearer ${__ENV.AUTH_TOKEN}` } : {};
 export const vaultID = __ENV.VAULT_ID || '00000000-0000-0000-0000-000000000000';
@@ -31,7 +30,6 @@ export function requestFor(name) {
       return expected(http.post(`${apiBase}/auth/challenge`, JSON.stringify({ wallet_address: wallet }), { headers: jsonHeaders, tags: { endpoint: 'challenge' } }), name);
     }
     case 'deposit': return expected(http.post(depositURL, JSON.stringify({ amount: __ENV.DEPOSIT_AMOUNT || '1', asset: __ENV.DEPOSIT_ASSET || 'USDC' }), { headers: jsonHeaders, tags: { endpoint: 'deposit' } }), name);
-    case 'chat': return expected(http.post(`${intelligenceBase}/chat`, JSON.stringify({ message: __ENV.CHAT_MESSAGE || 'Load-test health check' }), { headers: jsonHeaders, timeout: '60s', tags: { endpoint: 'chat' } }), name);
     default: throw new Error(`unknown load-test endpoint: ${name}`);
   }
 }
@@ -48,7 +46,7 @@ export function websocket() {
   sleep(0.1);
 }
 
-export const endpointTargets = { deposit: 50, vaults: 500, portfolio: 200, chat: 20, challenge: 200 };
+export const endpointTargets = { deposit: 50, vaults: 500, portfolio: 200, challenge: 200 };
 export const readThresholds = {
   'http_req_duration{endpoint:vaults}': ['p(95)<500'],
   'http_req_duration{endpoint:portfolio}': ['p(95)<500'],

@@ -32,7 +32,6 @@ from probe import (
 def make_config(**overrides: object) -> Config:
     base = {
         "api_base_url": "https://staging-api.example.test",
-        "intelligence_base_url": "https://staging-intel.example.test",
         "environment": "staging",
         "auth_token": "token",
         "vault_id": "vault-1",
@@ -85,14 +84,6 @@ def test_production_looking_urls_are_refused(url: str) -> None:
         _require_safe_target(make_config(api_base_url=url))
 
 
-def test_production_looking_intelligence_url_is_refused() -> None:
-    """Both URLs are checked, not just the API one."""
-    with pytest.raises(ProbeAbort, match="looks like production"):
-        _require_safe_target(
-            make_config(intelligence_base_url="https://prod-intel.example.test")
-        )
-
-
 def test_safe_staging_target_is_accepted() -> None:
     _require_safe_target(make_config())
 
@@ -103,13 +94,13 @@ def test_mutating_probes_are_skipped_without_opt_in() -> None:
 
     assert "deposit" not in selected
     assert "withdrawal" not in selected
-    assert set(selected) == {"balance", "intelligence"}
+    assert set(selected) == {"balance"}
 
 
 def test_mutating_probes_run_when_explicitly_allowed() -> None:
     selected = select_probes(make_config(allow_mutations=True))
 
-    assert set(selected) == {"balance", "intelligence", "deposit", "withdrawal"}
+    assert set(selected) == {"balance", "deposit", "withdrawal"}
 
 
 def test_explicitly_requested_mutation_still_requires_opt_in() -> None:
