@@ -23,21 +23,6 @@ func TestKeysetCursorRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSettlementCursorRoundTripStillWorks(t *testing.T) {
-	// The deprecated wrapper must stay behaviorally identical now that it
-	// delegates to KeysetCursor internally.
-	id := uuid.New()
-	created := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	token := listquery.EncodeSettlementCursor(created, id)
-	decoded, err := listquery.DecodeSettlementCursor(token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !decoded.CreatedAt.Equal(created) || decoded.ID != id {
-		t.Fatalf("cursor mismatch: %+v", decoded)
-	}
-}
-
 // ksRow is a stand-in for a database row: a sort column plus its id
 // tiebreaker, used to prove the keyset comparison rule KeysetClause encodes
 // (strict "<"/">" on the (sortValue, id) tuple) is free of overlap/skip.

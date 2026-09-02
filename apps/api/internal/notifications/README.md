@@ -51,7 +51,6 @@ dispatcher already calls `Save` so the wiring is exercised.
 
 | Event                          | Channels                |
 | ------------------------------ | ----------------------- |
-| settlement_completed / failed  | email + websocket       |
 | deposit_confirmed              | email + websocket       |
 | vault_apy_drop                 | email                   |
 | vault_paused                   | email + websocket       |

@@ -23,7 +23,6 @@ func ProductionAuthRules() []RouteRule {
 		{Method: http.MethodPost, PathPrefix: "/api/v1/auth/refresh", Public: true},
 		// No blanket "/api/v1/auth/" rule: logout, logout-all, and sessions
 		// must stay protected and fall through to the "/api/v1/" catch-all.
-		{PathPrefix: "/api/v1/banks/", Public: true},
 		{PathPrefix: "/api/v1/yields/", Public: true},
 		{PathPrefix: "/api/v1/savings-goals/shared/", Public: true},
 		// Whether deposits or withdrawals are halted, and the operator's

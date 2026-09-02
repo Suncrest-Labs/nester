@@ -311,10 +311,10 @@ func TestDispatcher_FallbackDoesNotDoubleDeliverWhenWebSocketAlreadyInMatrix(t *
 	)
 	_ = mail
 
-	// EventSettlementCompleted's matrix already includes WebSocket, so the
+	// EventDepositConfirmed's matrix already includes WebSocket, so the
 	// fallback triggered by Email's failure must not re-deliver a second
 	// time on top of the normal in-matrix WebSocket delivery.
-	_ = d.Send(context.Background(), uuid.New(), EventSettlementCompleted, "Done", "body", nil)
+	_ = d.Send(context.Background(), uuid.New(), EventDepositConfirmed, "Done", "body", nil)
 	if len(hub.Calls) != 1 {
 		t.Errorf("expected exactly one websocket delivery, got %d (fallback must not double-deliver)", len(hub.Calls))
 	}
@@ -329,7 +329,7 @@ func TestDispatcher_DeliveryOutcomesRecorded(t *testing.T) {
 		persistence,
 	)
 
-	_ = d.Send(context.Background(), uuid.New(), EventSettlementCompleted, "Done", "body", nil)
+	_ = d.Send(context.Background(), uuid.New(), EventDepositConfirmed, "Done", "body", nil)
 
 	if persistence.Count() != 1 {
 		t.Fatalf("expected one saved notification, got %d", persistence.Count())

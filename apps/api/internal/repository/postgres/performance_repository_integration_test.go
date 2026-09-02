@@ -19,7 +19,7 @@ import (
 // applyPerformanceMigrations applies the minimal set of migrations needed for
 // performance repository integration tests. We wipe every table in the public
 // schema before applying so re-runs against a reused DB don't trip on
-// non-idempotent statements (notably 006_create_settlements_table).
+// non-idempotent statements (notably 003_create_transactions_table).
 func applyPerformanceMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 	// The full migration chain in numeric order — see testutil.ApplyAllMigrations

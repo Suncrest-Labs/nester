@@ -31,7 +31,7 @@ func applyLedgerMigrations(t *testing.T, db *sql.DB) {
 	}
 	// Apply the whole up-chain in order rather than a hand-picked subset.
 	// The subset approach failed three times in a row here — each fix
-	// surfaced the next missing table or column (settlements, then
+	// surfaced the next missing table or column (one table, then
 	// vault_transactions, then users.display_name) because this file's
 	// helpers touch more schema than the ledger tables alone. Applying
 	// everything is what the migration-safety job does and cannot drift.

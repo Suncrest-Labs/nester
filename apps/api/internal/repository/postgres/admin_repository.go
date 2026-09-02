@@ -11,7 +11,6 @@ import (
 	"github.com/shopspring/decimal"
 
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/offramp"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
@@ -35,7 +34,7 @@ func (r *AdminRepository) DatabaseHealth(ctx context.Context) (int64, error) {
 
 func (r *AdminRepository) GetLastEventIndexedAt(ctx context.Context) (*time.Time, error) {
 	var last sql.NullTime
-	if err := r.db.QueryRowContext(ctx, `SELECT MAX(created_at) FROM settlements`).Scan(&last); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT MAX(processed_at) FROM processed_events`).Scan(&last); err != nil {
 		return nil, err
 	}
 	if !last.Valid {
@@ -415,148 +414,6 @@ func (r *AdminRepository) UpdateVaultStatus(
 	return r.GetVaultDetail(ctx, id)
 }
 
-func (r *AdminRepository) ListSettlements(
-	ctx context.Context,
-	filter admindomain.SettlementListFilter,
-) ([]admindomain.SettlementSummary, int, error) {
-	where, args := buildSettlementWhere(filter)
-
-	countQuery := `SELECT COUNT(*) FROM settlements s JOIN users u ON u.id = s.user_id WHERE ` + where
-	var total int
-	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	sortColumn := sanitizeSettlementSort(filter.Sort)
-	order := sanitizeOrder(filter.Order)
-	offset := (filter.Page - 1) * filter.PerPage
-
-	listQuery := fmt.Sprintf(`
-		SELECT s.id, s.user_id, s.vault_id,
-		       s.amount::text, s.currency, s.fiat_currency, s.fiat_amount::text, s.exchange_rate::text,
-		       s.destination_type, s.destination_provider, s.destination_account_number, s.destination_account_name, s.destination_bank_code,
-		       s.status, s.created_at, s.completed_at, u.wallet_address
-		FROM settlements s
-		JOIN users u ON u.id = s.user_id
-		WHERE %s
-		ORDER BY %s %s
-		LIMIT $%d OFFSET $%d
-	`, where, sortColumn, order, len(args)+1, len(args)+2) // #nosec G201 -- sortColumn/order come from sanitize* whitelist functions; values use $N placeholders
-
-	args = append(args, filter.PerPage, offset)
-	rows, err := r.db.QueryContext(ctx, listQuery, args...)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	out := make([]admindomain.SettlementSummary, 0)
-	for rows.Next() {
-		var (
-			id            string
-			userID        string
-			vaultID       string
-			amount        string
-			currency      string
-			fiatCurrency  string
-			fiatAmount    string
-			exchangeRate  string
-			destType      string
-			destProvider  string
-			destAccountNo string
-			destName      string
-			destBankCode  string
-			status        string
-			createdAt     time.Time
-			completedAt   sql.NullTime
-			walletAddress string
-		)
-
-		if err := rows.Scan(
-			&id,
-			&userID,
-			&vaultID,
-			&amount,
-			&currency,
-			&fiatCurrency,
-			&fiatAmount,
-			&exchangeRate,
-			&destType,
-			&destProvider,
-			&destAccountNo,
-			&destName,
-			&destBankCode,
-			&status,
-			&createdAt,
-			&completedAt,
-			&walletAddress,
-		); err != nil {
-			return nil, 0, err
-		}
-
-		parsedID, err := uuid.Parse(id)
-		if err != nil {
-			return nil, 0, err
-		}
-		parsedUserID, err := uuid.Parse(userID)
-		if err != nil {
-			return nil, 0, err
-		}
-		parsedVaultID, err := uuid.Parse(vaultID)
-		if err != nil {
-			return nil, 0, err
-		}
-		parsedAmount, err := decimal.NewFromString(amount)
-		if err != nil {
-			return nil, 0, err
-		}
-		parsedFiatAmount, err := decimal.NewFromString(fiatAmount)
-		if err != nil {
-			return nil, 0, err
-		}
-		parsedExchangeRate, err := decimal.NewFromString(exchangeRate)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		var completedAtPtr *time.Time
-		if completedAt.Valid {
-			t := completedAt.Time.UTC()
-			completedAtPtr = &t
-		}
-
-		out = append(out, admindomain.SettlementSummary{
-			Settlement: offramp.Settlement{
-				ID:           parsedID,
-				UserID:       parsedUserID,
-				VaultID:      parsedVaultID,
-				Amount:       parsedAmount,
-				Currency:     currency,
-				FiatCurrency: fiatCurrency,
-				FiatAmount:   parsedFiatAmount,
-				ExchangeRate: parsedExchangeRate,
-				Destination: offramp.Destination{
-					Type:          destType,
-					Provider:      destProvider,
-					AccountNumber: destAccountNo,
-					AccountName:   destName,
-					BankCode:      destBankCode,
-				},
-				Status:      offramp.SettlementStatus(status),
-				CreatedAt:   createdAt.UTC(),
-				CompletedAt: completedAtPtr,
-			},
-			WalletAddress: walletAddress,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, 0, err
-	}
-
-	return out, total, nil
-}
-
 func (r *AdminRepository) ListUsers(
 	ctx context.Context,
 	filter admindomain.UserListFilter,
@@ -661,30 +518,6 @@ func buildVaultWhere(filter admindomain.VaultListFilter) (string, []any) {
 	return strings.Join(clauses, " AND "), args
 }
 
-func buildSettlementWhere(filter admindomain.SettlementListFilter) (string, []any) {
-	clauses := []string{"1=1"}
-	args := make([]any, 0)
-
-	if filter.Status != "" {
-		args = append(args, strings.TrimSpace(filter.Status))
-		clauses = append(clauses, fmt.Sprintf("s.status = $%d", len(args)))
-	}
-	if filter.Search != "" {
-		args = append(args, "%"+strings.TrimSpace(filter.Search)+"%")
-		clauses = append(clauses, fmt.Sprintf("u.wallet_address ILIKE $%d", len(args)))
-	}
-	if filter.DateFrom != nil {
-		args = append(args, filter.DateFrom.UTC())
-		clauses = append(clauses, fmt.Sprintf("s.created_at >= $%d", len(args)))
-	}
-	if filter.DateTo != nil {
-		args = append(args, filter.DateTo.UTC())
-		clauses = append(clauses, fmt.Sprintf("s.created_at <= $%d", len(args)))
-	}
-
-	return strings.Join(clauses, " AND "), args
-}
-
 func buildUserWhere(filter admindomain.UserListFilter) (string, []any) {
 	clauses := []string{"1=1"}
 	args := make([]any, 0)
@@ -718,19 +551,6 @@ func sanitizeVaultSort(sort string) string {
 		return "v.status"
 	default:
 		return "v.created_at"
-	}
-}
-
-func sanitizeSettlementSort(sort string) string {
-	switch strings.ToLower(strings.TrimSpace(sort)) {
-	case "completed_at":
-		return "s.completed_at"
-	case "amount":
-		return "s.amount"
-	case "status":
-		return "s.status"
-	default:
-		return "s.created_at"
 	}
 }
 

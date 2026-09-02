@@ -66,7 +66,6 @@ type AdminService struct {
 	chainInvoker              VaultChainInvoker
 	httpClient                *http.Client
 	stellarHorizonURL         string
-	settlementProviderURL     string
 	allocationStrategyAddress string
 	minAllocationWeight       decimal.Decimal
 	startedAt                 time.Time
@@ -92,7 +91,6 @@ func NewAdminService(
 	vaultRepository vault.Repository,
 	chainInvoker VaultChainInvoker,
 	stellarHorizonURL string,
-	settlementProviderURL string,
 	allocationStrategyAddress string,
 	minAllocationWeightPercent int,
 ) *AdminService {
@@ -106,7 +104,6 @@ func NewAdminService(
 		chainInvoker:              chainInvoker,
 		httpClient:                &http.Client{Timeout: 5 * time.Second},
 		stellarHorizonURL:         stellarHorizonURL,
-		settlementProviderURL:     settlementProviderURL,
 		allocationStrategyAddress: allocationStrategyAddress,
 		minAllocationWeight:       decimal.NewFromInt(int64(minAllocationWeightPercent)),
 		startedAt:                 time.Now().UTC(),
@@ -260,13 +257,6 @@ func (s *AdminService) UnpauseVault(ctx context.Context, id uuid.UUID) (admindom
 	return s.repository.UpdateVaultStatus(ctx, id, vault.StatusActive)
 }
 
-func (s *AdminService) ListSettlements(
-	ctx context.Context,
-	filter admindomain.SettlementListFilter,
-) ([]admindomain.SettlementSummary, int, error) {
-	return s.repository.ListSettlements(ctx, filter)
-}
-
 func (s *AdminService) ListUsers(
 	ctx context.Context,
 	filter admindomain.UserListFilter,
@@ -284,16 +274,14 @@ func (s *AdminService) ListVaultRebalances(ctx context.Context, vaultID uuid.UUI
 func (s *AdminService) GetDetailedHealth(ctx context.Context) (admindomain.DetailedHealth, error) {
 	database := s.checkDatabase(ctx)
 	stellar := s.checkHTTPDependency(ctx, s.stellarHorizonURL, "stellar horizon")
-	settlement := s.checkHTTPDependency(ctx, s.settlementProviderURL, "settlement provider")
 	indexer := s.checkEventIndexer(ctx)
 
 	return admindomain.DetailedHealth{
-		Database:           database,
-		StellarRPC:         stellar,
-		SettlementProvider: settlement,
-		EventIndexer:       indexer,
-		DiskUsage:          diskUsage(),
-		Uptime:             time.Since(s.startedAt).Round(time.Second).String(),
+		Database:     database,
+		StellarRPC:   stellar,
+		EventIndexer: indexer,
+		DiskUsage:    diskUsage(),
+		Uptime:       time.Since(s.startedAt).Round(time.Second).String(),
 	}, nil
 }
 

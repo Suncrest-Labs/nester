@@ -76,7 +76,7 @@ func TestActivityHandler_List_MapsToFrontendContract(t *testing.T) {
 	server := httptest.NewServer(withAuthUser(mux, userID))
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/api/v1/activity?type=Deposit,Settlement&status=Confirmed&limit=10")
+	resp, err := http.Get(server.URL + "/api/v1/activity?type=Deposit,Withdrawal&status=Confirmed&limit=10")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestActivityHandler_List_MapsToFrontendContract(t *testing.T) {
 		t.Fatalf("cursors = next=%q prev=%q, want next=%q prev=empty", body.NextCursor, body.PrevCursor, "next-token")
 	}
 
-	if len(stub.gotFilter.Types) != 2 || stub.gotFilter.Types[0] != activity.EventDeposit || stub.gotFilter.Types[1] != activity.EventSettlement {
+	if len(stub.gotFilter.Types) != 2 || stub.gotFilter.Types[0] != activity.EventDeposit || stub.gotFilter.Types[1] != activity.EventWithdrawal {
 		t.Fatalf("type filter not parsed correctly: %+v", stub.gotFilter.Types)
 	}
 	if stub.gotFilter.Status != activity.StatusCompleted {

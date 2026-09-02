@@ -34,36 +34,6 @@ CREATE TABLE IF NOT EXISTS allocations (
 
 CREATE INDEX IF NOT EXISTS idx_allocations_vault_id ON allocations (vault_id);
 
-CREATE TABLE IF NOT EXISTS settlements (
-    id UUID PRIMARY KEY,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    vault_id UUID NOT NULL REFERENCES vaults(id) ON DELETE RESTRICT,
-    amount NUMERIC(20,8) NOT NULL CHECK (amount > 0),
-    currency VARCHAR(10) NOT NULL,
-    fiat_currency VARCHAR(10) NOT NULL,
-    fiat_amount NUMERIC(20,8) NOT NULL CHECK (fiat_amount > 0),
-    exchange_rate NUMERIC(20,8) NOT NULL CHECK (exchange_rate > 0),
-    destination_type VARCHAR(50) NOT NULL,
-    destination_provider VARCHAR(50) NOT NULL,
-    destination_account_number VARCHAR(100) NOT NULL,
-    destination_account_name VARCHAR(200) NOT NULL,
-    destination_bank_code VARCHAR(20) NOT NULL DEFAULT '',
-    status VARCHAR(30) NOT NULL DEFAULT 'initiated'
-        CHECK (status IN (
-            'initiated',
-            'liquidity_matched',
-            'fiat_dispatched',
-            'confirmed',
-            'failed'
-        )),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    completed_at TIMESTAMPTZ
-);
-
-CREATE INDEX IF NOT EXISTS idx_settlements_user_id ON settlements(user_id);
-CREATE INDEX IF NOT EXISTS idx_settlements_vault_id ON settlements(vault_id);
-CREATE INDEX IF NOT EXISTS idx_settlements_status ON settlements(status);
-
 CREATE TABLE IF NOT EXISTS user_roles (
     user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role       VARCHAR(50) NOT NULL,
@@ -116,32 +86,3 @@ INSERT INTO allocations (id, vault_id, protocol, amount, apy, allocated_at) VALU
      'Compound', 5000.00, 6.8000, NOW())
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO settlements (
-    id, user_id, vault_id, amount, currency, fiat_currency, fiat_amount,
-    exchange_rate, destination_type, destination_provider,
-    destination_account_number, destination_account_name, destination_bank_code,
-    status, created_at, completed_at
-) VALUES
-    ('550e8400-e29b-41d4-a716-446655440030',
-     '550e8400-e29b-41d4-a716-446655440001',
-     '550e8400-e29b-41d4-a716-446655440010',
-     100.00, 'USDC', 'NGN', 165000.00, 1650.00,
-     'bank_transfer', 'paystack', '0123456789', 'Test User', '044',
-     'confirmed',
-     NOW() - INTERVAL '2 days',
-     NOW() - INTERVAL '2 days' + INTERVAL '10 seconds'),
-    ('550e8400-e29b-41d4-a716-446655440031',
-     '550e8400-e29b-41d4-a716-446655440001',
-     '550e8400-e29b-41d4-a716-446655440010',
-     50.00, 'USDC', 'NGN', 82500.00, 1650.00,
-     'bank_transfer', 'paystack', '0123456789', 'Test User', '044',
-     'initiated',
-     NOW(), NULL),
-    ('550e8400-e29b-41d4-a716-446655440032',
-     '550e8400-e29b-41d4-a716-446655440001',
-     '550e8400-e29b-41d4-a716-446655440011',
-     200.00, 'USDC', 'NGN', 330000.00, 1650.00,
-     'bank_transfer', 'paystack', '9876543210', 'Test User', '058',
-     'fiat_dispatched',
-     NOW() - INTERVAL '1 hour', NULL)
-ON CONFLICT (id) DO NOTHING;

@@ -197,7 +197,7 @@ func (s *TransactionService) ReconcileTransaction(ctx context.Context, model tra
 }
 
 // applyConfirmedBalance moves the vault balance for a confirmed deposit or
-// withdrawal. It is a no-op for other transaction types (e.g. settlement) and
+// withdrawal. It is a no-op for other transaction types and
 // when no applier is configured.
 func (s *TransactionService) applyConfirmedBalance(ctx context.Context, model transaction.Transaction) error {
 	if s.balance == nil {
@@ -316,7 +316,7 @@ func (s *TransactionService) ListUserTransactions(ctx context.Context, input Lis
 
 func isSupportedTransactionType(value transaction.TransactionType) bool {
 	switch value {
-	case transaction.TypeDeposit, transaction.TypeWithdrawal, transaction.TypeSettlement:
+	case transaction.TypeDeposit, transaction.TypeWithdrawal:
 		return true
 	default:
 		return false

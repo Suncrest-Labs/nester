@@ -41,7 +41,6 @@ type adminService interface {
 	UpdateAllocation(ctx context.Context, input service.UpdateAllocationInput) (vault.Allocation, error)
 	DeleteAllocation(ctx context.Context, input service.DeleteAllocationInput) error
 	TriggerRebalance(ctx context.Context, id uuid.UUID, req admindomain.RebalanceRequest) (admindomain.RebalanceResponse, error)
-	ListSettlements(ctx context.Context, filter admindomain.SettlementListFilter) ([]admindomain.SettlementSummary, int, error)
 	ListUsers(ctx context.Context, filter admindomain.UserListFilter) ([]admindomain.UserSummary, int, error)
 	ListVaultRebalances(ctx context.Context, vaultID uuid.UUID) ([]admindomain.VaultRebalanceRecord, error)
 	GetDetailedHealth(ctx context.Context) (admindomain.DetailedHealth, error)
@@ -229,7 +228,6 @@ func (h *AdminHandler) Register(mux routeMux) {
 	mux.HandleFunc("POST /api/v1/admin/vaults/{id}/allocations", h.createAllocation)
 	mux.HandleFunc("PATCH /api/v1/admin/vaults/{id}/allocations/{alloc_id}", h.updateAllocation)
 	mux.HandleFunc("DELETE /api/v1/admin/vaults/{id}/allocations/{alloc_id}", h.deleteAllocation)
-	mux.HandleFunc("GET /api/v1/admin/settlements", h.listSettlements)
 	mux.HandleFunc("GET /api/v1/admin/users", h.listUsers)
 	mux.HandleFunc("GET /api/v1/admin/health", h.getDetailedHealth)
 	mux.HandleFunc("GET /api/v1/admin/scheduler/leadership", h.getSchedulerLeadership)
@@ -769,46 +767,6 @@ func (h *AdminHandler) deleteAllocation(w http.ResponseWriter, r *http.Request) 
 	response.WriteJSON(w, http.StatusOK, response.OK(map[string]string{"status": "deleted"}))
 }
 
-func (h *AdminHandler) listSettlements(w http.ResponseWriter, r *http.Request) {
-	page, perPage := parseAdminPagination(r)
-	filter := admindomain.SettlementListFilter{
-		Page:    page,
-		PerPage: perPage,
-		Status:  r.URL.Query().Get("status"),
-		Sort:    r.URL.Query().Get("sort"),
-		Order:   r.URL.Query().Get("order"),
-		Search:  r.URL.Query().Get("search"),
-	}
-
-	dateFrom, err := parseAdminDateQuery(r.URL.Query().Get("date_from"))
-	if err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("date_from must be RFC3339 or YYYY-MM-DD"))
-		return
-	}
-	filter.DateFrom = dateFrom
-
-	dateTo, err := parseAdminDateQuery(r.URL.Query().Get("date_to"))
-	if err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("date_to must be RFC3339 or YYYY-MM-DD"))
-		return
-	}
-	filter.DateTo = dateTo
-
-	items, total, err := h.service.ListSettlements(r.Context(), filter)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-
-	out := response.OK(items)
-	out.Meta = &response.Meta{
-		Page:       page,
-		PerPage:    perPage,
-		TotalCount: total,
-	}
-	response.WriteJSON(w, http.StatusOK, out)
-}
-
 func (h *AdminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 	page, perPage := parseAdminPagination(r)
 	filter := admindomain.UserListFilter{
@@ -870,23 +828,6 @@ func parseAdminIntQuery(raw string, fallback int) int {
 		return fallback
 	}
 	return n
-}
-
-func parseAdminDateQuery(raw string) (*time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-
-	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-		utc := parsed.UTC()
-		return &utc, nil
-	}
-	if parsed, err := time.Parse("2006-01-02", raw); err == nil {
-		utc := parsed.UTC()
-		return &utc, nil
-	}
-	return nil, errors.New("invalid date format")
 }
 
 func (h *AdminHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {

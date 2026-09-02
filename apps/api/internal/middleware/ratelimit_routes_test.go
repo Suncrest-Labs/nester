@@ -160,12 +160,12 @@ func TestSensitiveRouteLimiterWindowResets(t *testing.T) {
 
 func TestSensitiveUserRouteLimiterPerUser(t *testing.T) {
 	const limit = 1
-	l := NewLimiter(nil, "settlement", limit, time.Second)
-	routes := []RouteMatch{{Method: http.MethodPost, Path: "/api/v1/settlements"}}
+	l := NewLimiter(nil, "goalcreate", limit, time.Second)
+	routes := []RouteMatch{{Method: http.MethodPost, Path: "/api/v1/users/savings-goals"}}
 
 	rules := []RouteRule{{PathPrefix: "/api/v1/"}}
 	chain := Authenticate(testSecret, "", rules, alwaysActiveRevocation)(
-		SensitiveUserRouteLimiter(l, routes, "settlement rate limit exceeded")(ok200),
+		SensitiveUserRouteLimiter(l, routes, "rate limit exceeded")(ok200),
 	)
 
 	mint := func(id string) string {
@@ -177,7 +177,7 @@ func TestSensitiveUserRouteLimiterPerUser(t *testing.T) {
 	}
 
 	send := func(token string) int {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/settlements", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/savings-goals", nil)
 		req.RemoteAddr = "10.0.0.7:7777" // same IP for every request
 		req.Header.Set("Authorization", "Bearer "+token)
 		rec := httptest.NewRecorder()

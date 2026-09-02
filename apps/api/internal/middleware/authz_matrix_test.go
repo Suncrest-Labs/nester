@@ -88,10 +88,6 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/portfolio/valuation"},
 	{Method: "GET", Path: "/api/v1/performance/snapshots"},
 
-	// ── Settlements ──────────────────────────────────────────────────────
-	{Method: "GET", Path: "/api/v1/settlements"},
-	{Method: "POST", Path: "/api/v1/settlements"},
-
 	// ── Activity / notifications ─────────────────────────────────────────
 	{Method: "GET", Path: "/api/v1/activity"},
 
@@ -110,9 +106,6 @@ var authzMatrix = []AuthzRoute{
 	// ── Admin (requires admin role) ──────────────────────────────────────
 	{Method: "GET", Path: "/api/v1/admin/users", RequireRole: "admin"},
 
-	// ── Banks (public) ───────────────────────────────────────────────────
-	{Method: "GET", Path: "/api/v1/banks", Public: false},
-
 	// ── Yields (public) ───────────────────────────────────────────────
 	// NOTE: prefix rule "/api/v1/yields/" requires trailing slash; the
 	// exact path "/api/v1/yields" (no slash) falls through to protected.
@@ -130,8 +123,8 @@ var authzMatrix = []AuthzRoute{
 
 	// ── Routes recovered from the handler registrations ────────────────
 	// Added when the coverage guard showed the original matrix exercised
-	// 58 of 178 registered routes, leaving the whole admin, bank-account,
-	// and intelligence surface unverified.
+	// 58 of 178 registered routes, leaving the whole admin and
+	// intelligence surface unverified.
 	// admin
 	{Method: "DELETE", Path: "/api/v1/admin/savings-goal-templates/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "DELETE", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/allocations/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
@@ -142,7 +135,6 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/admin/health", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/savings-goal-templates", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/scheduler/leadership", RequireRole: "admin"},
-	{Method: "GET", Path: "/api/v1/admin/settlements", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/users/00000000-0000-0000-0000-000000000000/money-path", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/vaults", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
@@ -160,16 +152,6 @@ var authzMatrix = []AuthzRoute{
 
 	// analytics
 	{Method: "GET", Path: "/api/v1/analytics/users/00000000-0000-0000-0000-000000000000"},
-
-	// bank-accounts
-	{Method: "DELETE", Path: "/api/v1/bank-accounts/users/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000"},
-	{Method: "GET", Path: "/api/v1/bank-accounts/users/00000000-0000-0000-0000-000000000000"},
-	{Method: "PATCH", Path: "/api/v1/bank-accounts/users/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000"},
-	{Method: "POST", Path: "/api/v1/bank-accounts/users/00000000-0000-0000-0000-000000000000"},
-
-	// banks
-	{Method: "GET", Path: "/api/v1/banks"},
-	{Method: "GET", Path: "/api/v1/banks/resolve", Public: true},
 
 	// intelligence
 	{Method: "GET", Path: "/api/v1/intelligence/market"},
@@ -197,10 +179,6 @@ var authzMatrix = []AuthzRoute{
 
 	// savings-goals
 	{Method: "GET", Path: "/api/v1/savings-goals/shared/00000000-0000-0000-0000-000000000000", Public: true},
-
-	// settlements
-	{Method: "GET", Path: "/api/v1/settlements/00000000-0000-0000-0000-000000000000"},
-	{Method: "PATCH", Path: "/api/v1/settlements/00000000-0000-0000-0000-000000000000/status"},
 
 	// tools
 	{Method: "POST", Path: "/api/v1/tools/projection"},

@@ -44,7 +44,7 @@ func openReconciliationTestDB(t *testing.T) *sql.DB {
 func resetReconciliationTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	if _, err := db.Exec(`TRUNCATE TABLE reconciliation_findings, reconciliation_runs, reconciliation_checkpoints, settlements, allocations, vault_transactions, yield_harvests, vaults, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE reconciliation_findings, reconciliation_runs, reconciliation_checkpoints, allocations, vault_transactions, yield_harvests, vaults, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE failed: %v", err)
 	}
 }

@@ -1,5 +1,5 @@
 // Package activity provides the unified transaction-history feed
-// (GET /api/v1/activity): deposits, withdrawals, rebalances, settlements,
+// (GET /api/v1/activity): deposits, withdrawals, rebalances,
 // and yield harvests for a single user, merged into one cursor-paginated,
 // filterable, searchable list.
 package activity
@@ -20,7 +20,6 @@ const (
 	EventDeposit     EventType = "deposit"
 	EventWithdrawal  EventType = "withdrawal"
 	EventRebalance   EventType = "rebalance"
-	EventSettlement  EventType = "settlement"
 	EventYieldEarned EventType = "yield_earned"
 )
 
@@ -48,15 +47,15 @@ type Item struct {
 
 // ListFilter drives the unified activity feed query for a single user.
 type ListFilter struct {
-	Types   []EventType
-	Status  Status
-	VaultID string
-	From    *time.Time
-	To      *time.Time
-	Search  string
-	Cursor  string
+	Types    []EventType
+	Status   Status
+	VaultID  string
+	From     *time.Time
+	To       *time.Time
+	Search   string
+	Cursor   string
 	Backward bool
-	Limit   int
+	Limit    int
 }
 
 // Repository is the read side of the unified activity feed.

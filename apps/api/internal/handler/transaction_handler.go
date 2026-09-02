@@ -225,10 +225,9 @@ func (h *TransactionHandler) createTransaction(w http.ResponseWriter, r *http.Re
 	validTypes := map[string]bool{
 		string(transaction.TypeDeposit):    true,
 		string(transaction.TypeWithdrawal): true,
-		string(transaction.TypeSettlement): true,
 	}
 	if !validTypes[req.Type] {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("type must be one of: deposit, withdrawal, settlement"))
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("type must be one of: deposit, withdrawal"))
 		return
 	}
 

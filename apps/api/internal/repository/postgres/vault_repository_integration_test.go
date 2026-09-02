@@ -393,7 +393,7 @@ func applyIntegrationMigrations(t *testing.T, db *sql.DB) {
 func resetIntegrationTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	if _, err := db.Exec(`TRUNCATE TABLE settlements, allocations, vault_transactions, yield_harvests, vaults, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE allocations, vault_transactions, yield_harvests, vaults, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE failed: %v", err)
 	}
 }
