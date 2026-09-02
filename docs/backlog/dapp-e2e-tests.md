@@ -16,7 +16,7 @@ The DApp lacks end-to-end tests. Critical user flows (wallet connect → create 
 ## Acceptance Criteria
 
 - [ ] Set up Playwright test framework in `apps/dapp/frontend/e2e/`
-- [ ] Test golden paths: wallet connect, vault creation, deposit, offramp initiation
+- [ ] Test golden paths: wallet connect, vault creation, deposit, withdrawal
 - [ ] Test error cases: invalid input, network errors, auth failures
 - [ ] Add to CI: run E2E tests on every PR via `playwright test`
 - [ ] E2E tests must run against staging environment or local dev server

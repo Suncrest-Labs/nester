@@ -1,6 +1,6 @@
 import { docsContent, docsNav } from "../content";
 import Link from "next/link";
-import { BookOpen, Code, Server, Cpu, Rocket, Brain } from "lucide-react";
+import { BookOpen, Code, Server, Cpu, Rocket } from "lucide-react";
 import { Metadata } from "next";
 
 /* ──── Metadata ──── */
@@ -220,11 +220,10 @@ function getAdjacentPages(slug: string) {
 
 const landingSections = [
     { icon: BookOpen, title: "Getting Started", desc: "Learn what Nester is, how the architecture works, and set up your local environment.", links: [{ title: "Introduction", slug: "introduction" }, { title: "Architecture Overview", slug: "architecture" }, { title: "Quick Start", slug: "quick-start" }] },
-    { icon: Rocket, title: "Core Concepts", desc: "Understand the four pillars: savings vaults, multi-asset yield, instant off-ramps, and AI intelligence.", links: [{ title: "Savings Layer", slug: "savings-layer" }, { title: "Yield Layer", slug: "yield-layer" }, { title: "Off-Ramp Layer", slug: "offramp-layer" }, { title: "AI Intelligence", slug: "ai-layer" }] },
-    { icon: Code, title: "Smart Contracts", desc: "Soroban/Rust contract reference for vaults, share tokens, yield adapters, and escrow.", links: [{ title: "Contracts Overview", slug: "contracts-overview" }, { title: "Vault Contract", slug: "vault-contract" }, { title: "Yield Adapters", slug: "yield-adapters" }, { title: "Escrow & Settlement", slug: "escrow" }] },
-    { icon: Server, title: "Backend API", desc: "Go + Chi REST API reference with request/response examples for all endpoints.", links: [{ title: "API Overview", slug: "api-overview" }, { title: "Vault Endpoints", slug: "vault-api" }, { title: "Off-Ramp Endpoints", slug: "offramp-api" }] },
+    { icon: Rocket, title: "Core Concepts", desc: "Understand the core pillars: tiered savings vaults, automated multi-protocol yield, and your live portfolio.", links: [{ title: "Savings Layer", slug: "savings-layer" }, { title: "Yield Layer", slug: "yield-layer" }] },
+    { icon: Code, title: "Smart Contracts", desc: "Soroban/Rust contract reference for vaults, share tokens, and yield adapters.", links: [{ title: "Contracts Overview", slug: "contracts-overview" }, { title: "Vault Contract", slug: "vault-contract" }, { title: "Yield Adapters", slug: "yield-adapters" }] },
+    { icon: Server, title: "Backend API", desc: "Go + Chi REST API reference with request/response examples for all endpoints.", links: [{ title: "API Overview", slug: "api-overview" }, { title: "Vault Endpoints", slug: "vault-api" }, { title: "Position Endpoints", slug: "position-api" }] },
     { icon: Cpu, title: "Frontend SDK", desc: "Wallet integration, transaction signing, and frontend patterns for the DApp.", links: [{ title: "Wallet Integration", slug: "wallet-integration" }, { title: "Transaction Signing", slug: "transaction-signing" }] },
-    { icon: Brain, title: "Prometheus AI", desc: "Python/FastAPI AI service powered by Claude for portfolio intelligence.", links: [{ title: "Prometheus Overview", slug: "prometheus-overview" }, { title: "API Reference", slug: "prometheus-api" }] },
 ];
 
 function DocsLanding() {
@@ -232,7 +231,7 @@ function DocsLanding() {
         <div>
             <h1 className="text-3xl font-heading font-bold tracking-tight mb-3">Nester Documentation</h1>
             <p className="text-muted-foreground text-[15px] mb-10 max-w-2xl">
-                Technical documentation for the Nester protocol — decentralized savings, yield optimization, instant fiat off-ramps, and AI-powered portfolio intelligence on Stellar/Soroban.
+                Technical documentation for the Nester protocol — decentralized savings, automated yield optimization, live portfolio tracking, and on-chain auto-invest on Stellar/Soroban.
             </p>
             <div className="grid gap-6 sm:grid-cols-2">
                 {landingSections.map((section) => (

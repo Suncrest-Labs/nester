@@ -18,7 +18,7 @@ The `scripts/seed.sql` users INSERT block references `email` and `name` columns 
 - [ ] Update `scripts/seed.sql` users INSERT to match post-migration 007 schema
 - [ ] Remove references to deprecated `email` column
 - [ ] Remove references to deprecated `name` column
-- [ ] Use correct columns: `wallet_address`, `display_name`, `kyc_status`
+- [ ] Use correct columns: `wallet_address`, `display_name`
 - [ ] Insert test user with valid Stellar address (G-prefix, 56 chars)
 - [ ] Test: `make dev-reset` should complete without schema errors
 - [ ] Verify seeded test user can be queried via API
@@ -29,12 +29,12 @@ The `scripts/seed.sql` users INSERT block references `email` and `name` columns 
 
 ```sql
 -- Before (broken):
-INSERT INTO users (id, name, email, kyc_status) VALUES
-    ('550e8400-e29b-41d4-a716-446655440001', 'Test User', 'test@nester.dev', 'verified');
+INSERT INTO users (id, name, email) VALUES
+    ('550e8400-e29b-41d4-a716-446655440001', 'Test User', 'test@nester.dev');
 
 -- After (fixed):
-INSERT INTO users (id, wallet_address, display_name, kyc_status) VALUES
-    ('550e8400-e29b-41d4-a716-446655440001', 'GBRPYHIL2CI3FV4BSXVEQ7JZ47ZQFLQOJHGS4OVRI7OFDIYWERWLVUO', 'Test User', 'verified');
+INSERT INTO users (id, wallet_address, display_name) VALUES
+    ('550e8400-e29b-41d4-a716-446655440001', 'GBRPYHIL2CI3FV4BSXVEQ7JZ47ZQFLQOJHGS4OVRI7OFDIYWERWLVUO', 'Test User');
 ```
 
 ## Testing

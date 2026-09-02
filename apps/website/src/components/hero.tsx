@@ -28,7 +28,7 @@ export function Hero() {
                     >
                         <Image src="/logo.png" alt="Nester" width={150} height={100} className="object-cover w-full h-full" />
                     </span>{" "}
-                    <span className="font-alpina italic font-medium">AI Integrated Global</span>{" "}
+                    <span className="font-alpina italic font-medium">Decentralized Global</span>{" "}
                     <span className="font-alpina italic font-light">Stablecoin</span>{" "}
                     <span className="font-montserrat">Infrastructure</span><br />
                     <span className="font-montserrat">for</span>
@@ -53,7 +53,7 @@ export function Hero() {
                     transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
                     className="text-muted-foreground text-sm sm:text-base md:text-lg lg:text-xl max-w-sm sm:max-w-lg md:max-w-2xl leading-relaxed font-sans"
                 >
-                    Earn optimized stablecoin yield and settle to fiat instantly through a decentralized liquidity network.
+                    Earn optimized stablecoin yield through non-custodial smart vaults — with live portfolio tracking and on-chain auto-invest, built on Stellar.
                 </motion.p>
 
                 <motion.div

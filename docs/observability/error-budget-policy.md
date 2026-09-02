@@ -23,12 +23,10 @@ Applies to every SLO with an error budget in [slo.md](slo.md):
 - Deposit success (99.5%)
 - Withdrawal success (99.5%)
 - Deposit/withdrawal latency (99% under 30s)
-- Intelligence availability (99%)
-- Intelligence TTFT (95% under 3s)
 
-Balance freshness and intelligence refusal rate are **out of scope**: one is a
-gauge and the other measures correct behaviour, so neither has a budget to
-spend. They still alert, and a sustained breach of either is grounds for the
+Balance freshness is **out of scope**: it is a
+gauge, so it has no budget to
+spend. It still alerts, and a sustained breach is grounds for the
 same reliability prioritisation by judgement rather than by formula.
 
 Budget state is read from the `budget remaining` panel on each SLO dashboard,

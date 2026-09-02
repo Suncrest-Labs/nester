@@ -27,7 +27,7 @@ consequences followed:
 ## 2. Why a separate process, and not a KMS
 
 Two architectures were considered against the actual deployment model
-(`docker-compose.yml`: API, intelligence service, Postgres, Redis as separate
+(`docker-compose.yml`: API, Postgres, Redis as separate
 containers; no cloud IAM, no workload identity provider).
 
 | | Separate signer process | Cloud KMS / HSM |

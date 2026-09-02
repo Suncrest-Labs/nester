@@ -16,7 +16,7 @@ When a deposit, withdrawal, or core money-path transaction is stuck or failing a
 
 ### How to Detect
 - **Alerts:** `FlowSuccessFastBurn`, `PendingSubmissionsBacklogged`
-- **User symptom:** User reports funds submitted in dApp but balance not credited or fiat offramp not initiated after >30 seconds.
+- **User symptom:** User reports funds submitted in dApp but balance not credited after >30 seconds.
 - **Metrics:**
   ```promql
   sum by (flow, outcome) (rate(nester_flow_attempts_total[5m]))

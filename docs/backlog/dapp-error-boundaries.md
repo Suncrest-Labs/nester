@@ -17,7 +17,7 @@ The Next.js DApp lacks global error boundaries. If a single component crashes (e
 
 - [ ] Create `components/ErrorBoundary.tsx` React error boundary component
 - [ ] Add global error boundary wrapping all routes in `app/layout.tsx`
-- [ ] Per-route error boundaries for major sections: /dashboard, /vaults, /offramp, /portfolio, /savings
+- [ ] Per-route error boundaries for major sections: /dashboard, /vaults, /portfolio, /savings
 - [ ] Error fallback UI shows: error message, "Go Home" button, "Report Issue" link
 - [ ] Log all errors to monitoring service (e.g., Sentry)
 - [ ] Test: intentionally throw error in component → verify fallback UI appears, page remains interactive

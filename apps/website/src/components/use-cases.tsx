@@ -28,16 +28,16 @@ const SCENARIOS: Scenario[] = [
     subtitle: "Goal-based vaults earning platform fees.",
   },
   {
-    id: "offramp",
-    label: "Offramp Layer",
-    shortTag: "Offramp",
-    subtitle: "Smart LP routing for instant settlement.",
+    id: "autoinvest",
+    label: "Auto-Invest",
+    shortTag: "Auto",
+    subtitle: "Recurring deposits, executed on-chain.",
   },
   {
-    id: "ai",
-    label: "AI Portfolio",
-    shortTag: "AI",
-    subtitle: "Prometheus scans and optimizes.",
+    id: "portfolio",
+    label: "Live Portfolio",
+    shortTag: "Portfolio",
+    subtitle: "Positions, P&L and performance in real time.",
   },
 ];
 
@@ -297,10 +297,9 @@ function YieldScene({ playing }: { playing: boolean }) {
   }, [playing]);
 
   const STRATEGIES = [
-    { name: "Conservative", risk: "Low", apy: "5.2%" },
-    { name: "Balanced", risk: "Moderate", apy: "9.8%" },
-    { name: "Growth", risk: "High", apy: "13.4%" },
-    { name: "Aggressive", risk: "Very High", apy: "16.8%" },
+    { name: "Conservative", risk: "Low", apy: "6–8%" },
+    { name: "Balanced", risk: "Moderate", apy: "8–12%" },
+    { name: "Growth", risk: "High", apy: "12–18%" },
   ];
 
   const PROTOCOLS = [
@@ -376,7 +375,7 @@ function YieldScene({ playing }: { playing: boolean }) {
           <p className="text-[9px] font-bold tracking-[0.2em] uppercase text-black/25 mb-3 m-0">
             Choose Strategy
           </p>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {STRATEGIES.map((s, i) => (
               <motion.div
                 key={s.name}
@@ -912,11 +911,11 @@ function SavingsScene({ playing }: { playing: boolean }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   SCENE 3: OFFRAMP LAYER
+   SCENE 3: AUTO-INVEST
 ───────────────────────────────────────────────────────────────── */
-// OfframpScene Layer Architecture
+// AutoInvestScene — on-chain recurring deposit mandate pipeline
 
-function OfframpScene({ playing }: { playing: boolean }) {
+function AutoInvestScene({ playing }: { playing: boolean }) {
   const [seq, setSeq] = useState(0);
 
   useEffect(() => {
@@ -924,13 +923,13 @@ function OfframpScene({ playing }: { playing: boolean }) {
       setSeq(0);      return;
     }
     setSeq(0);    const timings = [
-      800,  // 1: Packet User -> Escrow, show Escrow
-      1800, // 2: Packet Escrow -> Router, show Router & Oracle
-      3200, // 3: Packets Router -> LPs, show LPs loading rings
-      4800, // 4: Resolve LPs (GTBank matches)
-      5800, // 5: Packet GTB -> API, show API
-      6800, // 6: Packet API -> Settlement, show Settlement
-      8000, // 7: Escrow atomic release (crypto -> GTB LP)
+      800,  // 1: Packet Mandate -> Contract, show Contract
+      1800, // 2: Packet Contract -> Router, show Router & Oracle
+      3200, // 3: Packets Router -> Protocols, show loading rings
+      4800, // 4: Resolve allocations across protocols
+      5800, // 5: Packet Blend -> Contracts pill
+      6800, // 6: Packet -> Vault position, show position card
+      8000, // 7: Mandate marked executed (deposit complete)
       11000 // 8: Reset
     ];
     const timers = timings.map((t, i) =>
@@ -939,27 +938,27 @@ function OfframpScene({ playing }: { playing: boolean }) {
     return () => timers.forEach(clearTimeout);
   }, [playing]);
 
-  const LPs = [
-    { id: 'zenith', name: 'Zenith Operator', rate: '₦1,550/$', logo: '/zenith-logo.png', cx: 80, path: "M 250 193 C 250 230, 80 220, 80 260", failReason: 'Insufficient Balance' },
-    { id: 'gtb', name: 'GTBank Node', rate: '₦1,557/$', logo: '/GTBank_logo.svg.png', cx: 250, path: "M 250 193 L 250 260", winner: true },
-    { id: 'access', name: 'Access LP', rate: '₦1,552/$', logo: '/access-logo.png', cx: 420, path: "M 250 193 C 250 230, 420 220, 420 260", failReason: 'High Network Latency' },
+  const PROTOCOLS = [
+    { id: 'aave', name: 'Aave Pool', apy: '8.4% APY', share: '45%', logo: '/aave.jpg', cx: 80, path: "M 250 193 C 250 230, 80 220, 80 260" },
+    { id: 'blend', name: 'Blend Pool', apy: '11.2% APY', share: '35%', logo: '/blend.svg', cx: 250, path: "M 250 193 L 250 260", primary: true },
+    { id: 'phoenix', name: 'Phoenix Pool', apy: '9.6% APY', share: '20%', logo: '/phoenix.png', cx: 420, path: "M 250 193 C 250 230, 420 220, 420 260" },
   ];
 
   return (
     <div className="relative w-full select-none overflow-hidden rounded-b-3xl flex items-center justify-center" style={{ height: 600 }}>
       <div className="absolute left-1/2 -translate-x-1/2 w-[500px] h-[480px] scale-125 origin-top" style={{ top: '0px' }}>
-        
+
         {/* SVG Paths Layer */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-0" viewBox="0 0 500 480">
-          
-          {/* User -> Escrow */}
+
+          {/* Mandate -> Contract */}
           <path d="M 250 54 L 250 80" stroke="#E5E7EB" strokeWidth="1.5" fill="none" />
           {seq >= 1 && (
              <motion.path d="M 250 54 L 250 80" stroke="#9CA3AF" strokeWidth="3" fill="none" strokeLinecap="round"
                initial={{ pathLength: 0.1, pathOffset: 0, opacity: 0 }} animate={{ pathOffset: 1, opacity: [0, 1, 0] }} transition={{ duration: 0.6, ease: "linear" }} />
           )}
 
-          {/* Escrow -> Router */}
+          {/* Contract -> Router */}
           <path d="M 250 124 L 250 143" stroke="#E5E7EB" strokeWidth="1.5" fill="none" />
           {seq >= 2 && (
              <motion.path d="M 250 124 L 250 143" stroke="#9CA3AF" strokeWidth="3" fill="none" strokeLinecap="round"
@@ -973,50 +972,50 @@ function OfframpScene({ playing }: { playing: boolean }) {
                initial={{ pathLength: 0.2, pathOffset: 0, opacity: 0 }} animate={{ pathOffset: 1, opacity: [0, 1, 0] }} transition={{ duration: 0.5, delay: 0.6, ease: "linear" }} />
           )}
 
-          {/* Router -> LPs */}
-          {LPs.map((lp, i) => (
-             <g key={`path-${lp.id}`}>
-               <path d={lp.path} stroke="#E5E7EB" strokeWidth="1.5" fill="none" />
+          {/* Router -> Protocols */}
+          {PROTOCOLS.map((pr, i) => (
+             <g key={`path-${pr.id}`}>
+               <path d={pr.path} stroke="#E5E7EB" strokeWidth="1.5" fill="none" />
                {seq === 3 && (
-                 <motion.path d={lp.path} stroke="#9CA3AF" strokeWidth="2.5" fill="none" strokeLinecap="round"
+                 <motion.path d={pr.path} stroke="#9CA3AF" strokeWidth="2.5" fill="none" strokeLinecap="round"
                    initial={{ pathLength: 0.15, pathOffset: 0, opacity: 0 }} animate={{ pathOffset: 1, opacity: [0, 1, 0] }} transition={{ duration: 0.8, delay: i * 0.15, ease: "easeInOut" }} />
                )}
              </g>
           ))}
 
-          {/* GTB LP -> API */}
+          {/* Blend -> Contracts pill */}
           <path d="M 250 320 L 250 340" stroke="#E5E7EB" strokeWidth="1.5" fill="none" />
           {seq >= 5 && (
              <motion.path d="M 250 320 L 250 340" stroke="#9CA3AF" strokeWidth="3" fill="none" strokeLinecap="round"
                initial={{ pathLength: 0.2, pathOffset: 0, opacity: 0 }} animate={{ pathOffset: 1, opacity: [0, 1, 0] }} transition={{ duration: 0.6, ease: "linear" }} />
           )}
 
-          {/* API -> Settlement */}
+          {/* Contracts pill -> Vault position */}
           <path d="M 250 376 L 250 400" stroke="#E5E7EB" strokeWidth="1.5" fill="none" />
           {seq >= 6 && (
              <motion.path d="M 250 376 L 250 400" stroke="#9CA3AF" strokeWidth="4" fill="none" strokeLinecap="round"
                initial={{ pathLength: 0.15, pathOffset: 0, opacity: 0 }} animate={{ pathOffset: 1, opacity: [0, 1, 0] }} transition={{ duration: 0.6, ease: "linear" }} />
           )}
 
-          {/* Escrow Crypto Release -> GTB LP (Atomic Release curve) */}
+          {/* Mandate confirmation curve back down (execution complete) */}
           {seq === 7 && (
              <motion.path d="M 150 102 C 100 150, 100 250, 180 290" stroke="#9CA3AF" strokeWidth="3" fill="none" strokeLinecap="round" strokeDasharray="4 4"
                initial={{ pathLength: 0.15, pathOffset: 0, opacity: 0 }} animate={{ pathOffset: 1, opacity: [0, 1, 0] }} transition={{ duration: 1.2, ease: "easeInOut" }} />
           )}
         </svg>
 
-        {/* 1. USER REQUEST */}
+        {/* 1. AUTO-INVEST MANDATE */}
         <div className="absolute top-[10px] left-[150px] w-[200px] h-[44px] bg-white rounded-xl shadow-sm border border-gray-200 flex items-center px-3 z-10 transition-all">
           <div className="w-6 h-6 rounded bg-gray-100 flex items-center justify-center shrink-0">
              <div className="w-1.5 h-1.5 rounded-full bg-gray-600" />
           </div>
           <div className="ml-2.5">
-             <div className="text-[10px] text-gray-600 leading-tight">User Request</div>
-             <div className="text-[8px] text-gray-500 mt-0.5 tracking-wide uppercase">Withdraw $1,000 to GTBank</div>
+             <div className="text-[10px] text-gray-600 leading-tight">Auto-Invest Mandate</div>
+             <div className="text-[8px] text-gray-500 mt-0.5 tracking-wide uppercase">Deposit $200 USDC weekly</div>
           </div>
         </div>
 
-        {/* 2. ESCROW */}
+        {/* 2. ON-CHAIN MANDATE CONTRACT */}
         <motion.div
            initial={{ opacity: 0, scale: 0.95 }}
            animate={{ opacity: seq >= 1 ? 1 : 0, scale: seq >= 1 ? 1 : 0.95 }}
@@ -1027,14 +1026,14 @@ function OfframpScene({ playing }: { playing: boolean }) {
             <div className={`w-2 h-2 rounded-sm ${seq >= 7 ? 'border-t-0 border-r-2 border-b-2 border-l-0 rotate-45 mb-0.5 border-gray-500' : 'bg-gray-400'}`} />
           </div>
           <div className="ml-2.5">
-             <div className="text-[10px] text-gray-700 tracking-tight">Smart Contract Escrow</div>
+             <div className="text-[10px] text-gray-700 tracking-tight">On-Chain Mandate</div>
              <div className={`text-[8px] mt-0.5 tracking-wide uppercase ${seq >= 7 ? 'text-gray-600' : 'text-gray-500'}`}>
-               {seq >= 7 ? 'USDC Released to LP' : '1,000 USDC Locked'}
+               {seq >= 7 ? 'Deposit Executed' : '200 USDC Authorized'}
              </div>
           </div>
         </motion.div>
 
-        {/* 3. ROUTING ENGINE */}
+        {/* 3. VAULT ROUTER */}
         <motion.div
            initial={{ opacity: 0, y: -10 }}
            animate={{ opacity: seq >= 2 ? 1 : 0, y: seq >= 2 ? 0 : -10 }}
@@ -1048,8 +1047,8 @@ function OfframpScene({ playing }: { playing: boolean }) {
              </div>
            </div>
            <div className="ml-2.5 flex-1">
-             <div className="text-[10px] text-gray-800 tracking-widest uppercase mb-0.5">Omni-Router</div>
-             <div className="text-[7px] text-gray-500 uppercase tracking-wider">Algorithmic Match</div>
+             <div className="text-[10px] text-gray-800 tracking-widest uppercase mb-0.5">Vault Router</div>
+             <div className="text-[7px] text-gray-500 uppercase tracking-wider">Allocation Engine</div>
            </div>
            {seq === 2 && (
              <div className="flex gap-0.5 h-3 items-center">
@@ -1060,7 +1059,7 @@ function OfframpScene({ playing }: { playing: boolean }) {
            )}
         </motion.div>
 
-        {/* 4. RATE ORACLE */}
+        {/* 4. APY ORACLE */}
         <motion.div
            initial={{ opacity: 0, x: -10 }}
            animate={{ opacity: seq >= 2 ? 1 : 0, x: seq >= 2 ? 0 : -10 }}
@@ -1071,32 +1070,32 @@ function OfframpScene({ playing }: { playing: boolean }) {
            <div className="w-1 h-4 bg-gray-400 rounded-sm mx-0.5" />
            <div className="w-1 h-2 bg-gray-300 rounded-sm mr-2" />
            <div className="ml-1">
-             <div className="text-[8px] text-gray-600 uppercase">Rate Oracle</div>
-             <div className="text-[7px] text-gray-400 mt-0.5 tracking-wide">Live Market Check</div>
+             <div className="text-[8px] text-gray-600 uppercase">APY Oracle</div>
+             <div className="text-[7px] text-gray-400 mt-0.5 tracking-wide">Live Yield Check</div>
            </div>
         </motion.div>
 
-        {/* 5. LP NODES */}
-        {LPs.map((lp, i) => (
+        {/* 5. PROTOCOL NODES */}
+        {PROTOCOLS.map((pr, i) => (
           <motion.div
-            key={lp.id}
+            key={pr.id}
             initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: seq >= 3 ? (seq >= 4 && !lp.winner ? 0.4 : 1) : 0, y: seq >= 3 ? 0 : 15 }}
+            animate={{ opacity: seq >= 3 ? 1 : 0, y: seq >= 3 ? 0 : 15 }}
             transition={{ duration: 0.5, delay: i * 0.1, ease: EASING }}
             className={`absolute top-[260px] w-[140px] h-[60px] bg-white rounded-xl border flex items-center px-2 z-10 transition-all duration-500 border-gray-200 shadow-sm`}
-            style={{ left: lp.cx - 70 }}
+            style={{ left: pr.cx - 70 }}
           >
             <div className="flex items-center gap-2 w-full">
               <div className="w-8 h-8 flex items-center justify-center shrink-0">
-                <Image src={lp.logo} width={24} height={24} alt={lp.name} className="object-contain" />
+                <Image src={pr.logo} width={24} height={24} alt={pr.name} className="object-contain" />
               </div>
               <div className="flex-1">
-                <div className="text-[10px] text-gray-600 leading-tight">{lp.name}</div>
+                <div className="text-[10px] text-gray-600 leading-tight">{pr.name}</div>
                 <div className="text-[8px] mt-0.5 tracking-wide text-gray-500">
-                  {seq >= 4 && lp.winner ? 'Match + Rate' : (seq >= 4 ? lp.failReason : lp.rate)}
+                  {seq >= 4 ? `${pr.share} allocated` : pr.apy}
                 </div>
               </div>
-              
+
               <div className="w-4 h-4 relative shrink-0">
                 {seq === 3 && (
                   <svg className="w-full h-full -rotate-90 overflow-visible">
@@ -1106,7 +1105,7 @@ function OfframpScene({ playing }: { playing: boolean }) {
                       transition={{ duration: 1.2, delay: i * 0.1, ease: "linear" }} strokeLinecap="round" />
                   </svg>
                 )}
-                {seq >= 7 && lp.winner && (
+                {seq >= 7 && pr.primary && (
                    <div className="absolute inset-0 flex items-center justify-center">
                      <div className="w-2 h-2 rounded-sm border-t-0 border-r-2 border-b-2 border-l-0 rotate-45 mb-0.5 border-gray-500" />
                    </div>
@@ -1116,7 +1115,7 @@ function OfframpScene({ playing }: { playing: boolean }) {
           </motion.div>
         ))}
 
-        {/* 6. BANKING API */}
+        {/* 6. SOROBAN CONTRACTS */}
         <motion.div
            initial={{ opacity: 0, y: -10 }}
            animate={{ opacity: seq >= 5 ? 1 : 0, y: seq >= 5 ? 0 : -10 }}
@@ -1124,10 +1123,10 @@ function OfframpScene({ playing }: { playing: boolean }) {
            className="absolute top-[340px] left-[170px] w-[160px] h-[36px] bg-white rounded-full shadow-sm border border-gray-200 flex items-center justify-center gap-2 z-10"
         >
            <span className="text-[12px]">⚙️</span>
-           <span className="text-[8px] text-gray-500 uppercase tracking-widest">GTBank Direct API</span>
+           <span className="text-[8px] text-gray-500 uppercase tracking-widest">Soroban Contracts</span>
         </motion.div>
 
-        {/* 7. SETTLEMENT NODE */}
+        {/* 7. VAULT POSITION */}
         <motion.div
           initial={{ scale: 0.95, opacity: 0, y: 15 }}
           animate={{ scale: seq >= 6 ? 1 : 0.95, opacity: seq >= 6 ? 1 : 0, y: seq >= 6 ? 0 : 15 }}
@@ -1135,10 +1134,10 @@ function OfframpScene({ playing }: { playing: boolean }) {
           className="absolute top-[400px] left-[130px] w-[240px] h-[64px] rounded-xl shadow-[0_8px_30px_rgba(0,0,0,0.06)] z-10 overflow-hidden p-[2px]"
         >
           {/* Animated Gradient border equivalent */}
-          <motion.div 
-             animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }} 
+          <motion.div
+             animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
              transition={{ duration: 4, ease: "linear", repeat: Infinity }}
-             className="absolute inset-0 z-0" 
+             className="absolute inset-0 z-0"
              style={{ backgroundSize: '200% auto', backgroundImage: 'linear-gradient(90deg, #6025f5 0%, #ff5555 45%, #facc15 100%, #6025f5)' }}
           />
 
@@ -1148,17 +1147,17 @@ function OfframpScene({ playing }: { playing: boolean }) {
                 <div className="w-4 h-4 rounded-sm border-t-0 border-r-2 border-b-2 border-l-0 rotate-45 mb-1 border-gray-800" />
               </div>
               <div className="flex-1">
-                <div className="text-[11px] text-gray-800 tracking-wide mb-0.5">GTBank Account</div>
-                <div className="text-[8px] text-gray-500 tracking-widest uppercase mb-0.5" style={{ fontFamily: "var(--font-space-grotesk, sans-serif)", letterSpacing: '0.15em' }}>012****899</div>
+                <div className="text-[11px] text-gray-800 tracking-wide mb-0.5">Balanced Vault</div>
+                <div className="text-[8px] text-gray-500 tracking-widest uppercase mb-0.5" style={{ fontFamily: "var(--font-space-grotesk, sans-serif)", letterSpacing: '0.15em' }}>GBXY****K3LQ</div>
                 <div className="text-[7px] text-gray-400 tracking-wider flex items-center gap-1 uppercase">
-                  T+0 Finality
+                  Earning 9.5% APY
                 </div>
               </div>
               <div className="text-right flex flex-col items-end">
                 <div className="text-[13px] text-gray-800 tracking-tight mb-0.5 tabular-nums">
-                  +₦1,557,350
+                  +$200.00
                 </div>
-                <div className="text-[7px] text-gray-500 uppercase tracking-wider bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded shadow-sm">Settled Instantly</div>
+                <div className="text-[7px] text-gray-500 uppercase tracking-wider bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded shadow-sm">Deposited Automatically</div>
               </div>
             </div>
           </div>
@@ -1170,10 +1169,10 @@ function OfframpScene({ playing }: { playing: boolean }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   SCENE 4: AI PORTFOLIO
+   SCENE 4: LIVE PORTFOLIO
 ───────────────────────────────────────────────────────────────── */
 
-function AiScene({ playing }: { playing: boolean }) {
+function PortfolioScene({ playing }: { playing: boolean }) {
   const [seq, setSeq] = useState(0);
   const riskScore = useCounter(playing, 68, 4000, 2, 25);
 
@@ -1222,19 +1221,19 @@ function AiScene({ playing }: { playing: boolean }) {
 
   const recommendations = [
     {
-      priority: "HIGH",
-      title: "Rebalance $5K from Blend",
-      impact: "-12% volatility · +0.4% APY",
+      priority: "30D",
+      title: "+$212.40 total yield",
+      impact: "+0.8% · Balanced & Growth vaults",
     },
     {
-      priority: "MEDIUM",
-      title: "Increase Cash Reserve",
-      impact: "+6% liquidity · Better opportunities",
+      priority: "90D",
+      title: "+$605.10 total yield",
+      impact: "+2.3% · ahead of target APY",
     },
     {
-      priority: "LOW",
-      title: "Lock Yield in Conservative",
-      impact: "+0.2% stability · Reduced risk",
+      priority: "YTD",
+      title: "+$1,842.75 total yield",
+      impact: "+7.1% · all positions combined",
     },
   ];
 
@@ -1269,7 +1268,7 @@ function AiScene({ playing }: { playing: boolean }) {
               className="w-1.5 h-1.5 rounded-full bg-black"
             />
             <span className="text-[8px] font-bold tracking-[0.15em] uppercase text-black/35">
-              Prometheus
+              Live
             </span>
           </div>
         </div>
@@ -1333,7 +1332,7 @@ function AiScene({ playing }: { playing: boolean }) {
           transition={{ duration: 0.4, ease: EASING }}
           className="w-full py-2 rounded-lg border border-black/[0.08] bg-white/60 font-bold text-[11px] tracking-wider uppercase text-black/70 mb-4"
         >
-          Scan with Prometheus
+          Analyze Performance
         </motion.button>
       )}
 
@@ -1392,11 +1391,11 @@ function AiScene({ playing }: { playing: boolean }) {
         </motion.div>
       )}
 
-      {/* Recommendations */}
+      {/* Performance highlights */}
       {seq >= 5 && (
         <div className="space-y-2">
           <p className="text-[9px] font-bold tracking-[0.2em] uppercase text-black/25 m-0 mb-2">
-            Recommendations
+            Performance
           </p>
           {recommendations
             .slice(0, seq >= 6 ? (seq >= 7 ? 3 : 2) : 1)
@@ -1439,7 +1438,7 @@ function AiScene({ playing }: { playing: boolean }) {
           transition={{ duration: 0.4, ease: EASING }}
           className="w-full py-3 rounded-lg bg-black text-white font-bold text-[11px] tracking-wider uppercase mt-4"
         >
-          Apply All Recommendations
+          View Full Portfolio
         </motion.button>
       )}
 
@@ -1479,8 +1478,8 @@ function SceneRouter({
     <>
       {activeIdx === 0 && <YieldScene playing={playing} />}
       {activeIdx === 1 && <SavingsScene playing={playing} />}
-      {activeIdx === 2 && <OfframpScene playing={playing} />}
-      {activeIdx === 3 && <AiScene playing={playing} />}
+      {activeIdx === 2 && <AutoInvestScene playing={playing} />}
+      {activeIdx === 3 && <PortfolioScene playing={playing} />}
     </>
   );
 }

@@ -206,9 +206,7 @@ Workflow skips cleanly with no failure.
 
 **Related secrets:**
 
-- `STAGING_PROBE_INTELLIGENCE_BASE_URL` — base URL of staging intelligence service
 - `STAGING_PROBE_AUTH_TOKEN` — authentication token for API access
-- `STAGING_PROBE_INTELLIGENCE_TOKEN` — authentication token for intelligence service
 - `STAGING_PROBE_VAULT_ID` — deployed vault contract ID for testing
 
 All must be set as a group for probes to run. If any is missing, the guard detects it and skips the run.
@@ -231,7 +229,6 @@ Workflow skips cleanly with no failure.
 
 **Related secrets:**
 
-- `STAGING_LOAD_INTELLIGENCE_BASE_URL` — staging intelligence service URL
 - `STAGING_LOAD_WS_URL` — staging WebSocket URL
 - `STAGING_LOAD_VAULT_ID` — vault ID for load testing
 - `STAGING_LOAD_AUTH_TOKEN` — authentication token
