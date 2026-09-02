@@ -20,7 +20,6 @@ func TestUserRepositoryIntegrationCRUD(t *testing.T) {
 		ID:            uuid.New(),
 		WalletAddress: "G" + uuid.New().String()[:30], // Mock stellar wallet address
 		DisplayName:   "Test User",
-		KYCStatus:     user.KYCStatusPending,
 	}
 
 	// 1. Create
@@ -54,7 +53,6 @@ func TestUserRepositoryIntegrationCRUD(t *testing.T) {
 		ID:            uuid.New(),
 		WalletAddress: u.WalletAddress, // Same wallet address
 		DisplayName:   "Another User",
-		KYCStatus:     user.KYCStatusVerified,
 	}
 	if err := repository.Create(ctx, duplicateUser); err != user.ErrDuplicateWallet {
 		t.Fatalf("expected ErrDuplicateWallet on repeat address, got: %v", err)

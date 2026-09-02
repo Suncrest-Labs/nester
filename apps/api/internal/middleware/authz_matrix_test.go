@@ -112,10 +112,6 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/yields/", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/00000000-0000-0000-0000-000000000000", Public: true},
 
-	// ── KYC for the authenticated user (#1231) ─────────────────────────
-	{Method: "POST", Path: "/api/v1/users/me/kyc"},
-	{Method: "GET", Path: "/api/v1/users/me/kyc"},
-
 	// ── Money-path pause switches (#1120) ──────────────────────────────
 	{Method: "GET", Path: "/api/v1/admin/money-path/switches", RequireRole: "admin"},
 	{Method: "PUT", Path: "/api/v1/admin/money-path/switches/deposit", RequireRole: "admin"},
@@ -123,8 +119,8 @@ var authzMatrix = []AuthzRoute{
 
 	// ── Routes recovered from the handler registrations ────────────────
 	// Added when the coverage guard showed the original matrix exercised
-	// 58 of 178 registered routes, leaving the whole admin and
-	// intelligence surface unverified.
+	// 58 of 178 registered routes, leaving the whole admin surface
+	// unverified.
 	// admin
 	{Method: "DELETE", Path: "/api/v1/admin/savings-goal-templates/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "DELETE", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/allocations/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
@@ -139,7 +135,6 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/admin/vaults", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "PATCH", Path: "/api/v1/admin/savings-goal-templates/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
-	{Method: "PATCH", Path: "/api/v1/admin/users/00000000-0000-0000-0000-000000000000/kyc", RequireRole: "admin"},
 	{Method: "PATCH", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/allocations/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/backfill", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/backfill/00000000-0000-0000-0000-000000000000/resume", RequireRole: "admin"},
@@ -153,22 +148,9 @@ var authzMatrix = []AuthzRoute{
 	// analytics
 	{Method: "GET", Path: "/api/v1/analytics/users/00000000-0000-0000-0000-000000000000"},
 
-	// intelligence
-	{Method: "GET", Path: "/api/v1/intelligence/market"},
-	{Method: "GET", Path: "/api/v1/intelligence/portfolio/00000000-0000-0000-0000-000000000000"},
-	{Method: "GET", Path: "/api/v1/intelligence/recommend/vault"},
-	{Method: "POST", Path: "/api/v1/intelligence/analyze"},
-	{Method: "POST", Path: "/api/v1/intelligence/chat"},
-	{Method: "POST", Path: "/api/v1/intelligence/coaching"},
-	{Method: "POST", Path: "/api/v1/intelligence/recommend/vault"},
-	{Method: "POST", Path: "/api/v1/intelligence/savings-plan"},
-	{Method: "POST", Path: "/api/v1/intelligence/tools/00000000-0000-0000-0000-000000000000/confirm"},
-
 	// internal
-	{Method: "POST", Path: "/api/v1/internal/intelligence/tool-audit", RequireRole: "service"},
 
 	// portfolio
-	{Method: "GET", Path: "/api/v1/portfolio/00000000-0000-0000-0000-000000000000/insights"},
 	{Method: "GET", Path: "/api/v1/portfolio/summary"},
 
 	// rates
@@ -184,20 +166,13 @@ var authzMatrix = []AuthzRoute{
 	{Method: "POST", Path: "/api/v1/tools/projection"},
 	{Method: "POST", Path: "/api/v1/tools/simulation"},
 
-	// user-vaults
-	{Method: "GET", Path: "/api/v1/user-vaults/00000000-0000-0000-0000-000000000000"},
-
 	// users
 	{Method: "DELETE", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/schedule"},
 	{Method: "DELETE", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/schedules/00000000-0000-0000-0000-000000000000"},
 	{Method: "DELETE", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/share"},
 	{Method: "DELETE", Path: "/api/v1/users/watchlist/00000000-0000-0000-0000-000000000000"},
-	{Method: "GET", Path: "/api/v1/users/digest-ledger"},
-	{Method: "GET", Path: "/api/v1/users/digest/latest"},
-	{Method: "GET", Path: "/api/v1/users/kyc/00000000-0000-0000-0000-000000000000"},
 	{Method: "GET", Path: "/api/v1/users/notification-preferences"},
 	{Method: "GET", Path: "/api/v1/users/profile"},
-	{Method: "GET", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/coaching"},
 	{Method: "GET", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/contributions"},
 	{Method: "GET", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/notification-preferences"},
 	{Method: "GET", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/schedules"},
@@ -215,7 +190,6 @@ var authzMatrix = []AuthzRoute{
 	{Method: "PATCH", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/unarchive"},
 	{Method: "POST", Path: "/api/v1/users"},
 	{Method: "POST", Path: "/api/v1/users/device-tokens"},
-	{Method: "POST", Path: "/api/v1/users/kyc/00000000-0000-0000-0000-000000000000"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/complete"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/restore"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/schedule"},
@@ -240,13 +214,10 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance-completions"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance-history"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance-legs"},
-	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/recommendations"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/risk"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/risk/history"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/tvl"},
 	{Method: "GET", Path: "/api/v1/vaults/tvl"},
-	{Method: "POST", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance/execute"},
-	{Method: "POST", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance/suggest"},
 	{Method: "POST", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/risk/refresh"},
 
 	// webhooks

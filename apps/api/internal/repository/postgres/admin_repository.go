@@ -11,7 +11,6 @@ import (
 	"github.com/shopspring/decimal"
 
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
@@ -431,13 +430,13 @@ func (r *AdminRepository) ListUsers(
 	offset := (filter.Page - 1) * filter.PerPage
 
 	listQuery := fmt.Sprintf(`
-		SELECT u.id, u.wallet_address, u.display_name, u.kyc_status, u.created_at, u.updated_at,
+		SELECT u.id, u.wallet_address, u.display_name, u.created_at, u.updated_at,
 		       COUNT(v.id) AS vault_count,
 		       COALESCE(SUM(v.total_deposited), 0)::text AS total_deposited
 		FROM users u
 		LEFT JOIN vaults v ON v.user_id = u.id
 		WHERE %s
-		GROUP BY u.id, u.wallet_address, u.display_name, u.kyc_status, u.created_at, u.updated_at
+		GROUP BY u.id, u.wallet_address, u.display_name, u.created_at, u.updated_at
 		ORDER BY %s %s
 		LIMIT $%d OFFSET $%d
 	`, where, sortColumn, order, len(args)+1, len(args)+2) // #nosec G201 -- sortColumn/order come from sanitize* whitelist functions; values use $N placeholders
@@ -455,7 +454,6 @@ func (r *AdminRepository) ListUsers(
 			id             string
 			walletAddress  string
 			displayName    string
-			kycStatus      string
 			createdAt      time.Time
 			updatedAt      time.Time
 			vaultCount     int64
@@ -465,7 +463,6 @@ func (r *AdminRepository) ListUsers(
 			&id,
 			&walletAddress,
 			&displayName,
-			&kycStatus,
 			&createdAt,
 			&updatedAt,
 			&vaultCount,
@@ -487,7 +484,6 @@ func (r *AdminRepository) ListUsers(
 			ID:             parsedID,
 			WalletAddress:  walletAddress,
 			DisplayName:    displayName,
-			KYCStatus:      user.KYCStatus(kycStatus),
 			VaultCount:     vaultCount,
 			TotalDeposited: parsedTotalDeposited,
 			CreatedAt:      createdAt.UTC(),

@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
@@ -97,7 +96,6 @@ type UserSummary struct {
 	ID             uuid.UUID       `json:"id"`
 	WalletAddress  string          `json:"wallet_address"`
 	DisplayName    string          `json:"display_name"`
-	KYCStatus      user.KYCStatus  `json:"kyc_status"`
 	VaultCount     int64           `json:"vault_count"`
 	TotalDeposited decimal.Decimal `json:"total_deposited"`
 	CreatedAt      time.Time       `json:"created_at"`

@@ -71,7 +71,7 @@ func (c DataRetentionConfig) withDefaults() DataRetentionConfig {
 // DataRetentionJob periodically hard-deletes rows past their retention
 // window from tables the policy in docs/data-retention.md classifies as
 // erasable operational history (nester#1226). Every table this job touches
-// carries no legal/audit retention requirement — audit_logs, KYC records,
+// carries no legal/audit retention requirement — audit_logs,
 // and processed_events are explicitly OUT of scope for this job; see the
 // policy doc for why each of those is handled (or deliberately not handled)
 // differently.

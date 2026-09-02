@@ -8,10 +8,10 @@ import (
 // Route costs
 //
 // The existing limiters count requests. That is the wrong unit: a profile read
-// and an intelligence relay call that fans out to Anthropic, CoinGecko,
-// DeFiLlama and Soroban RPC both count as one, so a user can sit comfortably
-// inside the request-rate limit while saturating every expensive dependency we
-// have. The limiter never notices, because it is measuring the wrong thing.
+// and a Soroban contract invocation that fans out to RPC and price APIs both
+// count as one, so a user can sit comfortably inside the request-rate limit
+// while saturating every expensive dependency we have. The limiter never
+// notices, because it is measuring the wrong thing.
 //
 // A route's cost is a rough statement of how much downstream work one call
 // causes, in units where an ordinary database-backed read is 1. The numbers are
@@ -25,25 +25,10 @@ const DefaultRouteCost = 1
 // Cost tiers. Named so the table below reads as a claim about fan-out rather
 // than a list of magic numbers, and so re-tuning a tier is one edit.
 const (
-	// CostLLMRelay is the chat relay: an Anthropic completion plus whatever
-	// tool calls the model decides to make, each of which can hit Soroban
-	// RPC or a price API in turn. The most expensive thing the API does.
-	CostLLMRelay = 25
-
-	// CostLLMAnalysis is a single bounded model call — analysis, coaching,
-	// a savings plan, a rebalance suggestion. Expensive and metered by the
-	// provider, but with a fan-out we control.
-	CostLLMAnalysis = 15
-
 	// CostChainWrite is a Soroban contract invocation: build, simulate,
 	// sign and submit, then poll for confirmation. Several RPC round-trips
 	// against an endpoint we do not own.
 	CostChainWrite = 10
-
-	// CostIntelligenceRead is a model-backed read served through a cache.
-	// Cheap on a hit, a full model call on a miss, and the limiter cannot
-	// tell which it will be.
-	CostIntelligenceRead = 8
 
 	// CostAggregation is multi-protocol APY comparison and TVL rollups:
 	// upstream calls to DeFiLlama and price oracles, fanned across
@@ -77,24 +62,6 @@ type RouteCost struct {
 // endpoint without adding it here is the failure mode this table exists to
 // prevent, so keep it next to the handler when you add one.
 var routeCosts = []RouteCost{
-	// ---- Intelligence relay: model call plus model-driven tool fan-out ----
-	{http.MethodPost, "/api/v1/intelligence/chat", CostLLMRelay},
-
-	// ---- Bounded model calls ----
-	{http.MethodPost, "/api/v1/intelligence/analyze", CostLLMAnalysis},
-	{http.MethodPost, "/api/v1/intelligence/coaching", CostLLMAnalysis},
-	{http.MethodPost, "/api/v1/intelligence/savings-plan", CostLLMAnalysis},
-	{http.MethodPost, "/api/v1/intelligence/recommend/vault", CostLLMAnalysis},
-	{http.MethodPost, "/api/v1/vaults/{id}/rebalance/suggest", CostLLMAnalysis},
-	{http.MethodGet, "/api/v1/users/savings-goals/{id}/coaching", CostLLMAnalysis},
-
-	// ---- Model-backed reads (cache in front, model behind) ----
-	{http.MethodGet, "/api/v1/intelligence/market", CostIntelligenceRead},
-	{http.MethodGet, "/api/v1/intelligence/recommend/vault", CostIntelligenceRead},
-	{http.MethodGet, "/api/v1/intelligence/portfolio/{userId}", CostIntelligenceRead},
-	{http.MethodGet, "/api/v1/portfolio/{user_id}/insights", CostIntelligenceRead},
-	{http.MethodGet, "/api/v1/vaults/{id}/recommendations", CostIntelligenceRead},
-	{http.MethodPost, "/api/v1/intelligence/tools/{proposalId}/confirm", CostIntelligenceRead},
 
 	// ---- Soroban contract invocations ----
 	{http.MethodPost, "/api/v1/vaults/{id}/deposit", CostChainWrite},
@@ -102,7 +69,6 @@ var routeCosts = []RouteCost{
 	{http.MethodPost, "/api/v1/vaults/{id}/emergency-withdraw", CostChainWrite},
 	{http.MethodPost, "/api/v1/vaults/{id}/harvest", CostChainWrite},
 	{http.MethodPost, "/api/v1/vaults/{id}/rebalance", CostChainWrite},
-	{http.MethodPost, "/api/v1/vaults/{id}/rebalance/execute", CostChainWrite},
 	{http.MethodPost, "/api/v1/vault/rebalance", CostChainWrite},
 	{http.MethodPost, "/api/v1/admin/vaults/{id}/rebalance", CostChainWrite},
 

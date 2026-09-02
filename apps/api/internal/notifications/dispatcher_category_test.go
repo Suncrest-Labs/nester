@@ -10,6 +10,20 @@ import (
 	"github.com/google/uuid"
 )
 
+// testPromoEvent stands in for a promotional event type now that no
+// production event is promotional; the category machinery stays exercised.
+const testPromoEvent EventType = "test_promotional"
+
+// testEmailOnlyEvent gives the retry-enqueue test an email-only matrix now
+// that no production event is email-only.
+const testEmailOnlyEvent EventType = "test_email_only"
+
+func init() {
+	promotionalEvents[testPromoEvent] = true
+	eventChannelMatrix[testPromoEvent] = []ChannelKind{ChannelPush, ChannelWebSocket}
+	eventChannelMatrix[testEmailOnlyEvent] = []ChannelKind{ChannelEmail}
+}
+
 // --- test doubles specific to #829 behavior ---
 
 type fakeRateLimiter struct {
@@ -105,9 +119,6 @@ func TestCategoryFor_KnownExceptionsAndDefault(t *testing.T) {
 	if CategoryFor(EventVaultPaused) != CategorySafety {
 		t.Errorf("vault paused must be safety")
 	}
-	if CategoryFor(EventFinancialDigest) != CategoryPromotional {
-		t.Errorf("financial digest must be promotional")
-	}
 	if CategoryFor(EventDepositConfirmed) != CategoryTransactional {
 		t.Errorf("deposit confirmed must default to transactional")
 	}
@@ -171,7 +182,7 @@ func TestDispatcher_PromotionalSuppressedByDefaultOptOut_AndRecorded(t *testing.
 	hub := &RecordingHub{}
 	persistence := &RecordingPersistenceStore{}
 	catPrefs := newCategoryAwarePreferences() // defaults: promotional = Email:false, WebSocket:true, Push:false
-	catPrefs.Set(CategoryPromotional, Preferences{Email: false, WebSocket: false, Push: false, DigestCadence: DigestCadenceOff})
+	catPrefs.Set(CategoryPromotional, Preferences{Email: false, WebSocket: false, Push: false})
 
 	d := New(
 		[]Channel{NewWebSocketChannel(hub)},
@@ -179,7 +190,7 @@ func TestDispatcher_PromotionalSuppressedByDefaultOptOut_AndRecorded(t *testing.
 		persistence,
 	)
 
-	if err := d.Send(context.Background(), uuid.New(), EventGoalCoaching, "Coaching", "body", nil); err != nil {
+	if err := d.Send(context.Background(), uuid.New(), testPromoEvent, "Promo", "body", nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if len(hub.Calls) != 0 {
@@ -198,7 +209,7 @@ func TestDispatcher_CategoryAwarePreferencesPreferredOverFlat(t *testing.T) {
 	catPrefs := newCategoryAwarePreferences()
 	d := New(nil, catPrefs, nil)
 
-	_ = d.Send(context.Background(), uuid.New(), EventGoalCoaching, "x", "y", nil)
+	_ = d.Send(context.Background(), uuid.New(), testPromoEvent, "x", "y", nil)
 
 	if len(catPrefs.calls) != 1 || catPrefs.calls[0] != CategoryPromotional {
 		t.Errorf("expected GetForCategory to be called with CategoryPromotional, got %+v", catPrefs.calls)
@@ -368,9 +379,9 @@ func TestDispatcher_EnqueuesRetryForFailedEmailButNotWebSocket(t *testing.T) {
 		WithRetryEnqueuer(retry),
 	)
 
-	// EventKYCRejected is email-only, so there's no websocket fallback to
+	// testEmailOnlyEvent is email-only, so there's no websocket fallback to
 	// muddy the assertion.
-	_ = d.Send(context.Background(), uuid.New(), EventKYCRejected, "x", "y", nil)
+	_ = d.Send(context.Background(), uuid.New(), testEmailOnlyEvent, "x", "y", nil)
 
 	if retry.count() != 1 {
 		t.Fatalf("expected exactly one retry enqueue for the failed email, got %d", retry.count())

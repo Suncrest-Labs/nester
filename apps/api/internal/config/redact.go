@@ -130,24 +130,6 @@ func (a AccountCipherConfig) LogValue() slog.Value {
 }
 
 // ---------------------------------------------------------------------------
-// IntelligenceConfig
-// ---------------------------------------------------------------------------
-
-func (i IntelligenceConfig) String() string {
-	return fmt.Sprintf(
-		"IntelligenceConfig{serviceAPIKey:%q timeout:%s}",
-		redact(i.serviceAPIKey), i.timeout,
-	)
-}
-
-func (i IntelligenceConfig) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("service_api_key", redact(i.serviceAPIKey)),
-		slog.Duration("timeout", i.timeout),
-	)
-}
-
-// ---------------------------------------------------------------------------
 // RateLimitConfig
 // ---------------------------------------------------------------------------
 
@@ -203,9 +185,9 @@ func (r RateLimitConfig) LogValue() slog.Value {
 
 func (c Config) String() string {
 	return fmt.Sprintf(
-		"Config{environment:%q bankAccountCipherKey:%q auth:%s database:%s stellar:%s intelligence:%s accountCipher:%s}",
+		"Config{environment:%q bankAccountCipherKey:%q auth:%s database:%s stellar:%s accountCipher:%s}",
 		c.environment, redact(c.bankAccountCipherKey),
-		c.auth, c.database, c.stellar, c.intelligence, c.accountCipher,
+		c.auth, c.database, c.stellar, c.accountCipher,
 	)
 }
 
@@ -216,7 +198,6 @@ func (c Config) LogValue() slog.Value {
 		slog.Any("auth", c.auth),
 		slog.Any("database", c.database),
 		slog.Any("stellar", c.stellar),
-		slog.Any("intelligence", c.intelligence),
 		slog.Any("account_cipher", c.accountCipher),
 	)
 }

@@ -44,7 +44,6 @@ export const viewport: Viewport = {
 import { ToastProvider } from "@/components/ui/toast/toast-provider";
 
 import { ConsentProvider } from "@/context/consent-context";
-import { ConsentGatedPrometheus } from "@/components/consent-gated-prometheus";
 import { CookieConsentBanner } from "@/components/cookie-consent-banner";
 
 const themeInitScript = `
@@ -121,7 +120,6 @@ export default function RootLayout({
                                                             <OnboardingProvider>
                                                                 {children}
                                                                 <NotificationsToaster />
-                                                                <ConsentGatedPrometheus />
                                                                 <CookieConsentBanner />
                                                             </OnboardingProvider>
                                                         </WebSocketProvider>

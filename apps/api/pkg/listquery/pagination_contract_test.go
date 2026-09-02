@@ -46,7 +46,6 @@ func TestNoNewUnboundedListLimits(t *testing.T) {
 	knownLargeLimits := map[string]string{
 		"internal/service/portfolio_service.go:55":    "nester#1193/#1225: ListUserVaults, bounded by a single user's vault count (product-UI-created, not transaction volume).",
 		"internal/service/performance/service.go:391": "nester#1193/#1225: ListUserVaults, same per-user bound as portfolio_service.go.",
-		"internal/service/user_vaults_service.go:45":  "nester#1225: ListUserVaults, same per-user bound, additionally scoped to StatusActive.",
 		"internal/valuation/adapters.go:50":           "nester#1193/#1225: VaultPositionSource.Positions — ListUserVaults, same per-user bound (see the function's own doc comment).",
 	}
 
