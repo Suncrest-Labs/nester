@@ -29,7 +29,7 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 export const metadata: Metadata = {
     title: "Nester | DApp",
     description:
-        "Decentralized savings and instant fiat settlements powered by Stellar.",
+        "Decentralized savings and yield investing powered by Stellar.",
     manifest: "/manifest.webmanifest",
     icons: {
         icon: "/logo.png",

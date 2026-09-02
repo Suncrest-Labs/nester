@@ -7,7 +7,6 @@ import { ShieldCheck, User, Bell, Globe, Monitor } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { useWallet } from "@/components/wallet-provider";
 import { KYCSection, type KYCStatus } from "@/components/kyc/KYCSection";
-import { BankAccountsSection } from "@/components/settings/bank-accounts-section";
 import { SessionsSection } from "@/components/settings/sessions-section";
 import { cn } from "@/lib/utils";
 import { useLocale, useTranslations } from "@/context/locale-context";
@@ -488,7 +487,6 @@ export default function SettingsPage() {
                       {t("settings.languageDescription")}
                     </p>
                   </div>
-                  <BankAccountsSection />
                 </div>
               </motion.div>
             )}

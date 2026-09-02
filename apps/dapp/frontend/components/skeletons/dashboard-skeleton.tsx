@@ -203,22 +203,6 @@ export function HistorySkeleton() {
   );
 }
 
-export function SettlementsSkeleton() {
-  return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <SkeletonLine width="150px" height="2rem" />
-        <SkeletonLine width="120px" height="2.5rem" />
-      </div>
-
-      {/* Settlements table */}
-      <SkeletonCard className="p-8">
-        <SkeletonTable rows={5} columns={5} />
-      </SkeletonCard>
-    </div>
-  );
-}
 
 export function NotificationsSkeleton() {
   return (

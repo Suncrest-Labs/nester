@@ -8,7 +8,7 @@ import { SkeletonTable, LoadingRegion } from '@/components/ui/skeleton/skeleton'
 export interface Transaction {
   id: string;
   timestamp: string; // ISO string
-  type: 'Deposit' | 'Withdrawal' | 'Rebalance' | 'Settlement' | 'Yield Earned';
+  type: 'Deposit' | 'Withdrawal' | 'Rebalance' | 'Yield Earned';
   vaultName: string;
   amount: string; // exact decimal string from the API, e.g. "123.45" (#1223)
   asset: string;

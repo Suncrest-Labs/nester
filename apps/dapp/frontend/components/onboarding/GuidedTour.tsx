@@ -35,13 +35,6 @@ const TOUR_STEPS: TourStep[] = [
         content: "Click here to add funds to a vault and start earning yield immediately.",
         position: "left",
     },
-    {
-        id: "settlements",
-        selector: "[data-tour='settlements-tab']",
-        title: "Settlements",
-        content: "Convert your earned yield directly to your local currency through our seamless off-ramp.",
-        position: "bottom",
-    },
 ];
 
 export function GuidedTour() {

@@ -9,7 +9,6 @@ import { useWallet } from "@/components/wallet-provider";
 const BOTTOM_NAV = [
     { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { label: "Vaults", href: "/vaults", icon: Vault },
-    { label: "Settlements", href: "/offramp", icon: Globe },
     { label: "History", href: "/portfolio", icon: BarChart3 },
 ];
 

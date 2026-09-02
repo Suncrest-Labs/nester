@@ -17,7 +17,6 @@ export type WSEventType =
     | "deposit_confirmed"
     | "withdrawal_confirmed"
     | "yield_accrued"
-    | "settlement_status_changed"
     | "vault_paused"
     | "vault_unpaused"
     | "emergency_queue_fill"
@@ -61,12 +60,6 @@ export interface YieldAccruedPayload {
     positionId: string;
     deltaYield: number;
     asset: string;
-}
-
-export interface SettlementStatusChangedPayload {
-    settlementId: string;
-    status: string;
-    message?: string;
 }
 
 export interface VaultPausedPayload {
@@ -146,15 +139,11 @@ export interface ClientWireMessage {
 
 /**
  * Server event names that differ from the name the DApp uses internally.
- * The hub emits settlement transitions as a bare `status_changed` on a
- * settlement channel; the UI switches on `settlement_status_changed`.
  */
 // A Map rather than an object literal: `rawType` comes off the wire, and a
 // plain-object lookup for "constructor" or "__proto__" would resolve up the
 // prototype chain and yield a nonsense event type.
-const SERVER_EVENT_ALIASES = new Map<string, WSEventType>([
-    ["status_changed", "settlement_status_changed"],
-]);
+const SERVER_EVENT_ALIASES = new Map<string, WSEventType>([]);
 
 /** Heartbeat reply from the hub — see EventPong in apps/api/internal/ws. */
 export const PONG_EVENT = "pong";

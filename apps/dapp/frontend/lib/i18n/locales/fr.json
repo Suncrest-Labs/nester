@@ -27,16 +27,6 @@
     "targetLabel": "Cible",
     "deadlineLabel": "Échéance"
   },
-  "offramp": {
-    "title": "Retrait",
-    "subtitle": "Convertissez vos cryptos en monnaie locale, directement sur votre compte bancaire",
-    "amountLabel": "Montant",
-    "bankLabel": "Banque",
-    "accountNumberLabel": "Numéro de compte",
-    "offlineMessage": "Vous êtes hors ligne — les retraits sont suspendus",
-    "enterAmount": "Entrez un montant",
-    "selectBank": "Choisissez une banque"
-  },
   "settings": {
     "language": "Langue",
     "languageDescription": "Choisissez la langue utilisée dans l'application"

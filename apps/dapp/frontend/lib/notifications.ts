@@ -10,7 +10,6 @@ export type NotificationType =
     | "withdrawal_processed"
     | "ai_alert"
     | "rebalance_event"
-    | "offramp_status"
     | "goal_milestone"
     | "nudge_recommendation"
     | "promotional"
@@ -62,7 +61,7 @@ export const CATEGORY_METADATA: Record<
     },
     transactional: {
         label: "Transactions & Vault Activity",
-        description: "Deposit confirmations, withdrawal processing, yield accrual, and settlement status.",
+        description: "Deposit confirmations, withdrawal processing, and yield accrual.",
         alwaysOn: false,
     },
     nudge: {
@@ -110,7 +109,6 @@ export function mapTypeToCategoryAndPriority(type: NotificationType): {
         case "deposit_confirmed":
         case "withdrawal_processed":
         case "rebalance_event":
-        case "offramp_status":
             return { category: "transactional", priority: "transactional" };
         case "ai_alert":
         case "goal_milestone":
@@ -186,19 +184,6 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         timestamp: isoMinutesAgo(145),
         read: true,
         mergedIds: ["seed-4"],
-    },
-    {
-        id: "seed-5",
-        type: "offramp_status",
-        category: "transactional",
-        priority: "transactional",
-        title: "Off-ramp Status",
-        message: "Off-ramp settlement is now in queued state and awaiting LP confirmation.",
-        timestamp: isoMinutesAgo(220),
-        read: true,
-        actionUrl: "/offramp",
-        actionLabel: "View Off-ramp",
-        mergedIds: ["seed-5"],
     },
 ];
 
