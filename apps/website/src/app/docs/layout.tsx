@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Search, Sun, Moon, Menu, X, ChevronDown, ChevronRight, Sparkles, Github } from "lucide-react";
+import { Search, Sun, Moon, Menu, X, ChevronDown, ChevronRight, Github } from "lucide-react";
 import { docsNav, docsContent } from "./content";
 import { cn } from "@/lib/utils";
 
@@ -264,15 +264,6 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
                     {children}
                 </main>
             </div>
-
-            {/* AI Chat Button (Prometheus) */}
-            <button
-                className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 bg-amber-400 hover:bg-amber-500 text-gray-900 rounded-xl shadow-lg hover:shadow-xl transition-all font-medium text-sm"
-                title="Ask Prometheus AI"
-            >
-                <Sparkles className="w-4 h-4" />
-                <span className="hidden sm:inline">Prometheus AI</span>
-            </button>
 
             {/* Search Modal */}
             <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />

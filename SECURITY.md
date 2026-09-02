@@ -3,7 +3,7 @@
 ## Scope
 
 **In scope — please report these:**
-- Smart contract vulnerabilities (reentrancy, fund loss, logic errors in vault/rebalance/offramp)
+- Smart contract vulnerabilities (reentrancy, fund loss, logic errors in vault/rebalance)
 - Authentication or authorization bypass
 - Data exposure (user PII, private keys, JWT secrets)
 - Injection attacks (SQL, command, XSS with financial impact)
@@ -104,7 +104,7 @@ The Go APY push pipeline (`apps/api/internal/service/apy_service.go`,
 before submitting registry updates via `apps/api/internal/stellar/invoker.go`.
 
 - The attester private key **must** be stored in the same secret store as the AES cipher keys
-  (see `apps/api/internal/crypto/account_cipher.go` and `apps/api/internal/rotation/rotation.go`),
+  (see `apps/api/internal/crypto/account_cipher.go`),
   **never** in a plain environment variable.
 - The attester key versioning **must** follow the same rotation scheme used for cipher keys:
   versioned labels (e.g. `attester-v1`, `attester-v2`), non-destructive rotation, with old
@@ -169,10 +169,9 @@ Key configuration (environment variables):
 
 ### Encrypted Fields
 
-| Table | Encrypted Columns | Blind Index | Key Version |
-|---|---|---|---|
-| `bank_accounts` | `account_number_encrypted` (BYTEA) | `account_number_fingerprint` (TEXT, unique) | `key_version` (VARCHAR(32)) |
-| `kyc_documents` | `id_number_encrypted` (BYTEA), `front_object_key_encrypted` (BYTEA), `back_object_key_encrypted` (BYTEA) | `id_number_fingerprint` (TEXT) | `key_version` (VARCHAR(32)) |
+| Table | Encrypted Columns | Key Version |
+|---|---|---|
+| `webhooks` | webhook signing secret (sealed via `AccountCipher`) | `secret_key_version` (TEXT) |
 
 ### Blind Indexes
 
@@ -184,11 +183,7 @@ Limitations:
 
 ### Key Rotation
 
-The `cmd/rotate_keys` command re-encrypts stored ciphertext under the active key version. It processes all encrypted domains (bank accounts, KYC documents) in a single run. The rotator is:
-
-- **Idempotent**: Rows already on the active version are skipped.
-- **Resumable**: Each row is committed independently; an interrupted run picks up where it left off.
-- **Safe**: Only row IDs and key versions are logged — never plaintext, ciphertext, or keys.
+Rotation is non-destructive: new encryptions use the active key version, while every registered key version can still decrypt the ciphertext it sealed. Each row records the version that sealed it, so rotating the active key never orphans existing data, and re-encryption can proceed row by row without downtime.
 
 ### Data Classification
 
@@ -196,7 +191,7 @@ A complete data-classification inventory is maintained at `apps/api/internal/cry
 
 ### Backfill for Existing Data
 
-When encryption is extended to a new domain, existing plaintext rows are backfilled using a dedicated command (e.g. `cmd/backfill_kyc_encryption`). The migration pattern follows:
+When encryption is extended to a new domain, existing plaintext rows are backfilled using a dedicated batched command. The migration pattern follows:
 
 1. Add encrypted columns alongside existing plaintext columns (rollback-safe).
 2. Run a batched, resumable backfill job to populate encrypted values.
@@ -207,14 +202,13 @@ Plaintext is never dropped in the same step that introduces ciphertext.
 
 ## Supply-Chain Security
 
-Nester implements defence-in-depth for software supply-chain security, covering all ecosystems in the monorepo (Go, npm, Rust Cargo, Python pip, and CI/containers).
+Nester implements defence-in-depth for software supply-chain security, covering all ecosystems in the monorepo (Go, npm, Rust Cargo, and CI/containers).
 
 ### Software Bill of Materials (SBOM)
 
 Every CI build generates a CycloneDX-format SBOM for each deployable artifact affected by the change set:
 - **Go API**: `cyclonedx-gomod` generates the Go module SBOM
 - **Frontend (npm/pnpm)**: `syft` generates the pnpm dependency tree SBOM (catalogs `pnpm-lock.yaml` directly)
-- **Intelligence (Python)**: `syft` generates the Python package SBOM
 - **Contracts (Rust)**: `syft` generates the Rust crate SBOM
 
 SBOM generation is mandatory for the artifacts touched by a build: a generator failure fails the job, and the artifact upload is configured with `if-no-files-found: error` so a build with missing SBOMs cannot go green. SBOMs are uploaded as build artifacts and retained per build, so any deployed version has an exact, queryable record of its dependency contents.
@@ -225,7 +219,6 @@ All package dependencies are pinned to exact versions with integrity verificatio
 - **Go**: `go.sum` with checksum database (`GOSUMDB`) verification
 - **npm**: Lockfile (`pnpm-lock.yaml`) with integrity hashes; CI uses `--frozen-lockfile` to reject unrecorded changes
 - **Rust**: `Cargo.lock` with verified crate checksums
-- **Python**: `requirements.txt` version pins audited by `pip-audit` in CI
 
 CI fails the build if integrity verification fails for any ecosystem. CI tooling is pinned as well: third-party GitHub Actions are pinned to immutable commit SHAs (see below) and the SBOM generators (`cyclonedx-gomod`, `syft`) are installed from exact release versions, with downloaded binaries verified against published checksums.
 
@@ -259,10 +252,8 @@ Automated vulnerability scanning runs on every PR and push across all ecosystems
 | `gosec` | Go (api) | Medium+ severity; warnings only |
 | `cargo-audit` | Rust (contracts) | All advisories; warnings only |
 | `pnpm audit` | npm (dapp/website) | Moderate+ fails; warnings only |
-| `pip-audit` | Python (intelligence) | Any reported finding fails with JSON report |
-| `bandit` | Python (intelligence) | High-confidence issues |
 | `semgrep` | TypeScript/Next.js | OSS + Pro rules (TypeScript, React, Next.js, secrets) |
-| `CodeQL` | Go, JS/TS, Python | All queries, security-extended suite |
+| `CodeQL` | Go, JS/TS | All queries, security-extended suite |
 
 A known vulnerability in a production dependency blocks the merge/release until remediated or explicitly waived.
 

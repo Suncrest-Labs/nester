@@ -12,12 +12,12 @@ const cormorant = Cormorant({ subsets: ["latin"], weight: ["300", "400"], style:
 export const metadata: Metadata = {
   metadataBase: new URL("https://nester.finance"),
   title: {
-    default: "Nester | Decentralized Savings & Liquidity",
+    default: "Nester | Decentralized Savings & Yield",
     template: "%s | Nester",
   },
   description:
-    "Optimize crypto yield and settle to fiat instantly through a decentralized liquidity network built for emerging markets.",
-  keywords: ["DeFi", "Stellar", "Soroban", "Savings", "Liquidity", "Crypto", "Fiat Settlement", "Yield Optimization"],
+    "Grow your crypto in non-custodial smart vaults with live portfolio tracking and on-chain auto-invest, built on Stellar.",
+  keywords: ["DeFi", "Stellar", "Soroban", "Savings", "Liquidity", "Crypto", "Smart Vaults", "Auto-Invest", "Yield Optimization"],
   authors: [{ name: "Nester Protocol" }],
   creator: "Nester Protocol",
   publisher: "Nester Protocol",
@@ -29,21 +29,21 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     siteName: "Nester",
-    title: "Nester | Decentralized Savings & Liquidity",
-    description: "Optimize crypto yield and settle to fiat instantly through a decentralized liquidity network built for emerging markets.",
+    title: "Nester | Decentralized Savings & Yield",
+    description: "Grow your crypto in non-custodial smart vaults with live portfolio tracking and on-chain auto-invest, built on Stellar.",
     images: [
       {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: "Nester - Decentralized Savings & Liquidity",
+        alt: "Nester - Decentralized Savings & Yield",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Nester | Decentralized Savings & Liquidity",
-    description: "Optimize crypto yield and settle to fiat instantly through a decentralized liquidity network built for emerging markets.",
+    title: "Nester | Decentralized Savings & Yield",
+    description: "Grow your crypto in non-custodial smart vaults with live portfolio tracking and on-chain auto-invest, built on Stellar.",
     images: ["/og-image.png"],
     site: "@NesterProtocol",
   },
@@ -59,7 +59,7 @@ const jsonLd = {
     "https://twitter.com/NesterProtocol",
     "https://github.com/Suncrest-Labs/nester"
   ],
-  "description": "Nester is a decentralized savings and liquidity protocol built on Stellar/Soroban that automates crypto savings."
+  "description": "Nester is a decentralized savings and yield protocol built on Stellar/Soroban that automates crypto savings."
 };
 
 export default function RootLayout({

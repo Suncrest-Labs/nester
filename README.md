@@ -1,40 +1,34 @@
 # Nester
 
-**Decentralized Savings & Liquidity Protocol**
+**Decentralized Savings & Yield Investment Protocol**
 
-Nester automates DeFi savings by diversifying deposits across multiple yield sources, while enabling instant crypto-to-fiat settlements. Built for emerging markets where people need both: high-yield crypto savings and fast access to local currency.
+Nester is a crypto-first savings and investment app on Stellar. Deposits are diversified across multiple on-chain yield sources, tracked in a live portfolio, and grown with automated recurring deposits — self-custodial from end to end.
 
-> Earn on-chain. Spend locally. Live freely—anywhere in the world.
+> Your keys. Your yield. Your portfolio.
 
 ---
 
 ## The Problem
 
-Holding stablecoins today means choosing between two bad options: let your money sit idle losing value to inflation, or navigate the complex world of DeFi protocols yourself. And even if you manage to earn yield, converting crypto to spendable fiat remains slow, expensive, and unreliable—especially in emerging markets.
+Holding stablecoins today means choosing between two bad options: let your money sit idle losing value to inflation, or navigate the complex world of DeFi protocols yourself — juggling pools, APYs, and rebalancing by hand.
 
-Nester solves both problems in one protocol.
+Nester turns that into one decision: pick a risk profile, deposit, and let the protocol do the work.
 
 ---
 
 ## How It Works
 
-![Nester Architecture Overview]
-
-Nester operates through three integrated layers that work together seamlessly:
-
-| Layer             | Function                                                | Outcome                      |
-| ----------------- | ------------------------------------------------------- | ---------------------------- |
-| **Savings Layer** | Diversifies deposits across lending & staking protocols | Optimized yields (8-15% APY) |
-| **Offramp Layer** | Aggregates liquidity and settles to local fiat          | ~3 second settlements        |
-| **AI Layer**      | Analyzes markets and portfolios                         | Personalized guidance        |
+| Piece | Function | Outcome |
+| ----- | -------- | ------- |
+| **Smart Vaults** | Diversify deposits across lending & staking protocols | Optimized yields, one deposit |
+| **Portfolio** | Live positions, P&L, performance history | Full visibility, on-chain truth |
+| **Auto-invest** | Recurring on-chain deposit mandates | Dollar-cost averaging into yield |
 
 ---
 
-## Savings Layer
+## Smart Vaults
 
-The yield engine. Deposits are automatically allocated across battle-tested DeFi protocols (Aave, Blend, Compound) to generate consistent returns without manual management.
-
-![Savings Flow]
+The yield engine. Deposits are automatically allocated across battle-tested DeFi protocols to generate consistent returns without manual management.
 
 **Smart Vaults** let users choose their risk profile:
 
@@ -44,42 +38,15 @@ The yield engine. Deposits are automatically allocated across battle-tested DeFi
 | Balanced     | Medium | 8-12%      | Mixed lending + staking   |
 | Growth       | Higher | 12-18%     | Aggressive multi-protocol |
 
-The protocol continuously monitors APYs and risk metrics, automatically rebalancing to maintain optimal performance while minimizing exposure to underperforming pools.
+The protocol continuously monitors APYs and risk metrics — including signature-attested APY/TVL data on-chain — automatically rebalancing to maintain optimal performance while minimizing exposure to underperforming pools. A circuit breaker and emergency withdrawal queue protect deposits when a source degrades.
 
 ---
 
-## Offramp Layer
+## Portfolio & Auto-invest
 
-The bridge to real-world spending. Unlike P2P marketplaces where you wait hours for a counterparty, Nester uses pre-funded liquidity nodes that enable instant settlement.
+Every position is visible in a live portfolio: holdings, realized yield, performance charts, and a unified activity feed. Recurring deposit mandates run on-chain, so auto-invest schedules execute without trusting a server with your funds.
 
-![Offramp Architecture]
-
-**How settlement works:**
-
-1. User initiates withdrawal (USDC → NGN)
-2. LP Aggregator finds optimal swap route
-3. Pre-funded node executes fiat transfer
-4. Bank/mobile money receives funds (~3 seconds)
-5. Automatic refund if settlement fails
-
-Supported rails include bank transfers, mobile money (M-Pesa, MTN MoMo), and card withdrawals across African markets.
-
----
-
-## AI Intelligence Layer (Prometheus)
-
-An intelligent advisor that analyzes market conditions and user portfolios to provide data-driven recommendations. Prometheus never executes transactions automatically—it only suggests, users decide.
-
-![AI Layer]
-
-**Capabilities:**
-
-- **Vault Analyzer** — Evaluates historical performance, risk metrics, and market conditions to recommend optimal vaults
-- **Portfolio Tracker** — Monitors holdings across vaults and wallets, identifies concentration risks, suggests rebalancing
-- **Market Intelligence** — Integrates DeFiLlama, CoinGecko, and on-chain data for real-time sentiment analysis
-- **Conversational Interface** — Natural language queries: "Should I move funds to Growth Vault?" or "What's safest right now?"
-
-All AI suggestions include reasoning and confidence levels. Disclaimer always present: recommendations are informational, not financial advice.
+Savings goals sit on top: set a target, attach a schedule, watch streaks and milestones — all backed by the same vault engine.
 
 ---
 
@@ -87,11 +54,11 @@ All AI suggestions include reasoning and confidence levels. Disclaimer always pr
 
 ![System Architecture]
 
-**Smart Contracts (Soroban/Stellar)** — Vault management, deposit routing, yield distribution, rebalancing logic, LP aggregation, and swap execution.
+**Smart Contracts (Soroban/Stellar)** — Vault management, deposit routing, yield distribution, rebalancing logic, recurring deposit mandates, and savings goals.
 
-**Backend Services** — Real-time APY monitoring, fiat settlement orchestration, and AI inference pipeline.
+**Backend Services (Go)** — Real-time APY/TVL monitoring, a reorg-safe event indexer, a double-entry ledger, and portfolio valuation.
 
-**Client Applications** — Web app (Next.js), mobile app (Flutter/Dart), and API for integrations.
+**Client Applications** — Web app (Next.js) and API for integrations.
 
 ---
 
@@ -113,7 +80,6 @@ Every pull request runs the following automated security checks:
 | TypeScript / Next.js | [Semgrep](https://semgrep.dev) (`p/typescript`, `p/react`, `p/nextjs`, `p/secrets`)  | XSS, secrets, Next.js misconfigs                |
 | TypeScript / Next.js | [CodeQL](https://codeql.github.com) (`javascript-typescript`)                        | Broad static analysis                           |
 | Go                   | gosec + govulncheck                                                                  | SAST + CVE audit                                |
-| Python               | bandit + pip-audit                                                                   | SAST + CVE audit                                |
 | Rust                 | cargo-audit                                                                          | CVE audit                                       |
 | All languages        | gitleaks                                                                             | Secret / credential detection                   |
 
@@ -126,7 +92,6 @@ The fastest way to run the full stack locally is Docker Compose. You only need D
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Docker Compose v2)
-- An Anthropic API key (optional — intelligence service falls back to a placeholder)
 
 ### 1. Clone and configure
 
@@ -134,7 +99,6 @@ The fastest way to run the full stack locally is Docker Compose. You only need D
 git clone https://github.com/suncrestlabs/nester.git
 cd nester
 cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY if you want the intelligence service
 ```
 
 ### 2. Start all services
@@ -143,17 +107,16 @@ cp .env.example .env
 make dev
 ```
 
-This builds and starts PostgreSQL, the Go API, the Next.js frontend, and the FastAPI intelligence service. On first run Docker pulls base images and compiles everything — expect 2–5 minutes.
+This builds and starts PostgreSQL, Redis, the Go API, and the Next.js frontend. On first run Docker pulls base images and compiles everything — expect 2–5 minutes.
 
 | Service      | URL                           |
 | ------------ | ----------------------------- |
 | Frontend     | http://localhost:3001         |
 | API          | http://localhost:8080         |
 | API health   | http://localhost:8080/healthz |
-| Intelligence | http://localhost:8000         |
 | PostgreSQL   | localhost:5432                |
 
-The database is seeded automatically with a test user, two vaults, allocations, and settlements in various states.
+The database is seeded automatically with a test user, two vaults, and allocations.
 
 ### 3. Useful commands
 
@@ -232,7 +195,7 @@ The dev stack uses placeholder credentials committed in the repository:
 
 ### External Network Access
 
-If you need to expose the dev stack to other machines (mobile testing, multi-machine development), use:
+If you need to expose the dev stack to other machines (multi-machine development), use:
 
 ```bash
 make dev-external
@@ -241,16 +204,6 @@ make dev-external
 This composes `docker-compose.external.yml` on top of the base config, exposing services on `0.0.0.0` (all interfaces).
 
 **Security warning:** Only use this on **trusted networks**. Development credentials are known; on public WiFi, anyone in range can access your database.
-
-For mobile app testing specifically:
-
-```bash
-# Start dev with external binding
-make dev-external
-
-# On the mobile device, configure the API URL to your machine's IP:
-# http://[your-machine-ip]:8080/api/v1
-```
 
 ### Production Posture
 
@@ -267,13 +220,12 @@ See [SECURITY.md](/SECURITY.md) and the [deployment docs](/deploy) for productio
 
 ## Roadmap
 
-| Phase       | Focus                                    | Status      |
-| ----------- | ---------------------------------------- | ----------- |
-| **Phase 1** | Core savings vaults + manual rebalancing | In Progress |
-| **Phase 2** | Automated rebalancing + LP aggregator    | Planned     |
-| **Phase 3** | Fiat offramp integration (Nigeria first) | In Progress |
-| **Phase 4** | AI Intelligence Layer (Prometheus)       | In Progress |
-| **Phase 5** | Multi-region expansion                   | Future      |
+| Phase  | Focus                                                           | Status      |
+| ------ | --------------------------------------------------------------- | ----------- |
+| **v1** | Yield vaults, portfolio dashboard, recurring on-chain deposits  | In Progress |
+| **v2** | In-app swaps (DEX routing) and recurring token buys             | Planned     |
+| **v3** | Fiat onramp widget, MPC embedded wallets, curated asset baskets | Planned     |
+| **v4** | Multi-region expansion and deeper protocol integrations         | Future      |
 
 ---
 
@@ -298,14 +250,13 @@ If you're setting up CI/CD (GitHub Actions, forks, or new environments), see [do
 
 ### Contribution Areas
 
-| Area            | Looking For                                  | Skills                       |
-| --------------- | -------------------------------------------- | ---------------------------- |
-| Smart Contracts | Vault logic, rebalancing, LP routing         | Soroban, Rust, Stellar       |
-| Backend         | Settlement orchestration, AI pipeline        | Node.js, Python, PostgreSQL  |
-| Frontend        | Web/mobile UI, dashboards                    | React, Next.js, Flutter/Dart |
-| AI/ML           | Market analysis models, risk scoring         | Python, ML frameworks        |
-| Documentation   | Guides, API docs, tutorials                  | Technical writing            |
-| Security        | Audits, penetration testing, threat modeling | Smart contract security      |
+| Area            | Looking For                                  | Skills                  |
+| --------------- | -------------------------------------------- | ----------------------- |
+| Smart Contracts | Vault logic, rebalancing, yield adapters     | Soroban, Rust, Stellar  |
+| Backend         | Indexing, ledger, portfolio valuation        | Go, PostgreSQL          |
+| Frontend        | Web UI, dashboards, charts                   | React, Next.js          |
+| Documentation   | Guides, API docs, tutorials                  | Technical writing       |
+| Security        | Audits, penetration testing, threat modeling | Smart contract security |
 
 ### Process
 

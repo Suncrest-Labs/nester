@@ -96,7 +96,7 @@ which appears in both the log line and the span.
 
 In [Jaeger](http://localhost:16686), service `nester-api`, filter `error=true`
 on the failing route from step 1. The span tree shows which downstream call
-failed — database, Redis, Soroban RPC, or the intelligence service — without
+failed — database, Redis, or Soroban RPC — without
 guessing from logs.
 
 Sampled, so use traces to understand a failure rather than to count them.
@@ -141,8 +141,7 @@ sum by (upstream, status_class) (rate(nester_outbound_requests_total[5m]))
 
 Confirmed when failures concentrate on routes that call one upstream, and that
 upstream's error rate rises at the same time. The `upstream` label names it
-directly: `soroban_rpc`, `horizon`, `coingecko`, `defillama`,
-`anthropic_relay`, `intelligence`.
+directly: `soroban_rpc`, `horizon`, `coingecko`, `defillama`.
 
 **Mitigation:** if the failing upstream backs a non-critical feature, disabling
 that feature restores availability for everything else. If it is

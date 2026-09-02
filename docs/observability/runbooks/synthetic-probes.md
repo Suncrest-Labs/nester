@@ -95,7 +95,6 @@ Then the staging service logs for the same window:
 
 ```bash
 kubectl logs -l app=nester-api --context=staging --since=30m | grep -i error
-kubectl logs -l app=nester-intelligence --context=staging --since=30m | grep -i error
 ```
 
 ---
@@ -186,7 +185,6 @@ Required for the read-only probes:
 | Secret | Purpose |
 |---|---|
 | `STAGING_PROBE_API_BASE_URL` | Staging API base URL. Unset means the workflow skips. |
-| `STAGING_PROBE_INTELLIGENCE_BASE_URL` | Staging intelligence base URL |
 | `STAGING_PROBE_AUTH_TOKEN` | Probe account credentials |
 | `STAGING_PROBE_VAULT_ID` | The probe account's staging vault |
 | `STAGING_PUSHGATEWAY_URL` | Where results are pushed |

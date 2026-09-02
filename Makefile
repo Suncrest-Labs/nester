@@ -36,7 +36,7 @@ clean:
 # By default, all services bind to 127.0.0.1 (loopback only) for security.
 # This prevents accidental exposure on shared networks.
 #
-# For multi-machine setups or mobile testing, opt in to external binding:
+# For multi-machine setups, opt in to external binding:
 #   make dev-external
 #
 # See docker-compose.external.yml and docs/security/dev-setup.md.

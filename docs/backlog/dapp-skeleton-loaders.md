@@ -16,7 +16,7 @@ Many data-fetching components show blank space while loading, causing layout shi
 ## Acceptance Criteria
 
 - [ ] Create `components/Skeleton.tsx` with Tailwind-based skeleton component
-- [ ] Add skeleton loaders to: VaultList, PortfolioChart, TransactionHistory, OfframpForm
+- [ ] Add skeleton loaders to: VaultList, PortfolioChart, TransactionHistory
 - [ ] Skeleton must match final layout dimensions and spacing
 - [ ] Use Tailwind `animate-pulse` for loading animation
 - [ ] Test: verify no layout shift between skeleton and loaded content

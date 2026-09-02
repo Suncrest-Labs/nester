@@ -200,10 +200,7 @@ On-call during period:
 | Deposit success | 99.5% | | | | |
 | Withdrawal success | 99.5% | | | | |
 | Flow latency | 99% <30s | | | | |
-| Intelligence availability | 99% | | | | |
-| Intelligence TTFT | 95% <3s | | | | |
 | Balance freshness | ≤300s staleness | n/a | n/a | | |
-| Intelligence refusal | <30% | n/a | n/a | | |
 
 ## 2. Incidents
 
@@ -262,26 +259,22 @@ happened.
 Its agenda differs from a steady-state review, because it is the first
 opportunity to check reasoning against reality:
 
-1. **Recalibrate the intelligence refusal threshold.** The 30% figure in
-   `slo.md` is an estimate, not a measurement. This is the first agenda item
-   because it is the least defensible number in the whole configuration.
-
-2. **Validate every target against observed data.** All were set from reasoning
+1. **Validate every target against observed data.** All were set from reasoning
    about topology and user impact. Some will be wrong; the review is where that
    is established rather than assumed.
 
-3. **Confirm the burn-rate thresholds produce useful alerts.** Specifically
+2. **Confirm the burn-rate thresholds produce useful alerts.** Specifically
    whether fast-burn pages were actionable and whether slow-burn tickets were
    worth filing.
 
-4. **Adopt or amend the error-budget policy.** It is a proposal until the
+3. **Adopt or amend the error-budget policy.** It is a proposal until the
    maintainers agree to it, including the 50% / 25% / 0% state thresholds.
 
-5. **Confirm the synthetic probes are configured and running.** Probe coverage
+4. **Confirm the synthetic probes are configured and running.** Probe coverage
    is zero until the staging secrets are set; if they are still unset at the
    first review, that is the finding.
 
-6. **Review the SLI definitions themselves**, not only the targets. Did any
+5. **Review the SLI definitions themselves**, not only the targets. Did any
    exclusion turn out to hide a real failure? The `failed_chain` decision — not
    excusing Soroban failures — is the one most likely to be argued, and this is
    where that argument should happen.

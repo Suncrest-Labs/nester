@@ -171,13 +171,6 @@
   z-index: 1;
 }
 
-/* AI layer — smaller glow for compact cards */
-.gradient-border-sm::after {
-  inset: -2px !important;
-  padding: 5px !important;
-  filter: blur(4px) !important;
-}
-
 /* FAQ — larger glow for wide accordion items */
 .gradient-border-lg::after {
   inset: -6px !important;
