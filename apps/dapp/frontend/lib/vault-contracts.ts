@@ -130,3 +130,35 @@ export const vaultContracts: VaultContract[] = [
 export function getVaultContractById(id: string): VaultContract | undefined {
   return vaultContracts.find((v) => v.id === id);
 }
+
+/**
+ * First deployed vault that settles in `asset`.
+ *
+ * A vault holds a single currency, so an allocation spanning several assets
+ * needs one deposit per asset. Vaults without a contract address are skipped:
+ * they cannot take a deposit, and offering them produces a signature prompt
+ * that always fails.
+ */
+export function getVaultContractByAsset(asset: string): VaultContract | undefined {
+  const wanted = settlementAssetFor(asset);
+  if (!wanted) return undefined;
+  return vaultContracts.find(
+    (v) => v.asset.toUpperCase() === wanted && !!v.contractAddress,
+  );
+}
+
+/**
+ * The currency a pool's position actually settles in.
+ *
+ * Pool symbols are the wrapper token a protocol issues — Gami pays EARNUSDC
+ * for a USDC deposit, EARNXLM for XLM — so matching a vault on the raw symbol
+ * finds nothing and every pool looks undepositable. Only the underlying is
+ * mapped: an unrecognised symbol returns undefined rather than being guessed
+ * into the wrong vault.
+ */
+export function settlementAssetFor(symbol: string): SupportedAsset | undefined {
+  const s = symbol.toUpperCase();
+  if (s.includes("USDC")) return "USDC";
+  if (s.includes("XLM")) return "XLM";
+  return undefined;
+}
