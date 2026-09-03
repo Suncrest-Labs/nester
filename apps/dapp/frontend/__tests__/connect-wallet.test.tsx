@@ -39,15 +39,25 @@ vi.mock("@/hooks/useNetwork", () => ({
 }));
 
 describe("ConnectWallet", () => {
-  it("shows wallet connect options when disconnected", () => {
+  // The disconnected screen deliberately shows one Connect button and no
+  // wallet list: a first-time visitor should not be handed a grid of wallets
+  // they may not have installed. The list is one click away.
+  it("shows a single connect action when disconnected", () => {
     render(<ConnectWallet />);
-    expect(screen.getByText(/connect your stellar wallet/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Connect$/ })).toBeInTheDocument();
+    expect(screen.queryByText("Freighter")).not.toBeInTheDocument();
+  });
+
+  it("reveals the wallet list after the connect action is used", () => {
+    render(<ConnectWallet />);
+    fireEvent.click(screen.getByRole("button", { name: /^Connect$/ }));
     expect(screen.getByText("Freighter")).toBeInTheDocument();
   });
 
   it("calls connect when wallet is selected", async () => {
     mockConnect.mockResolvedValue(undefined);
     render(<ConnectWallet />);
+    fireEvent.click(screen.getByRole("button", { name: /^Connect$/ }));
     fireEvent.click(screen.getByText("Freighter"));
     expect(mockConnect).toHaveBeenCalledWith("freighter");
   });

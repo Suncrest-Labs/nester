@@ -22,7 +22,6 @@ import {
 } from "lucide-react";
 import { WithdrawModal } from "@/components/vault-action-modals";
 import { cn } from "@/lib/utils";
-import { TestnetSetupStepper } from "@/components/onboarding/TestnetSetupStepper";
 import { RebalanceSuggestionCard } from "@/components/dashboard/RebalanceSuggestionCard";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
@@ -491,13 +490,6 @@ export default function Dashboard() {
                     </Link>
                 </div>
             </motion.div>
-
-            {/* First-run testnet setup (#1127). Renders nothing once the user
-                is set up or has dismissed it, so it costs returning users
-                nothing. */}
-            <div className="mb-4">
-                <TestnetSetupStepper />
-            </div>
 
             {/* Sign-in nudge when wallet connected but not yet signed in */}
             {isConnected && !isAuthenticated && (

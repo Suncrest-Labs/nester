@@ -4,7 +4,6 @@ import { useWallet } from "@/components/wallet-provider";
 import { ConnectWallet } from "@/components/connect-wallet";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { TestnetSetupStepper } from "@/components/onboarding/TestnetSetupStepper";
 
 export default function Home() {
     const { isConnected } = useWallet();
@@ -22,16 +21,5 @@ export default function Home() {
 
     if (isConnected) return null;
 
-    return (
-        <>
-            {/* First-run testnet setup (#1127). This is the surface a
-                disconnected first-time visitor actually sees — /dashboard
-                returns null without a wallet — so the install, network and
-                funding steps have to live here. */}
-            <div className="mx-auto w-full max-w-2xl px-4 pt-6">
-                <TestnetSetupStepper />
-            </div>
-            <ConnectWallet />
-        </>
-    );
+    return <ConnectWallet />;
 }

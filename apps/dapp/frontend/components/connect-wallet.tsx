@@ -110,6 +110,10 @@ export function ConnectWallet() {
     const [connectingId, setConnectingId] = useState<string | null>(null);
     const [showAll, setShowAll] = useState(false);
     const [isFunding, setIsFunding] = useState(false);
+    // The disconnected screen offers one Connect button; the wallet picker is
+    // revealed only after the user asks for it, so a first-time visitor is not
+    // handed a grid of wallets they may not have installed.
+    const [pickerOpen, setPickerOpen] = useState(false);
 
     const isTestnet = currentNetwork.id === 'testnet';
     const totalBalance = balances.USDC + balances.XLM + balances.USDT;
@@ -194,30 +198,15 @@ export function ConnectWallet() {
                 transition={{ duration: 0.8, ease: [0.25, 1, 0.5, 1] }}
                 className="relative z-10 flex w-full max-w-sm sm:max-w-md flex-col items-center"
             >
-                {/* Logo */}
-                <motion.div
-                    initial={{ opacity: 0, scale: 0.8 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ duration: 0.6, delay: 0.1 }}
-                    className="mb-6 sm:mb-8 animate-float"
-                >
-                    <Image
-                        src="/logo.png"
-                        alt="Nester"
-                        width={56}
-                        height={56}
-                        className="rounded-2xl shadow-lg sm:w-16 sm:h-16"
-                    />
-                </motion.div>
-
                 <motion.h1
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.6, delay: 0.2 }}
                     className="mb-3 text-center font-heading text-2xl font-light tracking-tight text-foreground sm:text-3xl md:text-4xl"
                 >
-                    Welcome to{" "}
-                    <span className="font-display italic font-medium">Nester</span>
+                    Connect wallet
+                    <br />
+                    to start earning
                 </motion.h1>
 
                 <motion.p
@@ -226,8 +215,8 @@ export function ConnectWallet() {
                     transition={{ duration: 0.6, delay: 0.3 }}
                     className="mb-6 sm:mb-8 max-w-sm text-center text-sm sm:text-base text-muted-foreground leading-relaxed px-2"
                 >
-                    Connect your Stellar wallet to start earning optimized yield
-                    and settle to fiat instantly.
+                    Deposit into a Smart Vault and earn optimized on-chain
+                    yield. Non-custodial — you keep your keys.
                 </motion.p>
 
                 {/* Wallet Card */}
@@ -294,11 +283,16 @@ export function ConnectWallet() {
                             </div>
                         ) : (
                             <>
-                                <p className="mb-4 text-xs font-medium text-muted-foreground tracking-wider uppercase text-center">
-                                    Choose a wallet
-                                </p>
-
-                                {!walletsLoaded ? (
+                                {!pickerOpen ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setPickerOpen(true)}
+                                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-foreground px-5 py-3.5 text-sm font-medium text-background transition-transform hover:scale-[1.02] active:scale-[0.98] min-h-[44px]"
+                                    >
+                                        <Wallet className="h-4 w-4" />
+                                        Connect
+                                    </button>
+                                ) : !walletsLoaded ? (
                             <div className="flex items-center justify-center py-12">
                                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                             </div>
