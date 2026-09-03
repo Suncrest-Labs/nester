@@ -20,6 +20,7 @@ import { useOfflineStatus } from "@/hooks/useOfflineStatus";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { TransactionAnnouncer } from "@/components/vault/transactionAnnouncer";
 import type { Vault as VaultDefinition, MarketStrategy } from "@/lib/types/vault";
+import { vaultsApi } from "@/lib/api/vaults";
 import {
   executeVaultDeposit,
   UserRejectedError,
@@ -317,6 +318,27 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
       // Confirmation creates the position and deducts the balance. Until the
       // chain confirms, the user holds no shares and their balance is intact.
       confirmPendingDeposit(pendingTxId, txReceipt.txHash);
+
+      // Register the signed transaction with the API so the position outlives
+      // this browser. The local record above is a cache; the server derives
+      // the authoritative position from rows like this one, and its poller
+      // confirms the hash against Horizon before crediting anything.
+      //
+      // Deliberately not fatal: the deposit is already on-chain by this point,
+      // so failing the UI here would tell the user their money did not move
+      // when it did. The reconciler picks the transaction up from the chain
+      // regardless; this call only makes it visible sooner.
+      try {
+        await vaultsApi.registerTransaction({
+          vault_id: vault.id,
+          type: "deposit",
+          amount: String(amount),
+          currency: selectedAsset,
+          tx_hash: txReceipt.txHash,
+        });
+      } catch (registerErr) {
+        console.error("deposit registered on-chain but not with the API", registerErr);
+      }
 
       setState("success");
       refreshBalances();

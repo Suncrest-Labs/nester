@@ -10,6 +10,8 @@ import {
     type ReactNode,
 } from "react";
 
+import { vaultsApi } from "@/lib/api/vaults";
+import { getStoredToken } from "@/lib/api/client";
 import { useWallet } from "@/components/wallet-provider";
 import { getVaultContractById as getVaultById, type SupportedAsset } from "@/lib/vault-contracts";
 import { useNetwork } from "@/hooks/useNetwork";
@@ -260,6 +262,57 @@ function PortfolioStore({
             })
         );
     }, [address, balances, storedPositions, transactions]);
+
+    // Hydrate confirmed history from the API.
+    //
+    // localStorage is a per-browser cache, so on a new device — or after the
+    // user clears site data — it starts empty and the portfolio looked wiped
+    // even though the deposits were on-chain and recorded server-side. The API
+    // derives transactions from indexed chain events, so it is the durable
+    // record; anything it returns is merged in by tx hash, and rows only this
+    // browser knows about (still-pending signatures) are kept.
+    useEffect(() => {
+        if (!address || !getStoredToken()) return;
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const remote = await vaultsApi.getTransactions();
+                if (cancelled || remote.length === 0) return;
+
+                setTransactions((local) => {
+                    const seen = new Set(
+                        local.map((t) => t.txHash).filter(Boolean)
+                    );
+                    const merged = remote
+                        .filter((r) => r.transaction_hash && !seen.has(r.transaction_hash))
+                        .map<PortfolioTransaction>((r) => ({
+                            id: r.id,
+                            type: r.type === "withdrawal" ? "Withdrawal" : "Deposit",
+                            amount: String(r.amount),
+                            asset: "USDC",
+                            vaultName: "Vault",
+                            timestamp: r.created_at,
+                            status: "Confirmed",
+                            txHash: r.transaction_hash,
+                            isOnChain: true,
+                        }));
+                    if (merged.length === 0) return local;
+                    return [...merged, ...local].sort(
+                        (a, b) =>
+                            new Date(b.timestamp).getTime() -
+                            new Date(a.timestamp).getTime()
+                    );
+                });
+            } catch {
+                // Offline or signed out: the cached view stays usable.
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [address]);
 
     // Sync real on-chain balances from Horizon whenever address or network changes
     useEffect(() => {
