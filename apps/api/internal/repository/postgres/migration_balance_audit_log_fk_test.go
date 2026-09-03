@@ -20,7 +20,7 @@ import (
 // permanently unconstrained, silently accepting rows referencing
 // nonexistent vaults/users.
 //
-// This exercises exactly that cycle directly against migration 118's own
+// This exercises exactly that cycle directly against migration 121's own
 // up/down files (rather than through verify_migrations.go, which only runs
 // a single up-then-down pass over the full chain and would not have caught
 // this).
@@ -32,13 +32,13 @@ func TestMigration118_DownThenUp_RestoresBalanceAuditLogFKs(t *testing.T) {
 
 	assertBothFKsExist(t, db, "before down-migrating 118")
 
-	downSQL := readMigrationFile(t, migrationsDir, "118_create_balance_audit_log.down.sql")
+	downSQL := readMigrationFile(t, migrationsDir, "121_create_balance_audit_log.down.sql")
 	if _, err := db.Exec(downSQL); err != nil {
 		t.Fatalf("apply 118 down migration: %v", err)
 	}
 	assertNeitherFKExists(t, db, "after down-migrating 118")
 
-	upSQL := readMigrationFile(t, migrationsDir, "118_create_balance_audit_log.up.sql")
+	upSQL := readMigrationFile(t, migrationsDir, "121_create_balance_audit_log.up.sql")
 	if _, err := db.Exec(upSQL); err != nil {
 		t.Fatalf("re-apply 118 up migration: %v", err)
 	}

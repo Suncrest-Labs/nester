@@ -2,7 +2,7 @@
 
 Every balance-changing vault operation that this PR wires up (deposit,
 withdrawal, harvest) appends one row to `balance_audit_log` (migration
-`apps/api/migrations/118_create_balance_audit_log.up.sql`):
+`apps/api/migrations/121_create_balance_audit_log.up.sql`):
 
 | column           | meaning                                              |
 |------------------|-------------------------------------------------------|
