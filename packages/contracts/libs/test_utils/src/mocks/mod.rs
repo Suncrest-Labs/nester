@@ -10,10 +10,12 @@
 // `withdraw`, and friends.
 // ---------------------------------------------------------------------------
 
+pub mod blend_pool;
 pub mod failing;
 pub mod lending;
 pub mod pool;
 
+pub use blend_pool::{MockBlendPool, MockBlendPoolClient};
 pub use failing::{MockFailingAdapter, MockFailingAdapterClient};
 pub use lending::{MockLendingProtocol, MockLendingProtocolClient};
 pub use pool::{MockAmmPool, MockAmmPoolClient};
