@@ -88,10 +88,6 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/portfolio/valuation"},
 	{Method: "GET", Path: "/api/v1/performance/snapshots"},
 
-	// ── Settlements ──────────────────────────────────────────────────────
-	{Method: "GET", Path: "/api/v1/settlements"},
-	{Method: "POST", Path: "/api/v1/settlements"},
-
 	// ── Activity / notifications ─────────────────────────────────────────
 	{Method: "GET", Path: "/api/v1/activity"},
 
@@ -110,18 +106,15 @@ var authzMatrix = []AuthzRoute{
 	// ── Admin (requires admin role) ──────────────────────────────────────
 	{Method: "GET", Path: "/api/v1/admin/users", RequireRole: "admin"},
 
-	// ── Banks (public) ───────────────────────────────────────────────────
-	{Method: "GET", Path: "/api/v1/banks", Public: false},
-
 	// ── Yields (public) ───────────────────────────────────────────────
-	// NOTE: prefix rule "/api/v1/yields/" requires trailing slash; the
-	// exact path "/api/v1/yields" (no slash) falls through to protected.
+	// Discovery is readable without a wallet. The bare list path is the one
+	// the dApp calls, and it is the case a trailing-slash-only prefix rule
+	// silently left protected, so it is asserted explicitly here.
+	{Method: "GET", Path: "/api/v1/yields", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/00000000-0000-0000-0000-000000000000", Public: true},
-
-	// ── KYC for the authenticated user (#1231) ─────────────────────────
-	{Method: "POST", Path: "/api/v1/users/me/kyc"},
-	{Method: "GET", Path: "/api/v1/users/me/kyc"},
+	{Method: "GET", Path: "/api/v1/yield-opportunities", Public: true},
+	{Method: "GET", Path: "/api/v1/yield-opportunities/compare", Public: true},
 
 	// ── Money-path pause switches (#1120) ──────────────────────────────
 	{Method: "GET", Path: "/api/v1/admin/money-path/switches", RequireRole: "admin"},
@@ -130,8 +123,8 @@ var authzMatrix = []AuthzRoute{
 
 	// ── Routes recovered from the handler registrations ────────────────
 	// Added when the coverage guard showed the original matrix exercised
-	// 58 of 178 registered routes, leaving the whole admin, bank-account,
-	// and intelligence surface unverified.
+	// 58 of 178 registered routes, leaving the whole admin surface
+	// unverified.
 	// admin
 	{Method: "DELETE", Path: "/api/v1/admin/savings-goal-templates/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "DELETE", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/allocations/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
@@ -142,12 +135,10 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/admin/health", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/savings-goal-templates", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/scheduler/leadership", RequireRole: "admin"},
-	{Method: "GET", Path: "/api/v1/admin/settlements", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/users/00000000-0000-0000-0000-000000000000/money-path", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/vaults", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "PATCH", Path: "/api/v1/admin/savings-goal-templates/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
-	{Method: "PATCH", Path: "/api/v1/admin/users/00000000-0000-0000-0000-000000000000/kyc", RequireRole: "admin"},
 	{Method: "PATCH", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/allocations/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/backfill", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/backfill/00000000-0000-0000-0000-000000000000/resume", RequireRole: "admin"},
@@ -161,32 +152,9 @@ var authzMatrix = []AuthzRoute{
 	// analytics
 	{Method: "GET", Path: "/api/v1/analytics/users/00000000-0000-0000-0000-000000000000"},
 
-	// bank-accounts
-	{Method: "DELETE", Path: "/api/v1/bank-accounts/users/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000"},
-	{Method: "GET", Path: "/api/v1/bank-accounts/users/00000000-0000-0000-0000-000000000000"},
-	{Method: "PATCH", Path: "/api/v1/bank-accounts/users/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000"},
-	{Method: "POST", Path: "/api/v1/bank-accounts/users/00000000-0000-0000-0000-000000000000"},
-
-	// banks
-	{Method: "GET", Path: "/api/v1/banks"},
-	{Method: "GET", Path: "/api/v1/banks/resolve", Public: true},
-
-	// intelligence
-	{Method: "GET", Path: "/api/v1/intelligence/market"},
-	{Method: "GET", Path: "/api/v1/intelligence/portfolio/00000000-0000-0000-0000-000000000000"},
-	{Method: "GET", Path: "/api/v1/intelligence/recommend/vault"},
-	{Method: "POST", Path: "/api/v1/intelligence/analyze"},
-	{Method: "POST", Path: "/api/v1/intelligence/chat"},
-	{Method: "POST", Path: "/api/v1/intelligence/coaching"},
-	{Method: "POST", Path: "/api/v1/intelligence/recommend/vault"},
-	{Method: "POST", Path: "/api/v1/intelligence/savings-plan"},
-	{Method: "POST", Path: "/api/v1/intelligence/tools/00000000-0000-0000-0000-000000000000/confirm"},
-
 	// internal
-	{Method: "POST", Path: "/api/v1/internal/intelligence/tool-audit", RequireRole: "service"},
 
 	// portfolio
-	{Method: "GET", Path: "/api/v1/portfolio/00000000-0000-0000-0000-000000000000/insights"},
 	{Method: "GET", Path: "/api/v1/portfolio/summary"},
 
 	// rates
@@ -198,28 +166,17 @@ var authzMatrix = []AuthzRoute{
 	// savings-goals
 	{Method: "GET", Path: "/api/v1/savings-goals/shared/00000000-0000-0000-0000-000000000000", Public: true},
 
-	// settlements
-	{Method: "GET", Path: "/api/v1/settlements/00000000-0000-0000-0000-000000000000"},
-	{Method: "PATCH", Path: "/api/v1/settlements/00000000-0000-0000-0000-000000000000/status"},
-
 	// tools
 	{Method: "POST", Path: "/api/v1/tools/projection"},
 	{Method: "POST", Path: "/api/v1/tools/simulation"},
-
-	// user-vaults
-	{Method: "GET", Path: "/api/v1/user-vaults/00000000-0000-0000-0000-000000000000"},
 
 	// users
 	{Method: "DELETE", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/schedule"},
 	{Method: "DELETE", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/schedules/00000000-0000-0000-0000-000000000000"},
 	{Method: "DELETE", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/share"},
 	{Method: "DELETE", Path: "/api/v1/users/watchlist/00000000-0000-0000-0000-000000000000"},
-	{Method: "GET", Path: "/api/v1/users/digest-ledger"},
-	{Method: "GET", Path: "/api/v1/users/digest/latest"},
-	{Method: "GET", Path: "/api/v1/users/kyc/00000000-0000-0000-0000-000000000000"},
 	{Method: "GET", Path: "/api/v1/users/notification-preferences"},
 	{Method: "GET", Path: "/api/v1/users/profile"},
-	{Method: "GET", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/coaching"},
 	{Method: "GET", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/contributions"},
 	{Method: "GET", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/notification-preferences"},
 	{Method: "GET", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/schedules"},
@@ -237,7 +194,6 @@ var authzMatrix = []AuthzRoute{
 	{Method: "PATCH", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/unarchive"},
 	{Method: "POST", Path: "/api/v1/users"},
 	{Method: "POST", Path: "/api/v1/users/device-tokens"},
-	{Method: "POST", Path: "/api/v1/users/kyc/00000000-0000-0000-0000-000000000000"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/complete"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/restore"},
 	{Method: "POST", Path: "/api/v1/users/savings-goals/00000000-0000-0000-0000-000000000000/schedule"},
@@ -262,13 +218,10 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance-completions"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance-history"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance-legs"},
-	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/recommendations"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/risk"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/risk/history"},
 	{Method: "GET", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/tvl"},
 	{Method: "GET", Path: "/api/v1/vaults/tvl"},
-	{Method: "POST", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance/execute"},
-	{Method: "POST", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/rebalance/suggest"},
 	{Method: "POST", Path: "/api/v1/vaults/00000000-0000-0000-0000-000000000000/risk/refresh"},
 
 	// webhooks
@@ -278,16 +231,17 @@ var authzMatrix = []AuthzRoute{
 	{Method: "POST", Path: "/api/v1/webhooks"},
 	{Method: "POST", Path: "/api/v1/webhooks/deliveries/00000000-0000-0000-0000-000000000000/redeliver"},
 
-	// yield-opportunities
-	{Method: "GET", Path: "/api/v1/yield-opportunities"},
-	{Method: "GET", Path: "/api/v1/yield-opportunities/compare"},
-
 	// yields
-	{Method: "DELETE", Path: "/api/v1/yields/bookmarks/aave-v3", Public: true},
+	//
+	// The bookmark reads sit under the public GET prefix, so the middleware
+	// lets them through; the handler resolves the caller from the auth
+	// context and answers 401 without one, which is where per-user access
+	// is actually enforced. The writes carry no public rule at all.
+	{Method: "DELETE", Path: "/api/v1/yields/bookmarks/aave-v3"},
 	{Method: "GET", Path: "/api/v1/yields/aave-v3/apy-history", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/bookmarks", Public: true},
 	{Method: "GET", Path: "/api/v1/yields/harvests", Public: true},
-	{Method: "POST", Path: "/api/v1/yields/bookmarks", Public: true},
+	{Method: "POST", Path: "/api/v1/yields/bookmarks"},
 }
 
 // TestAuthorizationMatrix verifies the three-way authorization contract for

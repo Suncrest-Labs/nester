@@ -4,7 +4,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Staging synthetic probe results for deposit, withdrawal, balance, and intelligence (nester#1056).",
+  "description": "Staging synthetic probe results for deposit, withdrawal, and balance (nester#1056).",
   "editable": false,
   "graphTooltip": 1,
   "links": [],
@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Probes exercise deposit, withdrawal, balance read, and an intelligence query on a schedule, so a path that is broken while nobody is using it is found by us rather than by the first user who tries it.\n\nNo error budget: a probe is a scheduled event, not a ratio over traffic, so there is nothing to burn. Alerts are absolute and ticket-severity \u2014 these run against staging, so a failure means a path is broken before it reaches production.\n\n**Runbook** `docs/observability/runbooks/synthetic-probes.md`",
+        "content": "Probes exercise deposit, withdrawal, and balance read on a schedule, so a path that is broken while nobody is using it is found by us rather than by the first user who tries it.\n\nNo error budget: a probe is a scheduled event, not a ratio over traffic, so there is nothing to burn. Alerts are absolute and ticket-severity \u2014 these run against staging, so a failure means a path is broken before it reaches production.\n\n**Runbook** `docs/observability/runbooks/synthetic-probes.md`",
         "mode": "markdown"
       },
       "title": "Synthetic probes \u2014 staging",

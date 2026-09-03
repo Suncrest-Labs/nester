@@ -3,9 +3,8 @@ name: Synthetic probes (staging)
 # Synthetic probes for nester#1056.
 #
 # Real-traffic SLIs cannot see a flow that is broken while nobody is using it.
-# These probes exercise deposit, withdrawal, balance read, and an intelligence
-# query on a schedule so a broken path is found by us rather than by the first
-# user who tries it.
+# These probes exercise deposit, withdrawal, and balance read on a schedule
+# so a broken path is found by us rather than by the first user who tries it.
 #
 # Every 15 minutes rather than every 5: the mutating probes create real
 # testnet transactions, and a tighter cadence multiplies that cost for very
@@ -54,13 +53,11 @@ jobs:
         id: guard
         env:
           API_BASE_URL: ${{ secrets.STAGING_PROBE_API_BASE_URL }}
-          INTELLIGENCE_BASE_URL: ${{ secrets.STAGING_PROBE_INTELLIGENCE_BASE_URL }}
           AUTH_TOKEN: ${{ secrets.STAGING_PROBE_AUTH_TOKEN }}
-          INTELLIGENCE_TOKEN: ${{ secrets.STAGING_PROBE_INTELLIGENCE_TOKEN }}
           VAULT_ID: ${{ secrets.STAGING_PROBE_VAULT_ID }}
         run: |
           all_set=true
-          for var in API_BASE_URL INTELLIGENCE_BASE_URL AUTH_TOKEN INTELLIGENCE_TOKEN VAULT_ID; do
+          for var in API_BASE_URL AUTH_TOKEN VAULT_ID; do
             if [ -z "$(eval echo \$$var)" ]; then
               echo "::notice::STAGING_PROBE_${var} is not set — skipping the probe run."
               all_set=false
@@ -71,7 +68,7 @@ jobs:
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
             # Surfaced in the job summary, not only as an annotation. The
-            # guard requires all five secrets, so a partially-configured
+            # guard requires all three secrets, so a partially-configured
             # environment disables every probe while the workflow still
             # reports green — the state most likely to be mistaken for
             # "probes are running and finding nothing".
@@ -94,9 +91,7 @@ jobs:
         # in both the Actions UI and through alerting metrics.
         env:
           PROBE_API_BASE_URL: ${{ secrets.STAGING_PROBE_API_BASE_URL }}
-          PROBE_INTELLIGENCE_BASE_URL: ${{ secrets.STAGING_PROBE_INTELLIGENCE_BASE_URL }}
           PROBE_AUTH_TOKEN: ${{ secrets.STAGING_PROBE_AUTH_TOKEN }}
-          PROBE_INTELLIGENCE_TOKEN: ${{ secrets.STAGING_PROBE_INTELLIGENCE_TOKEN }}
           PROBE_VAULT_ID: ${{ secrets.STAGING_PROBE_VAULT_ID }}
           PROBE_ENVIRONMENT: staging
           PROBE_AMOUNT: ${{ vars.STAGING_PROBE_AMOUNT || '0.01' }}

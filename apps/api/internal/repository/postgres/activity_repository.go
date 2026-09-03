@@ -23,9 +23,8 @@ func NewActivityRepository(db *sql.DB) *ActivityRepository {
 }
 
 // List returns one page of the unified activity feed for userID: deposits,
-// withdrawals, and rebalances from vault_transactions, settlements from
-// settlements, and yield harvests from yield_harvests, merged and ordered by
-// created_at. vault_transactions.type='harvest' rows are deliberately
+// withdrawals, and rebalances from vault_transactions, and yield harvests
+// from yield_harvests, merged and ordered by created_at. vault_transactions.type='harvest' rows are deliberately
 // excluded — the same harvest event is already represented via
 // yield_harvests, and including both would double-count it.
 func (r *ActivityRepository) List(ctx context.Context, userID uuid.UUID, filter activity.ListFilter) (items []activity.Item, nextCursor, prevCursor string, err error) {
@@ -70,20 +69,6 @@ func (r *ActivityRepository) List(ctx context.Context, userID uuid.UUID, filter 
 			  FROM vault_transactions vt
 			  JOIN vaults v ON v.id = vt.vault_id
 			 WHERE vt.user_id = $1 AND vt.type IN ('deposit', 'withdrawal', 'rebalance')
-
-			UNION ALL
-
-			SELECT s.id, s.user_id, 'settlement' AS type, s.amount, s.currency,
-			       CASE s.status
-			           WHEN 'confirmed' THEN 'completed'
-			           WHEN 'failed' THEN 'failed'
-			           ELSE 'pending'
-			       END AS status,
-			       s.created_at, s.vault_id, COALESCE(v.name, v.currency || ' Vault') AS vault_name,
-			       ''::text AS ref, s.search_vector AS search_vector
-			  FROM settlements s
-			  JOIN vaults v ON v.id = s.vault_id
-			 WHERE s.user_id = $1
 
 			UNION ALL
 

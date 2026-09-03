@@ -99,11 +99,11 @@ func TestRemainingReflectsRouteCost(t *testing.T) {
 	h := CostQuota(l, testQuotaConfig())(okHandler(nil))
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1"))
+	h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1"))
 
-	want := strconv.Itoa(100 - CostLLMRelay)
+	want := strconv.Itoa(100 - CostChainWrite)
 	if got := rec.Header().Get("RateLimit-Remaining"); got != want {
-		t.Errorf("RateLimit-Remaining = %q, want %q (charged %d for the relay)", got, want, CostLLMRelay)
+		t.Errorf("RateLimit-Remaining = %q, want %q (charged %d for the chain write)", got, want, CostChainWrite)
 	}
 }
 
@@ -112,19 +112,19 @@ func TestRemainingReflectsRouteCost(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestQuotaExhaustionReturns429WithRetryAfterAndReason(t *testing.T) {
-	// Two relay calls fit in the bucket; the third does not.
-	l := newMemoryQuotaLimiter(2*CostLLMRelay, time.Minute)
+	// Two chain writes fit in the bucket; the third does not.
+	l := newMemoryQuotaLimiter(2*CostChainWrite, time.Minute)
 	reached := 0
 	h := CostQuota(l, testQuotaConfig())(okHandler(&reached))
 
 	var rec *httptest.ResponseRecorder
 	for i := 0; i < 3; i++ {
 		rec = httptest.NewRecorder()
-		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1"))
+		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1"))
 	}
 
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("third relay call status = %d, want 429", rec.Code)
+		t.Fatalf("third chain write status = %d, want 429", rec.Code)
 	}
 	if reached != 2 {
 		t.Errorf("handler reached %d times, want 2", reached)
@@ -152,11 +152,11 @@ func TestQuotaExhaustionReturns429WithRetryAfterAndReason(t *testing.T) {
 	if body.Error.Quota == "" {
 		t.Error("body does not identify which quota was exhausted")
 	}
-	if body.Error.Cost != CostLLMRelay {
-		t.Errorf("body cost = %d, want %d", body.Error.Cost, CostLLMRelay)
+	if body.Error.Cost != CostChainWrite {
+		t.Errorf("body cost = %d, want %d", body.Error.Cost, CostChainWrite)
 	}
-	if body.Error.Limit != 2*CostLLMRelay {
-		t.Errorf("body limit = %d, want %d", body.Error.Limit, 2*CostLLMRelay)
+	if body.Error.Limit != 2*CostChainWrite {
+		t.Errorf("body limit = %d, want %d", body.Error.Limit, 2*CostChainWrite)
 	}
 	if body.Error.ResetSeconds <= 0 {
 		t.Errorf("body reset_seconds = %d, want > 0 so a client knows when it recovers", body.Error.ResetSeconds)
@@ -172,13 +172,13 @@ func TestQuotaExhaustionReturns429WithRetryAfterAndReason(t *testing.T) {
 func TestQuotaHeadersOnRejection(t *testing.T) {
 	// Capacity is an exact multiple of the cost, so the second call empties
 	// the bucket and the third is refused with nothing left.
-	l := newMemoryQuotaLimiter(2*CostLLMRelay, time.Minute)
+	l := newMemoryQuotaLimiter(2*CostChainWrite, time.Minute)
 	h := CostQuota(l, testQuotaConfig())(okHandler(nil))
 
 	var rec *httptest.ResponseRecorder
 	for i := 0; i < 3; i++ {
 		rec = httptest.NewRecorder()
-		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1"))
+		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1"))
 	}
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", rec.Code)
@@ -211,12 +211,12 @@ func TestExpensiveRoutesExhaustSoonerThanCheapOnes(t *testing.T) {
 	}
 
 	cheap := countAllowed(http.MethodGet, "/api/v1/users/profile")
-	relay := countAllowed(http.MethodPost, "/api/v1/intelligence/chat")
+	relay := countAllowed(http.MethodPost, "/api/v1/vaults/v-1/deposit")
 
 	if cheap != limit {
 		t.Errorf("cheap route allowed %d, want %d", cheap, limit)
 	}
-	if want := limit / CostLLMRelay; relay != want {
+	if want := limit / CostChainWrite; relay != want {
 		t.Errorf("relay allowed %d, want %d", relay, want)
 	}
 	if relay >= cheap {
@@ -359,15 +359,15 @@ func TestBucketToleratesClockGoingBackwards(t *testing.T) {
 
 // Quotas are per user: one user exhausting theirs must not affect another.
 func TestQuotaIsPerUser(t *testing.T) {
-	l := newMemoryQuotaLimiter(2*CostLLMRelay, time.Minute)
+	l := newMemoryQuotaLimiter(2*CostChainWrite, time.Minute)
 	h := CostQuota(l, testQuotaConfig())(okHandler(nil))
 
-	// Three relay calls against a two-call bucket: the third must be refused.
+	// Three chain writes against a two-call bucket: the third must be refused.
 	drain := func(user string) int {
 		last := 0
 		for i := 0; i < 3; i++ {
 			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), user))
+			h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), user))
 			last = rec.Code
 		}
 		return last
@@ -378,7 +378,7 @@ func TestQuotaIsPerUser(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-2"))
+	h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-2"))
 	if rec.Code != http.StatusOK {
 		t.Errorf("user-2 status = %d, want 200 — one user's exhaustion leaked into another's quota", rec.Code)
 	}
@@ -386,11 +386,11 @@ func TestQuotaIsPerUser(t *testing.T) {
 
 // Unauthenticated callers fall back to per-IP accounting.
 func TestQuotaFallsBackToIPWhenAnonymous(t *testing.T) {
-	l := newMemoryQuotaLimiter(CostLLMRelay, time.Minute)
+	l := newMemoryQuotaLimiter(CostChainWrite, time.Minute)
 	h := CostQuota(l, testQuotaConfig())(okHandler(nil))
 
 	req := func(addr string) int {
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil)
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil)
 		r.RemoteAddr = addr + ":12345"
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, r)
@@ -436,9 +436,9 @@ func TestRedisQuotaFailsOpenWhenRedisIsDown(t *testing.T) {
 
 	l := NewQuotaLimiter(rc, "test", 1, time.Minute, quietLogger())
 
-	// The bucket holds one unit, so a 25-unit relay call would be rejected
+	// The bucket holds one unit, so a 25-unit chain write would be rejected
 	// outright if Redis were answering. It must pass anyway.
-	d := l.AllowN(context.Background(), "u:1", CostLLMRelay)
+	d := l.AllowN(context.Background(), "u:1", CostChainWrite)
 	if !d.Allowed {
 		t.Fatal("request rejected while Redis is down; the limiter must fail open")
 	}
@@ -463,7 +463,7 @@ func TestQuotaMiddlewareFailsOpenWhenRedisIsDown(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1"))
+		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1"))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("request %d: status = %d, want 200 while Redis is down", i+1, rec.Code)
 		}
@@ -482,14 +482,14 @@ func TestQuotaMiddlewareFailsOpenWhenRedisIsDown(t *testing.T) {
 
 // The documented load-test escape hatch: quotas off entirely.
 func TestDisabledQuotaChargesNothing(t *testing.T) {
-	l := newMemoryQuotaLimiter(CostLLMRelay, time.Minute)
+	l := newMemoryQuotaLimiter(CostChainWrite, time.Minute)
 	cfg := testQuotaConfig()
 	cfg.Enabled = false
 	h := CostQuota(l, cfg)(okHandler(nil))
 
 	for i := 0; i < 20; i++ {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1"))
+		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1"))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("request %d: status = %d, want 200 with quotas disabled", i+1, rec.Code)
 		}
@@ -497,13 +497,13 @@ func TestDisabledQuotaChargesNothing(t *testing.T) {
 }
 
 func TestBypassTokenSkipsAccounting(t *testing.T) {
-	l := newMemoryQuotaLimiter(CostLLMRelay, time.Minute)
+	l := newMemoryQuotaLimiter(CostChainWrite, time.Minute)
 	cfg := testQuotaConfig()
 	cfg.BypassToken = "load-test-secret"
 	h := CostQuota(l, cfg)(okHandler(nil))
 
 	for i := 0; i < 10; i++ {
-		r := authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1")
+		r := authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1")
 		r.Header.Set(quotaBypassHeader, "load-test-secret")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, r)
@@ -514,18 +514,18 @@ func TestBypassTokenSkipsAccounting(t *testing.T) {
 }
 
 func TestBypassRejectsWrongToken(t *testing.T) {
-	l := newMemoryQuotaLimiter(CostLLMRelay, time.Minute)
+	l := newMemoryQuotaLimiter(CostChainWrite, time.Minute)
 	cfg := testQuotaConfig()
 	cfg.BypassToken = "load-test-secret"
 	h := CostQuota(l, cfg)(okHandler(nil))
 
 	first := httptest.NewRecorder()
-	h.ServeHTTP(first, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1"))
+	h.ServeHTTP(first, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1"))
 	if first.Code != http.StatusOK {
 		t.Fatalf("setup call = %d, want 200", first.Code)
 	}
 
-	r := authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1")
+	r := authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1")
 	r.Header.Set(quotaBypassHeader, "wrong")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
@@ -538,19 +538,19 @@ func TestBypassRejectsWrongToken(t *testing.T) {
 // With no token configured the mechanism must be entirely inert, so an unset
 // config cannot be bypassed by guessing (including with an empty header).
 func TestBypassInertWhenUnconfigured(t *testing.T) {
-	l := newMemoryQuotaLimiter(CostLLMRelay, time.Minute)
+	l := newMemoryQuotaLimiter(CostChainWrite, time.Minute)
 	h := CostQuota(l, testQuotaConfig())(okHandler(nil))
 
 	for _, attempt := range []string{"", "anything", "true"} {
 		user := "user-bypass-" + attempt
 		// Spend the whole bucket, then try to escape the consequences.
 		first := httptest.NewRecorder()
-		h.ServeHTTP(first, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), user))
+		h.ServeHTTP(first, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), user))
 		if first.Code != http.StatusOK {
 			t.Fatalf("bypass %q: setup call = %d, want 200", attempt, first.Code)
 		}
 
-		r := authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), user)
+		r := authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), user)
 		r.Header.Set(quotaBypassHeader, attempt)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, r)
@@ -565,7 +565,7 @@ func TestBypassInertWhenUnconfigured(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestObserverSeesAllowedAndRejectedDecisions(t *testing.T) {
-	l := newMemoryQuotaLimiter(CostLLMRelay, time.Minute)
+	l := newMemoryQuotaLimiter(CostChainWrite, time.Minute)
 	var events []QuotaEvent
 	cfg := testQuotaConfig()
 	cfg.Observer = func(e QuotaEvent) { events = append(events, e) }
@@ -573,7 +573,7 @@ func TestObserverSeesAllowedAndRejectedDecisions(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/intelligence/chat", nil), "user-1"))
+		h.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/v1/vaults/v-1/deposit", nil), "user-1"))
 	}
 
 	if len(events) != 2 {
@@ -583,10 +583,10 @@ func TestObserverSeesAllowedAndRejectedDecisions(t *testing.T) {
 		t.Errorf("expected allow then reject, got %v then %v", events[0].Allowed, events[1].Allowed)
 	}
 	for i, e := range events {
-		if e.Cost != CostLLMRelay {
-			t.Errorf("event %d cost = %d, want %d", i, e.Cost, CostLLMRelay)
+		if e.Cost != CostChainWrite {
+			t.Errorf("event %d cost = %d, want %d", i, e.Cost, CostChainWrite)
 		}
-		if e.Route != "POST /api/v1/intelligence/chat" {
+		if e.Route != "POST /api/v1/vaults/{id}/deposit" {
 			t.Errorf("event %d route = %q, want the declared pattern", i, e.Route)
 		}
 	}
@@ -631,20 +631,20 @@ func TestRedisQuotaChargesCost(t *testing.T) {
 
 	l := NewQuotaLimiter(rc, prefix, 50, time.Minute, quietLogger())
 
-	first := l.AllowN(ctx, key, CostLLMRelay)
+	first := l.AllowN(ctx, key, CostChainWrite)
 	if !first.Allowed {
-		t.Fatal("first relay call denied")
+		t.Fatal("first chain write denied")
 	}
-	if want := 50 - CostLLMRelay; first.Remaining != want {
+	if want := 50 - CostChainWrite; first.Remaining != want {
 		t.Errorf("remaining = %d, want %d", first.Remaining, want)
 	}
 
-	if second := l.AllowN(ctx, key, CostLLMRelay); !second.Allowed {
-		t.Fatal("second relay call denied")
+	if second := l.AllowN(ctx, key, CostChainWrite); !second.Allowed {
+		t.Fatal("second chain write denied")
 	}
-	third := l.AllowN(ctx, key, CostLLMRelay)
+	third := l.AllowN(ctx, key, CostChainWrite)
 	if third.Allowed {
-		t.Fatal("third relay call allowed; the quota is not being charged")
+		t.Fatal("third chain write allowed; the quota is not being charged")
 	}
 	if third.RetryAfter <= 0 {
 		t.Errorf("RetryAfter = %s, want > 0", third.RetryAfter)
@@ -707,20 +707,20 @@ func TestRedisQuotaIsSharedAcrossInstances(t *testing.T) {
 	key := "u:shared"
 	t.Cleanup(func() { _ = rc.Del(ctx, "rlq:"+prefix+":"+key).Err() })
 
-	instanceA := NewQuotaLimiter(rc, prefix, 2*CostLLMRelay, time.Minute, quietLogger())
-	instanceB := NewQuotaLimiter(rc, prefix, 2*CostLLMRelay, time.Minute, quietLogger())
+	instanceA := NewQuotaLimiter(rc, prefix, 2*CostChainWrite, time.Minute, quietLogger())
+	instanceB := NewQuotaLimiter(rc, prefix, 2*CostChainWrite, time.Minute, quietLogger())
 
-	if d := instanceA.AllowN(ctx, key, CostLLMRelay); !d.Allowed {
+	if d := instanceA.AllowN(ctx, key, CostChainWrite); !d.Allowed {
 		t.Fatal("instance A first call denied")
 	}
-	if d := instanceB.AllowN(ctx, key, CostLLMRelay); !d.Allowed {
+	if d := instanceB.AllowN(ctx, key, CostChainWrite); !d.Allowed {
 		t.Fatal("instance B first call denied")
 	}
 	// The budget is spent. Neither instance may grant another.
-	if d := instanceB.AllowN(ctx, key, CostLLMRelay); d.Allowed {
+	if d := instanceB.AllowN(ctx, key, CostChainWrite); d.Allowed {
 		t.Error("instance B allowed a third call; the quota is not shared across instances")
 	}
-	if d := instanceA.AllowN(ctx, key, CostLLMRelay); d.Allowed {
+	if d := instanceA.AllowN(ctx, key, CostChainWrite); d.Allowed {
 		t.Error("instance A allowed a third call; the quota is not shared across instances")
 	}
 }

@@ -88,8 +88,7 @@ const totalYield = mockVaultPositions.reduce((acc, pos) => acc + pos.yieldEarned
 export const mockPortfolioStats: PortfolioStats = {
     totalBalance: totalBal,
     totalYieldEarned: totalYield,
-    activeVaults: VAULTS.length,
-    prometheusInsights: 3
+    activeVaults: VAULTS.length
 };
 
 export const mockPerformanceHistory = Array.from({ length: 30 }, (_, i) => {
@@ -131,8 +130,7 @@ export const mockDataWithStates = {
             stats: {
               totalBalance: 0,
               totalYieldEarned: 0,
-              activeVaults: 0,
-              prometheusInsights: 0
+              activeVaults: 0
             }
           }, 
           error: null 

@@ -3,7 +3,6 @@ import { Navbar } from "@/components/navbar";
 import { Hero } from "@/components/hero";
 import { ImageCarousel } from "@/components/image-carousel";
 import { Ecosystem } from "@/components/ecosystem";
-import { AiLayer } from "@/components/ai-layer";
 import { HowItWorks } from "@/components/how-it-works";
 import { UseCases } from "@/components/use-cases";
 import { Faq } from "@/components/faq";
@@ -26,7 +25,7 @@ const jsonLd = {
       "url": "https://nester.finance",
       "applicationCategory": "FinanceApplication",
       "operatingSystem": "All",
-      "description": "Decentralized savings and liquidity protocol built on Stellar/Soroban.",
+      "description": "Decentralized savings and yield protocol built on Stellar/Soroban.",
       "offers": {
         "@type": "Offer",
         "price": "0",
@@ -41,7 +40,7 @@ const jsonLd = {
           "name": "What is Nester?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Nester is a DeFi yield platform that lets you deposit stablecoins and automatically earn optimized returns across multiple protocols like Aave, Blend, and Kamino — with instant fiat off-ramps to your local bank account."
+            "text": "Nester is a DeFi savings and yield platform that lets you deposit stablecoins into non-custodial smart vaults and automatically earn optimized returns across audited protocols like Aave and Blend on Stellar."
           }
         },
         {
@@ -54,10 +53,10 @@ const jsonLd = {
         },
         {
           "@type": "Question",
-          "name": "How does the fiat off-ramp work?",
+          "name": "How do withdrawals work?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Our distributed liquidity provider network routes fiat directly to your bank via live banking APIs. Same-bank transfers settle in as little as 3 seconds."
+            "text": "Nester is fully non-custodial. You can withdraw at any time — your vault shares are burned on-chain and the underlying stablecoins are sent straight back to your own wallet."
           }
         }
       ]
@@ -87,7 +86,6 @@ export default function Home() {
       <UseCases />
       {/* <FeaturesFloat /> */}
       <Ecosystem />
-      <AiLayer />
       <HowItWorks />
       <Faq />
       <Footer />

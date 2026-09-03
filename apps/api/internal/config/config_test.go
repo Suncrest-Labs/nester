@@ -22,7 +22,6 @@ func baseEnv(t *testing.T) {
 		"AUTH_JWT_SECRET", "AUTH_ACCESS_TOKEN_EXPIRY", "AUTH_REFRESH_TOKEN_EXPIRY", "AUTH_ABSOLUTE_SESSION_LIFETIME", "AUTH_CHALLENGE_EXPIRY",
 		"RATELIMIT_GLOBAL_LIMIT", "RATELIMIT_GLOBAL_WINDOW", "RATELIMIT_WRITE_LIMIT", "RATELIMIT_WRITE_WINDOW",
 		"RATELIMIT_WALLET_LIMIT", "RATELIMIT_WALLET_WINDOW",
-		"RATELIMIT_AUTH_LIMIT", "RATELIMIT_AUTH_WINDOW", "RATELIMIT_SETTLEMENT_LIMIT", "RATELIMIT_SETTLEMENT_WINDOW",
 		"RATELIMIT_TRUSTED_PROXY_COUNT",
 		"LOG_LEVEL", "LOG_FORMAT",
 		"ALLOWED_ORIGINS",
@@ -61,7 +60,6 @@ func TestLoadFromDotEnv(t *testing.T) {
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
 		"ALLOWED_ORIGINS=https://app.example.com",
-		"PAYSTACK_SECRET_KEY=sk_test_dummy",
 	}, "\n"))
 
 	chdir(t, dir)
@@ -214,7 +212,6 @@ func TestLoadEnvVarsTakePrecedenceOverDotEnv(t *testing.T) {
 	t.Setenv("STELLAR_RPC_URL", "https://envvar-rpc.example.com")
 	t.Setenv("STELLAR_HORIZON_URL", "https://envvar-horizon.example.com")
 	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
-	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -259,7 +256,6 @@ func TestLoadConcurrentCalls(t *testing.T) {
 		"STELLAR_HORIZON_URL=https://horizon.example.com",
 		"AUTH_JWT_SECRET=this-is-a-very-secret-jwt-key-that-is-at-least-thirty-two-bytes",
 		"ALLOWED_ORIGINS=https://app.example.com",
-		"PAYSTACK_SECRET_KEY=sk_test_dummy",
 	}, "\n"))
 	chdir(t, dir)
 
@@ -310,7 +306,6 @@ func TestLoadProcessEnvOverridesDotEnvAndFallsBack(t *testing.T) {
 	t.Setenv("SERVER_PORT", "9091")
 	t.Setenv("DATABASE_DSN", "postgres://env:secret@localhost:5432/nester?sslmode=disable")
 	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
-	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
@@ -451,8 +446,6 @@ func TestLoadAllDefaults(t *testing.T) {
 		{"ratelimit wallet window", cfg.RateLimit().WalletWindow(), 1 * time.Minute},
 		{"ratelimit auth limit", cfg.RateLimit().AuthLimit(), 10},
 		{"ratelimit auth window", cfg.RateLimit().AuthWindow(), 1 * time.Minute},
-		{"ratelimit settlement limit", cfg.RateLimit().SettlementLimit(), 5},
-		{"ratelimit settlement window", cfg.RateLimit().SettlementWindow(), 1 * time.Minute},
 		{"ratelimit trusted proxy count", cfg.RateLimit().TrustedProxyCount(), 0},
 		{"ratelimit quota enabled", cfg.RateLimit().QuotaEnabled(), true},
 		{"ratelimit quota limit", cfg.RateLimit().QuotaLimit(), 300},
@@ -494,7 +487,6 @@ func TestLoadProductionMode(t *testing.T) {
 	requiredEnv(t)
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
-	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_dummy")
 
 	chdir(t, t.TempDir())
 
@@ -804,7 +796,6 @@ func TestLoadWalletRateLimitOverrides(t *testing.T) {
 }
 
 // TestLoadSensitiveRateLimitRejectsNonPositiveValues verifies validation of the
-// strict auth and settlement rate-limit knobs.
 func TestLoadSensitiveRateLimitRejectsNonPositiveValues(t *testing.T) {
 	cases := []struct {
 		name string
@@ -815,8 +806,6 @@ func TestLoadSensitiveRateLimitRejectsNonPositiveValues(t *testing.T) {
 		{"zero auth limit", "RATELIMIT_AUTH_LIMIT", "0", "RATELIMIT_AUTH_LIMIT must be greater than 0"},
 		{"negative auth limit", "RATELIMIT_AUTH_LIMIT", "-1", "RATELIMIT_AUTH_LIMIT must be greater than 0"},
 		{"zero auth window", "RATELIMIT_AUTH_WINDOW", "0s", "RATELIMIT_AUTH_WINDOW must be greater than 0"},
-		{"zero settlement limit", "RATELIMIT_SETTLEMENT_LIMIT", "0", "RATELIMIT_SETTLEMENT_LIMIT must be greater than 0"},
-		{"zero settlement window", "RATELIMIT_SETTLEMENT_WINDOW", "0s", "RATELIMIT_SETTLEMENT_WINDOW must be greater than 0"},
 	}
 
 	for _, tc := range cases {
@@ -840,15 +829,12 @@ func TestLoadSensitiveRateLimitRejectsNonPositiveValues(t *testing.T) {
 }
 
 // TestLoadSensitiveRateLimitOverrides verifies env overrides for the strict auth
-// and settlement rate-limit knobs are honoured.
 func TestLoadSensitiveRateLimitOverrides(t *testing.T) {
 	baseEnv(t)
 	requiredEnv(t)
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("RATELIMIT_AUTH_LIMIT", "7")
 	t.Setenv("RATELIMIT_AUTH_WINDOW", "30s")
-	t.Setenv("RATELIMIT_SETTLEMENT_LIMIT", "3")
-	t.Setenv("RATELIMIT_SETTLEMENT_WINDOW", "45s")
 
 	chdir(t, t.TempDir())
 
@@ -861,12 +847,6 @@ func TestLoadSensitiveRateLimitOverrides(t *testing.T) {
 	}
 	if got := cfg.RateLimit().AuthWindow(); got != 30*time.Second {
 		t.Errorf("AuthWindow() = %s, want 30s", got)
-	}
-	if got := cfg.RateLimit().SettlementLimit(); got != 3 {
-		t.Errorf("SettlementLimit() = %d, want 3", got)
-	}
-	if got := cfg.RateLimit().SettlementWindow(); got != 45*time.Second {
-		t.Errorf("SettlementWindow() = %s, want 45s", got)
 	}
 }
 
@@ -882,7 +862,6 @@ func TestLoadRateLimitRejectsSubMillisecondWindows(t *testing.T) {
 	}{
 		{"global", "RATELIMIT_GLOBAL_WINDOW", "RATELIMIT_GLOBAL_WINDOW must be at least 1ms"},
 		{"auth", "RATELIMIT_AUTH_WINDOW", "RATELIMIT_AUTH_WINDOW must be at least 1ms"},
-		{"settlement", "RATELIMIT_SETTLEMENT_WINDOW", "RATELIMIT_SETTLEMENT_WINDOW must be at least 1ms"},
 	}
 
 	for _, tc := range cases {

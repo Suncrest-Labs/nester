@@ -27,16 +27,6 @@
     "targetLabel": "Target",
     "deadlineLabel": "Deadline"
   },
-  "offramp": {
-    "title": "Cash Out",
-    "subtitle": "Convert crypto to fiat, directly to your bank account",
-    "amountLabel": "Amount",
-    "bankLabel": "Bank",
-    "accountNumberLabel": "Account number",
-    "offlineMessage": "You're offline — withdrawals are paused",
-    "enterAmount": "Enter an amount",
-    "selectBank": "Select a bank"
-  },
   "settings": {
     "language": "Language",
     "languageDescription": "Choose the language used across the app"

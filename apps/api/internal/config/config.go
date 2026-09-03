@@ -35,38 +35,35 @@ const maxKeyVersionLen = 32
 const maxDatabasePoolSize = 10000
 
 type Config struct {
-	environment           string
-	server                ServerConfig
-	database              DatabaseConfig
-	stellar               StellarConfig
-	intelligence          IntelligenceConfig
-	allocation            AllocationConfig
-	redis                 RedisConfig
-	settlementProviderURL string
-	auth                  AuthConfig
-	rateLimit             RateLimitConfig
-	log                   LogConfig
-	allowedOrigins        []string
-	performance           PerformanceConfig
-	tvl                   TVLConfig
-	apyRefresh            APYRefreshConfig
-	startup               StartupConfig
-	bank                  BankConfig
-	bankAccountCipherKey  string
-	accountCipher         AccountCipherConfig
-	transactionPoller     TransactionPollerConfig
-	reconciliation        ReconciliationConfig
-	recurringDeposit      RecurringDepositConfig
-	jobQueue              JobQueueConfig
-	outbox                OutboxConfig
-	harvest               HarvestConfig
-	rebalancer            RebalancerConfig
-	schedulerLeadership   SchedulerLeadershipConfig
-	tracing               TracingConfig
-	metrics               MetricsConfig
-	indexer               IndexerConfig
-	circuitBreaker        CircuitBreakerConfig
-	rpcRetry              RPCRetryConfig
+	environment          string
+	server               ServerConfig
+	database             DatabaseConfig
+	stellar              StellarConfig
+	allocation           AllocationConfig
+	redis                RedisConfig
+	auth                 AuthConfig
+	rateLimit            RateLimitConfig
+	log                  LogConfig
+	allowedOrigins       []string
+	performance          PerformanceConfig
+	tvl                  TVLConfig
+	apyRefresh           APYRefreshConfig
+	startup              StartupConfig
+	bankAccountCipherKey string
+	accountCipher        AccountCipherConfig
+	transactionPoller    TransactionPollerConfig
+	reconciliation       ReconciliationConfig
+	recurringDeposit     RecurringDepositConfig
+	jobQueue             JobQueueConfig
+	outbox               OutboxConfig
+	harvest              HarvestConfig
+	rebalancer           RebalancerConfig
+	schedulerLeadership  SchedulerLeadershipConfig
+	tracing              TracingConfig
+	metrics              MetricsConfig
+	indexer              IndexerConfig
+	circuitBreaker       CircuitBreakerConfig
+	rpcRetry             RPCRetryConfig
 }
 
 // CircuitBreakerConfig is the policy protecting the chain upstreams, Soroban
@@ -260,12 +257,6 @@ type AllocationConfig struct {
 	minWeightPercent int
 }
 
-type IntelligenceConfig struct {
-	baseURL       string
-	serviceAPIKey string
-	timeout       time.Duration
-}
-
 type AuthConfig struct {
 	secret                  string
 	serviceAPIKey           string
@@ -293,8 +284,6 @@ type RateLimitConfig struct {
 	authFailureWindow    time.Duration
 	authLockoutBase      time.Duration
 	authLockoutMax       time.Duration
-	settlementLimit      int
-	settlementWindow     time.Duration
 	trustedProxyCount    int
 
 	// Cost-weighted quota (see middleware.CostQuota). This meters downstream
@@ -313,11 +302,6 @@ type LogConfig struct {
 
 type RedisConfig struct {
 	addr string
-}
-
-type BankConfig struct {
-	paystackKey    string
-	flutterwaveKey string
 }
 
 func Load() (*Config, error) {
@@ -369,11 +353,7 @@ func Load() (*Config, error) {
 			withdrawalSlippageBps:          loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
 			harvestDefaultCompound:         loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
 		},
-		intelligence: IntelligenceConfig{
-			baseURL:       loader.stringDefault("INTELLIGENCE_BASE_URL", loader.stringDefault("INTELLIGENCE_SERVICE_URL", "http://localhost:8000")),
-			serviceAPIKey: loader.stringDefault("INTELLIGENCE_SERVICE_API_KEY", ""),
-			timeout:       loader.durationDefault("INTELLIGENCE_TIMEOUT", loader.durationDefault("INTELLIGENCE_SERVICE_TIMEOUT", 10*time.Second)),
-		},
+
 		allocation: AllocationConfig{
 			minWeightPercent: loader.intDefault("MIN_ALLOCATION_WEIGHT", 5),
 		},
@@ -389,7 +369,6 @@ func Load() (*Config, error) {
 			sampleRatio:      loader.floatDefault("TRACING_SAMPLE_RATIO", 0.05),
 			latencyThreshold: loader.durationDefault("TRACING_LATENCY_THRESHOLD", 1*time.Second),
 		},
-		settlementProviderURL: loader.stringDefault("SETTLEMENT_PROVIDER_URL", ""),
 		auth: AuthConfig{
 			secret:                  loader.requiredString("AUTH_JWT_SECRET"),
 			serviceAPIKey:           loader.stringDefault("NESTER_SERVICE_API_KEY", ""),
@@ -419,13 +398,11 @@ func Load() (*Config, error) {
 			// locked out indefinitely by someone else spamming its address.
 			authLockoutBase:   loader.durationDefault("AUTH_LOCKOUT_BASE", 30*time.Second),
 			authLockoutMax:    loader.durationDefault("AUTH_LOCKOUT_MAX", 15*time.Minute),
-			settlementLimit:   loader.intDefault("RATELIMIT_SETTLEMENT_LIMIT", 5),
-			settlementWindow:  loader.durationDefault("RATELIMIT_SETTLEMENT_WINDOW", 1*time.Minute),
 			trustedProxyCount: loader.intDefault("RATELIMIT_TRUSTED_PROXY_COUNT", 0),
 
 			// 300 cost units/minute. An ordinary read costs 1, so normal
 			// browsing never approaches it (the global 100 req/min per IP
-			// binds first); an intelligence relay call costs 25, so the
+			// binds first); the most expensive calls cost 25, so the
 			// quota is what actually bounds the expensive traffic.
 			// Deliberately per-environment: staging can run tighter.
 			quotaEnabled:     loader.boolDefault("RATELIMIT_QUOTA_ENABLED", true),
@@ -452,10 +429,6 @@ func Load() (*Config, error) {
 			enableAutoMigrate: loader.boolDefault("RUN_MIGRATIONS", false),
 			migrationsDir:     loader.stringDefault("MIGRATIONS_DIR", "./migrations"),
 			dependencyTimeout: loader.durationDefault("STARTUP_DEPENDENCY_TIMEOUT", 5*time.Second),
-		},
-		bank: BankConfig{
-			paystackKey:    loader.stringDefault("PAYSTACK_SECRET_KEY", ""),
-			flutterwaveKey: loader.stringDefault("FLUTTERWAVE_SECRET_KEY", ""),
 		},
 		bankAccountCipherKey: loader.stringDefault("BANK_ACCOUNT_ENCRYPTION_KEY", ""),
 		transactionPoller: TransactionPollerConfig{
@@ -644,32 +617,8 @@ func (c Config) Allocation() AllocationConfig {
 	return c.allocation
 }
 
-func (c Config) Intelligence() IntelligenceConfig {
-	return c.intelligence
-}
-
-func (i IntelligenceConfig) BaseURL() string {
-	return i.baseURL
-}
-
-func (i IntelligenceConfig) ServiceURL() string {
-	return i.baseURL
-}
-
-func (i IntelligenceConfig) ServiceAPIKey() string {
-	return i.serviceAPIKey
-}
-
-func (i IntelligenceConfig) Timeout() time.Duration {
-	return i.timeout
-}
-
 func (s StellarConfig) USDCIssuer() string {
 	return s.stellarUSDCIssuer
-}
-
-func (c Config) SettlementProviderURL() string {
-	return c.settlementProviderURL
 }
 
 func (c Config) Auth() AuthConfig {
@@ -788,10 +737,6 @@ func (t TracingConfig) SampleRatio() float64 {
 // irrespective of the base sample ratio.
 func (t TracingConfig) LatencyThreshold() time.Duration {
 	return t.latencyThreshold
-}
-
-func (c Config) Bank() BankConfig {
-	return c.bank
 }
 
 func (c Config) BankAccountEncryptionKey() string {
@@ -952,14 +897,6 @@ func (j JobQueueConfig) BackoffBase() time.Duration       { return j.backoffBase
 func (j JobQueueConfig) BackoffMax() time.Duration        { return j.backoffMax }
 func (j JobQueueConfig) StatsInterval() time.Duration     { return j.statsInterval }
 func (j JobQueueConfig) DrainTimeout() time.Duration      { return j.drainTimeout }
-
-func (b BankConfig) PaystackKey() string {
-	return b.paystackKey
-}
-
-func (b BankConfig) FlutterwaveKey() string {
-	return b.flutterwaveKey
-}
 
 func (c *Config) validate(loader *envLoader) {
 	if strings.TrimSpace(c.server.host) == "" {
@@ -1165,14 +1102,6 @@ func (c *Config) validate(loader *envLoader) {
 	}
 	if c.rateLimit.authLockoutMax < c.rateLimit.authLockoutBase {
 		loader.addError("AUTH_LOCKOUT_MAX must be at least AUTH_LOCKOUT_BASE")
-	}
-	if c.rateLimit.settlementLimit <= 0 {
-		loader.addError("RATELIMIT_SETTLEMENT_LIMIT must be greater than 0")
-	}
-	if c.rateLimit.settlementWindow <= 0 {
-		loader.addError("RATELIMIT_SETTLEMENT_WINDOW must be greater than 0")
-	} else if c.rateLimit.settlementWindow < time.Millisecond {
-		loader.addError("RATELIMIT_SETTLEMENT_WINDOW must be at least 1ms")
 	}
 	if c.rateLimit.trustedProxyCount < 0 {
 		loader.addError("RATELIMIT_TRUSTED_PROXY_COUNT must be zero or greater")
@@ -1498,14 +1427,6 @@ func (r RateLimitConfig) AuthLockoutBase() time.Duration {
 // AuthLockoutMax caps the progressive backoff.
 func (r RateLimitConfig) AuthLockoutMax() time.Duration {
 	return r.authLockoutMax
-}
-
-func (r RateLimitConfig) SettlementLimit() int {
-	return r.settlementLimit
-}
-
-func (r RateLimitConfig) SettlementWindow() time.Duration {
-	return r.settlementWindow
 }
 
 func (r RateLimitConfig) TrustedProxyCount() int {

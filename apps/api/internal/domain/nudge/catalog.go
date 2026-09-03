@@ -31,6 +31,6 @@ var Catalog = map[NudgeType]NudgeDefinition{
 	NudgeTypeStreakMilestone:  {Type: NudgeTypeStreakMilestone, BaseImpact: 0.7, UsesLLMCopy: false, Immediate: true},
 	NudgeTypeMilestone:        {Type: NudgeTypeMilestone, BaseImpact: 0.7, UsesLLMCopy: false, Immediate: true},
 	NudgeTypePaydayDeposit:    {Type: NudgeTypePaydayDeposit, BaseImpact: 0.65, UsesLLMCopy: false},
-	NudgeTypeYieldOpportunity: {Type: NudgeTypeYieldOpportunity, BaseImpact: 0.6, UsesLLMCopy: true},
-	NudgeTypeReEngagement:     {Type: NudgeTypeReEngagement, BaseImpact: 0.5, UsesLLMCopy: true},
+	NudgeTypeYieldOpportunity: {Type: NudgeTypeYieldOpportunity, BaseImpact: 0.6, UsesLLMCopy: false},
+	NudgeTypeReEngagement:     {Type: NudgeTypeReEngagement, BaseImpact: 0.5, UsesLLMCopy: false},
 }

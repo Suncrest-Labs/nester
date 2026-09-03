@@ -33,9 +33,6 @@ func (r *rebalanceAdminRepo) GetVaultDetail(context.Context, uuid.UUID) (admindo
 func (r *rebalanceAdminRepo) UpdateVaultStatus(context.Context, uuid.UUID, vault.VaultStatus) (admindomain.VaultDetail, error) {
 	return r.detail, nil
 }
-func (r *rebalanceAdminRepo) ListSettlements(context.Context, admindomain.SettlementListFilter) ([]admindomain.SettlementSummary, int, error) {
-	return nil, 0, nil
-}
 func (r *rebalanceAdminRepo) ListUsers(context.Context, admindomain.UserListFilter) ([]admindomain.UserSummary, int, error) {
 	return nil, 0, nil
 }
@@ -152,7 +149,7 @@ func TestAdminService_TriggerRebalance_DryRun(t *testing.T) {
 			},
 		},
 	}
-	svc := service.NewAdminService(repo, rebalanceVaultRepo{}, rebalanceChainInvoker{}, "", "", "", 5)
+	svc := service.NewAdminService(repo, rebalanceVaultRepo{}, rebalanceChainInvoker{}, "", "", 5)
 
 	resp, err := svc.TriggerRebalance(context.Background(), vaultID, admindomain.RebalanceRequest{
 		Strategy: "auto",
@@ -181,7 +178,7 @@ func TestAdminService_TriggerRebalance_Submit(t *testing.T) {
 			},
 		},
 	}
-	svc := service.NewAdminService(repo, rebalanceVaultRepo{}, rebalanceChainInvoker{submitHash: "abc123"}, "", "", "", 5)
+	svc := service.NewAdminService(repo, rebalanceVaultRepo{}, rebalanceChainInvoker{submitHash: "abc123"}, "", "", 5)
 
 	resp, err := svc.TriggerRebalance(context.Background(), vaultID, admindomain.RebalanceRequest{
 		Strategy: "auto",
@@ -209,7 +206,7 @@ func TestAdminService_TriggerRebalance_InFlight(t *testing.T) {
 			},
 		},
 	}
-	svc := service.NewAdminService(repo, rebalanceVaultRepo{}, rebalanceChainInvoker{}, "", "", "", 5)
+	svc := service.NewAdminService(repo, rebalanceVaultRepo{}, rebalanceChainInvoker{}, "", "", 5)
 
 	_, err := svc.TriggerRebalance(context.Background(), vaultID, admindomain.RebalanceRequest{DryRun: true})
 	if !errors.Is(err, service.ErrRebalanceInFlight) {

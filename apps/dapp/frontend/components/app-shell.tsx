@@ -37,7 +37,6 @@ const SIDEBAR_NAV = [
     { label: "Yields", href: "/yields", icon: TrendingUp },
     { label: "Markets", href: "/vaults", icon: Vault },
     { label: "Stocks", href: "/stocks", icon: CandlestickChart },
-    { label: "Offramp", href: "/offramp", icon: Globe },
     { label: "Portfolio", href: "/portfolio", icon: BarChart3 },
     { label: "Settings", href: "/settings", icon: Settings },
 ];

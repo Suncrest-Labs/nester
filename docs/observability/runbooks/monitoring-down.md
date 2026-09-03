@@ -34,7 +34,6 @@ this — it is the thing that may be broken.
 
 ```bash
 kubectl get pods -l app=nester-api
-kubectl get pods -l app=nester-intelligence
 
 # Hit the service directly
 curl -sS -o /dev/null -w '%{http_code}\n' https://<api-host>/healthz
@@ -129,13 +128,8 @@ Sub-causes:
   The default is `127.0.0.1:9090`, which is correct for a sidecar scraper and
   wrong for a remote one.
 - A network policy or firewall blocking the metrics port.
-- For the intelligence service: `INTELLIGENCE_METRICS_TOKEN` set but the scrape
-  config carries no matching authorization, so `/metrics` returns 404 by
-  design.
 
-**Mitigation:** correct the configuration and restart. The 404-on-bad-token
-behaviour is deliberate — an unauthenticated prober learns nothing about
-whether the endpoint exists — so a 404 here means auth, not a missing route.
+**Mitigation:** correct the configuration and restart.
 
 ### Cause C — Prometheus itself is broken
 

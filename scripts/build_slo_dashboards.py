@@ -505,138 +505,6 @@ def build_flow_dashboard() -> dict[str, Any]:
     )
 
 
-def build_intelligence_dashboard() -> dict[str, Any]:
-    availability_budget = 0.01  # 99%
-    ttft_budget = 0.05  # 95%
-
-    panels: list[dict[str, Any]] = [
-        _text(
-            "Intelligence — 99% availability, 95% first token under 3s",
-            (
-                "**Availability SLI** errors over (answered + refused + error). "
-                "Refusals count as available: the service worked as designed. "
-                "Client disconnects are excluded.\n\n"
-                "**TTFT SLI** share of streams producing a first token within 3s. "
-                "Time to first token, not total duration, because that is what "
-                "perceived responsiveness depends on.\n\n"
-                "**Refusal rate** is a product-quality guardrail with no error "
-                "budget — some refusals are correct.\n\n"
-                "**Runbooks** `intelligence-availability.md`, "
-                "`intelligence-latency.md`, `intelligence-refusal.md`"
-            ),
-            {"h": 5, "w": 24, "x": 0, "y": 0},
-        )
-    ]
-
-    panels += _budget_panels(
-        "intelligence:availability:error_ratio_rate28d",
-        availability_budget,
-        "intelligence:availability:error_ratio_rate1h",
-        "intelligence:availability:error_ratio_rate6h",
-        row=5,
-    )
-
-    panels += [
-        _timeseries(
-            "Error ratio",
-            [
-                ("intelligence:availability:error_ratio_rate5m", "5m"),
-                ("intelligence:availability:error_ratio_rate1h", "1h"),
-            ],
-            "percentunit",
-            {"h": 9, "w": 12, "x": 0, "y": 10},
-            description="Genuine failures only. Refusals are not counted here.",
-            thresholds=[
-                {"color": "green", "value": None},
-                {"color": "orange", "value": availability_budget * SLOW_BURN_MULTIPLIER},
-                {"color": "red", "value": availability_budget * FAST_BURN_MULTIPLIER},
-            ],
-        ),
-        _timeseries(
-            "Requests by outcome",
-            [
-                (
-                    "sum by (outcome) (rate(nester_intelligence_requests_total[5m]))",
-                    "{{outcome}}",
-                )
-            ],
-            "reqps",
-            {"h": 9, "w": 12, "x": 12, "y": 10},
-            description="answered / refused / error / cancelled, so the mix is visible at a glance.",
-        ),
-        _timeseries(
-            "Time to first token p95",
-            [("intelligence:ttft:p95_5m", "p95 TTFT")],
-            "s",
-            {"h": 8, "w": 12, "x": 0, "y": 19},
-            description="The 3s line is the TTFT SLI threshold.",
-            thresholds=[
-                {"color": "green", "value": None},
-                {"color": "red", "value": 3},
-            ],
-        ),
-        _timeseries(
-            "Share of streams slower than 3s to first token",
-            [
-                ("intelligence:ttft:error_ratio_rate5m", "5m"),
-                ("intelligence:ttft:error_ratio_rate1h", "1h"),
-            ],
-            "percentunit",
-            {"h": 8, "w": 12, "x": 12, "y": 19},
-            description="The TTFT SLI, against a 95% target.",
-            thresholds=[
-                {"color": "green", "value": None},
-                {"color": "orange", "value": ttft_budget * SLOW_BURN_MULTIPLIER},
-                {"color": "red", "value": ttft_budget * FAST_BURN_MULTIPLIER},
-            ],
-        ),
-        _timeseries(
-            "Refusal rate and reasons",
-            [
-                ("intelligence:refusal:error_ratio_rate30m", "refusal ratio 30m"),
-                ("intelligence:refusal:by_reason_rate30m", "{{reason}}/s"),
-            ],
-            "percentunit",
-            {"h": 8, "w": 12, "x": 0, "y": 27},
-            description=(
-                "Split by mechanism because 'refusals are up' is not actionable. "
-                "Guardrail up with grounding flat points at one deploy; the "
-                "reverse points at the data source."
-            ),
-            thresholds=[
-                {"color": "green", "value": None},
-                {"color": "orange", "value": 0.30},
-            ],
-        ),
-        _timeseries(
-            "Model provider health",
-            [
-                (
-                    'sum by (status_class) (rate(nester_outbound_requests_total{upstream="anthropic_relay"}[5m]))',
-                    "anthropic {{status_class}}",
-                ),
-                (
-                    'sum by (kind) (rate(nester_outbound_errors_total{upstream="anthropic_relay"}[5m]))',
-                    "anthropic {{kind}}",
-                ),
-            ],
-            "reqps",
-            {"h": 8, "w": 12, "x": 12, "y": 27},
-            description=(
-                "Separates a provider outage from a fault on our side, which is "
-                "the first branch in the availability runbook."
-            ),
-        ),
-    ]
-
-    return _dashboard(
-        "nester-slo-intel",
-        "SLO — Intelligence",
-        "Availability, TTFT, and refusal indicators for the intelligence service (nester#1056).",
-        panels,
-    )
-
-
 def build_balance_dashboard() -> dict[str, Any]:
     panels = [
         _text(
@@ -778,10 +646,10 @@ def build_probe_dashboard() -> dict[str, Any]:
         _text(
             "Synthetic probes — staging",
             (
-                "Probes exercise deposit, withdrawal, balance read, and an "
-                "intelligence query on a schedule, so a path that is broken "
-                "while nobody is using it is found by us rather than by the "
-                "first user who tries it.\n\n"
+                "Probes exercise deposit, withdrawal, and balance read on a "
+                "schedule, so a path that is broken while nobody is using it "
+                "is found by us rather than by the first user who tries "
+                "it.\n\n"
                 "No error budget: a probe is a scheduled event, not a ratio "
                 "over traffic, so there is nothing to burn. Alerts are "
                 "absolute and ticket-severity — these run against staging, so "
@@ -869,7 +737,7 @@ def build_probe_dashboard() -> dict[str, Any]:
     return _dashboard(
         "nester-slo-probes",
         "SLO — Synthetic probes",
-        "Staging synthetic probe results for deposit, withdrawal, balance, and intelligence (nester#1056).",
+        "Staging synthetic probe results for deposit, withdrawal, and balance (nester#1056).",
         panels,
     )
 
@@ -1036,7 +904,6 @@ def build_money_path_dashboard() -> dict[str, Any]:
 DASHBOARDS = {
     "slo-api-availability.json": build_api_dashboard,
     "slo-deposits-withdrawals.json": build_flow_dashboard,
-    "slo-intelligence.json": build_intelligence_dashboard,
     "slo-balance-freshness.json": build_balance_dashboard,
     "slo-money-path-integrity.json": build_money_path_dashboard,
     "slo-synthetic-probes.json": build_probe_dashboard,

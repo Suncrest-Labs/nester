@@ -28,9 +28,6 @@ func (r *allocationAdminRepository) GetVaultDetail(context.Context, uuid.UUID) (
 func (r *allocationAdminRepository) UpdateVaultStatus(context.Context, uuid.UUID, vault.VaultStatus) (admindomain.VaultDetail, error) {
 	return r.detail, nil
 }
-func (r *allocationAdminRepository) ListSettlements(context.Context, admindomain.SettlementListFilter) ([]admindomain.SettlementSummary, int, error) {
-	return nil, 0, nil
-}
 func (r *allocationAdminRepository) ListUsers(context.Context, admindomain.UserListFilter) ([]admindomain.UserSummary, int, error) {
 	return nil, 0, nil
 }
@@ -143,7 +140,7 @@ func TestAdminServiceCreateAllocationUpdatesChainAndDatabase(t *testing.T) {
 	}
 	chain := &recordingChainInvoker{}
 
-	svc := NewAdminService(adminRepo, vaultRepo, chain, "", "", "CSTRATEGY001", 5)
+	svc := NewAdminService(adminRepo, vaultRepo, chain, "", "CSTRATEGY001", 5)
 
 	created, err := svc.CreateAllocation(context.Background(), CreateAllocationInput{
 		VaultID:  vaultID,
@@ -178,7 +175,7 @@ func TestAdminServiceCreateAllocationRejectsDuplicateProtocol(t *testing.T) {
 			},
 		},
 	}
-	svc := NewAdminService(adminRepo, &allocationVaultRepository{}, NoopVaultChainInvoker{}, "", "", "", 5)
+	svc := NewAdminService(adminRepo, &allocationVaultRepository{}, NoopVaultChainInvoker{}, "", "", 5)
 
 	_, err := svc.CreateAllocation(context.Background(), CreateAllocationInput{
 		VaultID:  vaultID,
@@ -205,7 +202,7 @@ func TestAdminServiceDeleteAllocationRejectsNonZeroBalance(t *testing.T) {
 			},
 		},
 	}
-	svc := NewAdminService(adminRepo, &allocationVaultRepository{}, NoopVaultChainInvoker{}, "", "", "", 5)
+	svc := NewAdminService(adminRepo, &allocationVaultRepository{}, NoopVaultChainInvoker{}, "", "", 5)
 
 	err := svc.DeleteAllocation(context.Background(), DeleteAllocationInput{
 		VaultID:      vaultID,
@@ -228,7 +225,7 @@ func TestAdminServiceUpdateAllocationValidatesWeightSum(t *testing.T) {
 			},
 		},
 	}
-	svc := NewAdminService(adminRepo, &allocationVaultRepository{}, NoopVaultChainInvoker{}, "", "", "", 5)
+	svc := NewAdminService(adminRepo, &allocationVaultRepository{}, NoopVaultChainInvoker{}, "", "", 5)
 
 	weight := decimal.RequireFromString("70")
 	_, err := svc.UpdateAllocation(context.Background(), UpdateAllocationInput{

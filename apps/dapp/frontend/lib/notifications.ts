@@ -8,9 +8,7 @@ export type NotificationType =
     | "breaker_trip"
     | "deposit_confirmed"
     | "withdrawal_processed"
-    | "ai_alert"
     | "rebalance_event"
-    | "offramp_status"
     | "goal_milestone"
     | "nudge_recommendation"
     | "promotional"
@@ -62,12 +60,12 @@ export const CATEGORY_METADATA: Record<
     },
     transactional: {
         label: "Transactions & Vault Activity",
-        description: "Deposit confirmations, withdrawal processing, yield accrual, and settlement status.",
+        description: "Deposit confirmations, withdrawal processing, and yield accrual.",
         alwaysOn: false,
     },
     nudge: {
         label: "Nudges & Milestones",
-        description: "Goal milestone achievements, Prometheus AI recommendations, and promotional updates.",
+        description: "Goal milestone achievements, savings nudges, and promotional updates.",
         alwaysOn: false,
     },
 };
@@ -110,9 +108,7 @@ export function mapTypeToCategoryAndPriority(type: NotificationType): {
         case "deposit_confirmed":
         case "withdrawal_processed":
         case "rebalance_event":
-        case "offramp_status":
             return { category: "transactional", priority: "transactional" };
-        case "ai_alert":
         case "goal_milestone":
         case "nudge_recommendation":
         case "promotional":
@@ -164,19 +160,6 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         mergedIds: ["seed-2"],
     },
     {
-        id: "seed-3",
-        type: "ai_alert",
-        category: "nudge",
-        priority: "nudge",
-        title: "Prometheus Alert",
-        message: "Prometheus: Your Balanced Vault APY dropped to 7.2%. Consider reviewing.",
-        timestamp: isoMinutesAgo(56),
-        read: false,
-        actionUrl: "/savings",
-        actionLabel: "Review Strategy",
-        mergedIds: ["seed-3"],
-    },
-    {
         id: "seed-4",
         type: "rebalance_event",
         category: "transactional",
@@ -186,19 +169,6 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         timestamp: isoMinutesAgo(145),
         read: true,
         mergedIds: ["seed-4"],
-    },
-    {
-        id: "seed-5",
-        type: "offramp_status",
-        category: "transactional",
-        priority: "transactional",
-        title: "Off-ramp Status",
-        message: "Off-ramp settlement is now in queued state and awaiting LP confirmation.",
-        timestamp: isoMinutesAgo(220),
-        read: true,
-        actionUrl: "/offramp",
-        actionLabel: "View Off-ramp",
-        mergedIds: ["seed-5"],
     },
 ];
 

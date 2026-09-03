@@ -115,22 +115,22 @@ more useful than a control that does not exist.
 
 | Field | Value |
 |---|---|
-| **What** | Versioned AES-256-GCM keys protecting stored bank account numbers, plus a stable HMAC pepper for uniqueness fingerprints |
+| **What** | Versioned AES-256-GCM keys protecting encrypted secrets at rest (webhook signing secrets), plus a stable HMAC pepper for uniqueness fingerprints |
 | **Storage** | Environment variables; parsed in `internal/crypto/account_cipher.go` |
-| **Process access** | The API process, and the `rotate_keys` / `backfill_kyc_encryption` commands |
-| **Compromise permits** | Decrypting every stored bank account number for versions the attacker holds. Compromise of the fingerprint key additionally permits confirming whether a *guessed* account number exists in the system, since the fingerprint is a deterministic keyed hash over a low-entropy input |
-| **Blast radius** | All bank account records encrypted under the compromised versions. Because `key_version` is stored per row, the radius is bounded by which versions leaked — this is the practical security benefit of versioning |
-| **Rotation mechanism** | Add a new version, set it active, run the rotator. Old versions must remain configured until no row references them |
+| **Process access** | The API process |
+| **Compromise permits** | Decrypting every stored ciphertext for versions the attacker holds |
+| **Blast radius** | All records encrypted under the compromised versions. Because the key version is stored per row, the radius is bounded by which versions leaked — this is the practical security benefit of versioning |
+| **Rotation mechanism** | Add a new version, set it active, re-encrypt. Old versions must remain configured until no row references them |
 | **Rotation frequency** | No policy exists. `key-rotation.md` documents the mechanism but not a cadence |
 | **Detection** | **Not detectable.** Decryption performed outside the application — by anyone holding the key and a database copy — produces no application-observable event. Only key *use inside the API* could be instrumented, and an attacker with the key and the ciphertext has no reason to use the API |
 | **Revocation** | Rotate to a new version and re-wrap. Note that rotation protects *future* reads; data already exfiltrated under the old key stays readable forever. Rotation is not a remedy for a completed exfiltration |
-| **Affected parties** | Every user with a stored bank account |
+| **Affected parties** | Owners of every record sealed under the compromised versions |
 | **Emergency response** | Treat as a data breach: rotate, re-wrap, and follow the disclosure path — rotation alone does not undo the exposure |
 
 **Envelope encryption changes the rotation economics, not the breach outcome.**
 With per-record data keys wrapped by a master key, rotating the master key
 rewraps a fixed-size wrapped key per row instead of decrypting and re-encrypting
-every account number. That reduces rotation from an expensive, plaintext-handling
+every record. That reduces rotation from an expensive, plaintext-handling
 migration to a cheap metadata operation — which is what makes *frequent* rotation
 and *fast emergency* rotation realistic.
 
@@ -155,7 +155,7 @@ and *fast emergency* rotation realistic.
 | **What** | Connection string including database username and password |
 | **Storage** | Environment variable |
 | **Process access** | The API process, migration runner, and operational commands |
-| **Compromise permits** | Full read/write access to application data: user records, encrypted bank accounts (ciphertext only — see below), vault positions, and **the audit log itself** |
+| **Compromise permits** | Full read/write access to application data: user records, encrypted secrets (ciphertext only — see below), vault positions, and **the audit log itself** |
 | **Blast radius** | The entire dataset. Critically, an attacker with write access to the database can rewrite audit rows |
 | **Rotation mechanism** | Rotate the database role password, update the environment, restart |
 | **Detection** | Partially detectable — connections from unexpected sources are visible in PostgreSQL logs if those logs are collected and reviewed. Queries issued through a legitimate connection string are not distinguishable from application traffic |
@@ -165,18 +165,18 @@ and *fast emergency* rotation realistic.
 
 ---
 
-### 2.6 Provider and service credentials
+### 2.6 Service credentials
 
-`FLUTTERWAVE_SECRET_KEY`, `PAYSTACK_SECRET_KEY`, `INTELLIGENCE_SERVICE_API_KEY`, `NESTER_SERVICE_API_KEY`, `REDIS_ADDR` (and any credentials embedded in it).
+`NESTER_SERVICE_API_KEY`, `REDIS_ADDR` (and any credentials embedded in it).
 
 | Field | Value |
 |---|---|
 | **Storage** | Environment variables |
 | **Process access** | The API process |
-| **Compromise permits** | Payment-provider keys allow initiating or querying transactions with those providers under the Nester merchant identity. Service API keys allow calling the intelligence service directly, bypassing the API authorization layer. Redis access allows reading and manipulating cached data, rate-limit counters, and scheduler leader locks — the last of which permits denial of scheduled operations |
-| **Rotation** | Provider keys rotate through the provider dashboard; service keys by changing the environment on both sides |
-| **Detection** | Provider-side: dashboards and provider-issued alerts, i.e. out-of-band. Service keys and Redis: **not currently detectable** — no authentication-failure or anomaly telemetry is collected for these paths |
-| **Blast radius** | Bounded to the respective provider relationship. These are materially lower-value than 2.1–2.3 but are enumerated because incident scoping requires the complete list |
+| **Compromise permits** | The service API key allows calling the API's service-to-service surface directly, bypassing the user authorization layer. Redis access allows reading and manipulating cached data, rate-limit counters, and scheduler leader locks — the last of which permits denial of scheduled operations |
+| **Rotation** | Service keys rotate by changing the environment on both sides |
+| **Detection** | **Not currently detectable** — no authentication-failure or anomaly telemetry is collected for these paths |
+| **Blast radius** | Bounded relative to 2.1–2.3 — these are materially lower-value but are enumerated because incident scoping requires the complete list |
 
 ---
 

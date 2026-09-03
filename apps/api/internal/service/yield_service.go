@@ -98,6 +98,13 @@ type YieldService struct {
 const defaultYieldCacheTTL = 5 * time.Minute
 const maxStaleDataAge = 30 * time.Minute
 
+// defiLlamaMaxResponseBytes bounds how much of the /pools body we buffer, so a
+// misbehaving or hostile upstream cannot exhaust memory here. It is generous
+// against the real payload (~11.7MB in Sept 2026) because that response covers
+// every pool on every chain and only grows; the headroom is the point, and
+// exceeding it is reported as our limit rather than as malformed JSON.
+const defiLlamaMaxResponseBytes int64 = 64 * 1024 * 1024
+
 func NewYieldService(defiLlamaURL string) *YieldService {
 	if defiLlamaURL == "" {
 		defiLlamaURL = "https://yields.llama.fi"
@@ -382,9 +389,23 @@ func (s *YieldService) fetchFromUpstream(ctx context.Context, chain string, limi
 		return nil, fmt.Errorf("defillama returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	// The cap bounds how much of a remote body we buffer, but a truncated
+	// read is not a smaller answer — it is a broken one, and json.Unmarshal
+	// reports it as "unexpected end of JSON input", which reads like an
+	// upstream data problem rather than our own limit. Reading one byte past
+	// the cap tells the two apart, so hitting it says so plainly.
+	//
+	// /pools carries every pool on every chain: ~11.7MB as of Sept 2026 and
+	// growing, which is what silently broke this at the previous 10MB cap.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, defiLlamaMaxResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read defillama response: %w", err)
+	}
+	if int64(len(body)) > defiLlamaMaxResponseBytes {
+		return nil, fmt.Errorf(
+			"defillama response exceeds %d bytes; raise defiLlamaMaxResponseBytes",
+			defiLlamaMaxResponseBytes,
+		)
 	}
 
 	var raw defiLlamaPoolsResponse

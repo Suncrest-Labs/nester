@@ -18,6 +18,7 @@ import {
   type PortfolioPosition,
 } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
+import { vaultsApi } from "@/lib/api/vaults";
 import { cn } from "@/lib/utils";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
@@ -232,6 +233,22 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
       });
 
       if (!result) throw new Error("Unable to record the withdrawal locally.");
+
+      // Mirror the withdrawal to the API so the server-derived position stays
+      // in step with the chain. Not fatal for the same reason as the deposit
+      // path: the transaction is already signed and submitted, so a failure
+      // here must not be reported to the user as a failed withdrawal.
+      try {
+        await vaultsApi.registerTransaction({
+          vault_id: position.vaultId,
+          type: "withdrawal",
+          amount: String(quote.grossAmount),
+          currency: position.asset?.toUpperCase() === "XLM" ? "XLM" : "USDC",
+          tx_hash: txReceipt.txHash,
+        });
+      } catch (registerErr) {
+        console.error("withdrawal submitted on-chain but not registered with the API", registerErr);
+      }
 
       setReceipt({
         ...txReceipt,

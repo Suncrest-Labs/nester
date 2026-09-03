@@ -20,8 +20,8 @@ var (
 	fakeJWT           = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" + "." +
 		"eyJzdWIiOiIxMjM0NSJ9" + "." +
 		"dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-	fakeAnthropicKey = "sk-" + "ant-api03-" + strings.Repeat("A", 36)
-	fakePaystackKey  = "sk_" + "live_" + "abc123def456ghi789"
+	fakeAnthropicKey   = "sk-" + "ant-api03-" + strings.Repeat("A", 36)
+	fakeStripeStyleKey = "sk_" + "live_" + "abc123def456ghi789"
 )
 
 func TestRedactValueStripsSecrets(t *testing.T) {
@@ -37,7 +37,7 @@ func TestRedactValueStripsSecrets(t *testing.T) {
 		{"stellar secret seed", fakeStellarSecret, fakeStellarSecret},
 		{"jwt", fakeJWT, fakeJWT},
 		{"anthropic api key", fakeAnthropicKey, fakeAnthropicKey},
-		{"paystack secret key", fakePaystackKey, fakePaystackKey},
+		{"stripe-style secret key", fakeStripeStyleKey, fakeStripeStyleKey},
 		{"bearer header", "Bearer " + fakeJWT, fakeJWT},
 		{"secret embedded in error text", "invalid operator secret: " + fakeStellarSecret, fakeStellarSecret},
 		{"jwt embedded in url", "https://api.example.com/cb?token=" + fakeJWT, fakeJWT},
@@ -286,22 +286,17 @@ func TestIsSensitiveKeyBlocksSessionAndIdentifiers(t *testing.T) {
 	}
 }
 
-// Flutterwave keys and Stripe-style webhook secrets do not use the sk_/pk_
-// shape that genericKeyPattern matches. Both are live credential formats in
-// this codebase — FLUTTERWAVE_SECRET_KEY is read in internal/config and the
-// webhook subsystem handles whsec_ values — so both can reach an error string
-// and from there a span.
-func TestRedactValueStripsPaymentProviderKeys(t *testing.T) {
+// Stripe-style webhook secrets do not use the sk_/pk_ shape that
+// genericKeyPattern matches. The webhook subsystem handles whsec_ values, so
+// they can reach an error string and from there a span.
+func TestRedactValueStripsWebhookSecrets(t *testing.T) {
 	keys := []string{
-		"FLWSECK_TEST-" + strings.Repeat("a", 24) + "-X",
-		"FLWSECK-" + strings.Repeat("b", 24) + "-X",
-		"FLWPUBK-" + strings.Repeat("c", 24) + "-X",
 		"whsec_" + strings.Repeat("d", 28),
 	}
 	for _, key := range keys {
-		got := RedactValue("provider key=" + key + " rejected")
+		got := RedactValue("webhook key=" + key + " rejected")
 		if strings.Contains(got, key) {
-			t.Errorf("payment provider key survived redaction: %q", got)
+			t.Errorf("webhook secret survived redaction: %q", got)
 		}
 		if !strings.Contains(got, RedactedPlaceholder) {
 			t.Errorf("expected a placeholder for %q, got %q", key, got)

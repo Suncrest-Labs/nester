@@ -26,10 +26,10 @@ const projects = [
         color: "#2775CA",
     },
     {
-        name: "MoneyGram Access",
-        tag: "Fiat On/Off Ramp",
-        desc: "Cash out USDC at 350,000+ MoneyGram locations worldwide.",
-        avatar: "MG",
+        name: "Reflector",
+        tag: "Price Oracle",
+        desc: "Decentralized price feeds for assets on Stellar and Soroban.",
+        avatar: "RF",
         color: "#E11D48",
     },
     {
@@ -70,7 +70,7 @@ const projects = [
     {
         name: "Pendulum",
         tag: "Cross-chain Bridge",
-        desc: "Connects Stellar stablecoins to EVM ecosystems via fiat rails.",
+        desc: "Connects Stellar stablecoins to EVM ecosystems via decentralized bridges.",
         avatar: "PD",
         color: "#14B8A6",
     },
@@ -98,7 +98,7 @@ const features = [
     },
     {
         label: "Seamless App Integrations",
-        desc: "Enjoy a frictionless user experience with our built-in integrations for leading wallets, trackers, and fiat on/off ramps.",
+        desc: "Enjoy a frictionless user experience with our built-in integrations for leading wallets, trackers, and DeFi protocols.",
         icon: Blocks
     },
     {

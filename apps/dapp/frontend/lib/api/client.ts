@@ -238,36 +238,6 @@ export interface ApiAllocation {
   updated_at?: string;
 }
 
-export interface ApiSettlement {
-  id: string;
-  user_id: string;
-  vault_id: string;
-  amount: string;
-  currency: string;
-  fiat_currency: string;
-  fiat_amount: string;
-  exchange_rate: string;
-  destination: {
-    type: string;
-    provider: string;
-    account_number: string;
-    account_name: string;
-    bank_code?: string;
-  };
-  status:
-    | "initiated"
-    | "liquidity_matched"
-    | "fiat_dispatched"
-    | "confirmed"
-    | "failed";
-  retry_count: number;
-  error_message?: string;
-  notes?: string;
-  estimated_fee?: string;
-  created_at: string;
-  completed_at?: string;
-}
-
 export interface ApiUser {
   id: string;
   wallet_address: string;
@@ -299,7 +269,7 @@ export interface ApiPerformanceSnapshot {
 export interface ApiTransaction {
   id: string;
   vault_id: string;
-  type: "deposit" | "withdrawal" | "settlement";
+  type: "deposit" | "withdrawal";
   amount: string;
   currency: string;
   tx_hash: string;
@@ -415,35 +385,4 @@ export const api = {
       apiFetch<Record<string, number>>(`/vaults/${vaultId}/performance/apy`),
   },
 
-  /** Settlements */
-  settlements: {
-    list: (userId: string, status?: string) =>
-      apiFetch<ApiSettlement[]>(
-        `/settlements?userId=${userId}${status ? `&status=${status}` : ""}`
-      ),
-
-    getById: (settlementId: string) =>
-      apiFetch<ApiSettlement>(`/settlements/${settlementId}`),
-
-    create: (req: {
-      user_id: string;
-      vault_id: string;
-      amount: string;
-      currency: string;
-      fiat_currency: string;
-      fiat_amount: string;
-      exchange_rate: string;
-      destination: {
-        type: string;
-        provider: string;
-        account_number: string;
-        account_name: string;
-        bank_code?: string;
-      };
-    }) =>
-      apiFetch<ApiSettlement>("/settlements", {
-        method: "POST",
-        body: JSON.stringify(req),
-      }),
-  },
 };

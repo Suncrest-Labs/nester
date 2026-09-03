@@ -9,7 +9,7 @@ const FAQ_ITEMS = [
     classification: "GENERAL",
     question: "What is Nester?",
     answer:
-      "Nester is a DeFi yield platform that lets you deposit stablecoins and automatically earn optimized returns across multiple protocols like Aave, Blend, and Kamino — with instant fiat off-ramps to your local bank account.",
+      "Nester is a DeFi savings and yield platform that lets you deposit stablecoins into non-custodial smart vaults and automatically earn optimized returns across audited protocols like Aave and Blend — all on Stellar.",
   },
   {
     id: "how-yield",
@@ -26,18 +26,18 @@ const FAQ_ITEMS = [
       "Nester only integrates with audited, battle-tested protocols. Your funds are held in non-custodial smart contracts — Nester never has direct access to your deposits. All vault strategies undergo rigorous risk assessment before deployment.",
   },
   {
-    id: "offramp",
-    classification: "OFF-RAMP",
-    question: "How does the fiat off-ramp work?",
+    id: "withdrawals",
+    classification: "WITHDRAWALS",
+    question: "How do withdrawals work?",
     answer:
-      "Our distributed liquidity provider network routes fiat directly to your bank via live banking APIs. Same-bank transfers settle in as little as 3 seconds. No peer-to-peer matching, no delays, no intermediaries.",
+      "You can withdraw at any time. Your vault shares are burned on-chain and the underlying stablecoins — deposit plus accrued yield — are sent straight back to your own wallet. No lockups on standard vaults, no approval queues, no intermediaries.",
   },
   {
-    id: "prometheus",
-    classification: "AI",
-    question: "What is Prometheus?",
+    id: "auto-invest",
+    classification: "AUTO-INVEST",
+    question: "What is auto-invest?",
     answer:
-      "Prometheus is Nester's built-in AI financial advisor. It analyzes your portfolio against live market data, protocol health, and sentiment — then delivers plain-language recommendations with one-click execution. Think of it as a 24/7 co-pilot for your money.",
+      "Auto-invest lets you set up an on-chain recurring deposit mandate — for example, $200 USDC into the Balanced Vault every week. Once you authorize the mandate, deposits execute automatically on schedule, straight from your wallet into your chosen vault. You can pause or cancel it at any time.",
   },
   {
     id: "minimum",
@@ -51,7 +51,7 @@ const FAQ_ITEMS = [
     classification: "GENERAL",
     question: "What are the fees?",
     answer:
-      "Nester charges a small performance fee on yield earned — you only pay when you're making money. Off-ramp transactions carry a flat 0.5% conversion fee. There are no deposit fees, no withdrawal fees, and no hidden charges.",
+      "Nester charges a small performance fee on yield earned — you only pay when you're making money. There are no deposit fees, no withdrawal fees, and no hidden charges.",
   },
   {
     id: "supported",

@@ -250,25 +250,3 @@ export function HarvestHistorySkeleton({ rows = 5 }: { rows?: number }) {
   );
 }
 
-/** Offramp settlement history. */
-export function OfframpSkeleton({ rows = 3 }: { rows?: number }) {
-  return (
-    <LoadingRegion label="Loading your offramps" className="space-y-2">
-      {Array.from({ length: rows }).map((_, i) => (
-        <div
-          key={i}
-          className="flex items-center justify-between rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-5 py-4"
-        >
-          <div className="flex items-center gap-3">
-            <Skeleton className="h-9 w-9 rounded-full" />
-            <div className="space-y-2">
-              <SkeletonLine width="130px" height="0.9rem" />
-              <SkeletonLine width="90px" height="0.7rem" />
-            </div>
-          </div>
-          <SkeletonLine width="70px" height="0.9rem" />
-        </div>
-      ))}
-    </LoadingRegion>
-  );
-}

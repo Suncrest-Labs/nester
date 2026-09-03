@@ -10,15 +10,11 @@ import (
 
 func TestChannelsFor_MatchesIssueMatrix(t *testing.T) {
 	cases := map[EventType][]ChannelKind{
-		EventSettlementCompleted: {ChannelEmail, ChannelWebSocket, ChannelPush},
-		EventSettlementFailed:    {ChannelEmail, ChannelWebSocket, ChannelPush},
-		EventDepositConfirmed:    {ChannelEmail, ChannelWebSocket, ChannelPush},
-		EventYieldMilestone:      {ChannelPush},
-		EventVaultAPYDrop:        {ChannelEmail, ChannelPush},
-		EventVaultPaused:         {ChannelEmail, ChannelWebSocket},
-		EventRebalanceExecuted:   {ChannelWebSocket},
-		EventKYCApproved:               {ChannelEmail},
-		EventKYCRejected:               {ChannelEmail},
+		EventDepositConfirmed:          {ChannelEmail, ChannelWebSocket, ChannelPush},
+		EventYieldMilestone:            {ChannelPush},
+		EventVaultAPYDrop:              {ChannelEmail, ChannelPush},
+		EventVaultPaused:               {ChannelEmail, ChannelWebSocket},
+		EventRebalanceExecuted:         {ChannelWebSocket},
 		EventGoalMilestone:             {ChannelPush},
 		EventScheduledDepositCompleted: {ChannelEmail, ChannelWebSocket, ChannelPush},
 	}
@@ -37,9 +33,9 @@ func TestChannelsFor_MatchesIssueMatrix(t *testing.T) {
 }
 
 func TestChannelsFor_ReturnsACopy(t *testing.T) {
-	a := ChannelsFor(EventSettlementCompleted)
+	a := ChannelsFor(EventDepositConfirmed)
 	a[0] = "mutated"
-	b := ChannelsFor(EventSettlementCompleted)
+	b := ChannelsFor(EventDepositConfirmed)
 	if b[0] == "mutated" {
 		t.Errorf("ChannelsFor must defensively copy; in-place mutation leaked across calls")
 	}
@@ -62,7 +58,7 @@ func TestDispatcher_SendDeliversToBothChannels(t *testing.T) {
 		nil,
 	)
 
-	if err := d.Send(context.Background(), uid, EventSettlementCompleted, "Done", "Settled $50", map[string]any{"amount": 50}); err != nil {
+	if err := d.Send(context.Background(), uid, EventDepositConfirmed, "Done", "Deposited $50", map[string]any{"amount": 50}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -147,7 +143,7 @@ func TestDispatcher_RespectsEmailOptOut(t *testing.T) {
 		nil,
 	)
 
-	if err := d.Send(context.Background(), uid, EventSettlementCompleted, "Done", "Settled $50", nil); err != nil {
+	if err := d.Send(context.Background(), uid, EventDepositConfirmed, "Done", "Deposited $50", nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if len(mail.Calls) != 0 {
@@ -224,7 +220,7 @@ func TestDispatcher_OneChannelFailureDoesNotBlockOthers(t *testing.T) {
 		nil,
 	)
 
-	err := d.Send(context.Background(), uuid.New(), EventSettlementCompleted, "Done", "Settled", nil)
+	err := d.Send(context.Background(), uuid.New(), EventDepositConfirmed, "Done", "Deposited", nil)
 	if err == nil {
 		t.Errorf("expected joined error containing the email failure")
 	}

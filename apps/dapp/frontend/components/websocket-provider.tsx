@@ -21,7 +21,6 @@ import {
   type DepositConfirmedPayload,
   type WithdrawalConfirmedPayload,
   type YieldAccruedPayload,
-  type SettlementStatusChangedPayload,
   type VaultPausedPayload,
   type VaultUnpausedPayload,
   type EmergencyQueueFillPayload,
@@ -138,7 +137,6 @@ export function WebSocketProvider({
     return [
       `user:${address}`,
       "vaults:global",
-      "settlements:global",
       "notifications:safety",
     ];
   }, [address]);
@@ -187,22 +185,6 @@ export function WebSocketProvider({
         case "yield_accrued": {
           const p = event.payload as unknown as YieldAccruedPayload;
           applyYieldAccrual(p.positionId, p.deltaYield);
-          break;
-        }
-
-        case "settlement_status_changed": {
-          const p = event.payload as unknown as SettlementStatusChangedPayload;
-          addNotification(
-            {
-              type: "offramp_status",
-              title: "Settlement Updated",
-              message:
-                p.message ?? `Settlement ${p.settlementId} is now ${p.status}`,
-              actionUrl: "/offramp",
-              actionLabel: "View Off-ramp",
-            },
-            { showToast: true },
-          );
           break;
         }
 

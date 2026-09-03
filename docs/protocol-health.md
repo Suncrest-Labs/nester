@@ -73,15 +73,3 @@ Every assessment (not just ones that cross a threshold) is recorded to
 `deterioration_assessments`, so a probability can later be checked against
 what actually happened to the protocol — the calibration-validation loop the
 issue asks for.
-
-## LLM summaries
-
-The score, level, and indicators are computed entirely in Go. The Python
-intelligence service's `deterioration_summary.summarize_assessment`
-(`apps/intelligence/app/services/deterioration_summary.py`) only narrates an
-already-computed assessment — for an operator dashboard, or for the "why we
-moved your funds" message shown to an affected user — following the exact
-grounding pattern `yield_explanation.py` established for the yield
-optimizer: every number the model may use is collected from the assessment
-first, and any model output introducing an untraceable number is discarded
-in favor of a deterministic, template-built fallback.

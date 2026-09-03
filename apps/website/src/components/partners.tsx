@@ -4,13 +4,11 @@
 import Image from "next/image"
 
 const partners = [
-    { name: "MoneyGram", logo: "/logos/moneygram.svg" },
     { name: "Circle", logo: "/logos/circle.svg" },
     { name: "Franklin Templeton", logo: "/logos/franklin.svg" },
     { name: "Fireblocks", logo: "/logos/fireblocks.svg" },
     { name: "WisdomTree", logo: "/logos/wisdomtree.svg" },
     { name: "Bitso", logo: "/logos/bitso.svg" },
-    { name: "Flutterwave", logo: "/logos/flutterwave.svg" },
     { name: "Anchorage Digital", logo: "/logos/anchorage.svg" },
 ]
 

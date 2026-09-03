@@ -54,7 +54,7 @@ func Authenticate(secret, serviceAPIKey string, rules []RouteRule, revocation Re
 				return
 			}
 
-			// Service-to-service auth for intelligence and internal callers.
+			// Service-to-service auth for internal callers.
 			//
 			// subtle.ConstantTimeCompare rather than ==, matching the JWT path
 			// below: a byte-wise short-circuit on a shared secret leaks its
@@ -66,7 +66,7 @@ func Authenticate(secret, serviceAPIKey string, rules []RouteRule, revocation Re
 					return
 				}
 
-				// The key is shared with the intelligence service and has no
+				// The key is shared between internal services and has no
 				// per-caller identity of its own, so anyone holding it could
 				// otherwise act as any user on any route. Money-path routes
 				// refuse it outright: a service asserting a user identity has
@@ -171,7 +171,7 @@ var moneyPathSuffixes = []string{
 // Deliberately a denylist of value-moving suffixes rather than an allowlist of
 // safe routes: the read surface is large and grows constantly, and a new
 // analytics endpoint appearing without a matching entry here should not be
-// what stops the intelligence service from working. The set that moves money
+// what stops internal service callers from working. The set that moves money
 // is small, stable, and worth naming explicitly.
 //
 // Trailing slashes are trimmed so "/deposit/" cannot slip past, and the match

@@ -9,8 +9,8 @@ the `Makefile`.
 
 ## The default: loopback only
 
-`make dev` publishes Postgres, Redis, the API, the frontend, the intelligence
-service and Jaeger on `127.0.0.1`. They are reachable from your machine and
+`make dev` publishes Postgres, Redis, the API, the frontend and Jaeger on
+`127.0.0.1`. They are reachable from your machine and
 from nothing else.
 
 This matters because the dev stack ships with credentials that are committed to
@@ -62,11 +62,11 @@ password in a local `.env` that git ignores.
 `docker-compose.external.yml` uses `!override` on the frontend's `environment`
 map. Compose replaces the whole map rather than merging into it, so every key
 the base file sets has to be repeated in the override — including
-`NEXT_PUBLIC_NETWORK` and `INTELLIGENCE_SERVICE_URL`, which are not themselves
+`NEXT_PUBLIC_NETWORK`, which is not itself
 hostname-dependent.
 
 Dropping one of them does not fail loudly; the frontend comes up and then
-misroutes API calls or loses the intelligence rewrites. If you add a variable to
+misroutes API calls. If you add a variable to
 the frontend service in `docker-compose.yml`, add it to the override too, and
 verify with:
 

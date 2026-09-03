@@ -1,0 +1,21 @@
+[package]
+name = "adapter-blend-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Clean crate name so other crates can import it as `adapter_blend`.
+name = "adapter_blend"
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+nester-common = { path = "../../libs/common" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+nester-test-utils = { path = "../../libs/test_utils" }
+# Used only to prove the generic adapter fails against a Blend-shaped pool.
+adapter-lending-contract = { path = "../adapter_lending" }

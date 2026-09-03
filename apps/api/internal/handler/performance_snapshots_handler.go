@@ -11,7 +11,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
-// PerformanceSnapshotsHandler serves GET /api/v1/performance/snapshots for intelligence context.
+// PerformanceSnapshotsHandler serves GET /api/v1/performance/snapshots.
 type PerformanceSnapshotsHandler struct {
 	performance *performancesvc.Service
 }
@@ -45,9 +45,9 @@ func (h *PerformanceSnapshotsHandler) list(w http.ResponseWriter, r *http.Reques
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(map[string]any{
-		"snapshots":            analytics.DailySnapshots,
-		"performance_metrics":  analytics.PerformanceMetrics,
-		"current_allocation":   analytics.CurrentAllocation,
-		"vaults":               analytics.Vaults,
+		"snapshots":           analytics.DailySnapshots,
+		"performance_metrics": analytics.PerformanceMetrics,
+		"current_allocation":  analytics.CurrentAllocation,
+		"vaults":              analytics.Vaults,
 	}))
 }

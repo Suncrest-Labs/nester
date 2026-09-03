@@ -312,130 +312,16 @@ groups:
           runbook: docs/observability/runbooks/flow-latency.md
 
   # ---------------------------------------------------------------------------
-  # Intelligence availability — target 99%
   # ---------------------------------------------------------------------------
   # budget 1% => fast 13.44 * 0.01 = 0.1344 (13.44%)
   #              slow  5.60 * 0.01 = 0.0560 (5.60%)
   #
-  # 99%, not 99.9%: this path depends on a third-party model API whose
-  # availability we neither control nor can repair. The feature is also
-  # advisory — a user who cannot get coaching still has full access to their
-  # money — so the user impact of a failure is materially lower than for the
-  # API or the money paths. Ticket severity for the same reason: nobody's funds
-  # are at risk, and there is no 3am action that fixes an upstream provider.
-  - name: slo_alerts_intelligence_availability
-    rules:
-      - alert: IntelligenceAvailabilityFastBurn
-        expr: |
-          intelligence:availability:error_ratio_rate1h > 0.1344
-          and
-          intelligence:availability:error_ratio_rate5m > 0.1344
-        for: 2m
-        labels:
-          severity: ticket
-          slo: intelligence_availability
-          service: intelligence
-          burn: fast
-        annotations:
-          summary: >-
-            Intelligence error rate burning error budget 13.4x
-            ({{ $value | humanizePercentage }} over 1h)
-          description: >-
-            Intelligence requests are erroring at
-            {{ $value | humanizePercentage }} against a 99% target. Refusals are
-            NOT counted here — this is genuine failure (upstream error, timeout,
-            unhandled exception). Client disconnects are excluded. Check
-            nester_outbound_*{upstream="anthropic_relay"} to separate a provider
-            outage from a fault on our side.
-          budget_remaining: >-
-            {{ with query "1 - (intelligence:availability:error_ratio_rate28d / 0.01)" }}{{ . | first | value | humanizePercentage }}{{ end }}
-          dashboard: /d/nester-slo-intel/intelligence
-          runbook: docs/observability/runbooks/intelligence-availability.md
 
-      - alert: IntelligenceAvailabilitySlowBurn
-        expr: |
-          intelligence:availability:error_ratio_rate6h > 0.056
-          and
-          intelligence:availability:error_ratio_rate30m > 0.056
-        for: 15m
-        labels:
-          severity: ticket
-          slo: intelligence_availability
-          service: intelligence
-          burn: slow
-        annotations:
-          summary: >-
-            Intelligence error rate burning error budget 5.6x
-            ({{ $value | humanizePercentage }} over 6h)
-          description: >-
-            Sustained intelligence errors against a 99% target. 28-day budget
-            exhausted in ~5 days at this rate.
-          budget_remaining: >-
-            {{ with query "1 - (intelligence:availability:error_ratio_rate28d / 0.01)" }}{{ . | first | value | humanizePercentage }}{{ end }}
-          dashboard: /d/nester-slo-intel/intelligence
-          runbook: docs/observability/runbooks/intelligence-availability.md
-
-  # ---------------------------------------------------------------------------
-  # Intelligence time to first token — target 95% under 3s
   # ---------------------------------------------------------------------------
   # budget 5% => fast 13.44 * 0.05 = 0.672 (67.2%)
   #              slow  5.60 * 0.05 = 0.280 (28.0%)
   #
-  # 95% is deliberately the loosest target in this file. TTFT depends on model
-  # provider queueing that we cannot influence, and the consequence of a slow
-  # first token is impatience, not lost money. A tighter target would generate
-  # tickets nobody can action. Note the fast threshold works out to 67.2% of
-  # requests exceeding 3s — that is not a subtle degradation, it is the stream
-  # being effectively broken, which is the correct bar for this indicator.
-  - name: slo_alerts_intelligence_ttft
-    rules:
-      - alert: IntelligenceTTFTFastBurn
-        expr: |
-          intelligence:ttft:error_ratio_rate1h > 0.672
-          and
-          intelligence:ttft:error_ratio_rate5m > 0.672
-        for: 2m
-        labels:
-          severity: ticket
-          slo: intelligence_ttft
-          service: intelligence
-          burn: fast
-        annotations:
-          summary: >-
-            Intelligence time-to-first-token degraded:
-            {{ $value | humanizePercentage }} of streams exceed 3s
-          description: >-
-            The majority of streamed answers are taking over 3s to produce a
-            first token against a 95% target. At this level the chat feels
-            broken even when answers eventually complete. p95 TTFT is
-            {{ with query "intelligence:ttft:p95_5m" }}{{ . | first | value | humanizeDuration }}{{ end }}.
-          dashboard: /d/nester-slo-intel/intelligence
-          runbook: docs/observability/runbooks/intelligence-latency.md
 
-      - alert: IntelligenceTTFTSlowBurn
-        expr: |
-          intelligence:ttft:error_ratio_rate6h > 0.28
-          and
-          intelligence:ttft:error_ratio_rate30m > 0.28
-        for: 15m
-        labels:
-          severity: ticket
-          slo: intelligence_ttft
-          service: intelligence
-          burn: slow
-        annotations:
-          summary: >-
-            Intelligence time-to-first-token sustained degradation
-            ({{ $value | humanizePercentage }} over 3s)
-          description: >-
-            Sustained TTFT degradation against a 95% target. Usually provider
-            queueing; the runbook distinguishes that from our own tool-round
-            overhead before the first token.
-          dashboard: /d/nester-slo-intel/intelligence
-          runbook: docs/observability/runbooks/intelligence-latency.md
-
-  # ---------------------------------------------------------------------------
-  # Intelligence refusal rate — product-quality guardrail
   # ---------------------------------------------------------------------------
   #
   # No burn-rate treatment, and that is a considered decision rather than an
@@ -448,36 +334,6 @@ groups:
   # misfiring or grounding has lost its data source. So this alerts on an
   # absolute threshold over a long window, and never pages.
   #
-  # 30% over 6h: high enough that ordinary off-topic traffic and legitimate
-  # data-missing refusals never reach it, low enough that a guardrail regression
-  # refusing a large share of valid questions is caught the same day. This
-  # number is a starting estimate, not a measurement — the first SLO review
-  # should retune it against observed baseline, and docs/observability/slo.md
-  # records that as an open item rather than pretending it is calibrated.
-  - name: slo_alerts_intelligence_refusal
-    rules:
-      - alert: IntelligenceRefusalRateHigh
-        expr: |
-          intelligence:refusal:error_ratio_rate6h > 0.30
-          and
-          intelligence:refusal:error_ratio_rate30m > 0.30
-        for: 30m
-        labels:
-          severity: ticket
-          slo: intelligence_refusal
-          service: intelligence
-        annotations:
-          summary: >-
-            Intelligence refusing {{ $value | humanizePercentage }} of answerable
-            requests
-          description: >-
-            Refusal rate is well above the expected baseline, which usually
-            means a guardrail regression or grounding losing its data source
-            rather than a change in what users are asking. Errors are excluded
-            from the denominator, so this is not availability. Split by reason:
-            {{ with query "intelligence:refusal:by_reason_rate30m" }}{{ range . }}{{ .Labels.reason }}={{ .Value | printf "%.3f" }}/s {{ end }}{{ end }}
-          dashboard: /d/nester-slo-intel/intelligence
-          runbook: docs/observability/runbooks/intelligence-refusal.md
 
   # ---------------------------------------------------------------------------
   # Balance freshness

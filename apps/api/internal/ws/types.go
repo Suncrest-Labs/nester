@@ -9,18 +9,15 @@ type EventType string
 
 const (
 	// Vault events
-	EventBalanceUpdated       EventType = "balance_updated"
-	EventDepositConfirmed     EventType = "deposit_confirmed"
-	EventWithdrawalConfirmed  EventType = "withdrawal_confirmed"
-	EventYieldAccrued         EventType = "yield_accrued"
-	EventHarvestCompleted     EventType = "harvest_completed"
-	EventVaultPaused          EventType = "vault_paused"
-	EventVaultUnpaused        EventType = "vault_unpaused"
+	EventBalanceUpdated      EventType = "balance_updated"
+	EventDepositConfirmed    EventType = "deposit_confirmed"
+	EventWithdrawalConfirmed EventType = "withdrawal_confirmed"
+	EventYieldAccrued        EventType = "yield_accrued"
+	EventHarvestCompleted    EventType = "harvest_completed"
+	EventVaultPaused         EventType = "vault_paused"
+	EventVaultUnpaused       EventType = "vault_unpaused"
 
-	// Settlement events
-	EventStatusChanged        EventType = "status_changed"
-	EventSettlementCompleted  EventType = "settlement_completed"
-	EventSettlementFailed     EventType = "settlement_failed"
+	EventStatusChanged EventType = "status_changed"
 
 	// System events
 	EventMaintenanceScheduled EventType = "maintenance_scheduled"

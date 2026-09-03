@@ -17,7 +17,6 @@ import (
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/backfill"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/user"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	"github.com/suncrestlabs/nester/apps/api/internal/stellar"
@@ -41,7 +40,6 @@ type adminService interface {
 	UpdateAllocation(ctx context.Context, input service.UpdateAllocationInput) (vault.Allocation, error)
 	DeleteAllocation(ctx context.Context, input service.DeleteAllocationInput) error
 	TriggerRebalance(ctx context.Context, id uuid.UUID, req admindomain.RebalanceRequest) (admindomain.RebalanceResponse, error)
-	ListSettlements(ctx context.Context, filter admindomain.SettlementListFilter) ([]admindomain.SettlementSummary, int, error)
 	ListUsers(ctx context.Context, filter admindomain.UserListFilter) ([]admindomain.UserSummary, int, error)
 	ListVaultRebalances(ctx context.Context, vaultID uuid.UUID) ([]admindomain.VaultRebalanceRecord, error)
 	GetDetailedHealth(ctx context.Context) (admindomain.DetailedHealth, error)
@@ -229,12 +227,10 @@ func (h *AdminHandler) Register(mux routeMux) {
 	mux.HandleFunc("POST /api/v1/admin/vaults/{id}/allocations", h.createAllocation)
 	mux.HandleFunc("PATCH /api/v1/admin/vaults/{id}/allocations/{alloc_id}", h.updateAllocation)
 	mux.HandleFunc("DELETE /api/v1/admin/vaults/{id}/allocations/{alloc_id}", h.deleteAllocation)
-	mux.HandleFunc("GET /api/v1/admin/settlements", h.listSettlements)
 	mux.HandleFunc("GET /api/v1/admin/users", h.listUsers)
 	mux.HandleFunc("GET /api/v1/admin/health", h.getDetailedHealth)
 	mux.HandleFunc("GET /api/v1/admin/scheduler/leadership", h.getSchedulerLeadership)
 	mux.HandleFunc("POST /api/v1/admin/sync-events", h.syncEvents)
-	mux.HandleFunc("PATCH /api/v1/admin/users/{id}/kyc", h.reviewUserKYC)
 
 	// Goal template marketplace (#919).
 	mux.HandleFunc("GET /api/v1/admin/savings-goal-templates", h.listGoalTemplates)
@@ -498,53 +494,6 @@ func (h *AdminHandler) writeBackfillError(w http.ResponseWriter, run *backfill.R
 	})
 }
 
-func (h *AdminHandler) reviewUserKYC(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	userID, err := uuid.Parse(idStr)
-	if err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid user ID"))
-		return
-	}
-
-	var req struct {
-		Status          string `json:"status"`
-		RejectionReason string `json:"rejection_reason"`
-	}
-	// Note: decodeJSON is not available in AdminHandler, we'll parse it manually
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("invalid request body"))
-		return
-	}
-
-	if req.Status != "verified" && req.Status != "rejected" {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("status must be verified or rejected"))
-		return
-	}
-
-	var reason *string
-	if req.Status == "rejected" {
-		if req.RejectionReason == "" {
-			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("rejection_reason is required when rejecting"))
-			return
-		}
-		reason = &req.RejectionReason
-	}
-
-	var kycStatus user.KYCStatus
-	if req.Status == "verified" {
-		kycStatus = user.KYCStatusVerified
-	} else {
-		kycStatus = user.KYCStatusRejected
-	}
-
-	if err := h.userService.UpdateKYCStatus(r.Context(), userID, kycStatus, reason); err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-
-	response.WriteJSON(w, http.StatusOK, response.OK(map[string]string{"status": string(kycStatus)}))
-}
-
 func (h *AdminHandler) getDashboard(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.GetDashboard(r.Context())
 	if err != nil {
@@ -769,46 +718,6 @@ func (h *AdminHandler) deleteAllocation(w http.ResponseWriter, r *http.Request) 
 	response.WriteJSON(w, http.StatusOK, response.OK(map[string]string{"status": "deleted"}))
 }
 
-func (h *AdminHandler) listSettlements(w http.ResponseWriter, r *http.Request) {
-	page, perPage := parseAdminPagination(r)
-	filter := admindomain.SettlementListFilter{
-		Page:    page,
-		PerPage: perPage,
-		Status:  r.URL.Query().Get("status"),
-		Sort:    r.URL.Query().Get("sort"),
-		Order:   r.URL.Query().Get("order"),
-		Search:  r.URL.Query().Get("search"),
-	}
-
-	dateFrom, err := parseAdminDateQuery(r.URL.Query().Get("date_from"))
-	if err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("date_from must be RFC3339 or YYYY-MM-DD"))
-		return
-	}
-	filter.DateFrom = dateFrom
-
-	dateTo, err := parseAdminDateQuery(r.URL.Query().Get("date_to"))
-	if err != nil {
-		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("date_to must be RFC3339 or YYYY-MM-DD"))
-		return
-	}
-	filter.DateTo = dateTo
-
-	items, total, err := h.service.ListSettlements(r.Context(), filter)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-
-	out := response.OK(items)
-	out.Meta = &response.Meta{
-		Page:       page,
-		PerPage:    perPage,
-		TotalCount: total,
-	}
-	response.WriteJSON(w, http.StatusOK, out)
-}
-
 func (h *AdminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 	page, perPage := parseAdminPagination(r)
 	filter := admindomain.UserListFilter{
@@ -870,23 +779,6 @@ func parseAdminIntQuery(raw string, fallback int) int {
 		return fallback
 	}
 	return n
-}
-
-func parseAdminDateQuery(raw string) (*time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-
-	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-		utc := parsed.UTC()
-		return &utc, nil
-	}
-	if parsed, err := time.Parse("2006-01-02", raw); err == nil {
-		utc := parsed.UTC()
-		return &utc, nil
-	}
-	return nil, errors.New("invalid date format")
 }
 
 func (h *AdminHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {

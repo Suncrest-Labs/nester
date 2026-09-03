@@ -68,7 +68,6 @@ var activityTypeInternalToDisplay = map[activity.EventType]string{
 	activity.EventDeposit:     "Deposit",
 	activity.EventWithdrawal:  "Withdrawal",
 	activity.EventRebalance:   "Rebalance",
-	activity.EventSettlement:  "Settlement",
 	activity.EventYieldEarned: "Yield Earned",
 }
 

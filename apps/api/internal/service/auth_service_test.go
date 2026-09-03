@@ -72,18 +72,6 @@ func (m *mockAuthUserRepository) GetRoles(ctx context.Context, id uuid.UUID) ([]
 	return []string{}, nil
 }
 
-func (m *mockAuthUserRepository) SaveKYCDocument(_ context.Context, _ *user.KYCDocument, _ *user.EncryptedKYCDoc) error {
-	return nil
-}
-
-func (m *mockAuthUserRepository) GetKYCDocument(_ context.Context, _ uuid.UUID) (*user.KYCDocument, *user.EncryptedKYCDoc, error) {
-	return nil, nil, user.ErrUserNotFound
-}
-
-func (m *mockAuthUserRepository) UpdateKYCStatus(_ context.Context, _ uuid.UUID, _ user.KYCStatus, _ *string, _ *time.Time) error {
-	return nil
-}
-
 func (m *mockAuthUserRepository) UpdateProfile(_ context.Context, _ uuid.UUID, _ user.ProfilePatch) (*user.User, error) {
 	return nil, errors.New("not implemented")
 }
@@ -478,7 +466,6 @@ func TestAuthService_VerifyAndIssue_AdminRolePopulatedInToken(t *testing.T) {
 		ID:            uuid.New(),
 		WalletAddress: kp.Address(),
 		DisplayName:   kp.Address()[:8],
-		KYCStatus:     user.KYCStatusPending,
 	}
 	repo.users[kp.Address()] = adminUser
 	repo.roles[adminUser.ID] = []string{"admin"}

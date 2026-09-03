@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "adapter-blend-contract"
+version = "0.1.0"
+dependencies = [
+ "adapter-lending-contract",
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "adapter-lending-contract"
 version = "0.1.0"
 dependencies = [
@@ -15,6 +25,16 @@ dependencies = [
 name = "adapter-pool-contract"
 version = "0.1.0"
 dependencies = [
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "adapter-soroswap-contract"
+version = "0.1.0"
+dependencies = [
+ "adapter-pool-contract",
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",

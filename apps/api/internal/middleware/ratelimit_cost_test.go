@@ -18,24 +18,11 @@ var expensiveRoutes = []struct {
 	path   string
 	what   string
 }{
-	// Intelligence relay and model calls.
-	{http.MethodPost, "/api/v1/intelligence/chat", "intelligence relay"},
-	{http.MethodPost, "/api/v1/intelligence/analyze", "model analysis"},
-	{http.MethodPost, "/api/v1/intelligence/coaching", "model coaching"},
-	{http.MethodPost, "/api/v1/intelligence/savings-plan", "model savings plan"},
-	{http.MethodPost, "/api/v1/intelligence/recommend/vault", "model vault recommendation"},
-	{http.MethodGet, "/api/v1/intelligence/market", "market intelligence"},
-	{http.MethodGet, "/api/v1/intelligence/portfolio/abc-123", "portfolio intelligence"},
-	{http.MethodGet, "/api/v1/portfolio/abc-123/insights", "portfolio insights"},
-	{http.MethodGet, "/api/v1/vaults/v-1/recommendations", "vault recommendations"},
-	{http.MethodPost, "/api/v1/vaults/v-1/rebalance/suggest", "rebalance suggestion"},
-
 	// Soroban chain invoker.
 	{http.MethodPost, "/api/v1/vaults/v-1/deposit", "chain deposit"},
 	{http.MethodPost, "/api/v1/vaults/v-1/withdraw", "chain withdraw"},
 	{http.MethodPost, "/api/v1/vaults/v-1/emergency-withdraw", "chain emergency withdraw"},
 	{http.MethodPost, "/api/v1/vaults/v-1/harvest", "chain harvest"},
-	{http.MethodPost, "/api/v1/vaults/v-1/rebalance/execute", "chain rebalance execute"},
 	{http.MethodGet, "/api/v1/vaults/v-1/preview-deposit", "chain simulation"},
 	{http.MethodGet, "/api/v1/vaults/v-1/share-price", "chain share price"},
 
@@ -58,7 +45,7 @@ func costOf(t *testing.T, method, path string) int {
 
 // Every endpoint the issue calls expensive must carry a weight above 1.
 // Counting them as one request is exactly the bug: a caller stays inside the
-// request-rate limit while saturating Anthropic, DeFiLlama and Soroban RPC.
+// request-rate limit while saturating DeFiLlama and Soroban RPC.
 func TestExpensiveRoutesCostMoreThanOne(t *testing.T) {
 	for _, rt := range expensiveRoutes {
 		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
@@ -74,11 +61,11 @@ func TestExpensiveRoutesCostMoreThanOne(t *testing.T) {
 // The relay is the most expensive thing the API does: a model call plus
 // model-driven tool fan-out. Nothing should outrank it, or the ordering that
 // makes the weights meaningful is wrong.
-func TestRelayIsTheMostExpensiveRoute(t *testing.T) {
-	relay := costOf(t, http.MethodPost, "/api/v1/intelligence/chat")
+func TestChainWriteIsTheMostExpensiveRoute(t *testing.T) {
+	chainWrite := costOf(t, http.MethodPost, "/api/v1/vaults/v-1/deposit")
 	for _, rc := range RouteCosts() {
-		if rc.Cost > relay {
-			t.Errorf("%s %s costs %d, above the relay's %d", rc.Method, rc.Pattern, rc.Cost, relay)
+		if rc.Cost > chainWrite {
+			t.Errorf("%s %s costs %d, above the chain write's %d", rc.Method, rc.Pattern, rc.Cost, chainWrite)
 		}
 	}
 }
@@ -93,7 +80,7 @@ func TestOrdinaryRoutesCostTheDefault(t *testing.T) {
 		{http.MethodGet, "/api/v1/transactions"},
 		{http.MethodPost, "/api/v1/users/watchlist"},
 		{http.MethodPatch, "/api/v1/users/profile"},
-		{http.MethodGet, "/api/v1/settlements"},
+		{http.MethodGet, "/api/v1/activity"},
 		{http.MethodGet, "/health"},
 	}
 	for _, rt := range ordinary {
@@ -163,18 +150,18 @@ func TestLiteralRoutesBeatWildcards(t *testing.T) {
 // The method is part of the match: GET and POST on the same path are different
 // endpoints with different fan-out.
 func TestCostIsMethodSpecific(t *testing.T) {
-	get := costOf(t, http.MethodGet, "/api/v1/intelligence/recommend/vault")
-	post := costOf(t, http.MethodPost, "/api/v1/intelligence/recommend/vault")
+	get := costOf(t, http.MethodGet, "/api/v1/vaults/v-1/deposit")
+	post := costOf(t, http.MethodPost, "/api/v1/vaults/v-1/deposit")
 
-	if get != CostIntelligenceRead {
-		t.Errorf("GET recommend/vault = %d, want %d", get, CostIntelligenceRead)
+	if get != DefaultRouteCost {
+		t.Errorf("GET deposit = %d, want the default %d", get, DefaultRouteCost)
 	}
-	if post != CostLLMAnalysis {
-		t.Errorf("POST recommend/vault = %d, want %d", post, CostLLMAnalysis)
+	if post != CostChainWrite {
+		t.Errorf("POST deposit = %d, want %d", post, CostChainWrite)
 	}
 
 	// A declared POST route called with DELETE is not that route.
-	if got := costOf(t, http.MethodDelete, "/api/v1/intelligence/chat"); got != DefaultRouteCost {
+	if got := costOf(t, http.MethodDelete, "/api/v1/vaults/v-1/deposit"); got != DefaultRouteCost {
 		t.Errorf("DELETE on a POST-only route = %d, want the default %d", got, DefaultRouteCost)
 	}
 }
@@ -223,7 +210,7 @@ func TestMaxRouteCostMatchesTheTable(t *testing.T) {
 	if got := MaxRouteCost(); got != want {
 		t.Errorf("MaxRouteCost() = %d, want %d", got, want)
 	}
-	if MaxRouteCost() != CostLLMRelay {
-		t.Errorf("MaxRouteCost() = %d, want the relay cost %d", MaxRouteCost(), CostLLMRelay)
+	if MaxRouteCost() != CostChainWrite {
+		t.Errorf("MaxRouteCost() = %d, want the chain-write cost %d", MaxRouteCost(), CostChainWrite)
 	}
 }

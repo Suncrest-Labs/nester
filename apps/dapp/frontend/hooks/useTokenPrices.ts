@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { hasThirdPartyConsent } from "@/lib/consent";
 
 export interface TokenPrices {
     XLM: number;
@@ -16,10 +15,6 @@ async function fetchPrices(): Promise<TokenPrices> {
     const now = Date.now();
     if (cachedPrices && now - cacheTimestamp < CACHE_TTL_MS) {
         return cachedPrices;
-    }
-
-    if (!hasThirdPartyConsent()) {
-        return cachedPrices ?? { XLM: 0, USDC: 1.0 };
     }
 
     try {
@@ -60,15 +55,9 @@ export function useTokenPrices() {
 
         const interval = setInterval(load, CACHE_TTL_MS);
 
-        const onStorage = (e: StorageEvent) => {
-            if (e.key === "nester-consent") load();
-        };
-        window.addEventListener("storage", onStorage);
-
         return () => {
             cancelled = true;
             clearInterval(interval);
-            window.removeEventListener("storage", onStorage);
         };
     }, []);
 

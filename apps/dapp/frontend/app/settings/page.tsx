@@ -3,11 +3,9 @@
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { ShieldCheck, User, Bell, Globe, Monitor } from "lucide-react";
+import { User, Bell, Globe, Monitor } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { useWallet } from "@/components/wallet-provider";
-import { KYCSection, type KYCStatus } from "@/components/kyc/KYCSection";
-import { BankAccountsSection } from "@/components/settings/bank-accounts-section";
 import { SessionsSection } from "@/components/settings/sessions-section";
 import { cn } from "@/lib/utils";
 import { useLocale, useTranslations } from "@/context/locale-context";
@@ -161,100 +159,18 @@ function SavingsNotificationsSection() {
 
 type Tab =
   | "profile"
-  | "verification"
   | "security"
   | "notifications"
   | "preferences";
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "profile", label: "Profile", icon: User },
-  { id: "verification", label: "Verification", icon: ShieldCheck },
   { id: "security", label: "Security", icon: Monitor },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "preferences", label: "Preferences", icon: Globe },
 ];
 
-interface KYCStatusResponse {
-  status: KYCStatus;
-  submitted_at?: string;
-  reviewed_at?: string;
-  rejection_reason?: string;
-}
 
-// No userId parameter: every call inside goes to /api/v1/users/me/kyc,
-// which resolves the user from the session. The parameter was declared
-// and never read, and the call site passed nothing, so the build failed
-// with "Expected 1 arguments, but got 0".
-function useKYCState() {
-  const [status, setStatus] = useState<KYCStatus>("unverified");
-  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
-  const [reviewedAt, setReviewedAt] = useState<string | null>(null);
-  const [rejectionReason, setRejectionReason] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Fetch KYC status from server (authenticated endpoint that uses session user ID)
-  const fetchStatus = useCallback(async () => {
-    try {
-      const resp = await fetch(`/api/v1/users/me/kyc`);
-      if (!resp.ok) {
-        throw new Error(`Failed to fetch KYC status: ${resp.statusText}`);
-      }
-      const data = await resp.json();
-      const kyc = data.data as KYCStatusResponse;
-      setStatus(kyc.status);
-      setSubmittedAt(kyc.submitted_at || null);
-      setReviewedAt(kyc.reviewed_at || null);
-      setRejectionReason(kyc.rejection_reason || null);
-      setError(null);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load KYC status",
-      );
-    }
-  }, []);
-
-  // Load status on mount
-  useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
-
-  const submitKYC = async (formData: FormData) => {
-    setIsSubmitting(true);
-    setError(null);
-    try {
-      const resp = await fetch(`/api/v1/users/me/kyc`, {
-        method: "POST",
-        body: formData,
-      });
-      if (!resp.ok) {
-        const errorData = await resp.json();
-        throw new Error(
-          errorData.message || `KYC submission failed: ${resp.statusText}`,
-        );
-      }
-      // Refresh status after successful submission
-      await fetchStatus();
-    } catch (err) {
-      const errorMsg =
-        err instanceof Error ? err.message : "Failed to submit KYC";
-      setError(errorMsg);
-      setStatus("rejected"); // Show failed state
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return {
-    status,
-    submittedAt,
-    reviewedAt,
-    rejectionReason,
-    isSubmitting,
-    submitKYC,
-    error,
-  };
-}
 
 export default function SettingsPage() {
   const { isConnected, address } = useWallet();
@@ -263,7 +179,6 @@ export default function SettingsPage() {
   const { locale, setLocale } = useLocale();
   const t = useTranslations();
 
-  const kyc = useKYCState();
 
   useEffect(() => {
     if (!isConnected) router.push("/");
@@ -353,27 +268,7 @@ export default function SettingsPage() {
               </motion.div>
             )}
 
-            {activeTab === "verification" && (
-              <motion.div
-                key="verification"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 8 }}
-                className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-6"
-              >
-                <h2 className="mb-5 text-sm font-medium text-black dark:text-white">
-                  Identity Verification
-                </h2>
-                <KYCSection
-                  status={kyc.status}
-                  submittedAt={kyc.submittedAt}
-                  reviewedAt={kyc.reviewedAt}
-                  rejectionReason={kyc.rejectionReason}
-                  onSubmit={kyc.submitKYC}
-                  isSubmitting={kyc.isSubmitting}
-                />
-              </motion.div>
-            )}
+            
 
             {activeTab === "security" && (
               <motion.div
@@ -406,11 +301,7 @@ export default function SettingsPage() {
                       },
                       {
                         label: "Withdrawal processed",
-                        desc: "When a fiat withdrawal is settled",
-                      },
-                      {
-                        label: "KYC status update",
-                        desc: "When your verification status changes",
+                        desc: "When a withdrawal settles on-chain",
                       },
                       { label: "Yield accrual", desc: "Daily yield summary" },
                     ].map((item) => (
@@ -488,7 +379,6 @@ export default function SettingsPage() {
                       {t("settings.languageDescription")}
                     </p>
                   </div>
-                  <BankAccountsSection />
                 </div>
               </motion.div>
             )}

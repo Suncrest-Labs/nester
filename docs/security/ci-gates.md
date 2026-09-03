@@ -9,7 +9,6 @@ This document describes the security gates that protect the Nester codebase. Eac
 | Go                    | `govulncheck`                       | 0 unknown CVEs (accepted list maintained) | `security.yml`, `ci.yml` |
 | Go                    | `gosec`                             | medium severity                           | `security.yml`           |
 | Rust                  | `cargo-audit`                       | any CVE                                   | `security.yml`           |
-| Python                | `pip-audit`                         | high/critical (CVSS ≥ 7.0)                | `security.yml`, `ci.yml` |
 | JavaScript/TypeScript | `pnpm audit`                        | critical only                             | `security.yml`, `ci.yml` |
 | JavaScript/TypeScript | `eslint` + `eslint-plugin-security` | all violations                            | `ci.yml` dapp job        |
 | All                   | `gitleaks`                          | any secret detection                      | `security.yml`           |
@@ -72,38 +71,6 @@ const testAPIKey = "sk-test-12345" // #nosec G101 -- test fixture, never used in
 ```bash
 cd packages/contracts
 cargo audit
-```
-
-## Python (apps/intelligence)
-
-### pip-audit
-
-**Threshold:** High and critical vulnerabilities (CVSS ≥ 7.0).
-
-**Moderate vulnerabilities** (4.0 ≤ CVSS < 7.0) are warned but do not block the build, allowing time for upstream releases.
-
-**How it works:**
-
-```bash
-cd apps/intelligence
-pip-audit -r requirements.txt --format json --output report.json
-# Then evaluate CVSS scores >= 7.0
-```
-
-**Where it runs:**
-
-- `security.yml` — full suite with separate warn/fail gates
-- `ci.yml` — intelligence job gates on high/critical only
-
-### bandit
-
-**Threshold:** All violations at `-ll` (high confidence, medium+ severity).
-
-**How it works:**
-
-```bash
-cd apps/intelligence
-bandit -r app -ll
 ```
 
 ## JavaScript/TypeScript (apps/dapp/frontend, apps/website)
@@ -174,7 +141,7 @@ semgrep scan --config p/typescript p/react p/nextjs p/secrets
 
 ### CodeQL
 
-**Threshold:** All violations across Go, TypeScript, Python.
+**Threshold:** All violations across Go and TypeScript.
 
 **Where it runs:**
 
@@ -187,7 +154,6 @@ semgrep scan --config p/typescript p/react p/nextjs p/secrets
 Runs on every push/PR, gates specific areas for fast feedback:
 
 - **Dapp Frontend:** Lint (security), build, unit tests, E2E tests, JS audit
-- **Intelligence:** Lint, type check, unit tests, Python audit (high/critical)
 - **API:** Build, unit tests, database integration tests
 - **Contracts:** Build, unit tests, property tests
 - **Security:** gitleaks, CodeQL, per-language audits
@@ -200,8 +166,6 @@ Scheduled weekly + triggered by security/\* file changes:
 - pnpm audit (critical gate + moderate warning)
 - govulncheck (with accepted list)
 - cargo-audit
-- pip-audit (with CVSS thresholds)
-- bandit
 - CodeQL
 - Semgrep
 
@@ -260,14 +224,6 @@ apiKey := "<test-key-placeholder>" // #nosec G101 -- test credential only
 
 **Example:** Add a dependency with a known CVE → `cargo audit` finds it → CI fails. No exceptions allowed.
 
-### Python (pip-audit)
-
-**Fails when:** A high or critical vulnerability (CVSS ≥ 7.0) is detected in requirements.
-
-**Example:** Add `vulnerable-package==1.0.0` with CVSS 8.5 → pip-audit detects it → CI fails until dependency is upgraded or removed.
-
-**Moderate vulnerabilities** (CVSS 4.0–7.0) are warned but do not block.
-
 ### JavaScript (pnpm audit)
 
 **Fails when:** A critical advisory is found in the dependency tree.
@@ -314,6 +270,6 @@ db.query(query, [userId]);
 
 ### CodeQL
 
-**Fails when:** Static analysis detects potential security issues across Go, TypeScript, or Python.
+**Fails when:** Static analysis detects potential security issues across Go or TypeScript.
 
 **Example:** SQL injection pattern, path traversal, or unsafe deserialization → CodeQL detects → CI fails.

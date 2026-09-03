@@ -1,5 +1,7 @@
 "use client";
 
+import React from "react";
+
 import { cn } from "@/lib/utils";
 
 interface SkeletonProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -151,6 +153,11 @@ interface LoadingRegionProps {
  * Wraps a group of skeletons in a single busy region. The skeletons themselves
  * are decorative (`aria-hidden` via the container), so screen readers hear one
  * "loading" message rather than a stream of empty boxes.
+ *
+ * `className` usually carries the same grid/flex layout the loaded content
+ * uses, so the children are rendered as direct children of that container:
+ * an element between them and the grid would collapse every skeleton into a
+ * single track. Each child is marked decorative individually instead.
  */
 export function LoadingRegion({ label, className, children }: LoadingRegionProps) {
   return (
@@ -162,7 +169,13 @@ export function LoadingRegion({ label, className, children }: LoadingRegionProps
       className={className}
     >
       <span className="sr-only">{label}</span>
-      <div aria-hidden="true">{children}</div>
+      {React.Children.map(children, (child) =>
+        React.isValidElement(child)
+          ? React.cloneElement(child as React.ReactElement<{ "aria-hidden"?: boolean }>, {
+              "aria-hidden": true,
+            })
+          : child,
+      )}
     </div>
   );
 }

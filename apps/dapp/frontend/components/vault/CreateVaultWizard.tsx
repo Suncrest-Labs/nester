@@ -42,19 +42,7 @@ export function CreateVaultWizard() {
   const [deployError, setDeployError] = useState("");
   const [successData, setSuccessData] = useState<VaultDeploymentResponse | null>(null);
 
-  const openPrometheusRecommendation = () => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.dispatchEvent(
-      new CustomEvent("nester:prometheus-open", {
-        detail: {
-          prompt:
-            "Recommend a vault for me. I want a straightforward recommendation with a clear rationale, using my risk tolerance, savings goal, and time horizon.",
-        },
-      })
-    );
-  };
+
 
   // Validation
   const canProceed = () => {
@@ -127,14 +115,6 @@ export function CreateVaultWizard() {
           <h2 className="text-2xl font-bold text-white mb-1">Vault Basics</h2>
           <p className="text-slate-400">Let&apos;s start with the fundamental details of your new savings vault.</p>
         </div>
-        <button
-          type="button"
-          onClick={openPrometheusRecommendation}
-          className="inline-flex items-center gap-2 self-start rounded-full border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:border-blue-400/50 hover:bg-blue-500/15 hover:text-blue-200"
-        >
-          <Sparkles className="h-4 w-4" />
-          Get recommendation
-        </button>
       </div>
 
       <div className="space-y-4">

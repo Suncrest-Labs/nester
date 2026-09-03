@@ -9,15 +9,6 @@ export const validateUSDCPrecision = (val: string | number) => {
   return decimals.length <= 6;
 };
 
-// Helper for bank account (10-digit Nigerian format)
-export const validateBankAccount = () => {
-  return z
-    .string({ message: "Account number is required" })
-    .min(1, { message: "Account number is required" })
-    .length(10, { message: "Account number must be 10 digits" })
-    .regex(/^\d+$/, { message: "Account number must contain only numbers" });
-};
-
 /**
  * Reusable amount validator using precise decimal parsing.
  *
