@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
@@ -247,13 +248,13 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
         </div>
       ) : null}
 
-      <a
+      <Link
         href="/vaults"
         className="flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-semibold text-black dark:text-white transition-colors hover:bg-black/5 dark:hover:bg-white/5"
       >
         <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
         Explore all yield opportunities
-      </a>
+      </Link>
       <p className="mt-3 text-center text-[11px] text-black/40 dark:text-white/40">
         You can always link a vault later.{" "}
         <button type="button" onClick={onSkip} className="underline hover:text-black dark:hover:text-white">
@@ -276,19 +277,19 @@ function StepDeposit({ currency, onSkip }: { currency: "USDC" | "XLM"; onSkip: (
       <p className="mb-6 text-sm text-black/60 dark:text-white/60">
         Kick-start your goal with an initial deposit in {currency}. You can deposit more at any time.
       </p>
-      <a
+      <Link
         href="/vaults"
         className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3.5 text-sm font-semibold text-white transition-opacity hover:opacity-75"
       >
         Go to Vaults to deposit
         <ArrowRight className="h-4 w-4" aria-hidden="true" />
-      </a>
+      </Link>
       <button
         type="button"
         onClick={onSkip}
         className="text-xs font-medium text-black/50 dark:text-white/50 underline hover:text-black dark:hover:text-white"
       >
-        Skip for now — I'll deposit later
+        Skip for now — I&apos;ll deposit later
       </button>
     </div>
   );

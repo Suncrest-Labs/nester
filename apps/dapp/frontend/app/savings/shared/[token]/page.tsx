@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { format } from "date-fns";
 import { Target } from "lucide-react";
@@ -140,9 +141,9 @@ export default function SharedGoalPage() {
 
         <p className="mt-6 text-center text-xs text-black/30 dark:text-white/30">
           Powered by{" "}
-          <a href="/" className="underline hover:text-black dark:hover:text-white">
+          <Link href="/" className="underline hover:text-black dark:hover:text-white">
             Nester
-          </a>
+          </Link>
         </p>
       </div>
     </div>

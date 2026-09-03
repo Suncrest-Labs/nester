@@ -529,7 +529,7 @@ export function SavingsCalculator({ className }: SavingsCalculatorProps) {
                   Ready to Calculate
                 </h4>
                 <p className="text-sm text-black/60 dark:text-white/60">
-                  Enter your savings details and click "Calculate Projection" to see your growth potential.
+                  Enter your savings details and click &quot;Calculate Projection&quot; to see your growth potential.
                 </p>
               </div>
             )}

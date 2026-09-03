@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
 import { isBefore } from "date-fns";
 import { Target, TrendingUp, Lock } from "lucide-react";
 import type { SavingsGoal } from "@/lib/api/savings-goals";
+import { useNow } from "@/hooks/useRelativeAge";
 import { ProgressVisualization } from "./ProgressVisualization";
 import type { GoalProgressData } from "@/lib/types/progress";
 
@@ -62,15 +62,18 @@ export function SavingsGoalCard({
   const current = toNumber(goal.current_amount);
   const target = toNumber(goal.target_amount);
   const deadlineDate = goal.deadline ? new Date(goal.deadline) : null;
-  const { daysLeft, deadlineLabel } = useMemo(() => {
-    if (!deadlineDate) return { daysLeft: null, deadlineLabel: "—" } as const;
-    const now = Date.now();
-    const left = isBefore(deadlineDate, new Date(now)) ? 0 : Math.max(0, Math.ceil((deadlineDate.getTime() - now) / 86400000));
-    return {
-      daysLeft: left,
-      deadlineLabel: left === 0 ? "Due today" : `${left} day${left > 1 ? "s" : ""} left`,
-    };
-  }, [deadlineDate]);
+  const now = useNow(Boolean(deadlineDate));
+  const daysLeft = deadlineDate
+    ? isBefore(deadlineDate, new Date(now))
+      ? 0
+      : Math.max(0, Math.ceil((deadlineDate.getTime() - now) / 86400000))
+    : null;
+  const deadlineLabel =
+    daysLeft === null
+      ? "—"
+      : daysLeft === 0
+      ? "Due today"
+      : `${daysLeft} day${daysLeft > 1 ? "s" : ""} left`;
 
   const hasRichData = goal.principal_amount != null || goal.locked_positions?.length;
 

@@ -901,3 +901,79 @@ fn two_of_two_threshold_succeeds() {
     let source = h.registry().get_source(&source_id);
     assert_eq!(source.current_apy_bps, new_apy);
 }
+
+/// Emergency withdrawal succeeds even when third-party adapter contract fails/reverts.
+#[test]
+fn test_emergency_withdraw_with_broken_failing_adapter() {
+    use nester_test_utils::mocks::MockFailingAdapter;
+
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+    let broken_src = symbol_short!("bad_src");
+
+    let bad_adapter = h.env.register_contract(None, MockFailingAdapter);
+    h.registry().register_source(
+        &h.admin,
+        &broken_src,
+        &h.create_user(),
+        &Some(bad_adapter),
+        &nester_common::ProtocolType::Lending,
+    );
+
+    h.mint_deposit_tokens(&user, 50_000_000);
+    h.vault().deposit(&user, &50_000_000, &0);
+
+    // Emergency withdrawal executes purely from vault reserves without calling broken external adapter
+    h.vault().pause(&h.admin);
+    let returned = h.vault().emergency_withdraw(&user);
+    assert_eq!(returned, 50_000_000);
+    assert_eq!(h.token().balance(&user), 0);
+}
+
+/// Emergency withdrawal cannot extract more than caller's legitimate asset entitlement.
+#[test]
+fn test_emergency_withdraw_cannot_extract_more_than_caller_entitlement() {
+    let h = NesterHarness::setup();
+    let user1 = h.create_user();
+    let user2 = h.create_user();
+    let usdc = token::Client::new(&h.env, &h.deposit_token_id);
+
+    h.mint_deposit_tokens(&user1, 40_000_000);
+    h.mint_deposit_tokens(&user2, 60_000_000);
+
+    h.vault().deposit(&user1, &40_000_000, &0);
+    h.vault().deposit(&user2, &60_000_000, &0);
+
+    h.vault().pause(&h.admin);
+
+    let user1_before = usdc.balance(&user1);
+    let returned1 = h.vault().emergency_withdraw(&user1);
+
+    assert_eq!(returned1, 40_000_000);
+    assert_eq!(usdc.balance(&user1) - user1_before, 40_000_000);
+    assert_eq!(h.token().balance(&user1), 0);
+
+    // User2's 60_000_000 remains completely intact
+    let user2_before = usdc.balance(&user2);
+    let returned2 = h.vault().emergency_withdraw(&user2);
+    assert_eq!(returned2, 60_000_000);
+    assert_eq!(usdc.balance(&user2) - user2_before, returned2);
+    assert_eq!(h.vault().total_assets(), 0);
+    assert_eq!(h.token().total_supply(), 0);
+}
+
+/// A second emergency withdrawal attempt on an empty principal panics.
+#[test]
+#[should_panic]
+fn test_second_emergency_withdraw_on_zero_principal_panics() {
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+
+    h.mint_deposit_tokens(&user, 50_000_000);
+    h.vault().deposit(&user, &50_000_000, &0);
+
+    h.vault().pause(&h.admin);
+    h.vault().emergency_withdraw(&user);
+    // Second emergency withdraw must panic
+    h.vault().emergency_withdraw(&user);
+}

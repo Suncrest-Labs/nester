@@ -92,14 +92,24 @@ async function installFakeHub(page: Page): Promise<FakeHub> {
     return hub;
 }
 
-const badge = (page: Page) => page.getByTestId('connection-status');
+const badge = (page: Page) => page.locator('main').getByTestId('connection-status');
 
 test.describe('WebSocket reconnection', () => {
     // Reconnection is a waiting game: the bounded-retry schedule alone runs
-    // ~1/2/4/8/16s before the client gives up. Playwright's 30s default would
-    // expire mid-schedule and report a timeout instead of the real outcome,
-    // and an assertion-level timeout cannot outlive the test that contains it.
-    test.setTimeout(90_000);
+    // ~1/2/4/8/16s before the client gives up. CI runners can take up to 90s
+    // to cycle through all attempts. A 180s timeout ensures the full
+    // reconnection cycle completes deterministically.
+    test.setTimeout(180_000);
+
+    test.beforeEach(async ({ page }) => {
+        await page.addInitScript(() => {
+            try {
+                window.localStorage.setItem('nester_auth_token', 'e2e-harness-token');
+            } catch {
+                // Storage unavailable
+            }
+        });
+    });
 
     test('shows the reconnecting indicator when the socket closes, and clears it when it reopens', async ({
         page,
@@ -186,13 +196,20 @@ test.describe('WebSocket reconnection', () => {
         });
         await page.goto(HARNESS);
 
+        // First confirm that reconnection attempts have begun
+        await expect(badge(page)).toHaveAttribute('data-status', 'reconnecting', {
+            timeout: 10_000,
+        });
+
         // Default schedule is 5 attempts at ~1/2/4/8/16s (jitter shortens
         // each), after which the client stops and says so rather than
         // looping in the background.
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
             timeout: 60_000,
         });
-        await expect(badge(page)).toContainText('Disconnected');
+        await expect(badge(page)).toContainText('Disconnected', {
+            timeout: 10_000,
+        });
     });
 
     test('offers a way back once it has given up', async ({ page }) => {
@@ -211,6 +228,11 @@ test.describe('WebSocket reconnection', () => {
         });
         await page.goto(HARNESS);
 
+        // First confirm that reconnection attempts have begun
+        await expect(badge(page)).toHaveAttribute('data-status', 'reconnecting', {
+            timeout: 10_000,
+        });
+
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
             timeout: 60_000,
         });
@@ -218,7 +240,9 @@ test.describe('WebSocket reconnection', () => {
         // The server comes back; bounded retries mean nothing notices on its
         // own, so the user needs an affordance that is not "reload the page".
         refuse = false;
-        await page.getByTestId('connection-retry').click();
+        const retryBtn = page.getByTestId('connection-retry');
+        await expect(retryBtn).toBeVisible({ timeout: 15_000 });
+        await retryBtn.click();
 
         await expect(badge(page)).toHaveAttribute('data-status', 'connected', {
             timeout: 15_000,

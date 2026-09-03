@@ -3,7 +3,6 @@ import {
   parseAmountToStroops,
   formatStroopsToDisplay,
   isValidAmountInput,
-  parseDecimalStrict,
 } from "@/lib/decimal";
 
 describe("Decimal Amount Parsing", () => {

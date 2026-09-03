@@ -7,7 +7,7 @@ export default defineConfig({
   retries: process.env.SMOKE_TEST ? 0 : (process.env.CI ? 2 : 0), // No retries for smoke tests
   workers: process.env.SMOKE_TEST ? 1 : (process.env.CI ? 1 : undefined), // Smoke tests always single worker
   reporter: process.env.SMOKE_TEST 
-    ? ([['json'], ['html'], ['list']] as any)
+    ? [['json'], ['html'], ['list']]
     : 'html',
   use: {
     baseURL: process.env.STAGING_URL || 'http://localhost:3001',
