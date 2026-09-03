@@ -5,6 +5,7 @@ members = [
   "contracts/adapter_blend",
   "contracts/adapter_lending",
   "contracts/adapter_pool",
+  "contracts/adapter_soroswap",
   "contracts/allocation_strategy",
   "contracts/lp_aggregator",
   "contracts/nester",

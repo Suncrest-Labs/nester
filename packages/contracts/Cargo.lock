@@ -31,6 +31,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "adapter-soroswap-contract"
+version = "0.1.0"
+dependencies = [
+ "adapter-pool-contract",
+ "nester-common",
+ "nester-test-utils",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
