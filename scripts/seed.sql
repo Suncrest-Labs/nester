@@ -4,7 +4,6 @@ CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY,
     wallet_address TEXT NOT NULL UNIQUE CHECK (length(btrim(wallet_address)) > 0),
     display_name TEXT NOT NULL,
-    kyc_status TEXT NOT NULL DEFAULT 'pending',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -55,8 +54,8 @@ ON CONFLICT (key) DO NOTHING;
 
 -- Seed data
 
-INSERT INTO users (id, wallet_address, display_name, kyc_status, created_at, updated_at) VALUES
-    ('550e8400-e29b-41d4-a716-446655440001', 'GBDZVKPNWE5K3VQXXS3F2XW56XG6Y74NXZ4L6R445VMBG6X5D74NXR7Z', 'Test User', 'approved', NOW(), NOW())
+INSERT INTO users (id, wallet_address, display_name, created_at, updated_at) VALUES
+    ('550e8400-e29b-41d4-a716-446655440001', 'GBDZVKPNWE5K3VQXXS3F2XW56XG6Y74NXZ4L6R445VMBG6X5D74NXR7Z', 'Test User', NOW(), NOW())
 ON CONFLICT DO NOTHING;
 
 INSERT INTO user_roles (user_id, role, granted_at, granted_by) VALUES

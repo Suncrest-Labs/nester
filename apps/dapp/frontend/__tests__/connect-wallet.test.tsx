@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ConnectWallet } from "@/components/connect-wallet";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 const mockConnect = vi.fn();
 const mockDisconnect = vi.fn();
 
@@ -25,9 +29,6 @@ vi.mock("@/components/portfolio-provider", () => ({
   }),
 }));
 
-vi.mock("@/hooks/useOnboarding", () => ({
-  useOnboarding: () => ({ completeStep: vi.fn() }),
-}));
 
 vi.mock("@/components/notifications-provider", () => ({
   useNotifications: () => ({ addNotification: vi.fn() }),

@@ -4,11 +4,11 @@ import { useWallet, type WalletInfo } from "@/components/wallet-provider";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, Loader2, AlertCircle, ChevronDown, CheckCircle2, Wallet } from "lucide-react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { config } from "@/lib/config";
 import { truncateAddress } from "@/lib/utils";
 import { usePortfolio } from "@/components/portfolio-provider";
-import { useOnboarding } from "@/hooks/useOnboarding";
 import { useNotifications } from "@/components/notifications-provider";
 import { useNetwork } from "@/hooks/useNetwork";
 
@@ -100,10 +100,10 @@ function WalletListItem({
 }
 
 export function ConnectWallet() {
+    const router = useRouter();
     const { currentNetwork } = useNetwork();
     const { connect, isConnecting, wallets, walletsLoaded, isConnected, address, disconnect } = useWallet();
     const { balances, applyBalanceUpdate } = usePortfolio();
-    const { completeStep } = useOnboarding();
     const { addNotification } = useNotifications();
 
     const [error, setError] = useState<string | null>(null);
@@ -158,7 +158,7 @@ export function ConnectWallet() {
     };
 
     const handleContinue = () => {
-        completeStep("hasConnectedWallet");
+        router.push("/dashboard");
     };
 
     const sorted = [...wallets].sort((a, b) => {
