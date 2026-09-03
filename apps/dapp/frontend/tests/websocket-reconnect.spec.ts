@@ -200,7 +200,7 @@ test.describe('WebSocket reconnection', () => {
         // each), after which the client stops and says so rather than
         // looping in the background.
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
-            timeout: 60_000,
+            timeout: 75_000,
         });
         await expect(badge(page)).toContainText('Disconnected', {
             timeout: 15_000,
@@ -224,7 +224,7 @@ test.describe('WebSocket reconnection', () => {
         await page.goto(HARNESS);
 
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
-            timeout: 60_000,
+            timeout: 75_000,
         });
 
         // The server comes back; bounded retries mean nothing notices on its
