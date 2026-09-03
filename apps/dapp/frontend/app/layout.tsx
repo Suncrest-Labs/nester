@@ -42,8 +42,6 @@ export const viewport: Viewport = {
 
 import { ToastProvider } from "@/components/ui/toast/toast-provider";
 
-import { ConsentProvider } from "@/context/consent-context";
-import { CookieConsentBanner } from "@/components/cookie-consent-banner";
 
 const themeInitScript = `
 (function() {
@@ -82,7 +80,6 @@ export default function RootLayout({
                 className={`${inter.className} ${inter.variable} antialiased`}
             >
                 <ToastProvider>
-                    <ConsentProvider>
                         <ReactQueryProvider>
                             <NetworkProvider>
                                 <LocaleProvider>
@@ -118,7 +115,6 @@ export default function RootLayout({
                                                         >
                                                                 {children}
                                                                 <NotificationsToaster />
-                                                                <CookieConsentBanner />
                                                         </WebSocketProvider>
                                                     </PortfolioProvider>
                                                 </NotificationsProvider>
@@ -128,7 +124,6 @@ export default function RootLayout({
                                 </LocaleProvider>
                             </NetworkProvider>
                         </ReactQueryProvider>
-                    </ConsentProvider>
                 </ToastProvider>
             </body>
         </html>
