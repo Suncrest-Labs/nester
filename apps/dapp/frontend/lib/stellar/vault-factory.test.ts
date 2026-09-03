@@ -149,7 +149,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         true

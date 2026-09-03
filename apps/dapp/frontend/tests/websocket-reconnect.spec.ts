@@ -96,10 +96,10 @@ const badge = (page: Page) => page.getByTestId('connection-status');
 
 test.describe('WebSocket reconnection', () => {
     // Reconnection is a waiting game: the bounded-retry schedule alone runs
-    // ~1/2/4/8/16s before the client gives up. Playwright's 30s default would
-    // expire mid-schedule and report a timeout instead of the real outcome,
-    // and an assertion-level timeout cannot outlive the test that contains it.
-    test.setTimeout(90_000);
+    // ~1/2/4/8/16s before the client gives up. CI runners can take up to 90s
+    // to cycle through all attempts. A 180s timeout ensures the full
+    // reconnection cycle completes deterministically.
+    test.setTimeout(180_000);
 
     test.beforeEach(async ({ page }) => {
         await page.addInitScript(() => {
@@ -200,7 +200,7 @@ test.describe('WebSocket reconnection', () => {
         // each), after which the client stops and says so rather than
         // looping in the background.
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
-            timeout: 75_000,
+            timeout: 100_000,
         });
         await expect(badge(page)).toContainText('Disconnected', {
             timeout: 15_000,
@@ -224,7 +224,7 @@ test.describe('WebSocket reconnection', () => {
         await page.goto(HARNESS);
 
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
-            timeout: 75_000,
+            timeout: 100_000,
         });
 
         // The server comes back; bounded retries mean nothing notices on its

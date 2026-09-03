@@ -225,7 +225,7 @@ describe("Notification Center & Preferences Suite (#870)", () => {
                 },
             };
 
-            const sanitized = sanitizePreferences(inputPrefs as any);
+            const sanitized = sanitizePreferences(inputPrefs as unknown as Parameters<typeof sanitizePreferences>[0]);
             expect(sanitized.categories.safety.in_app).toBe(true);
             expect(sanitized.categories.safety.email).toBe(true);
             expect(sanitized.categories.safety.push).toBe(true);
