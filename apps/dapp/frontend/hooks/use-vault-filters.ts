@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import type { Vault, MarketType } from "@/lib/types/vault";
+import { getVaultContractByAsset } from "@/lib/vault-contracts";
 import { useVaultMarkets } from "@/hooks/useVaultMarkets";
 
 export type SortKey = "apy" | "tvl" | "utilization";
@@ -49,15 +50,21 @@ export function useVaultFilters() {
         description: `Automated yield strategies for ${m.symbol} on ${m.protocol}.`,
         marketType,
         tokens,
-        currentApy: apy * 100,
-        apyRange: `${(apy * 80).toFixed(1)}-${(apy * 120).toFixed(1)}%`,
+        // The API already reports APY in percent (6.98 means 6.98%), so the
+        // old `apy * 100` rendered a 7% pool as 698% and its range as
+        // "558.6-837.9%".
+        currentApy: apy,
+        apyRange: `${(apy * 0.8).toFixed(2)}-${(apy * 1.2).toFixed(2)}%`,
         tvl,
         utilization: 0, // Not provided by current API
         allocations: [],
         supportedAssets: tokens,
         maturityTerms: "Flexible - withdraw anytime",
         earlyWithdrawalPenalty: "None",
-        contractAddress: undefined,
+        // Resolved from the pool's settlement asset so a deposit built from
+        // this market targets a real deployed vault rather than failing at
+        // signing time.
+        contractAddress: getVaultContractByAsset(m.symbol)?.contractAddress ?? undefined,
         apyHistory: [],
         strategies: [],
       };

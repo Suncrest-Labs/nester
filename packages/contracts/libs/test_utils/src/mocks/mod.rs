@@ -10,10 +10,16 @@
 // `withdraw`, and friends.
 // ---------------------------------------------------------------------------
 
+pub mod blend_pool;
 pub mod failing;
 pub mod lending;
 pub mod pool;
+pub mod soroswap_pair;
+pub mod soroswap_router;
 
+pub use blend_pool::{MockBlendPool, MockBlendPoolClient};
 pub use failing::{MockFailingAdapter, MockFailingAdapterClient};
 pub use lending::{MockLendingProtocol, MockLendingProtocolClient};
 pub use pool::{MockAmmPool, MockAmmPoolClient};
+pub use soroswap_pair::{MockSoroswapPair, MockSoroswapPairClient};
+pub use soroswap_router::{MockSoroswapRouter, MockSoroswapRouterClient};
