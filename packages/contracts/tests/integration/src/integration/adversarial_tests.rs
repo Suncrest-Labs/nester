@@ -917,7 +917,7 @@ fn test_emergency_withdraw_with_broken_failing_adapter() {
         &broken_src,
         &h.create_user(),
         &Some(bad_adapter),
-        &ProtocolType::Lending,
+        &nester_common::ProtocolType::Lending,
     );
 
     h.mint_deposit_tokens(&user, 50_000_000);
@@ -954,8 +954,10 @@ fn test_emergency_withdraw_cannot_extract_more_than_caller_entitlement() {
     assert_eq!(h.token().balance(&user1), 0);
 
     // User2's 60_000_000 remains completely intact
+    let user2_before = usdc.balance(&user2);
     let returned2 = h.vault().emergency_withdraw(&user2);
     assert_eq!(returned2, 60_000_000);
+    assert_eq!(usdc.balance(&user2) - user2_before, returned2);
     assert_eq!(h.vault().total_assets(), 0);
     assert_eq!(h.token().total_supply(), 0);
 }
@@ -975,6 +977,3 @@ fn test_second_emergency_withdraw_on_zero_principal_panics() {
     // Second emergency withdraw must panic
     h.vault().emergency_withdraw(&user);
 }
-
-
-
