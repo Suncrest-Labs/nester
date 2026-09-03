@@ -99,7 +99,6 @@ import {
   createVault,
   VaultFactory,
   CreateVaultParams,
-  CreateVaultResult,
 } from "./vault-factory";
 
 describe("vault-factory", () => {
@@ -184,7 +183,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -193,7 +192,7 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const params: CreateVaultParams = {
         name: "Test Vault",
@@ -226,7 +225,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -235,7 +234,7 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const params: CreateVaultParams = {
         name: "Test Vault",
@@ -273,7 +272,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -282,14 +281,14 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       // Mock Address.fromScVal
       const mockAddressInstance = {
         toString: vi.fn().mockReturnValue(expectedContractAddress),
       };
       vi.mocked(StellarSdk.Address.fromScVal).mockReturnValue(
-        mockAddressInstance as any
+        mockAddressInstance as unknown as InstanceType<typeof StellarSdk.Address>
       );
 
       const params: CreateVaultParams = {
@@ -327,7 +326,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -336,7 +335,7 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const realContractAddress =
         "CCJAJVEFZPGIGMYIBQO4U7VL2PGEQR2XGVQ4YFQUHK37IJDJWEXHKGFA";
@@ -345,7 +344,7 @@ describe("vault-factory", () => {
         toString: vi.fn().mockReturnValue(realContractAddress),
       };
       vi.mocked(StellarSdk.Address.fromScVal).mockReturnValue(
-        mockAddressInstance as any
+        mockAddressInstance as unknown as InstanceType<typeof StellarSdk.Address>
       );
 
       const params: CreateVaultParams = {
@@ -389,7 +388,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -398,13 +397,13 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const mockAddressInstance = {
         toString: vi.fn().mockReturnValue("CCJAJVEFZPGIGMYIBQO4U7VL2PGEQR2XGVQ4YFQUHK37IJDJWEXHKGFA"),
       };
       vi.mocked(StellarSdk.Address.fromScVal).mockReturnValue(
-        mockAddressInstance as any
+        mockAddressInstance as unknown as InstanceType<typeof StellarSdk.Address>
       );
 
       const params: CreateVaultParams = {
@@ -450,7 +449,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -459,13 +458,13 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const mockAddressInstance = {
         toString: vi.fn().mockReturnValue("CCJAJVEFZPGIGMYIBQO4U7VL2PGEQR2XGVQ4YFQUHK37IJDJWEXHKGFA"),
       };
       vi.mocked(StellarSdk.Address.fromScVal).mockReturnValue(
-        mockAddressInstance as any
+        mockAddressInstance as unknown as InstanceType<typeof StellarSdk.Address>
       );
 
       const params: CreateVaultParams = {
@@ -500,7 +499,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -509,7 +508,7 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const params: CreateVaultParams = {
         name: "Test Vault",
@@ -564,7 +563,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -573,13 +572,13 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const mockAddressInstance = {
         toString: vi.fn().mockReturnValue("CCJAJVEFZPGIGMYIBQO4U7VL2PGEQR2XGVQ4YFQUHK37IJDJWEXHKGFA"),
       };
       vi.mocked(StellarSdk.Address.fromScVal).mockReturnValue(
-        mockAddressInstance as any
+        mockAddressInstance as unknown as InstanceType<typeof StellarSdk.Address>
       );
 
       const response = await VaultFactory.createVault(
@@ -651,7 +650,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -660,13 +659,13 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const mockAddressInstance = {
         toString: vi.fn().mockReturnValue("CCJAJVEFZPGIGMYIBQO4U7VL2PGEQR2XGVQ4YFQUHK37IJDJWEXHKGFA"),
       };
       vi.mocked(StellarSdk.Address.fromScVal).mockReturnValue(
-        mockAddressInstance as any
+        mockAddressInstance as unknown as InstanceType<typeof StellarSdk.Address>
       );
 
       const onProgress = vi.fn();
@@ -718,7 +717,7 @@ describe("vault-factory", () => {
       };
 
       vi.mocked(StellarSdk.rpc.Server).mockImplementation(
-        () => mockServer as any
+        () => mockServer as unknown as InstanceType<typeof StellarSdk.rpc.Server>
       );
       vi.mocked(StellarSdk.rpc.Api.isSimulationError).mockReturnValue(
         false
@@ -727,13 +726,13 @@ describe("vault-factory", () => {
         build: vi.fn().mockReturnValue({
           toXDR: vi.fn().mockReturnValue("assembled_xdr"),
         }),
-      } as any);
+      } as unknown as ReturnType<typeof StellarSdk.rpc.assembleTransaction>);
 
       const mockAddressInstance = {
         toString: vi.fn().mockReturnValue("CCJAJVEFZPGIGMYIBQO4U7VL2PGEQR2XGVQ4YFQUHK37IJDJWEXHKGFA"),
       };
       vi.mocked(StellarSdk.Address.fromScVal).mockReturnValue(
-        mockAddressInstance as any
+        mockAddressInstance as unknown as InstanceType<typeof StellarSdk.Address>
       );
 
       const params: CreateVaultParams = {

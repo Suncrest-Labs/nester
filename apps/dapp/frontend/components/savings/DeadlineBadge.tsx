@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useState } from "react";
 import { Check, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -26,9 +26,7 @@ export interface DeadlineBadgeProps {
 
 export function DeadlineBadge({ deadline, status, className }: DeadlineBadgeProps) {
   const [showTooltip, setShowTooltip] = useState(false);
-  const tooltipId = useRef(
-    `deadline-tooltip-${Math.random().toString(36).slice(2, 9)}`
-  ).current;
+  const tooltipId = useId();
 
   const info = getDeadlineBadgeInfo(deadline, status);
   const fullDate = formatFullDeadline(deadline);

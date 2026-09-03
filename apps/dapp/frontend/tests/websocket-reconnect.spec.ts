@@ -92,7 +92,7 @@ async function installFakeHub(page: Page): Promise<FakeHub> {
     return hub;
 }
 
-const badge = (page: Page) => page.getByTestId('connection-status');
+const badge = (page: Page) => page.locator('main').getByTestId('connection-status');
 
 test.describe('WebSocket reconnection', () => {
     // Reconnection is a waiting game: the bounded-retry schedule alone runs
@@ -196,14 +196,19 @@ test.describe('WebSocket reconnection', () => {
         });
         await page.goto(HARNESS);
 
+        // First confirm that reconnection attempts have begun
+        await expect(badge(page)).toHaveAttribute('data-status', 'reconnecting', {
+            timeout: 10_000,
+        });
+
         // Default schedule is 5 attempts at ~1/2/4/8/16s (jitter shortens
         // each), after which the client stops and says so rather than
         // looping in the background.
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
-            timeout: 100_000,
+            timeout: 60_000,
         });
         await expect(badge(page)).toContainText('Disconnected', {
-            timeout: 15_000,
+            timeout: 10_000,
         });
     });
 
@@ -223,8 +228,13 @@ test.describe('WebSocket reconnection', () => {
         });
         await page.goto(HARNESS);
 
+        // First confirm that reconnection attempts have begun
+        await expect(badge(page)).toHaveAttribute('data-status', 'reconnecting', {
+            timeout: 10_000,
+        });
+
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
-            timeout: 100_000,
+            timeout: 60_000,
         });
 
         // The server comes back; bounded retries mean nothing notices on its
