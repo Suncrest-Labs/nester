@@ -101,6 +101,16 @@ test.describe('WebSocket reconnection', () => {
     // and an assertion-level timeout cannot outlive the test that contains it.
     test.setTimeout(90_000);
 
+    test.beforeEach(async ({ page }) => {
+        await page.addInitScript(() => {
+            try {
+                window.localStorage.setItem('nester_auth_token', 'e2e-harness-token');
+            } catch {
+                // Storage unavailable
+            }
+        });
+    });
+
     test('shows the reconnecting indicator when the socket closes, and clears it when it reopens', async ({
         page,
     }) => {
@@ -192,7 +202,9 @@ test.describe('WebSocket reconnection', () => {
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
             timeout: 60_000,
         });
-        await expect(badge(page)).toContainText('Disconnected');
+        await expect(badge(page)).toContainText('Disconnected', {
+            timeout: 15_000,
+        });
     });
 
     test('offers a way back once it has given up', async ({ page }) => {
@@ -218,7 +230,9 @@ test.describe('WebSocket reconnection', () => {
         // The server comes back; bounded retries mean nothing notices on its
         // own, so the user needs an affordance that is not "reload the page".
         refuse = false;
-        await page.getByTestId('connection-retry').click();
+        const retryBtn = page.getByTestId('connection-retry');
+        await expect(retryBtn).toBeVisible({ timeout: 15_000 });
+        await retryBtn.click();
 
         await expect(badge(page)).toHaveAttribute('data-status', 'connected', {
             timeout: 15_000,

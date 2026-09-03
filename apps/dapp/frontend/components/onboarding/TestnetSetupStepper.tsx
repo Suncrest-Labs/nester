@@ -66,7 +66,15 @@ export function TestnetSetupStepper() {
     setDismissed(readDismissed());
   }, []);
 
-  const walletAvailable = walletsLoaded && wallets.some((w) => w.isAvailable);
+  const walletAvailable =
+    walletsLoaded &&
+    wallets.some(
+      (w) =>
+        (w.id.toLowerCase().includes("freighter") ||
+          w.id.toLowerCase().includes("hana") ||
+          w.id.toLowerCase().includes("rabet")) &&
+        w.isAvailable,
+    );
 
   // The wallet's real network, not the app's own preference. currentNetwork
   // comes from localStorage and says which network the user asked the app to
