@@ -62,15 +62,21 @@ INSERT INTO user_roles (user_id, role, granted_at, granted_by) VALUES
     ('550e8400-e29b-41d4-a716-446655440001', 'admin', NOW(), NULL)
 ON CONFLICT DO NOTHING;
 
+-- Contract addresses are the real testnet deployments from
+-- packages/contracts/scripts/deployed-testnet.env, not placeholders. The event
+-- indexer builds its RPC event filter from these rows, and a fabricated ID
+-- fails the whole poll ("contract ID 1 invalid") rather than just that vault:
+-- the previous XLM value was 55 characters and could not be decoded at all, so
+-- no deposit was ever indexed and positions never reached the database.
 INSERT INTO vaults (id, user_id, contract_address, total_deposited, current_balance, currency, status) VALUES
     ('550e8400-e29b-41d4-a716-446655440010',
      '550e8400-e29b-41d4-a716-446655440001',
-     'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCFW3',
+     'CBYJXQUCJ475OREU4TQGGPYFC4XX2EW7FR5XNNR5X2MH3GQJLOTIT5YL',
      10000.00, 10234.56, 'USDC', 'active'),
     ('550e8400-e29b-41d4-a716-446655440011',
      '550e8400-e29b-41d4-a716-446655440001',
-     'CCLQBFQKIIASLN7MXDQFAUXHQXPKR5ZVGKIMKNBZMKWL4LNKQXQXQAB',
-     5000.00, 5150.25, 'USDC', 'active')
+     'CAQUVMTUGONBIUUXKUP3ANIOXBVLSQNXOEP2P5AWUJIM3XMH3NADZDKR',
+     5000.00, 5150.25, 'XLM', 'active')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO allocations (id, vault_id, protocol, amount, apy, allocated_at) VALUES
