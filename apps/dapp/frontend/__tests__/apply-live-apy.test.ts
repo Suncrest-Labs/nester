@@ -73,4 +73,20 @@ describe("buildSavingsVaults", () => {
     expect(vaults).toHaveLength(4);
     expect(vaults.every((v) => v.apyLabel.endsWith("%"))).toBe(true);
   });
+
+  // A non-array payload reached pools.filter and took the savings page down
+  // with "pools.filter is not a function". Falling back is the correct
+  // degradation: the page still renders every vault at its published APY.
+  it("falls back instead of throwing when pools is not an array", () => {
+    const malformed = { data: mockPools } as unknown as typeof mockPools;
+    const vaults = buildSavingsVaults(SAVINGS_VAULT_DEFINITIONS, malformed, false);
+    expect(vaults).toHaveLength(4);
+    const flexible = vaults.find((v) => v.type === "flexible")!;
+    expect(flexible.apy).toBe(FALLBACK_VAULT_APY.flexible.apy);
+  });
+
+  it("falls back when pools is undefined", () => {
+    const vaults = buildSavingsVaults(SAVINGS_VAULT_DEFINITIONS, undefined, false);
+    expect(vaults).toHaveLength(4);
+  });
 });

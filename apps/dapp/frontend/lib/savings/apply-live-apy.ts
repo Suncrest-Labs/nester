@@ -62,6 +62,10 @@ export function buildSavingsVaults(
   pools: YieldPool[] | undefined,
   isError: boolean
 ): SavingsVault[] {
-  const useFallback = isError || !pools;
-  return definitions.map((def) => applyLiveApyToVault(def, pools ?? [], useFallback));
+  // Guard the shape, not just the absence: a malformed payload used to reach
+  // pool.filter and take the whole savings page down with a TypeError. A
+  // vault renders its published fallback APY instead.
+  const safePools = Array.isArray(pools) ? pools : [];
+  const useFallback = isError || safePools.length === 0;
+  return definitions.map((def) => applyLiveApyToVault(def, safePools, useFallback));
 }

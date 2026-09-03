@@ -11,7 +11,6 @@ import { ReactQueryProvider } from "@/components/react-query-provider";
 import { OfflineBanner } from "@/components/offline-banner";
 import { SettingsProvider } from "@/context/settings-context";
 import { LocaleProvider } from "@/context/locale-context";
-import { OnboardingProvider } from "@/hooks/useOnboarding";
 import { NetworkProvider } from "@/context/NetworkProvider";
 import { NetworkBanner } from "@/components/network/NetworkSelector";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
@@ -43,8 +42,6 @@ export const viewport: Viewport = {
 
 import { ToastProvider } from "@/components/ui/toast/toast-provider";
 
-import { ConsentProvider } from "@/context/consent-context";
-import { CookieConsentBanner } from "@/components/cookie-consent-banner";
 
 const themeInitScript = `
 (function() {
@@ -83,7 +80,6 @@ export default function RootLayout({
                 className={`${inter.className} ${inter.variable} antialiased`}
             >
                 <ToastProvider>
-                    <ConsentProvider>
                         <ReactQueryProvider>
                             <NetworkProvider>
                                 <LocaleProvider>
@@ -117,11 +113,8 @@ export default function RootLayout({
                                                                     : undefined
                                                             }
                                                         >
-                                                            <OnboardingProvider>
                                                                 {children}
                                                                 <NotificationsToaster />
-                                                                <CookieConsentBanner />
-                                                            </OnboardingProvider>
                                                         </WebSocketProvider>
                                                     </PortfolioProvider>
                                                 </NotificationsProvider>
@@ -131,7 +124,6 @@ export default function RootLayout({
                                 </LocaleProvider>
                             </NetworkProvider>
                         </ReactQueryProvider>
-                    </ConsentProvider>
                 </ToastProvider>
             </body>
         </html>

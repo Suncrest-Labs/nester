@@ -22,11 +22,7 @@ import {
 } from "lucide-react";
 import { WithdrawModal } from "@/components/vault-action-modals";
 import { cn } from "@/lib/utils";
-import { GuidedTour } from "@/components/onboarding/GuidedTour";
-import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
-import { TestnetSetupStepper } from "@/components/onboarding/TestnetSetupStepper";
 import { RebalanceSuggestionCard } from "@/components/dashboard/RebalanceSuggestionCard";
-import { profileApi } from "@/lib/api/profile";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 import { useNetwork } from "@/hooks/useNetwork";
 import { AppShell } from "@/components/app-shell";
@@ -385,7 +381,6 @@ export default function Dashboard() {
     const router = useRouter();
     const [selectedVault, setSelectedVault] = useState<VaultWithPerf | null>(null);
     const [chartPeriod, setChartPeriod] = useState<ChartPeriod>("1M");
-    const [onboardingOpen, setOnboardingOpen] = useState(false);
     const { isOffline, lastSynced } = useOfflineStatus();
     const { lastUpdatedAt: wsLastUpdatedAt } = useWebSocketContext();
 
@@ -411,16 +406,6 @@ export default function Dashboard() {
     // const { balances } = usePortfolio();
 
     const positions = useMemo(() => vaults.map(vaultToPosition), [vaults]);
-
-    useEffect(() => {
-        if (!isConnected) return;
-        profileApi
-            .get()
-            .then((p) => {
-                if (!p.onboarding_completed) setOnboardingOpen(true);
-            })
-            .catch(() => {});
-    }, [isConnected]);
 
     useEffect(() => {
         if (!isConnected) router.push("/");
@@ -505,13 +490,6 @@ export default function Dashboard() {
                     </Link>
                 </div>
             </motion.div>
-
-            {/* First-run testnet setup (#1127). Renders nothing once the user
-                is set up or has dismissed it, so it costs returning users
-                nothing. */}
-            <div className="mb-4">
-                <TestnetSetupStepper />
-            </div>
 
             {/* Sign-in nudge when wallet connected but not yet signed in */}
             {isConnected && !isAuthenticated && (
@@ -662,12 +640,6 @@ export default function Dashboard() {
                 onClose={() => setSelectedVault(null)}
                 position={selectedVault ? vaultToPosition(selectedVault) : null}
             />
-            <OnboardingWizard
-                open={onboardingOpen}
-                onClose={() => setOnboardingOpen(false)}
-                onComplete={() => setOnboardingOpen(false)}
-            />
-            <GuidedTour />
         </AppShell>
     );
 }
