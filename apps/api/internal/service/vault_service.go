@@ -10,9 +10,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/balanceaudit"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/moneypath"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 type sharePriceCache struct {
@@ -153,6 +155,135 @@ type VaultService struct {
 	// built without one (tests, tooling) behaves as it did before the switch
 	// existed. Production wires it in SetMoneyPathSwitches.
 	moneyPathSwitches MoneyPathGate
+	// capsChecker enforces the per-user deposit cap and global TVL cap for
+	// the testnet launch (#1119). Optional: a nil checker allows everything,
+	// so a service built without one (tests, tooling) behaves as it did
+	// before the caps existed. Production wires it in SetCapsChecker.
+	capsChecker CapsChecker
+	// balanceAudit appends every balance-changing operation to the
+	// append-only ledger (#1124). Optional and best-effort: a failure to
+	// record an audit entry is logged but never blocks or rolls back the
+	// underlying money movement, since the balance change has already been
+	// durably committed by the time the audit append runs.
+	balanceAudit BalanceAuditRecorder
+}
+
+// BalanceAuditRecorder appends one balance-changing operation to the
+// append-only audit ledger (#1124). Declared here (rather than taking
+// *postgres.BalanceAuditRepository directly) so tests can substitute a
+// recorder without a database. Satisfied by
+// *postgres.BalanceAuditRepository.
+type BalanceAuditRecorder interface {
+	Append(ctx context.Context, entry balanceaudit.Entry) (balanceaudit.Entry, error)
+}
+
+// SetBalanceAuditRecorder installs the balance-change audit ledger (#1124).
+func (s *VaultService) SetBalanceAuditRecorder(recorder BalanceAuditRecorder) {
+	s.balanceAudit = recorder
+}
+
+// depositAuditRepository is satisfied by repositories (postgres.VaultRepository
+// in production) that can perform the balance credit, the launch-cap check,
+// and the audit-ledger append as a single atomic transaction — see
+// RecordDepositWithAudit's doc comment for why that atomicity matters
+// (nester CodeRabbit TOCTOU + audit-durability findings). Declared here
+// (rather than requiring it on vault.Repository) so repository test doubles
+// that don't implement it keep working: RecordDeposit falls back to the
+// older non-atomic check-then-write path for those.
+type depositAuditRepository interface {
+	RecordDepositWithAudit(
+		ctx context.Context,
+		vaultID uuid.UUID,
+		record vault.TransactionRecord,
+		capCheck func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error,
+		auditTemplate balanceaudit.Entry,
+	) (balanceaudit.Entry, error)
+}
+
+// withdrawalAuditRepository is the withdrawal counterpart of
+// depositAuditRepository: the balance debit and the audit append commit or
+// roll back together.
+type withdrawalAuditRepository interface {
+	RecordWithdrawalWithAudit(
+		ctx context.Context,
+		vaultID uuid.UUID,
+		record vault.TransactionRecord,
+		auditTemplate balanceaudit.Entry,
+	) (balanceaudit.Entry, error)
+}
+
+// harvestAuditRepository is the harvest counterpart of
+// depositAuditRepository: the post-harvest balance update and the audit
+// append commit or roll back together.
+type harvestAuditRepository interface {
+	RecordHarvestWithAudit(
+		ctx context.Context,
+		input vault.HarvestRecordInput,
+		auditTemplate balanceaudit.Entry,
+	) (balanceaudit.Entry, error)
+}
+
+// capEvaluator is satisfied by *caps.Checker: the pure, transaction-safe
+// evaluation used by depositAuditRepository's capCheck callback. Declared
+// here (rather than importing domain/caps) so the type assertion in
+// RecordDeposit stays a structural one, matching the rest of this file's
+// pattern of small local interfaces.
+type capEvaluator interface {
+	EvaluateTotals(ctx context.Context, userID uuid.UUID, amount, currentUserTotal, currentGlobalTotal decimal.Decimal) error
+}
+
+// recordBalanceAudit best-effort appends a balance-change entry. It never
+// returns an error to the caller: by the time it runs, the balance change
+// itself has already been committed, and refusing the user's deposit or
+// withdrawal because the audit-log write failed would make the audit trail
+// less available than the money path it is meant to observe. A failure is
+// logged loudly instead so it can be alerted on.
+//
+// This is the fallback path used only when s.repository does not implement
+// the *AuditRepository interfaces above (i.e. in tests using a plain mock).
+// The production postgres repository always takes the atomic path instead,
+// where the audit append is part of the same transaction as the balance
+// mutation.
+func (s *VaultService) recordBalanceAudit(ctx context.Context, vaultID, userID uuid.UUID, actor string, op balanceaudit.Operation, amount, before, after decimal.Decimal, chainRef string, metadata map[string]any) {
+	if s.balanceAudit == nil {
+		return
+	}
+	entry := balanceaudit.Entry{
+		VaultID:        vaultID,
+		UserID:         userID,
+		Actor:          actor,
+		Operation:      op,
+		Amount:         amount,
+		BalanceBefore:  before,
+		BalanceAfter:   after,
+		ChainReference: chainRef,
+		Metadata:       metadata,
+	}
+	if _, err := s.balanceAudit.Append(ctx, entry); err != nil {
+		logpkg.FromContext(ctx).Error("balance audit append failed",
+			"vault_id", vaultID, "user_id", userID, "operation", string(op), "error", err)
+	}
+}
+
+// CapsChecker evaluates a prospective deposit against the configured
+// per-user and global caps. Declared here (rather than taking *caps.Checker
+// directly) so tests can substitute a checker without a database. Satisfied
+// by *caps.Checker.
+type CapsChecker interface {
+	CheckDeposit(ctx context.Context, userID uuid.UUID, amount decimal.Decimal) error
+}
+
+// SetCapsChecker installs the launch cap enforcement (#1119).
+func (s *VaultService) SetCapsChecker(checker CapsChecker) {
+	s.capsChecker = checker
+}
+
+// CapsChecker returns the installed cap checker (or nil), so another
+// VaultService instance sharing the same repository (e.g. the recurring
+// deposit job's ledger service) can be wired with the identical checker
+// rather than building its own.
+func (s *VaultService) CapsChecker() CapsChecker {
+	return s.capsChecker
 }
 
 // MoneyPathGate reports whether a money-path operation may proceed. Declared
@@ -435,6 +566,19 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 		return vault.Vault{}, vault.ErrChainVerificationUnavailable
 	}
 
+	// Launch caps (#1119). Checked against the requested amount before the
+	// chain is touched, same principle as the money-path pause above: refuse
+	// early rather than after an on-chain call has already been made. When a
+	// chain event later verifies a different (contract-emitted) amount, that
+	// amount is smaller in the vast majority of cases (fees/slippage) and the
+	// pre-check is intentionally conservative rather than re-checked against
+	// the verified amount, keeping this a single, predictable gate.
+	if s.capsChecker != nil {
+		if err := s.capsChecker.CheckDeposit(ctx, userID, input.Amount); err != nil {
+			return vault.Vault{}, err
+		}
+	}
+
 	if txHash == "" && s.depositInvoker != nil {
 		// No tx_hash means nothing was signed by the user, so this deposit
 		// would be submitted with the operator as both caller and depositing
@@ -492,11 +636,60 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 		SharePriceAtTime:     sharePrice,
 		FeeCharged:           input.Fee,
 	}
+
+	// The atomic path (below) re-checks the launch caps against the final,
+	// chain-verified amount from inside the same DB transaction as the
+	// credit — the authoritative check that closes the TOCTOU window. The
+	// early check above is only a fast-fail against the requested amount so
+	// an obviously-over-cap deposit never touches the chain.
+	auditRepo, hasAuditRepo := s.repository.(depositAuditRepository)
+	evaluator, hasEvaluator := s.capsChecker.(capEvaluator)
+	if hasAuditRepo {
+		var capCheck func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error
+		if s.capsChecker != nil && hasEvaluator {
+			capCheck = func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error {
+				return evaluator.EvaluateTotals(ctx, userID, amount, currentUserTotal, currentGlobalTotal)
+			}
+		} else if s.capsChecker != nil && !hasEvaluator {
+			// The installed CapsChecker can't supply a transactional cap
+			// check, so the atomic/advisory-lock evaluation below is
+			// skipped for this call, re-opening the TOCTOU window the
+			// atomic path exists to close. This should never happen with
+			// the production *caps.Checker (which does satisfy
+			// capEvaluator) — log loudly so a future CapsChecker
+			// implementation that doesn't can't regress this silently.
+			logpkg.FromContext(ctx).Error("caps checker does not support atomic transactional evaluation; TOCTOU guarantee not enforced for this deposit",
+				"vault_id", input.VaultID, "user_id", userID, "amount", amount.String())
+		}
+		if _, err := auditRepo.RecordDepositWithAudit(ctx, input.VaultID, record, capCheck, balanceaudit.Entry{
+			UserID:         userID,
+			Actor:          userID.String(),
+			Operation:      balanceaudit.OperationDeposit,
+			Amount:         amount,
+			ChainReference: txHash,
+		}); err != nil {
+			return vault.Vault{}, err
+		}
+		updated, err := s.repository.GetVault(ctx, input.VaultID)
+		if err != nil {
+			return vault.Vault{}, err
+		}
+		return updated, nil
+	}
+
 	if err := s.repository.RecordDeposit(ctx, input.VaultID, record); err != nil {
 		return vault.Vault{}, err
 	}
 
-	return s.repository.GetVault(ctx, input.VaultID)
+	updated, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return vault.Vault{}, err
+	}
+
+	s.recordBalanceAudit(ctx, input.VaultID, userID, userID.String(), balanceaudit.OperationDeposit,
+		amount, existing.CurrentBalance, updated.CurrentBalance, txHash, nil)
+
+	return updated, nil
 }
 
 func (s *VaultService) UpdateAllocations(ctx context.Context, input UpdateAllocationsInput) (vault.Vault, error) {
@@ -818,11 +1011,37 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 		SharePriceAtTime:     sharePrice,
 		FeeCharged:           input.Fee,
 	}
+
+	if auditRepo, ok := s.repository.(withdrawalAuditRepository); ok {
+		if _, err := auditRepo.RecordWithdrawalWithAudit(ctx, input.VaultID, record, balanceaudit.Entry{
+			UserID:         userID,
+			Actor:          userID.String(),
+			Operation:      balanceaudit.OperationWithdrawal,
+			Amount:         amount,
+			ChainReference: txHash,
+		}); err != nil {
+			return vault.Vault{}, err
+		}
+		updated, err := s.repository.GetVault(ctx, input.VaultID)
+		if err != nil {
+			return vault.Vault{}, err
+		}
+		return updated, nil
+	}
+
 	if err := s.repository.RecordWithdrawal(ctx, input.VaultID, record); err != nil {
 		return vault.Vault{}, err
 	}
 
-	return s.repository.GetVault(ctx, input.VaultID)
+	updated, err := s.repository.GetVault(ctx, input.VaultID)
+	if err != nil {
+		return vault.Vault{}, err
+	}
+
+	s.recordBalanceAudit(ctx, input.VaultID, userID, userID.String(), balanceaudit.OperationWithdrawal,
+		amount, existing.CurrentBalance, updated.CurrentBalance, txHash, nil)
+
+	return updated, nil
 }
 
 // stroopsPerUnit is the fixed-point scale Soroban uses for asset and share
@@ -981,7 +1200,7 @@ func (s *VaultService) HarvestVault(ctx context.Context, input HarvestVaultInput
 		newSharesStr = formatUSDCAmount(shares)
 	}
 
-	if err := s.repository.RecordHarvest(ctx, vault.HarvestRecordInput{
+	harvestInput := vault.HarvestRecordInput{
 		VaultID:         input.VaultID,
 		UserID:          input.UserID,
 		NetYield:        netYield,
@@ -989,7 +1208,22 @@ func (s *VaultService) HarvestVault(ctx context.Context, input HarvestVaultInput
 		Compounded:      compound,
 		NewSharesMinted: newShares,
 		TransactionHash: txHash,
-	}); err != nil {
+	}
+
+	harvestedAtomically := false
+	if auditRepo, ok := s.repository.(harvestAuditRepository); ok {
+		if _, err := auditRepo.RecordHarvestWithAudit(ctx, harvestInput, balanceaudit.Entry{
+			UserID:         input.UserID,
+			Actor:          balanceaudit.SystemActor("harvest"),
+			Operation:      balanceaudit.OperationHarvest,
+			Amount:         netYield,
+			ChainReference: txHash,
+			Metadata:       map[string]any{"compounded": compound, "performance_fee": performanceFee.String()},
+		}); err != nil {
+			return HarvestResult{}, err
+		}
+		harvestedAtomically = true
+	} else if err := s.repository.RecordHarvest(ctx, harvestInput); err != nil {
 		return HarvestResult{}, err
 	}
 
@@ -1011,6 +1245,14 @@ func (s *VaultService) HarvestVault(ctx context.Context, input HarvestVaultInput
 			HarvestedAt: time.Now().UTC(),
 			TxHash:      txHash,
 		})
+	}
+
+	if !harvestedAtomically {
+		if refreshed, refreshErr := s.repository.GetVault(ctx, input.VaultID); refreshErr == nil {
+			s.recordBalanceAudit(ctx, input.VaultID, input.UserID, balanceaudit.SystemActor("harvest"),
+				balanceaudit.OperationHarvest, netYield, existing.CurrentBalance, refreshed.CurrentBalance, txHash,
+				map[string]any{"compounded": compound, "performance_fee": performanceFee.String()})
+		}
 	}
 
 	return HarvestResult{

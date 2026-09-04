@@ -138,7 +138,13 @@ async function apiFetch<T>(
   init?: RequestInit & { skipAuth?: boolean; _isRetry?: boolean }
 ): Promise<T> {
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    // Omit Content-Type for FormData bodies (e.g. KYC document uploads) so
+    // the browser sets `multipart/form-data; boundary=...` itself — setting
+    // it manually here would drop the boundary and the server couldn't
+    // parse the multipart body.
+    ...(typeof FormData !== "undefined" && init?.body instanceof FormData
+      ? {}
+      : { "Content-Type": "application/json" }),
     ...(init?.headers as Record<string, string>),
   };
 
@@ -246,6 +252,13 @@ export interface ApiUser {
   updated_at: string;
 }
 
+export interface ApiKYCStatus {
+  status: "unverified" | "pending" | "verified" | "rejected";
+  submitted_at?: string;
+  reviewed_at?: string;
+  rejection_reason?: string;
+}
+
 export interface ApiPerformanceSummary {
   vault_id: string;
   current_balance: number;
@@ -350,6 +363,18 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ wallet_address: walletAddress, display_name: displayName }),
         skipAuth: true,
+      }),
+  },
+
+  /** KYC status + submission (nester#1125 — replaces settings-page mock state) */
+  kyc: {
+    getStatus: (userId: string) =>
+      apiFetch<ApiKYCStatus>(`/users/kyc/${userId}`),
+
+    submit: (userId: string, formData: FormData) =>
+      apiFetch<{ status: string }>(`/users/kyc/${userId}`, {
+        method: "POST",
+        body: formData,
       }),
   },
 
