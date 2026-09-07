@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 // Client is the producer-facing façade for enqueueing work. It wraps the
@@ -28,6 +30,13 @@ func NewClient(repo Repository, metrics Metrics) *Client {
 func (c *Client) Enqueue(ctx context.Context, in EnqueueInput) (Job, error) {
 	if in.Type == "" {
 		return Job{}, fmt.Errorf("jobqueue: enqueue requires a type")
+	}
+	// If the caller did not explicitly set a correlation id (e.g. via
+	// WithCorrelationID), inherit the request id of the HTTP request that
+	// triggered this enqueue, if any, so the job's logs can be tied back to
+	// the originating request end-to-end (nester#1111).
+	if in.CorrelationID == "" {
+		in.CorrelationID = logpkg.RequestIDFromContext(ctx)
 	}
 	job, created, err := c.repo.Enqueue(ctx, in)
 	if err != nil {

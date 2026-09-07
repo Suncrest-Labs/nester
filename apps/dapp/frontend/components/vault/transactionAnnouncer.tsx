@@ -75,16 +75,20 @@ export function TransactionAnnouncer({
 
   useEffect(() => {
     const phrase = phraseFor(phase, action, amountLabel);
+
+    // Clearing first (via a callback, not a synchronous render-phase set)
+    // forces the region to re-announce when two phases produce the same
+    // string, since assistive tech ignores an unchanged value.
+    const clearId = window.setTimeout(() => setMessage(""), 0);
     if (!phrase) {
-      setMessage("");
-      return;
+      return () => window.clearTimeout(clearId);
     }
 
-    // Clearing first forces the region to re-announce when two phases
-    // produce the same string; assistive tech ignores an unchanged value.
-    setMessage("");
-    const id = window.setTimeout(() => setMessage(phrase), 50);
-    return () => window.clearTimeout(id);
+    const setId = window.setTimeout(() => setMessage(phrase), 50);
+    return () => {
+      window.clearTimeout(clearId);
+      window.clearTimeout(setId);
+    };
   }, [phase, action, amountLabel]);
 
   return (

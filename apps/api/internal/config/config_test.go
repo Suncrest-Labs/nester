@@ -1370,3 +1370,106 @@ func TestLoadQuotaValidationSkippedWhenDisabled(t *testing.T) {
 		t.Fatalf("Load() error = %v, want nil when quotas are disabled", err)
 	}
 }
+
+// TestLoadLaunchCapsValidation table-drives LAUNCH_PER_USER_DEPOSIT_CAP /
+// LAUNCH_GLOBAL_TVL_CAP parsing (nester CodeRabbit finding): blank/"0" must
+// disable the cap silently, a valid positive value must be accepted, and a
+// negative or malformed value must fail Load() rather than silently
+// disabling the cap.
+func TestLoadLaunchCapsValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "blank disables cap", value: "", wantErr: false},
+		{name: "zero disables cap", value: "0", wantErr: false},
+		{name: "valid positive enables cap", value: "1000.50", wantErr: false},
+		{name: "negative value errors", value: "-100", wantErr: true},
+		{name: "malformed value errors", value: "not-a-number", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run("per_user/"+tt.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			// Clear both cap env vars before setting the one this case
+			// actually exercises, so a case can't inherit a leftover value
+			// set by a previous subtest for the other cap (nester CodeRabbit
+			// post-rebase finding: order-dependent flakiness).
+			t.Setenv("LAUNCH_PER_USER_DEPOSIT_CAP", "")
+			t.Setenv("LAUNCH_GLOBAL_TVL_CAP", "")
+			t.Setenv("LAUNCH_PER_USER_DEPOSIT_CAP", tt.value)
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if tt.wantErr && err == nil {
+				t.Fatalf("Load() error = nil, want an error for LAUNCH_PER_USER_DEPOSIT_CAP=%q", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Load() error = %v, want nil for LAUNCH_PER_USER_DEPOSIT_CAP=%q", err, tt.value)
+			}
+		})
+
+		t.Run("global/"+tt.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			// See the matching comment in the per_user subtest above.
+			t.Setenv("LAUNCH_PER_USER_DEPOSIT_CAP", "")
+			t.Setenv("LAUNCH_GLOBAL_TVL_CAP", "")
+			t.Setenv("LAUNCH_GLOBAL_TVL_CAP", tt.value)
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if tt.wantErr && err == nil {
+				t.Fatalf("Load() error = nil, want an error for LAUNCH_GLOBAL_TVL_CAP=%q", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Load() error = %v, want nil for LAUNCH_GLOBAL_TVL_CAP=%q", err, tt.value)
+			}
+		})
+	}
+}
+
+// TestLoadLaunchCapWarnThresholdsValidation table-drives
+// LAUNCH_CAP_WARN_THRESHOLDS_PCT parsing (nester CodeRabbit post-rebase
+// finding): every threshold must be in 1..100 and the list must be strictly
+// increasing, checked at Load() time rather than silently accepted.
+func TestLoadLaunchCapWarnThresholdsValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "default-shaped ascending pair", value: "80,90", wantErr: false},
+		{name: "single threshold", value: "50", wantErr: false},
+		{name: "empty disables warnings", value: "", wantErr: false},
+		{name: "zero is out of range", value: "0,90", wantErr: true},
+		{name: "over 100 is out of range", value: "80,101", wantErr: true},
+		{name: "duplicate values not strictly increasing", value: "80,80", wantErr: true},
+		{name: "descending order rejected", value: "90,80", wantErr: true},
+		{name: "non-integer token rejected", value: "80,abc", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("LAUNCH_PER_USER_DEPOSIT_CAP", "")
+			t.Setenv("LAUNCH_GLOBAL_TVL_CAP", "")
+			t.Setenv("LAUNCH_CAP_WARN_THRESHOLDS_PCT", tt.value)
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if tt.wantErr && err == nil {
+				t.Fatalf("Load() error = nil, want an error for LAUNCH_CAP_WARN_THRESHOLDS_PCT=%q", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Load() error = %v, want nil for LAUNCH_CAP_WARN_THRESHOLDS_PCT=%q", err, tt.value)
+			}
+		})
+	}
+}
