@@ -1428,6 +1428,17 @@ func (s *VaultService) EmergencyWithdraw(ctx context.Context, input EmergencyWit
 		})
 	}
 
+	// An emergency withdraw pulls every position back on chain, so each
+	// drained leg is appended to the audit trail (#1124). Recorded per
+	// protocol rather than as one aggregate so the trail shows which
+	// positions actually unwound.
+	for _, position := range result.Succeeded {
+		s.recordBalanceAudit(ctx, input.VaultID, existing.UserID, existing.UserID.String(),
+			balanceaudit.OperationEmergencyWithdraw, position.Amount,
+			existing.CurrentBalance, existing.CurrentBalance.Sub(position.Amount), "",
+			map[string]any{"protocol": position.Protocol})
+	}
+
 	return result, nil
 }
 
@@ -1519,6 +1530,17 @@ func (s *VaultService) RebalancePosition(ctx context.Context, input RebalancePos
 			toBalance = allocation.Amount
 		}
 	}
+
+	// A rebalance leaves the vault total untouched but moves funds between
+	// protocols, so it is still a balance-changing operation for #1124: the
+	// two legs are appended separately so the trail names both sides of the
+	// move rather than a single net-zero entry that explains nothing.
+	s.recordBalanceAudit(ctx, input.VaultID, input.UserID, input.UserID.String(), balanceaudit.OperationRebalanceWithdraw,
+		input.Amount, existing.CurrentBalance, updatedVault.CurrentBalance, input.TxHash,
+		map[string]any{"protocol": input.FromProtocol, "to_protocol": input.ToProtocol})
+	s.recordBalanceAudit(ctx, input.VaultID, input.UserID, input.UserID.String(), balanceaudit.OperationRebalanceDeposit,
+		input.Amount, existing.CurrentBalance, updatedVault.CurrentBalance, input.TxHash,
+		map[string]any{"protocol": input.ToProtocol, "from_protocol": input.FromProtocol})
 
 	return RebalancePositionResult{
 		Vault:               updatedVault,
