@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/balanceaudit"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
@@ -380,6 +381,371 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, recor
 	return tx.Commit()
 }
 
+// RecordDepositWithAudit performs the balance credit, the (optional)
+// transactional launch-cap check, and the balance-audit ledger append as one
+// atomic transaction — either all three commit, or none do.
+//
+// This closes two gaps CodeRabbit found in the earlier non-atomic path:
+//  1. TOCTOU on the launch caps (nester#1119): CheckDeposit used to read
+//     totals and return well before the balance credit committed, so two
+//     concurrent deposits could each pass the check and collectively exceed
+//     a cap. Here, capCheck runs after acquiring Postgres advisory
+//     transaction locks keyed on the user and (for the global cap) a fixed
+//     key, held until commit/rollback, so totals are read and the credit
+//     applied as one atomic step with respect to every other deposit.
+//  2. The audit trail (nester#1124) used to be appended in a separate,
+//     best-effort step after the balance change had already committed, so a
+//     failure there left a permanent audit gap. Here the append is inside
+//     the same transaction, so it commits or rolls back with the balance
+//     change.
+//
+// auditTemplate must have VaultID/BalanceBefore/BalanceAfter unset — they
+// are filled in from the row locked and updated here.
+// capCheck's parameter/return signature is intentionally an unnamed func
+// type, not a named one, matched structurally by an identical unnamed type
+// in the caller-side interface (internal/service.depositAuditRepository) so
+// the service layer can type-assert against this method without importing
+// this package.
+func (r *VaultRepository) RecordDepositWithAudit(
+	ctx context.Context,
+	vaultID uuid.UUID,
+	record vault.TransactionRecord,
+	capCheck func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error,
+	auditTemplate balanceaudit.Entry,
+) (balanceaudit.Entry, error) {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
+		return balanceaudit.Entry{}, vault.ErrInvalidAmount
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return balanceaudit.Entry{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var before decimal.Decimal
+	if err := tx.QueryRowContext(ctx,
+		`SELECT current_balance FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		vaultID.String(),
+	).Scan(&before); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return balanceaudit.Entry{}, vault.ErrVaultNotFound
+		}
+		return balanceaudit.Entry{}, err
+	}
+
+	if capCheck != nil {
+		// Advisory transaction locks: released automatically on commit or
+		// rollback, and cheap relative to locking every row in `vaults`.
+		// Keyed so two deposits for different users (or a deposit and a
+		// withdrawal, which doesn't take this path) never contend on the
+		// per-user key, only ever on the shared global key.
+		if _, err := tx.ExecContext(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext('nester:launch_cap:user:' || $1::text))`,
+			record.UserID.String(),
+		); err != nil {
+			return balanceaudit.Entry{}, err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext('nester:launch_cap:global'))`,
+		); err != nil {
+			return balanceaudit.Entry{}, err
+		}
+
+		var userTotal, globalTotal decimal.Decimal
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(current_balance), 0) FROM vaults WHERE user_id = $1 AND deleted_at IS NULL`,
+			record.UserID.String(),
+		).Scan(&userTotal); err != nil {
+			return balanceaudit.Entry{}, err
+		}
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(current_balance), 0) FROM vaults WHERE deleted_at IS NULL`,
+		).Scan(&globalTotal); err != nil {
+			return balanceaudit.Entry{}, err
+		}
+
+		if err := capCheck(ctx, userTotal, globalTotal); err != nil {
+			return balanceaudit.Entry{}, err
+		}
+	}
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET total_deposited = total_deposited + $2::numeric,
+		     current_balance = current_balance + $2::numeric,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		vaultID.String(),
+		record.Amount.String(),
+	)
+	if err != nil {
+		return balanceaudit.Entry{}, mapRepositoryError(err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return balanceaudit.Entry{}, err
+	}
+	if rowsAffected == 0 {
+		return balanceaudit.Entry{}, vault.ErrVaultNotFound
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'deposit', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
+		vaultID.String(),
+		record.UserID.String(),
+		record.Amount.String(),
+		record.TransactionHash,
+		record.SharesMintedOrBurned.String(),
+		record.SharePriceAtTime.String(),
+		record.FeeCharged.String(),
+	); err != nil {
+		return balanceaudit.Entry{}, mapRepositoryError(err)
+	}
+
+	auditTemplate.VaultID = vaultID
+	auditTemplate.BalanceBefore = before
+	auditTemplate.BalanceAfter = before.Add(record.Amount)
+	inserted, err := appendBalanceAuditEntry(ctx, tx, auditTemplate)
+	if err != nil {
+		return balanceaudit.Entry{}, err
+	}
+
+	// --- Ledger: post balanced double-entry within same DB transaction ---
+	if err := r.postDepositLedgerTx(ctx, tx, vaultID, record.UserID, record.Amount, record.TransactionHash); err != nil {
+		if !isLedgerTableMissing(err) {
+			return balanceaudit.Entry{}, fmt.Errorf("ledger deposit posting failed: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return balanceaudit.Entry{}, err
+	}
+	return inserted, nil
+}
+
+// RecordWithdrawalWithAudit performs the balance debit and the balance-audit
+// ledger append as one atomic transaction (nester#1124 durability finding):
+// either both commit, or neither does. auditTemplate must have
+// VaultID/BalanceBefore/BalanceAfter unset — they are filled in here.
+func (r *VaultRepository) RecordWithdrawalWithAudit(
+	ctx context.Context,
+	vaultID uuid.UUID,
+	record vault.TransactionRecord,
+	auditTemplate balanceaudit.Entry,
+) (balanceaudit.Entry, error) {
+	if record.Amount.Cmp(decimal.Zero) <= 0 {
+		return balanceaudit.Entry{}, vault.ErrInvalidAmount
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return balanceaudit.Entry{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var before decimal.Decimal
+	if err := tx.QueryRowContext(ctx,
+		`SELECT current_balance FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		vaultID.String(),
+	).Scan(&before); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return balanceaudit.Entry{}, vault.ErrVaultNotFound
+		}
+		return balanceaudit.Entry{}, err
+	}
+	if before.LessThan(record.Amount) {
+		return balanceaudit.Entry{}, vault.ErrWithdrawalExceedsPosition
+	}
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE vaults
+		 SET current_balance = current_balance - $2::numeric,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		vaultID.String(),
+		record.Amount.String(),
+	)
+	if err != nil {
+		return balanceaudit.Entry{}, mapRepositoryError(err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return balanceaudit.Entry{}, err
+	}
+	if rowsAffected == 0 {
+		return balanceaudit.Entry{}, vault.ErrVaultNotFound
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash,
+			shares_minted_or_burned, share_price_at_time, fee_charged
+		) VALUES ($1, $2, 'withdrawal', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric, $7::numeric)`,
+		vaultID.String(),
+		record.UserID.String(),
+		record.Amount.String(),
+		record.TransactionHash,
+		record.SharesMintedOrBurned.String(),
+		record.SharePriceAtTime.String(),
+		record.FeeCharged.String(),
+	); err != nil {
+		return balanceaudit.Entry{}, mapRepositoryError(err)
+	}
+
+	auditTemplate.VaultID = vaultID
+	auditTemplate.BalanceBefore = before
+	auditTemplate.BalanceAfter = before.Sub(record.Amount)
+	inserted, err := appendBalanceAuditEntry(ctx, tx, auditTemplate)
+	if err != nil {
+		return balanceaudit.Entry{}, err
+	}
+
+	// --- Ledger: atomic posting ---
+	if err := r.postWithdrawalLedgerTx(ctx, tx, vaultID, record.UserID, record.Amount, record.TransactionHash); err != nil {
+		if !isLedgerTableMissing(err) {
+			return balanceaudit.Entry{}, fmt.Errorf("ledger withdrawal posting failed: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return balanceaudit.Entry{}, err
+	}
+	return inserted, nil
+}
+
+// RecordHarvestWithAudit applies the same post-harvest balance update as
+// RecordHarvest, but appends the balance-audit ledger entry inside the same
+// transaction (nester#1124 durability finding) instead of as a separate
+// best-effort step afterward. auditTemplate must have
+// VaultID/BalanceBefore/BalanceAfter unset — they are filled in here.
+func (r *VaultRepository) RecordHarvestWithAudit(
+	ctx context.Context,
+	input vault.HarvestRecordInput,
+	auditTemplate balanceaudit.Entry,
+) (balanceaudit.Entry, error) {
+	if input.NetYield.Cmp(decimal.Zero) < 0 || input.PerformanceFee.Cmp(decimal.Zero) < 0 {
+		return balanceaudit.Entry{}, vault.ErrInvalidAmount
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return balanceaudit.Entry{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var before decimal.Decimal
+	if err := tx.QueryRowContext(ctx,
+		`SELECT current_balance FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		input.VaultID.String(),
+	).Scan(&before); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return balanceaudit.Entry{}, vault.ErrVaultNotFound
+		}
+		return balanceaudit.Entry{}, err
+	}
+
+	var after decimal.Decimal
+	if input.Compounded {
+		after = before.Add(input.NetYield)
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE vaults
+			 SET total_deposited = total_deposited + $2::numeric,
+			     current_balance = current_balance + $2::numeric,
+			     yield_earned = GREATEST(yield_earned - ($2::numeric + $3::numeric), 0),
+			     fees_paid = fees_paid + $3::numeric,
+			     last_harvested_at = NOW(),
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`,
+			input.VaultID.String(),
+			input.NetYield.String(),
+			input.PerformanceFee.String(),
+		)
+		if err != nil {
+			return balanceaudit.Entry{}, mapRepositoryError(err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return balanceaudit.Entry{}, err
+		}
+		if rowsAffected == 0 {
+			return balanceaudit.Entry{}, vault.ErrVaultNotFound
+		}
+	} else {
+		after = before.Sub(input.NetYield)
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE vaults
+			 SET current_balance = current_balance - $2::numeric,
+			     yield_earned = GREATEST(yield_earned - ($2::numeric + $3::numeric), 0),
+			     fees_paid = fees_paid + $3::numeric,
+			     last_harvested_at = NOW(),
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`,
+			input.VaultID.String(),
+			input.NetYield.String(),
+			input.PerformanceFee.String(),
+		)
+		if err != nil {
+			return balanceaudit.Entry{}, mapRepositoryError(err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return balanceaudit.Entry{}, err
+		}
+		if rowsAffected == 0 {
+			return balanceaudit.Entry{}, vault.ErrVaultNotFound
+		}
+	}
+
+	var sharesArg any
+	if input.NewSharesMinted != nil {
+		sharesArg = input.NewSharesMinted.String()
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO vault_transactions (
+			vault_id, user_id, type, amount, transaction_hash, shares_minted_or_burned, fee_charged
+		) VALUES ($1, $2, 'harvest', $3::numeric, NULLIF($4, ''), $5::numeric, $6::numeric)`,
+		input.VaultID.String(),
+		input.UserID.String(),
+		input.NetYield.String(),
+		input.TransactionHash,
+		sharesArg,
+		input.PerformanceFee.String(),
+	); err != nil {
+		return balanceaudit.Entry{}, mapRepositoryError(err)
+	}
+
+	auditTemplate.VaultID = input.VaultID
+	auditTemplate.BalanceBefore = before
+	auditTemplate.BalanceAfter = after
+	inserted, err := appendBalanceAuditEntry(ctx, tx, auditTemplate)
+	if err != nil {
+		return balanceaudit.Entry{}, err
+	}
+
+	// --- Ledger: atomic harvest posting (gross = net + fee) ---
+	if err := r.postHarvestLedgerTx(ctx, tx, input.VaultID, input.UserID, input.NetYield, input.PerformanceFee, "blend", input.TransactionHash); err != nil {
+		if !isLedgerTableMissing(err) {
+			return balanceaudit.Entry{}, fmt.Errorf("ledger harvest posting failed: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return balanceaudit.Entry{}, err
+	}
+	return inserted, nil
+}
+
 func (r *VaultRepository) ReplaceAllocations(ctx context.Context, vaultID uuid.UUID, allocations []vault.Allocation) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -665,55 +1031,141 @@ func (r *VaultRepository) RecordHarvest(ctx context.Context, input vault.Harvest
 // no duplicate ledger row), so the auto-confirmation worker can safely retry.
 // This is the only path that credits balance from a confirmed deposit —
 // balance is never moved at submission time.
-func (r *VaultRepository) ApplyConfirmedDeposit(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txHash string) error {
-	return r.applyConfirmedBalanceChange(ctx, id, amount, txHash, "deposit")
+//
+// It shares the atomic balance+audit pattern established by
+// RecordDepositWithAudit (see that doc comment): the credit and the
+// balance-audit append happen in the same DB transaction, so a confirmed
+// deposit always produces exactly one matching audit entry (nester CodeRabbit
+// finding: confirmed deposits/withdrawals previously updated balance without
+// ever appending an audit entry).
+//
+// capCheck, when non-nil, is evaluated under the same advisory locks used by
+// RecordDepositWithAudit, but its result is never used to refuse the credit:
+// unlike an interactive deposit, this money has already moved on-chain by the
+// time this is called, so there is nothing left to safely reject — refusing
+// to record it would only make our balance diverge from the chain. Instead, a
+// cap-exceeded result from capCheck is returned as capWarning so the caller
+// can log/alert on it; the credit and its audit entry still commit
+// unconditionally (nester CodeRabbit finding: launch caps were not evaluated
+// at all on this path).
+func (r *VaultRepository) ApplyConfirmedDeposit(
+	ctx context.Context,
+	id uuid.UUID,
+	userID uuid.UUID,
+	amount decimal.Decimal,
+	txHash string,
+	capCheck func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error,
+) (capWarning error, err error) {
+	return r.applyConfirmedBalanceChange(ctx, id, userID, amount, txHash, "deposit", capCheck)
 }
 
 // ApplyConfirmedWithdrawal debits a vault's balance for a withdrawal confirmed
-// on-chain. Idempotent on txHash, mirroring ApplyConfirmedDeposit.
-func (r *VaultRepository) ApplyConfirmedWithdrawal(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txHash string) error {
-	return r.applyConfirmedBalanceChange(ctx, id, amount, txHash, "withdrawal")
+// on-chain. Idempotent on txHash, mirroring ApplyConfirmedDeposit, and appends
+// a matching audit entry in the same transaction as the debit. Withdrawals
+// never push a total over a launch cap, so there is no cap check here.
+func (r *VaultRepository) ApplyConfirmedWithdrawal(ctx context.Context, id uuid.UUID, userID uuid.UUID, amount decimal.Decimal, txHash string) error {
+	_, err := r.applyConfirmedBalanceChange(ctx, id, userID, amount, txHash, "withdrawal", nil)
+	return err
 }
 
-func (r *VaultRepository) applyConfirmedBalanceChange(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txHash, txType string) error {
+func (r *VaultRepository) applyConfirmedBalanceChange(
+	ctx context.Context,
+	id uuid.UUID,
+	userID uuid.UUID,
+	amount decimal.Decimal,
+	txHash, txType string,
+	capCheck func(ctx context.Context, currentUserTotal, currentGlobalTotal decimal.Decimal) error,
+) (capWarning error, err error) {
 	if amount.Cmp(decimal.Zero) <= 0 {
-		return vault.ErrInvalidAmount
+		return nil, vault.ErrInvalidAmount
 	}
 	if strings.TrimSpace(txHash) == "" {
 		// Without a hash we cannot dedupe, and a confirmed on-chain change
 		// always has one. Refuse rather than risk a double credit.
-		return vault.ErrInvalidVault
+		return nil, vault.ErrInvalidVault
 	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	// Claim the hash first. If another worker (or an earlier retry) already
 	// applied this transaction, the insert affects zero rows and we leave the
 	// balance untouched.
+	var userIDArg any
+	if userID != uuid.Nil {
+		userIDArg = userID.String()
+	}
 	ledgerRow, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO vault_transactions (vault_id, type, amount, transaction_hash)
-		 VALUES ($1, $2, $3::numeric, $4)
+		`INSERT INTO vault_transactions (vault_id, user_id, type, amount, transaction_hash)
+		 VALUES ($1, $2, $3, $4::numeric, $5)
 		 ON CONFLICT (transaction_hash) DO NOTHING`,
 		id.String(),
+		userIDArg,
 		txType,
 		amount.String(),
 		txHash,
 	)
 	if err != nil {
-		return mapRepositoryError(err)
+		return nil, mapRepositoryError(err)
 	}
 	inserted, err := ledgerRow.RowsAffected()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if inserted == 0 {
 		// Already applied for this hash — idempotent no-op.
-		return tx.Commit()
+		return nil, tx.Commit()
+	}
+
+	var before decimal.Decimal
+	if err := tx.QueryRowContext(ctx,
+		`SELECT current_balance FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		id.String(),
+	).Scan(&before); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, vault.ErrVaultNotFound
+		}
+		return nil, err
+	}
+
+	if txType == "deposit" && capCheck != nil && userID != uuid.Nil {
+		// Same advisory-lock pattern as RecordDepositWithAudit: cheap,
+		// released on commit/rollback, and serializes concurrent confirmed
+		// deposits (and interactive ones, which lock the same keys) so the
+		// totals capCheck sees reflect every other in-flight deposit.
+		if _, err := tx.ExecContext(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext('nester:launch_cap:user:' || $1::text))`,
+			userID.String(),
+		); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext('nester:launch_cap:global'))`,
+		); err != nil {
+			return nil, err
+		}
+
+		var userTotal, globalTotal decimal.Decimal
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(current_balance), 0) FROM vaults WHERE user_id = $1 AND deleted_at IS NULL`,
+			userID.String(),
+		).Scan(&userTotal); err != nil {
+			return nil, err
+		}
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(current_balance), 0) FROM vaults WHERE deleted_at IS NULL`,
+		).Scan(&globalTotal); err != nil {
+			return nil, err
+		}
+
+		// Deliberately not returned as err: see the ApplyConfirmedDeposit doc
+		// comment on why an already-confirmed on-chain deposit is credited
+		// regardless of the outcome here.
+		capWarning = capCheck(ctx, userTotal, globalTotal)
 	}
 
 	var balanceSQL string
@@ -732,65 +1184,62 @@ func (r *VaultRepository) applyConfirmedBalanceChange(ctx context.Context, id uu
 
 	result, err := tx.ExecContext(ctx, balanceSQL, id.String(), amount.String())
 	if err != nil {
-		return mapRepositoryError(err)
+		return nil, mapRepositoryError(err)
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if rowsAffected == 0 {
-		return vault.ErrVaultNotFound
+		return nil, vault.ErrVaultNotFound
+	}
+
+	var after decimal.Decimal
+	if txType == "deposit" {
+		after = before.Add(amount)
+	} else {
+		after = before.Sub(amount)
+	}
+
+	auditOp := balanceaudit.OperationDeposit
+	if txType != "deposit" {
+		auditOp = balanceaudit.OperationWithdrawal
+	}
+	actor := balanceaudit.SystemActor("chain_confirmation")
+	if userID != uuid.Nil {
+		actor = userID.String()
+	}
+	if _, err := appendBalanceAuditEntry(ctx, tx, balanceaudit.Entry{
+		VaultID:        id,
+		UserID:         userID,
+		Actor:          actor,
+		Operation:      auditOp,
+		Amount:         amount,
+		BalanceBefore:  before,
+		BalanceAfter:   after,
+		ChainReference: txHash,
+	}); err != nil {
+		return nil, err
 	}
 
 	// --- Ledger: post confirmation as deposit/withdrawal ---
-	// We need a user_id for ledger; vault_transactions row we inserted doesn't have user_id
-	// in this path (legacy). We try to fetch vault owner as fallback.
-	var userID uuid.UUID
-	// Try to get vault owner from vaults table (we have id)
-	_ = tx.QueryRowContext(ctx, `SELECT user_id FROM vaults WHERE id = $1`, id.String()).Scan((*string)(nil))
-	// Actually we will attempt to load vault user_id via a query; if fails, use Nil and skip user leg? But we need user account.
-	// For simplicity, we will use a placeholder that will be handled by ledger posting which can work with Nil user?
-	// Instead, we fetch vault user_id.
-	var ownerStr string
-	if err := tx.QueryRowContext(ctx, `SELECT user_id FROM vaults WHERE id = $1`, id.String()).Scan(&ownerStr); err == nil {
-		if uid, err := uuid.Parse(ownerStr); err == nil {
-			userID = uid
-		}
-	}
-	if userID == uuid.Nil {
-		// If we cannot resolve user, we use vault owner as user for ledger; if still nil, we still post vault leg only?
-		// We will attempt ledger posting with the vault's user_id if available, else skip user leg and post vault+suspense only.
-		// For deposit confirmation, we post same as deposit.
-		if txType == "deposit" {
-			// Need user, if nil we post to vault only via fallback method that allows nil user (creates system account)
-			// We'll post using postDepositLedgerTx which requires userID; if nil, it will fail, so we try best effort.
-			if userID == uuid.Nil {
-				userID = uuid.New() // temporary, will create account but not accurate — but we have owner lookup above
-			}
-			_ = r.postDepositLedgerTx(ctx, tx, id, userID, amount, txHash)
-		} else {
-			if userID == uuid.Nil {
-				userID = uuid.New()
-			}
-			_ = r.postWithdrawalLedgerTx(ctx, tx, id, userID, amount, txHash)
-		}
-	} else {
+	if userID != uuid.Nil {
 		if txType == "deposit" {
 			if err := r.postDepositLedgerTx(ctx, tx, id, userID, amount, txHash); err != nil {
 				if !isLedgerTableMissing(err) {
-					return fmt.Errorf("ledger confirmed deposit posting failed: %w", err)
+					return nil, fmt.Errorf("ledger confirmed deposit posting failed: %w", err)
 				}
 			}
 		} else {
 			if err := r.postWithdrawalLedgerTx(ctx, tx, id, userID, amount, txHash); err != nil {
 				if !isLedgerTableMissing(err) {
-					return fmt.Errorf("ledger confirmed withdrawal posting failed: %w", err)
+					return nil, fmt.Errorf("ledger confirmed withdrawal posting failed: %w", err)
 				}
 			}
 		}
 	}
 
-	return tx.Commit()
+	return capWarning, tx.Commit()
 }
 
 // SoftDeleteVault stamps deleted_at so reads exclude this vault going forward.
@@ -1588,6 +2037,34 @@ func (r *VaultRepository) postRebalanceLedgerTx(ctx context.Context, tx *sql.Tx,
 		{AccountID: fromID, Amount: -stroops, DomainEventType: "rebalance", DomainEventID: domainEventID},
 		{AccountID: toID, Amount: stroops, DomainEventType: "rebalance", DomainEventID: domainEventID},
 	})
+}
+
+// UserDepositTotal returns the sum of current_balance across every
+// non-deleted vault owned by userID. Implements caps.Totals for the
+// per-user deposit cap (nester#1119).
+func (r *VaultRepository) UserDepositTotal(ctx context.Context, userID uuid.UUID) (decimal.Decimal, error) {
+	const query = `
+		SELECT COALESCE(SUM(current_balance), 0)
+		FROM vaults
+		WHERE user_id = $1 AND deleted_at IS NULL
+	`
+	var total decimal.Decimal
+	if err := r.db.QueryRowContext(ctx, query, userID.String()).Scan(&total); err != nil {
+		return decimal.Zero, err
+	}
+	return total, nil
+}
+
+// GlobalDepositTotal returns protocol-wide TVL: the sum of current_balance
+// across every non-deleted vault. Implements caps.Totals for the global TVL
+// cap (nester#1119).
+func (r *VaultRepository) GlobalDepositTotal(ctx context.Context) (decimal.Decimal, error) {
+	const query = `SELECT COALESCE(SUM(current_balance), 0) FROM vaults WHERE deleted_at IS NULL`
+	var total decimal.Decimal
+	if err := r.db.QueryRowContext(ctx, query).Scan(&total); err != nil {
+		return decimal.Zero, err
+	}
+	return total, nil
 }
 
 func mapRepositoryError(err error) error {

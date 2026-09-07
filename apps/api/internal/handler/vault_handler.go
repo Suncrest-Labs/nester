@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/moneypath"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
@@ -719,6 +720,20 @@ func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, 
 	case errors.Is(err, moneypath.ErrPaused):
 		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(
 			http.StatusServiceUnavailable, "MONEY_PATH_PAUSED", err.Error()))
+
+	// Launch caps (#1119). 422 (not 400): the request is well-formed, it is
+	// simply refused by policy given the account/protocol's current state —
+	// the same distinction the codebase already draws for ErrBelowMinDeposit
+	// vs. a malformed request. The message names which cap and by how much.
+	case errors.As(err, new(*caps.CapExceededError)):
+		var capErr *caps.CapExceededError
+		errors.As(err, &capErr)
+		code := "GLOBAL_TVL_CAP_EXCEEDED"
+		if capErr.Kind == caps.KindPerUser {
+			code = "USER_DEPOSIT_CAP_EXCEEDED"
+		}
+		response.WriteJSON(w, http.StatusUnprocessableEntity, response.Err(
+			http.StatusUnprocessableEntity, code, capErr.Error()))
 	case errors.Is(err, vault.ErrVaultNotFound):
 		response.WriteJSON(w, http.StatusNotFound, response.NotFound("vault"))
 	case errors.Is(err, vault.ErrVaultForbidden):

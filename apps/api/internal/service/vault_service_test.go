@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/balanceaudit"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -606,4 +609,316 @@ func (r *memoryVaultRepository) ListUserVaultTransactions(_ context.Context, use
 func cloneVault(model vault.Vault) vault.Vault {
 	model.Allocations = append([]vault.Allocation(nil), model.Allocations...)
 	return model
+}
+
+// stubCapsChecker lets tests control whether RecordDeposit's cap check
+// passes or fails, without depending on the caps package or a database.
+type stubCapsChecker struct {
+	err       error
+	lastUser  uuid.UUID
+	lastAmt   decimal.Decimal
+	callCount int
+}
+
+func (s *stubCapsChecker) CheckDeposit(_ context.Context, userID uuid.UUID, amount decimal.Decimal) error {
+	s.callCount++
+	s.lastUser = userID
+	s.lastAmt = amount
+	return s.err
+}
+
+// TestVaultServiceRecordDeposit_CapsChecker verifies RecordDeposit consults
+// the caps checker before touching the chain or crediting a balance
+// (nester#1119): a cap-exceeded rejection (or any other checker error) is
+// surfaced verbatim and leaves the balance untouched, while an approval lets
+// the deposit proceed exactly as it did before caps existed.
+func TestVaultServiceRecordDeposit_CapsChecker(t *testing.T) {
+	capErr := errors.New("deposit would exceed the per-user deposit cap")
+	otherErr := errors.New("caps service unavailable")
+
+	tests := []struct {
+		name        string
+		checkerErr  error
+		wantErr     error
+		wantBalance decimal.Decimal
+	}{
+		{
+			name:        "rejects when cap exceeded",
+			checkerErr:  capErr,
+			wantErr:     capErr,
+			wantBalance: decimal.Zero,
+		},
+		{
+			name:        "allows when under cap",
+			checkerErr:  nil,
+			wantErr:     nil,
+			wantBalance: decimal.RequireFromString("100"),
+		},
+		{
+			name:        "rejects on non-cap checker error",
+			checkerErr:  otherErr,
+			wantErr:     otherErr,
+			wantBalance: decimal.Zero,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			userID := uuid.New()
+			repository := newMemoryVaultRepository(userID)
+			svc := NewVaultService(repository)
+
+			created, err := svc.CreateVault(context.Background(), CreateVaultInput{
+				UserID:          userID,
+				ContractAddress: "CA123",
+				Currency:        "usdc",
+			})
+			if err != nil {
+				t.Fatalf("CreateVault() error = %v", err)
+			}
+
+			checker := &stubCapsChecker{err: tt.checkerErr}
+			svc.SetCapsChecker(checker)
+
+			updated, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
+				VaultID: created.ID,
+				Amount:  decimal.RequireFromString("100"),
+			})
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("RecordDeposit() error = %v, want %v", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("RecordDeposit() error = %v", err)
+			}
+			if checker.callCount != 1 {
+				t.Fatalf("expected caps checker to be consulted exactly once, got %d", checker.callCount)
+			}
+
+			if tt.wantErr != nil {
+				// Balance must be unchanged — the rejected deposit was never applied.
+				refreshed, getErr := repository.GetVault(context.Background(), created.ID)
+				if getErr != nil {
+					t.Fatalf("GetVault() error = %v", getErr)
+				}
+				if !refreshed.CurrentBalance.Equal(tt.wantBalance) {
+					t.Fatalf("expected balance to stay %s after rejected deposit, got %s", tt.wantBalance, refreshed.CurrentBalance)
+				}
+			} else if !updated.CurrentBalance.Equal(tt.wantBalance) {
+				t.Fatalf("expected balance %s, got %s", tt.wantBalance, updated.CurrentBalance)
+			}
+		})
+	}
+}
+
+// memoryBalanceAuditRecorder is an in-memory BalanceAuditRecorder for tests.
+type memoryBalanceAuditRecorder struct {
+	entries []balanceaudit.Entry
+}
+
+func (r *memoryBalanceAuditRecorder) Append(_ context.Context, entry balanceaudit.Entry) (balanceaudit.Entry, error) {
+	r.entries = append(r.entries, entry)
+	return entry, nil
+}
+
+// TestVaultServiceRecordDeposit_AppendsBalanceAuditEntry verifies every
+// deposit is appended to the audit ledger with actor, operation, before,
+// after and chain reference populated, and that replaying the resulting
+// ledger reproduces the vault's live balance (nester#1124).
+func TestVaultServiceRecordDeposit_AppendsBalanceAuditEntry(t *testing.T) {
+	userID := uuid.New()
+	repository := newMemoryVaultRepository(userID)
+	svc := NewVaultService(repository)
+
+	recorder := &memoryBalanceAuditRecorder{}
+	svc.SetBalanceAuditRecorder(recorder)
+
+	created, err := svc.CreateVault(context.Background(), CreateVaultInput{
+		UserID:          userID,
+		ContractAddress: "CA123",
+		Currency:        "usdc",
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+
+	if _, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
+		VaultID: created.ID,
+		Amount:  decimal.RequireFromString("100"),
+	}); err != nil {
+		t.Fatalf("RecordDeposit() #1 error = %v", err)
+	}
+	if _, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
+		VaultID: created.ID,
+		Amount:  decimal.RequireFromString("50"),
+	}); err != nil {
+		t.Fatalf("RecordDeposit() #2 error = %v", err)
+	}
+
+	final, err := svc.RecordWithdrawal(context.Background(), RecordWithdrawalInput{
+		VaultID: created.ID,
+		Amount:  decimal.RequireFromString("30"),
+	})
+	if err != nil {
+		t.Fatalf("RecordWithdrawal() error = %v", err)
+	}
+
+	if len(recorder.entries) != 3 {
+		t.Fatalf("expected 3 audit entries, got %d", len(recorder.entries))
+	}
+
+	first := recorder.entries[0]
+	if first.Operation != balanceaudit.OperationDeposit {
+		t.Fatalf("entry[0] operation = %v, want deposit", first.Operation)
+	}
+	if first.Actor != userID.String() {
+		t.Fatalf("entry[0] actor = %q, want %q", first.Actor, userID.String())
+	}
+	if !first.BalanceBefore.IsZero() || !first.BalanceAfter.Equal(decimal.RequireFromString("100")) {
+		t.Fatalf("entry[0] before/after = %s/%s, want 0/100", first.BalanceBefore, first.BalanceAfter)
+	}
+	if first.ChainReference != "" {
+		t.Fatalf("entry[0] chain reference = %q, want empty (no chain verifier configured in this test)", first.ChainReference)
+	}
+
+	last := recorder.entries[2]
+	if last.Operation != balanceaudit.OperationWithdrawal {
+		t.Fatalf("entry[2] operation = %v, want withdrawal", last.Operation)
+	}
+
+	// Replaying the recorded ledger from zero must reproduce the vault's
+	// actual current balance exactly.
+	replayed, err := balanceaudit.Reconcile(recorder.entries)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if !replayed.Equal(final.CurrentBalance) {
+		t.Fatalf("replayed balance %s does not match live balance %s", replayed, final.CurrentBalance)
+	}
+}
+
+// A rebalance moves funds between protocols. The vault total does not change,
+// but the money does, so #1124's "every balance-changing operation" has to
+// cover it — otherwise the trail cannot explain how a position moved.
+func TestVaultServiceRebalancePosition_AppendsBothAuditLegs(t *testing.T) {
+	userID := uuid.New()
+	repository := newMemoryVaultRepository(userID)
+	svc := NewVaultService(repository)
+
+	recorder := &memoryBalanceAuditRecorder{}
+	svc.SetBalanceAuditRecorder(recorder)
+
+	created, err := svc.CreateVault(context.Background(), CreateVaultInput{
+		UserID:          userID,
+		ContractAddress: "CA123",
+		Currency:        "usdc",
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+	if _, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
+		VaultID: created.ID,
+		Amount:  decimal.RequireFromString("100"),
+	}); err != nil {
+		t.Fatalf("RecordDeposit() error = %v", err)
+	}
+
+	before := len(recorder.entries)
+
+	if _, err := svc.RebalancePosition(context.Background(), RebalancePositionInput{
+		VaultID:      created.ID,
+		UserID:       userID,
+		Amount:       decimal.RequireFromString("40"),
+		FromProtocol: "blend",
+		ToProtocol:   "yieldblox",
+		TxHash:       "tx-rebalance-1",
+	}); err != nil {
+		t.Fatalf("RebalancePosition() error = %v", err)
+	}
+
+	legs := recorder.entries[before:]
+	if len(legs) != 2 {
+		t.Fatalf("expected 2 audit legs for a rebalance, got %d", len(legs))
+	}
+	if legs[0].Operation != balanceaudit.OperationRebalanceWithdraw {
+		t.Errorf("leg[0] operation = %v, want %v", legs[0].Operation, balanceaudit.OperationRebalanceWithdraw)
+	}
+	if legs[1].Operation != balanceaudit.OperationRebalanceDeposit {
+		t.Errorf("leg[1] operation = %v, want %v", legs[1].Operation, balanceaudit.OperationRebalanceDeposit)
+	}
+	for i, leg := range legs {
+		if leg.ChainReference != "tx-rebalance-1" {
+			t.Errorf("leg[%d] chain reference = %q, want tx-rebalance-1", i, leg.ChainReference)
+		}
+		if leg.Actor != userID.String() {
+			t.Errorf("leg[%d] actor = %q, want %q", i, leg.Actor, userID.String())
+		}
+		if !leg.Amount.Equal(decimal.RequireFromString("40")) {
+			t.Errorf("leg[%d] amount = %s, want 40", i, leg.Amount)
+		}
+	}
+	if got := legs[0].Metadata["protocol"]; got != "blend" {
+		t.Errorf("withdraw leg protocol = %v, want blend", got)
+	}
+	if got := legs[1].Metadata["protocol"]; got != "yieldblox" {
+		t.Errorf("deposit leg protocol = %v, want yieldblox", got)
+	}
+}
+
+// An emergency withdraw unwinds every position, which is the balance change an
+// operator is most likely to be asked to account for after the fact (#1124).
+func TestVaultServiceEmergencyWithdraw_AppendsAuditEntryPerPosition(t *testing.T) {
+	userID := uuid.New()
+	repository := newMemoryVaultRepository(userID)
+	svc := NewVaultService(repository)
+
+	recorder := &memoryBalanceAuditRecorder{}
+	svc.SetBalanceAuditRecorder(recorder)
+
+	created, err := svc.CreateVault(context.Background(), CreateVaultInput{
+		UserID:          userID,
+		ContractAddress: "CA123",
+		Currency:        "usdc",
+	})
+	if err != nil {
+		t.Fatalf("CreateVault() error = %v", err)
+	}
+	if _, err := svc.RecordDeposit(context.Background(), RecordDepositInput{
+		VaultID: created.ID,
+		Amount:  decimal.RequireFromString("100"),
+	}); err != nil {
+		t.Fatalf("RecordDeposit() error = %v", err)
+	}
+	if _, err := svc.UpdateAllocations(context.Background(), UpdateAllocationsInput{
+		VaultID: created.ID,
+		Allocations: []vault.Allocation{
+			{Protocol: "blend", Amount: decimal.RequireFromString("60")},
+			{Protocol: "yieldblox", Amount: decimal.RequireFromString("40")},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateAllocations() error = %v", err)
+	}
+
+	before := len(recorder.entries)
+
+	result, err := svc.EmergencyWithdraw(context.Background(), EmergencyWithdrawInput{VaultID: created.ID})
+	if err != nil {
+		t.Fatalf("EmergencyWithdraw() error = %v", err)
+	}
+	if len(result.Succeeded) == 0 {
+		t.Fatal("no positions unwound; nothing to audit")
+	}
+
+	entries := recorder.entries[before:]
+	if len(entries) != len(result.Succeeded) {
+		t.Fatalf("expected %d audit entries (one per unwound position), got %d", len(result.Succeeded), len(entries))
+	}
+	for i, entry := range entries {
+		if entry.Operation != balanceaudit.OperationEmergencyWithdraw {
+			t.Errorf("entry[%d] operation = %v, want %v", i, entry.Operation, balanceaudit.OperationEmergencyWithdraw)
+		}
+		if entry.Metadata["protocol"] == nil {
+			t.Errorf("entry[%d] has no protocol metadata; the trail cannot say which position unwound", i)
+		}
+	}
 }

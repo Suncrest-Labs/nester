@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/breaker"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
 	"github.com/suncrestlabs/nester/apps/api/internal/retry"
 )
@@ -64,6 +65,7 @@ type Config struct {
 	indexer              IndexerConfig
 	circuitBreaker       CircuitBreakerConfig
 	rpcRetry             RPCRetryConfig
+	launchCaps           LaunchCapsConfig
 }
 
 // CircuitBreakerConfig is the policy protecting the chain upstreams, Soroban
@@ -198,6 +200,41 @@ type PerformanceConfig struct {
 // TVLConfig governs the background TVL snapshot worker.
 type TVLConfig struct {
 	refreshInterval time.Duration
+}
+
+// LaunchCapsConfig governs the per-user deposit cap and global TVL cap for
+// the testnet launch (nester#1119). Amounts are stored as decimal strings
+// (matching RecurringDepositConfig.minDeposit) and parsed by whoever wires
+// the caps checker, so an operator can change either cap by editing the env
+// var and restarting — no code change or migration needed. A zero/empty
+// value disables that cap.
+type LaunchCapsConfig struct {
+	perUserDepositCap string
+	globalTVLCap      string
+	warnThresholdsPct []int
+}
+
+func (l LaunchCapsConfig) PerUserDepositCap() string { return l.perUserDepositCap }
+func (l LaunchCapsConfig) GlobalTVLCap() string       { return l.globalTVLCap }
+func (l LaunchCapsConfig) WarnThresholdsPct() []int   { return l.warnThresholdsPct }
+
+// validateWarnThresholdsPct enforces LAUNCH_CAP_WARN_THRESHOLDS_PCT's
+// contract: every threshold must be a percentage in (0, 100], and the list
+// must be strictly increasing (no duplicates, no out-of-order values) so the
+// cap checker can rely on it being sorted ascending. An empty list is valid
+// — it just means no warning thresholds are configured.
+func validateWarnThresholdsPct(thresholds []int) error {
+	prev := 0
+	for i, t := range thresholds {
+		if t < 1 || t > 100 {
+			return fmt.Errorf("threshold %d (index %d) must be between 1 and 100", t, i)
+		}
+		if i > 0 && t <= prev {
+			return fmt.Errorf("thresholds must be strictly increasing: %d (index %d) is not greater than %d", t, i, prev)
+		}
+		prev = t
+	}
+	return nil
 }
 
 // APYRefreshConfig governs polling yield_registry for on-chain APY updates.
@@ -420,6 +457,13 @@ func Load() (*Config, error) {
 		},
 		tvl: TVLConfig{
 			refreshInterval: loader.durationDefault("TVL_REFRESH_INTERVAL", 15*time.Minute),
+		},
+		launchCaps: LaunchCapsConfig{
+			// Empty/"0" disables the respective cap. No default cap is set:
+			// operators opt in explicitly for the testnet launch window.
+			perUserDepositCap: loader.stringDefault("LAUNCH_PER_USER_DEPOSIT_CAP", ""),
+			globalTVLCap:      loader.stringDefault("LAUNCH_GLOBAL_TVL_CAP", ""),
+			warnThresholdsPct: loader.intSliceDefault("LAUNCH_CAP_WARN_THRESHOLDS_PCT", []int{80, 90}),
 		},
 		apyRefresh: APYRefreshConfig{
 			refreshInterval:       loader.durationDefault("APY_REFRESH_INTERVAL", 5*time.Minute),
@@ -663,6 +707,10 @@ func (p PerformanceConfig) SnapshotInterval() time.Duration {
 
 func (c Config) TVL() TVLConfig {
 	return c.tvl
+}
+
+func (c Config) LaunchCaps() LaunchCapsConfig {
+	return c.launchCaps
 }
 
 func (t TVLConfig) RefreshInterval() time.Duration {
@@ -929,6 +977,20 @@ func (c *Config) validate(loader *envLoader) {
 
 	if c.tracing.latencyThreshold < 0 {
 		loader.addError("TRACING_LATENCY_THRESHOLD must not be negative")
+	}
+
+	// Launch caps (#1119): blank/"0" explicitly disables a cap; anything else
+	// must parse as a non-negative decimal, checked at load time so a typo
+	// fails startup instead of silently disabling the cap (nester CodeRabbit
+	// finding).
+	if _, err := caps.ParseCapValue(c.launchCaps.perUserDepositCap); err != nil {
+		loader.addError(fmt.Sprintf("LAUNCH_PER_USER_DEPOSIT_CAP: %s", err))
+	}
+	if _, err := caps.ParseCapValue(c.launchCaps.globalTVLCap); err != nil {
+		loader.addError(fmt.Sprintf("LAUNCH_GLOBAL_TVL_CAP: %s", err))
+	}
+	if err := validateWarnThresholdsPct(c.launchCaps.warnThresholdsPct); err != nil {
+		loader.addError(fmt.Sprintf("LAUNCH_CAP_WARN_THRESHOLDS_PCT: %s", err))
 	}
 
 	if c.server.port <= 0 || c.server.port > 65535 {
@@ -1527,6 +1589,28 @@ func (l *envLoader) stringSliceDefault(key string, fallback []string) []string {
 		if trimmed := strings.TrimSpace(p); trimmed != "" {
 			out = append(out, trimmed)
 		}
+	}
+	return out
+}
+
+func (l *envLoader) intSliceDefault(key string, fallback []int) []int {
+	raw, ok := l.lookup(key)
+	if !ok {
+		return fallback
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		value, err := strconv.Atoi(trimmed)
+		if err != nil {
+			l.addError(fmt.Sprintf("%s must be a comma-separated list of integers, got %q", key, raw))
+			return fallback
+		}
+		out = append(out, value)
 	}
 	return out
 }

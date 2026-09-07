@@ -27,6 +27,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/cache"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
 	cryptopkg "github.com/suncrestlabs/nester/apps/api/internal/crypto"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/jobqueue"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/ledger"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/nudge"
@@ -555,6 +556,48 @@ func run() error {
 	moneyPathSwitchService := service.NewMoneyPathSwitchService(
 		postgres.NewMoneyPathSwitchRepository(db), auditLogger)
 	vaultService.SetMoneyPathSwitches(moneyPathSwitchService)
+
+	// Launch caps: per-user deposit cap and global TVL cap (#1119).
+	// Config-driven (LAUNCH_PER_USER_DEPOSIT_CAP / LAUNCH_GLOBAL_TVL_CAP env
+	// vars) so operators can raise, lower, or disable either cap by changing
+	// the env var and restarting — no code change. Blank or "0" explicitly
+	// disables a cap; any other malformed or negative value fails startup
+	// (nester CodeRabbit finding) rather than silently disabling the cap.
+	{
+		// Blank/"0" explicitly disables a cap; anything else must parse as a
+		// non-negative decimal or startup fails loudly rather than silently
+		// disabling the cap on a typo (nester CodeRabbit finding).
+		perUserCap, err := caps.ParseCapValue(cfg.LaunchCaps().PerUserDepositCap())
+		if err != nil {
+			return fmt.Errorf("LAUNCH_PER_USER_DEPOSIT_CAP: %w", err)
+		}
+		globalCap, err := caps.ParseCapValue(cfg.LaunchCaps().GlobalTVLCap())
+		if err != nil {
+			return fmt.Errorf("LAUNCH_GLOBAL_TVL_CAP: %w", err)
+		}
+		capsChecker := caps.NewChecker(caps.Config{
+			PerUserCap:        perUserCap,
+			GlobalCap:         globalCap,
+			WarnThresholdsPct: cfg.LaunchCaps().WarnThresholdsPct(),
+		}, vaultRepository, func(ctx context.Context, w caps.Warning) {
+			logpkg.FromContext(ctx).Warn("launch cap approaching threshold",
+				"kind", w.Kind,
+				"user_id", w.UserID,
+				"cap", w.Cap.String(),
+				"new_total", w.NewTotal.String(),
+				"threshold_pct", w.ThresholdPct,
+			)
+		})
+		vaultService.SetCapsChecker(capsChecker)
+		// Same caps enforced on the confirmed on-chain path, so a deposit that
+		// only gets caps-checked once it lands can't silently skip the check
+		// (nester CodeRabbit finding). See TransactionService.SetCapsChecker's
+		// doc comment for why this warns rather than blocks.
+		transactionService.SetCapsChecker(capsChecker)
+	}
+
+	// Append-only balance-change audit trail (#1124).
+	vaultService.SetBalanceAuditRecorder(postgres.NewBalanceAuditRepository(db))
 
 	activityEventRepo := postgres.NewActivityEventRepository(db)
 	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)
@@ -1142,6 +1185,11 @@ func run() error {
 	// the denominator of the deposit success rate.
 	ledgerVaultService := service.NewVaultService(vaultRepository)
 	ledgerVaultService.SetMetrics(appMetrics)
+	// Recurring deposits are still deposits: subject to the same launch
+	// caps and the same balance-change audit trail as the interactive path
+	// (#1119, #1124).
+	ledgerVaultService.SetCapsChecker(vaultService.CapsChecker())
+	ledgerVaultService.SetBalanceAuditRecorder(postgres.NewBalanceAuditRepository(db))
 	scheduledDepositSvc := service.NewScheduledDepositService(ledgerVaultService)
 	goalProgressSvc := service.NewGoalProgressService(savingsGoalRepo)
 

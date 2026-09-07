@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 // Config controls the worker pool. Read once at construction.
@@ -228,14 +230,26 @@ func (w *Worker) process(reg *registration, job Job) {
 		defer stopHB()
 	}
 
-	start := time.Now()
-	err := w.runHandler(base, reg.handler, job)
-	w.metrics.ObserveLatency(job.Type, time.Since(start))
-
 	logger := w.logger.With("job_id", job.ID, "type", job.Type, "attempt", job.Attempts)
 	if job.CorrelationID != "" {
 		logger = logger.With("correlation_id", job.CorrelationID)
 	}
+
+	// Propagate the originating request's correlation id (and a logger already
+	// bound to it) into the handler's context, so any downstream log line —
+	// including further job enqueues or chain submissions triggered from this
+	// handler — carries the same request_id the edge middleware minted
+	// (nester#1111). Falls back to the job_id-scoped logger above when the job
+	// was not enqueued with a CorrelationID (e.g. cron-triggered jobs).
+	handlerCtx := base
+	if job.CorrelationID != "" {
+		handlerCtx = logpkg.WithRequestID(handlerCtx, job.CorrelationID)
+	}
+	handlerCtx = logpkg.WithLogger(handlerCtx, logger)
+
+	start := time.Now()
+	err := w.runHandler(handlerCtx, reg.handler, job)
+	w.metrics.ObserveLatency(job.Type, time.Since(start))
 
 	// Use a fresh, short-lived context for the terminal state write so a
 	// cancelled/expired job context cannot prevent us recording the outcome.
