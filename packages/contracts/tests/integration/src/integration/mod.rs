@@ -1,4 +1,5 @@
 pub mod adapter_failure_tests;
+pub mod adapter_pool_tests;
 pub mod adversarial_tests;
 pub mod circuit_breaker_tests;
 pub mod fee_tests;

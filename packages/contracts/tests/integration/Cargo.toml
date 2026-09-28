@@ -21,3 +21,4 @@ yield-registry-contract      = { path = "../../contracts/yield_registry" }
 allocation-strategy-contract = { path = "../../contracts/allocation_strategy" }
 proptest                     = "1.4"
 treasury-contract            = { path = "../../contracts/treasury" }
+adapter-pool-contract        = { path = "../../contracts/adapter_pool" }

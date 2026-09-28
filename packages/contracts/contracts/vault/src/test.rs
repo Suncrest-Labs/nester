@@ -40,8 +40,8 @@ extern crate std;
 use nester_access_control::Role;
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
-    testutils::{Address as _, Ledger, LedgerInfo},
-    token, Address, Env, String, Symbol,
+    testutils::{Address as _, Events as _, Ledger, LedgerInfo},
+    token, Address, Env, IntoVal, String, Symbol,
 };
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
@@ -1787,6 +1787,81 @@ fn get_min_deposit_returns_configured_value() {
 }
 
 // ---------------------------------------------------------------------------
+// Cap-change event emission (issue #1354) — set_max_deposit/set_min_deposit
+// were silent on-chain; the off-chain indexer needs a CAP_CHG event to
+// reconstruct config state without extra RPC calls.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_max_deposit_emits_cap_changed_event() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_max_deposit(&admin, &(500 * XLM));
+
+    let events = env.events().all();
+    let (contract_id, topics, data) = events
+        .last()
+        .expect("set_max_deposit must emit an event")
+        .clone();
+    assert_eq!(contract_id, vault.address);
+
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
+    let topic2: Address = topics.get(2).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "VAULT"));
+    assert_eq!(topic1, Symbol::new(&env, "CAP_CHG"));
+    assert_eq!(topic2, admin);
+
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(decoded.field, Symbol::new(&env, "MAX_DEP"));
+    assert_eq!(decoded.old_value, i128::MAX);
+    assert_eq!(decoded.new_value, 500 * XLM);
+}
+
+#[test]
+fn set_min_deposit_emits_cap_changed_event() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    let events = env.events().all();
+    let (contract_id, topics, data) = events
+        .last()
+        .expect("set_min_deposit must emit an event")
+        .clone();
+    assert_eq!(contract_id, vault.address);
+
+    let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, Symbol::new(&env, "CAP_CHG"));
+
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(decoded.field, Symbol::new(&env, "MIN_DEP"));
+    assert_eq!(decoded.old_value, 0);
+    assert_eq!(decoded.new_value, 10 * XLM);
+}
+
+#[test]
+fn set_max_deposit_event_old_value_reflects_prior_setting() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_max_deposit(&admin, &(500 * XLM));
+    vault.set_max_deposit(&admin, &(750 * XLM));
+
+    let events = env.events().all();
+    let (_, _, data) = events
+        .last()
+        .expect("second set_max_deposit must emit")
+        .clone();
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(
+        decoded.old_value,
+        500 * XLM,
+        "must reflect the PRIOR cap, not a default"
+    );
+    assert_eq!(decoded.new_value, 750 * XLM);
+}
+
+// ---------------------------------------------------------------------------
 // Emergency Withdraw All Positions Tests (issue #736)
 // ---------------------------------------------------------------------------
 
@@ -2659,4 +2734,3 @@ mod proptests {
         }
     }
 }
-

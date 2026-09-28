@@ -138,6 +138,10 @@ const DEFAULT_MAX_REBALANCE_VALUE_BPS: u32 = rebalance::DEFAULT_MAX_REBALANCE_VA
 const DEFAULT_MAX_LEG_SLIPPAGE_BPS: u32 = rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING;
 const PNLTY_CHG: Symbol = symbol_short!("PNLTY_CHG");
 const PNLTY_DST: Symbol = symbol_short!("PNLTY_DST");
+/// Emitted by `set_max_deposit`/`set_min_deposit` — issue #1354: cap changes
+/// were silent on-chain, which the off-chain indexer needs to reconstruct
+/// config state without extra RPC calls.
+const CAP_CHG: Symbol = symbol_short!("CAP_CHG");
 /// Default split: 70% of every penalty compensates remaining depositors,
 /// 30% is protocol revenue — within the compile-time treasury cap.
 const DEFAULT_DEPOSITOR_SHARE_BPS: u32 = 10_000 - nester_common::MAX_TREASURY_SHARE_BPS + 2_000;
@@ -158,6 +162,17 @@ pub struct FeeConfig {
 pub struct FeeConfigUpdatedEventData {
     pub old_config: FeeConfig,
     pub new_config: FeeConfig,
+}
+
+/// Shared by `set_max_deposit`/`set_min_deposit`: which cap changed, and its
+/// old/new value. One struct for both setters (DRY) rather than a
+/// near-identical struct per field.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CapChangedEventData {
+    pub field: Symbol,
+    pub old_value: i128,
+    pub new_value: i128,
 }
 
 #[contracttype]
@@ -1618,7 +1633,23 @@ impl VaultContract {
         if amount <= 0 {
             panic_with_error!(&env, ContractError::ConfigOutOfRange);
         }
+        let old_value: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxDeposit)
+            .unwrap_or(i128::MAX);
         env.storage().instance().set(&DataKey::MaxDeposit, &amount);
+        emit_event(
+            &env,
+            VAULT,
+            CAP_CHG,
+            caller,
+            CapChangedEventData {
+                field: symbol_short!("MAX_DEP"),
+                old_value,
+                new_value: amount,
+            },
+        );
     }
 
     pub fn set_min_deposit(env: Env, caller: Address, amount: i128) {
@@ -1628,7 +1659,23 @@ impl VaultContract {
         if amount < 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
+        let old_value: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDeposit)
+            .unwrap_or(0);
         env.storage().instance().set(&DataKey::MinDeposit, &amount);
+        emit_event(
+            &env,
+            VAULT,
+            CAP_CHG,
+            caller,
+            CapChangedEventData {
+                field: symbol_short!("MIN_DEP"),
+                old_value,
+                new_value: amount,
+            },
+        );
     }
 
     pub fn get_min_deposit(env: Env) -> i128 {

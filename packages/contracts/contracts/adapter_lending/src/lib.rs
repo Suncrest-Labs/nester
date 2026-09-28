@@ -12,11 +12,11 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
-    Symbol, Vec, IntoVal, Val,
+    IntoVal, Symbol, Val, Vec,
 };
 
 use nester_common::adapters::{AdapterApy, ApyConfidence, YieldAdapter};
-use nester_common::{emit_event, ContractError};
+use nester_common::{emit_event, with_reentrancy_guard, ContractError};
 
 const ADAPTER: Symbol = symbol_short!("ADAPTER");
 const DEPOSITED: Symbol = symbol_short!("DEPOSIT");
@@ -59,7 +59,9 @@ impl LendingAdapterContract {
         }
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage().instance().set(&DataKey::Protocol, &protocol);
-        env.storage().instance().set(&DataKey::Underlying, &underlying);
+        env.storage()
+            .instance()
+            .set(&DataKey::Underlying, &underlying);
         env.storage().instance().set(&DataKey::Units, &0i128);
     }
 
@@ -70,11 +72,8 @@ impl LendingAdapterContract {
     pub fn get_protocol(env: Env) -> Address {
         env.storage().instance().get(&DataKey::Protocol).unwrap()
     }
-}
 
-#[contractimpl]
-impl YieldAdapter for LendingAdapterContract {
-    fn deposit(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128 {
+    fn deposit_internal(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128 {
         from.require_auth();
         require_vault(&env, &from);
         if amount <= 0 {
@@ -103,7 +102,9 @@ impl YieldAdapter for LendingAdapterContract {
         }
 
         let held: i128 = env.storage().instance().get(&DataKey::Units).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Units, &(held + units));
+        env.storage()
+            .instance()
+            .set(&DataKey::Units, &(held + units));
 
         emit_event(
             &env,
@@ -115,7 +116,7 @@ impl YieldAdapter for LendingAdapterContract {
         units
     }
 
-    fn withdraw(env: Env, to: Address, units: i128, min_out: i128) -> i128 {
+    fn withdraw_internal(env: Env, to: Address, units: i128, min_out: i128) -> i128 {
         let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
         vault.require_auth();
         if units <= 0 {
@@ -145,7 +146,9 @@ impl YieldAdapter for LendingAdapterContract {
             panic_with_error!(&env, ContractError::SlippageExceeded);
         }
 
-        env.storage().instance().set(&DataKey::Units, &(held - units));
+        env.storage()
+            .instance()
+            .set(&DataKey::Units, &(held - units));
         token::Client::new(&env, &underlying).transfer(&me, &to, &assets);
 
         emit_event(
@@ -159,6 +162,19 @@ impl YieldAdapter for LendingAdapterContract {
             },
         );
         assets
+    }
+}
+
+#[contractimpl]
+impl YieldAdapter for LendingAdapterContract {
+    fn deposit(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128 {
+        with_reentrancy_guard(env, |env| {
+            Self::deposit_internal(env, from, amount, min_units_out)
+        })
+    }
+
+    fn withdraw(env: Env, to: Address, units: i128, min_out: i128) -> i128 {
+        with_reentrancy_guard(env, |env| Self::withdraw_internal(env, to, units, min_out))
     }
 
     /// Asset value of the aggregate position. `_owner` is ignored: the
