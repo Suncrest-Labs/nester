@@ -230,3 +230,17 @@ html.menu-open {
         repeating-linear-gradient(180deg, transparent, transparent 3px, rgba(255,255,255,0.08) 3px, rgba(255,255,255,0.08) 7px),
         repeating-linear-gradient(270deg, transparent, transparent 3px, rgba(255,255,255,0.08) 3px, rgba(255,255,255,0.08) 7px);
 }
+
+/* Respect the OS-level reduced-motion preference for any CSS transition or
+   animation app-wide, as a fallback for the components not already gated by
+   the useReducedMotion hook. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}

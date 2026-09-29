@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -22,6 +22,8 @@ import {
 } from "@/lib/api/vaults";
 import { cn } from "@/lib/utils";
 import { getExplorerTxUrl } from "@/utils/explorer";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 
 interface HarvestModalProps {
   open: boolean;
@@ -82,6 +84,20 @@ function ModalShell({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const prefersReducedMotion = useReducedMotion();
+  useFocusTrap(panelRef, open);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
   return (
     <AnimatePresence>
       {open && (
@@ -89,14 +105,19 @@ function ModalShell({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          transition={prefersReducedMotion ? { duration: 0 } : undefined}
           className="fixed inset-0 z-100 bg-black/45 px-4 py-8 backdrop-blur-sm"
         >
           <div className="flex min-h-full items-center justify-center">
             <motion.div
-              initial={{ opacity: 0, y: 24, scale: 0.98 }}
+              ref={panelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              initial={prefersReducedMotion ? false : { opacity: 0, y: 24, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 12, scale: 0.98 }}
-              transition={{ duration: 0.2 }}
+              exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
+              transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.2 }}
               className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#fafafa] shadow-2xl"
             >
               <div className="flex items-start justify-between border-b border-border px-6 py-5">
@@ -104,7 +125,7 @@ function ModalShell({
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
                     Vault Action
                   </p>
-                  <h2 className="mt-2 font-heading text-2xl font-light text-foreground">
+                  <h2 id={titleId} className="mt-2 font-heading text-2xl font-light text-foreground">
                     {title}
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
