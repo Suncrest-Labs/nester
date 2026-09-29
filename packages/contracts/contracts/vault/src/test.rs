@@ -41,7 +41,7 @@ use nester_access_control::Role;
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
     testutils::{Address as _, Ledger, LedgerInfo},
-    token, Address, Env, String, Symbol,
+    token, Address, BytesN, Env, String, Symbol,
 };
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
@@ -2409,6 +2409,74 @@ fn measure_reentrancy_guard_resource_cost_on_deposit_and_withdraw() {
         "reentrancy_guard_deposit_cpu={deposit_cpu} reentrancy_guard_deposit_mem={deposit_mem} \
          reentrancy_guard_withdraw_cpu={withdraw_cpu} reentrancy_guard_withdraw_mem={withdraw_mem}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Upgrade posture (see docs/security/upgrade-policy.md): the vault is
+// upgradeable only through a timelocked, Upgrader-gated wasm swap. Holding
+// `Role::Admin` alone is not sufficient, and execution cannot happen before
+// the proposed ETA matures.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic]
+fn propose_upgrade_rejects_caller_without_upgrader_role() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let eta = env.ledger().timestamp() + 200_000;
+
+    // `admin` holds Role::Admin but was never granted Role::Upgrader.
+    vault.propose_upgrade(&admin, &new_hash, &eta);
+}
+
+#[test]
+fn propose_upgrade_rejects_delay_shorter_than_minimum() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    vault.grant_role(&admin, &admin, &Role::Upgrader);
+
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    // MIN_UPGRADE_DELAY_VAULT is 172_800s (48h); this eta is far too soon.
+    let too_soon_eta = env.ledger().timestamp() + 60;
+
+    let result = vault.try_propose_upgrade(&admin, &new_hash, &too_soon_eta);
+    assert!(
+        result.is_err(),
+        "propose_upgrade must enforce the 48h minimum timelock delay"
+    );
+}
+
+#[test]
+fn execute_upgrade_before_eta_is_rejected_even_for_upgrader() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    vault.grant_role(&admin, &admin, &Role::Upgrader);
+
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let eta = env.ledger().timestamp() + 172_800; // MIN_UPGRADE_DELAY_VAULT
+    vault.propose_upgrade(&admin, &new_hash, &eta);
+
+    // Before maturity, execution must fail regardless of caller or hash.
+    let early_result = vault.try_execute_upgrade(&admin, &new_hash);
+    assert!(
+        early_result.is_err(),
+        "execute_upgrade must reject before the pending upgrade's ETA"
+    );
+
+    advance_time(&env, 172_800);
+
+    // Once matured, the timelock no longer blocks execution — only a hash
+    // mismatch would. Using the wrong hash here isolates that the ETA gate
+    // (not the wasm hash) was the reason the earlier call failed.
+    let wrong_hash = BytesN::from_array(&env, &[9u8; 32]);
+    let matured_wrong_hash_result = vault.try_execute_upgrade(&admin, &wrong_hash);
+    assert!(
+        matured_wrong_hash_result.is_err(),
+        "execute_upgrade must still validate the wasm hash after maturity"
+    );
+
+    // The pending upgrade must remain untouched since no execution succeeded.
+    let pending = vault.get_pending_upgrade().expect("pending upgrade must persist");
+    assert_eq!(pending.wasm_hash, new_hash);
+    assert_eq!(pending.eta, eta);
 }
 
 // ---------------------------------------------------------------------------
