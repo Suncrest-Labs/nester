@@ -1878,6 +1878,104 @@ fn emergency_withdraw_all_with_no_positions_returns_empty() {
 }
 
 // ---------------------------------------------------------------------------
+// Emergency withdrawal under adverse conditions (issue: emergency path
+// hardening). These pin down the exact boundary of the escape hatch: what
+// unlocks it, what a failing adapter does to it, and that it can never pay
+// out more than a caller's own entitlement.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emergency_withdraw_blocked_by_degraded_source_failures_alone() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 500 * XLM);
+    vault.deposit(&user, &(500 * XLM), &0);
+
+    // Three consecutive adapter failures trip the source-failure breaker to
+    // `DepositsHalted` (see `breaker::note_source_failure`,
+    // `DEFAULT_MAX_SOURCE_FAILURES == 3`).
+    vault.record_source_failure(&admin);
+    vault.record_source_failure(&admin);
+    vault.record_source_failure(&admin);
+    assert_eq!(vault.get_breaker_status().severity, Severity::DepositsHalted);
+
+    // A degraded yield source on its own is documented as *not* sufficient
+    // to unlock the emergency exit — only an explicit pause or an escalation
+    // all the way to `FullHalt` does (see `emergency_withdraw_internal`).
+    // This pins down the precise circumstance where a user cannot yet
+    // emergency-exit.
+    let result = vault.try_emergency_withdraw(&user);
+    assert!(
+        result.is_err(),
+        "a merely-degraded vault (DepositsHalted) must not unlock emergency_withdraw"
+    );
+}
+
+#[test]
+fn emergency_withdraw_recovers_principal_once_degraded_state_escalates_to_full_halt() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 500 * XLM);
+    vault.deposit(&user, &(500 * XLM), &0);
+
+    vault.record_source_failure(&admin);
+    vault.record_source_failure(&admin);
+    vault.record_source_failure(&admin);
+
+    // Escalating the degraded state to FullHalt opens the emergency path
+    // without ever calling `pause()`.
+    vault.guardian_trip_breaker(&admin);
+    assert!(!vault.is_paused());
+    assert_eq!(vault.get_breaker_status().severity, Severity::FullHalt);
+
+    let returned = vault.emergency_withdraw(&user);
+    assert_eq!(returned, 500 * XLM, "user must recover their full principal");
+}
+
+#[test]
+fn emergency_withdraw_all_unwinds_healthy_positions_when_one_adapter_fails_while_paused() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    let aave = symbol_short!("aave");
+    let blend = symbol_short!("blend");
+    // `aave`'s recorded allocation is deliberately unrecoverable (simulates a
+    // failing adapter): unwinding it would overflow the vault's reserves.
+    vault.record_source_allocation(&admin, &aave, &i128::MAX);
+    vault.record_source_allocation(&admin, &blend, &(400 * XLM));
+
+    vault.pause(&admin);
+    let result = vault.emergency_withdraw_all(&user);
+
+    assert_eq!(result.failed.len(), 1, "the failing adapter must not block others");
+    assert_eq!(result.failed.get(0).unwrap().protocol, aave);
+    assert_eq!(result.succeeded.len(), 1);
+    assert_eq!(result.succeeded.get(0).unwrap().protocol, blend);
+}
+
+#[test]
+fn emergency_withdraw_cannot_be_claimed_twice_for_same_principal() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+
+    vault.pause(&admin);
+    let first = vault.emergency_withdraw(&user);
+    assert_eq!(first, 1_000 * XLM);
+
+    // Principal was zeroed by the first call; a second attempt must not pay
+    // out again — no emergency path may exceed the caller's entitlement.
+    let second = vault.try_emergency_withdraw(&user);
+    assert!(
+        second.is_err(),
+        "a second emergency_withdraw for the same user must not pay out again"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Systematic negative-authorization matrix
 // ---------------------------------------------------------------------------
 
