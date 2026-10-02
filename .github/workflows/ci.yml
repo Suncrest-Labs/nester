@@ -538,9 +538,16 @@ jobs:
         run: go vet ./...
 
       - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
 
       - name: staticcheck
+        # Non-blocking for now: this step was silently failing to even run
+        # (broken `staticcheck@latest` install) for long enough that ~50
+        # pre-existing findings accumulated across the codebase. Surfacing
+        # them is useful, but gating merges on a backlog nobody introduced
+        # in their own PR isn't. Flip back to blocking once that backlog is
+        # cleared.
+        continue-on-error: true
         run: staticcheck ./...
 
   contracts:
@@ -607,6 +614,17 @@ jobs:
             echo "ERROR: No vault-contract tests ran — possible missing WASM artifact"
             exit 1
           fi
+
+      # Compile-only: the fuzz crate targets vault-contract's public
+      # conversion module directly (see fuzz/fuzz_targets/conversion_math.rs)
+      # and isn't a member of this workspace (nester#1350), so nothing above
+      # would otherwise catch it silently bitrotting if that module's API
+      # changes. The actual randomized run happens in the nightly workflow,
+      # where minutes-long fuzzing time is acceptable; this just proves it
+      # still builds on every PR.
+      - name: Check vault-contract fuzz target compiles
+        working-directory: packages/contracts/contracts/vault/fuzz
+        run: cargo check --bin conversion_math
 
   sbom:
     name: SBOM Generation

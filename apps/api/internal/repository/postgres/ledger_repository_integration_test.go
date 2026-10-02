@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -369,6 +370,150 @@ func TestLedger_Property_BooksAlwaysSumToZero(t *testing.T) {
 	}
 	if len(mismatches) != 0 {
 		t.Fatalf("final mismatches: %+v", mismatches)
+	}
+}
+
+// Retrying the same domain event (same domain_event_type + domain_event_id)
+// must not create a second set of ledger entries, and the caller must get
+// ledger.ErrAlreadyPosted rather than a generic error (nester#1309).
+func TestLedger_PostEntries_RetriedDomainEventIsIdempotent(t *testing.T) {
+	db := openIntegrationDB(t)
+	applyLedgerMigrations(t, db)
+	resetIntegrationTables(t, db)
+
+	repo := NewLedgerRepository(db)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, db)
+	vaultID := seedIntegrationVault(t, db, userID)
+
+	userAcc, err := repo.GetOrCreateAccount(ctx, ledger.AccountTypeUserVaultPosition, &vaultID, &userID, nil, "USDC")
+	if err != nil {
+		t.Fatalf("GetOrCreateAccount user: %v", err)
+	}
+	vaultAcc, err := repo.GetOrCreateAccount(ctx, ledger.AccountTypeVaultAssetPool, &vaultID, nil, nil, "USDC")
+	if err != nil {
+		t.Fatalf("GetOrCreateAccount vault: %v", err)
+	}
+	suspenseAcc, err := repo.GetOrCreateAccount(ctx, ledger.AccountTypeSystemSuspense, nil, nil, nil, "USDC")
+	if err != nil {
+		t.Fatalf("GetOrCreateAccount suspense: %v", err)
+	}
+
+	amountStroops := int64(100_000_000)
+	domainEventID := "webhook-deposit-retry-1"
+	buildEntries := func() []ledger.Entry {
+		txID := uuid.New()
+		return []ledger.Entry{
+			{TransactionID: txID, AccountID: userAcc.ID, Amount: amountStroops, AssetCode: "USDC", AssetUnit: "stroops", DomainEventType: "deposit", DomainEventID: domainEventID},
+			{TransactionID: txID, AccountID: vaultAcc.ID, Amount: amountStroops, AssetCode: "USDC", AssetUnit: "stroops", DomainEventType: "deposit", DomainEventID: domainEventID},
+			{TransactionID: txID, AccountID: suspenseAcc.ID, Amount: -2 * amountStroops, AssetCode: "USDC", AssetUnit: "stroops", DomainEventType: "deposit", DomainEventID: domainEventID},
+		}
+	}
+
+	if err := repo.PostEntries(ctx, buildEntries()); err != nil {
+		t.Fatalf("first PostEntries error = %v", err)
+	}
+
+	// Simulate a webhook redelivery / client retry of the exact same domain event.
+	err = repo.PostEntries(ctx, buildEntries())
+	if !errors.Is(err, ledger.ErrAlreadyPosted) {
+		t.Fatalf("retried PostEntries error = %v, want ledger.ErrAlreadyPosted", err)
+	}
+
+	// Only one set of entries (3 legs) must exist — balances must reflect a single posting.
+	userBal, err := repo.GetUserVaultBalance(ctx, userID, vaultID)
+	if err != nil {
+		t.Fatalf("GetUserVaultBalance error = %v", err)
+	}
+	if userBal != amountStroops {
+		t.Fatalf("user balance after retry: got %d, want %d (no double-post)", userBal, amountStroops)
+	}
+
+	sum, err := repo.SumAllEntries(ctx)
+	if err != nil {
+		t.Fatalf("SumAllEntries error = %v", err)
+	}
+	if sum != 0 {
+		t.Fatalf("books unbalanced: sum=%d", sum)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ledger_entries WHERE domain_event_type = $1 AND domain_event_id = $2`, "deposit", domainEventID).Scan(&count); err != nil {
+		t.Fatalf("count ledger_entries: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("ledger_entries rows for domain event: got %d, want 3 (one set, no duplicate)", count)
+	}
+}
+
+// PostEntriesTx must behave the same way as PostEntries when called within an
+// existing transaction handle, which is how vault/harvest/rebalance code paths
+// post entries atomically with their own domain write.
+func TestLedger_PostEntriesTx_RetriedDomainEventIsIdempotent(t *testing.T) {
+	db := openIntegrationDB(t)
+	applyLedgerMigrations(t, db)
+	resetIntegrationTables(t, db)
+
+	repo := NewLedgerRepository(db)
+	ctx := context.Background()
+
+	fromAdapter := "blend"
+	toAdapter := "aave"
+	fromAcc, err := repo.GetOrCreateAccount(ctx, ledger.AccountTypeYieldSource, nil, nil, &fromAdapter, "USDC")
+	if err != nil {
+		t.Fatalf("from account: %v", err)
+	}
+	toAcc, err := repo.GetOrCreateAccount(ctx, ledger.AccountTypeYieldSource, nil, nil, &toAdapter, "USDC")
+	if err != nil {
+		t.Fatalf("to account: %v", err)
+	}
+
+	amount := int64(50_000_000)
+	domainEventID := "rebalance-job-run-42"
+	buildEntries := func() []ledger.Entry {
+		txID := uuid.New()
+		return []ledger.Entry{
+			{TransactionID: txID, AccountID: fromAcc.ID, Amount: -amount, AssetCode: "USDC", AssetUnit: "stroops", DomainEventType: "rebalance", DomainEventID: domainEventID},
+			{TransactionID: txID, AccountID: toAcc.ID, Amount: amount, AssetCode: "USDC", AssetUnit: "stroops", DomainEventType: "rebalance", DomainEventID: domainEventID},
+		}
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	if err := repo.PostEntriesTx(ctx, tx, buildEntries()); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("first PostEntriesTx error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	tx2, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx retry: %v", err)
+	}
+	retryErr := repo.PostEntriesTx(ctx, tx2, buildEntries())
+	_ = tx2.Rollback()
+	if !errors.Is(retryErr, ledger.ErrAlreadyPosted) {
+		t.Fatalf("retried PostEntriesTx error = %v, want ledger.ErrAlreadyPosted", retryErr)
+	}
+
+	sum, err := repo.SumAllEntries(ctx)
+	if err != nil {
+		t.Fatalf("SumAllEntries error = %v", err)
+	}
+	if sum != 0 {
+		t.Fatalf("books unbalanced: sum=%d", sum)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ledger_entries WHERE domain_event_type = $1 AND domain_event_id = $2`, "rebalance", domainEventID).Scan(&count); err != nil {
+		t.Fatalf("count ledger_entries: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("ledger_entries rows for domain event: got %d, want 2 (one set, no duplicate)", count)
 	}
 }
 

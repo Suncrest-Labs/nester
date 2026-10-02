@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/moneypath"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/metrics"
@@ -153,6 +154,21 @@ type VaultService struct {
 	// built without one (tests, tooling) behaves as it did before the switch
 	// existed. Production wires it in SetMoneyPathSwitches.
 	moneyPathSwitches MoneyPathGate
+	// depositAllowlist gates individual deposits by user ID during the
+	// mainnet controlled-rollout window (nester#1389). Optional: a nil gate
+	// allows all users.
+	depositAllowlist DepositAllowlistGate
+	// tvlCapManager enforces the mainnet-only hard TVL cap per vault
+	// (nester#1376). Optional: a nil manager enforces nothing, so a service
+	// built without one (tests, tooling, testnet) behaves as it did before
+	// the cap existed. Production wires it in SetTVLCapManager.
+	tvlCapManager caps.VaultTVLCapManager
+	// outflowBreakerConfig is the withdrawal circuit breaker's policy
+	// (nester#1377). Nil means "use vault.DefaultOutflowBreakerConfig()", so
+	// a service built without an override (tests, tooling) behaves exactly
+	// as before configurability existed. Production wires an override in
+	// SetOutflowBreakerConfig when the operator has set non-default values.
+	outflowBreakerConfig *vault.OutflowBreakerConfig
 }
 
 // MoneyPathGate reports whether a money-path operation may proceed. Declared
@@ -174,6 +190,19 @@ func (s *VaultService) ensureMoneyPathAllowed(ctx context.Context, op moneypath.
 		return nil
 	}
 	return s.moneyPathSwitches.EnsureAllowed(ctx, op)
+}
+
+// DepositAllowlistGate controls per-user deposit access during the mainnet
+// controlled-rollout window (nester#1389). A nil gate allows everyone.
+type DepositAllowlistGate interface {
+	// EnsureDepositAllowed returns nil when userID is in the current cohort,
+	// or vault.ErrDepositNotAllowlisted when they are not.
+	EnsureDepositAllowed(ctx context.Context, userID uuid.UUID) error
+}
+
+// SetDepositAllowlist installs the deposit allowlist gate.
+func (s *VaultService) SetDepositAllowlist(gate DepositAllowlistGate) {
+	s.depositAllowlist = gate
 }
 
 // GoalYieldRouter lets VaultService honor a savings goal's per-goal
@@ -300,6 +329,29 @@ func (s *VaultService) SetChainEventVerifier(verifier ChainEventVerifier) {
 	s.chainVerifier = verifier
 }
 
+// SetTVLCapManager wires the mainnet-only hard TVL cap per vault
+// (nester#1376). A nil manager (the default) enforces nothing.
+func (s *VaultService) SetTVLCapManager(manager caps.VaultTVLCapManager) {
+	s.tvlCapManager = manager
+}
+
+// SetOutflowBreakerConfig overrides the withdrawal circuit breaker's
+// threshold and window (nester#1377). Passing the zero value disables the
+// breaker (Enabled defaults to false), matching how every other optional
+// policy on this service turns off cleanly with its zero value.
+func (s *VaultService) SetOutflowBreakerConfig(cfg vault.OutflowBreakerConfig) {
+	s.outflowBreakerConfig = &cfg
+}
+
+// outflowBreaker returns the configured breaker policy, falling back to
+// vault.DefaultOutflowBreakerConfig() when no override was set.
+func (s *VaultService) outflowBreaker() vault.OutflowBreakerConfig {
+	if s.outflowBreakerConfig != nil {
+		return *s.outflowBreakerConfig
+	}
+	return vault.DefaultOutflowBreakerConfig()
+}
+
 // SetMetrics wires the SLI recorder for the deposit and withdrawal service
 // level indicators (nester#1056). Optional; when unset, recording no-ops.
 func (s *VaultService) SetMetrics(m *metrics.Metrics) {
@@ -407,6 +459,15 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 		return vault.Vault{}, err
 	}
 
+	// Mainnet deposit allowlist (nester#1389). Checked after the pause gate
+	// so a paused service rejects all users uniformly before reaching cohort
+	// logic. A nil gate allows everyone.
+	if s.depositAllowlist != nil && input.UserID != uuid.Nil {
+		if err := s.depositAllowlist.EnsureDepositAllowed(ctx, input.UserID); err != nil {
+			return vault.Vault{}, err
+		}
+	}
+
 	if input.VaultID == uuid.Nil {
 		return vault.Vault{}, vault.ErrInvalidVault
 	}
@@ -420,6 +481,17 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 	existing, err := s.repository.GetVault(ctx, input.VaultID)
 	if err != nil {
 		return vault.Vault{}, err
+	}
+
+	// Mainnet-only hard TVL cap per vault (nester#1376). Checked against the
+	// vault's current balance before anything else touches the chain or the
+	// ledger, same as the global pause check above: a request that would
+	// exceed the cap must never reach the deposit invoker or credit a
+	// balance. A nil manager (testnet, tests, tooling) enforces nothing.
+	if s.tvlCapManager != nil {
+		if err := s.tvlCapManager.CheckDepositCap(ctx, input.VaultID, existing.CurrentBalance, input.Amount); err != nil {
+			return vault.Vault{}, err
+		}
 	}
 
 	userID := input.UserID
@@ -711,6 +783,28 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 	existing, err := s.repository.GetVault(ctx, input.VaultID)
 	if err != nil {
 		return vault.Vault{}, err
+	}
+
+	breakerConfig := s.outflowBreaker()
+	if breakerConfig.Enabled {
+		transactions, err := s.repository.ListUserVaultTransactions(ctx, existing.UserID, input.VaultID)
+		if err != nil {
+			return vault.Vault{}, err
+		}
+		cutoff := time.Now().Add(-breakerConfig.Window)
+		sumOutflows := input.Amount
+		for _, transaction := range transactions {
+			if transaction.Type == "withdrawal" && !transaction.CreatedAt.Before(cutoff) {
+				sumOutflows = sumOutflows.Add(transaction.Amount)
+			}
+		}
+		if existing.CurrentBalance.IsPositive() {
+			pct := sumOutflows.Div(existing.CurrentBalance).Mul(decimal.NewFromInt(100))
+			if pct.GreaterThanOrEqual(breakerConfig.ThresholdPercent) {
+				_ = s.repository.UpdateVault(ctx, input.VaultID, existing.ContractAddress, vault.StatusPaused)
+				return vault.Vault{}, vault.ErrVaultPausedByBreaker
+			}
+		}
 	}
 
 	if existing.Status == vault.StatusClosed {

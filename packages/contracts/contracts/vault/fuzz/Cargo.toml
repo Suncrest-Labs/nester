@@ -1,0 +1,29 @@
+[package]
+name = "vault-contract-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Deliberately not a member of the parent packages/contracts workspace: the
+# fuzz crate's libfuzzer-sys/arbitrary/ethnum dependencies are fuzz-only and
+# have no reason to appear in the main workspace's Cargo.lock, and
+# cargo-fuzz's own tooling expects to resolve this manifest standalone.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+ethnum = "1.5"
+libfuzzer-sys = "0.4"
+
+[dependencies.vault-contract]
+path = ".."
+
+[[bin]]
+name = "conversion_math"
+path = "fuzz_targets/conversion_math.rs"
+test = false
+doc = false
+bench = false

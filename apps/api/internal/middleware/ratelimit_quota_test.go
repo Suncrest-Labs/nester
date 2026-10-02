@@ -618,9 +618,9 @@ func TestRedisQuotaChargesCost(t *testing.T) {
 	if addr == "" {
 		t.Skip("REDIS_ADDR not set; skipping distributed quota test")
 	}
-	rc := redis.NewClient(&redis.Options{Addr: addr})
+	rc := redis.NewClient(&redis.Options{Addr: addr, DialTimeout: redisProbeTimeout})
 	ctx := context.Background()
-	if err := rc.Ping(ctx).Err(); err != nil {
+	if err := pingRedis(rc); err != nil {
 		t.Skipf("redis not reachable at %s: %v", addr, err)
 	}
 	t.Cleanup(func() { _ = rc.Close() })
@@ -629,13 +629,19 @@ func TestRedisQuotaChargesCost(t *testing.T) {
 	key := "u:quota-1"
 	t.Cleanup(func() { _ = rc.Del(ctx, "rlq:"+prefix+":"+key).Err() })
 
-	l := NewQuotaLimiter(rc, prefix, 50, time.Minute, quietLogger())
+	// Capacity is expressed in terms of the cost being charged so the
+	// boundary below is the one the test actually asserts: two chain writes
+	// fit exactly, the third must not. A capacity that merely happens to be
+	// larger than three writes would let every call through and assert
+	// nothing about charging.
+	const capacity = 2 * CostChainWrite
+	l := NewQuotaLimiter(rc, prefix, capacity, time.Minute, quietLogger())
 
 	first := l.AllowN(ctx, key, CostChainWrite)
 	if !first.Allowed {
 		t.Fatal("first chain write denied")
 	}
-	if want := 50 - CostChainWrite; first.Remaining != want {
+	if want := capacity - CostChainWrite; first.Remaining != want {
 		t.Errorf("remaining = %d, want %d", first.Remaining, want)
 	}
 
@@ -753,14 +759,29 @@ func TestRedisQuotaKeepsFractionalBalance(t *testing.T) {
 
 // redisForTest returns a client and a unique key prefix, skipping when no Redis
 // is configured.
+// redisProbeTimeout bounds the reachability probe below. Without it a probe
+// against a closed port inherits the client's default dial behaviour, and an
+// unreachable Redis is reported as an ordinary error only after the limiter
+// has already failed open — which surfaces as a bogus assertion failure in
+// the test body rather than a clean skip.
+const redisProbeTimeout = 2 * time.Second
+
+// pingRedis reports whether Redis is actually reachable, under a bounded
+// deadline so the decision to skip is made before any accounting runs.
+func pingRedis(rc *redis.Client) error {
+	ctx, cancel := context.WithTimeout(context.Background(), redisProbeTimeout)
+	defer cancel()
+	return rc.Ping(ctx).Err()
+}
+
 func redisForTest(t *testing.T) (*redis.Client, string) {
 	t.Helper()
 	addr := os.Getenv("REDIS_ADDR")
 	if addr == "" {
 		t.Skip("REDIS_ADDR not set; skipping distributed quota test")
 	}
-	rc := redis.NewClient(&redis.Options{Addr: addr})
-	if err := rc.Ping(context.Background()).Err(); err != nil {
+	rc := redis.NewClient(&redis.Options{Addr: addr, DialTimeout: redisProbeTimeout})
+	if err := pingRedis(rc); err != nil {
 		t.Skipf("redis not reachable at %s: %v", addr, err)
 	}
 	t.Cleanup(func() { _ = rc.Close() })

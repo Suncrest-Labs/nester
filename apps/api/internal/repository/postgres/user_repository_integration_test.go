@@ -70,3 +70,52 @@ func TestUserRepositoryIntegrationCRUD(t *testing.T) {
 		t.Fatalf("expected ErrUserNotFound for unknown address, got: %v", err)
 	}
 }
+
+// TestUserRepositoryIntegration_UpdateProfile covers the partial-update
+// semantics (#44) at the DB layer: only the provided fields change, and an
+// omitted field is round-tripped from the row rather than zeroed.
+func TestUserRepositoryIntegration_UpdateProfile(t *testing.T) {
+	db := openIntegrationDB(t)
+	applyIntegrationMigrations(t, db)
+	resetIntegrationTables(t, db)
+
+	repository := NewUserRepository(db)
+	ctx := context.Background()
+
+	u := &user.User{
+		ID:            uuid.New(),
+		WalletAddress: "G" + uuid.New().String()[:30],
+		DisplayName:   "Update Target",
+	}
+	if err := repository.Create(ctx, u); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	goal := "retire early"
+	updated, err := repository.UpdateProfile(ctx, u.ID, user.ProfilePatch{SavingsGoal: &goal})
+	if err != nil {
+		t.Fatalf("UpdateProfile() error = %v", err)
+	}
+	if updated.SavingsGoal == nil || *updated.SavingsGoal != goal {
+		t.Fatalf("expected SavingsGoal %q, got %v", goal, updated.SavingsGoal)
+	}
+	if updated.DisplayName != u.DisplayName {
+		t.Errorf("expected DisplayName untouched, got %q", updated.DisplayName)
+	}
+
+	onboarded := true
+	updated2, err := repository.UpdateProfile(ctx, u.ID, user.ProfilePatch{OnboardingCompleted: &onboarded})
+	if err != nil {
+		t.Fatalf("second UpdateProfile() error = %v", err)
+	}
+	if !updated2.OnboardingCompleted {
+		t.Errorf("expected OnboardingCompleted true")
+	}
+	if updated2.SavingsGoal == nil || *updated2.SavingsGoal != goal {
+		t.Errorf("expected the earlier SavingsGoal to survive an unrelated partial update, got %v", updated2.SavingsGoal)
+	}
+
+	if _, err := repository.UpdateProfile(ctx, uuid.New(), user.ProfilePatch{SavingsGoal: &goal}); err != user.ErrUserNotFound {
+		t.Fatalf("expected ErrUserNotFound for unknown user, got: %v", err)
+	}
+}

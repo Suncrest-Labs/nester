@@ -550,6 +550,7 @@ func (h *AdminHandler) pauseVault(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", id.String())
 
 	result, err := h.service.PauseVault(r.Context(), id)
 	if err != nil {
@@ -565,6 +566,7 @@ func (h *AdminHandler) unpauseVault(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", id.String())
 
 	result, err := h.service.UnpauseVault(r.Context(), id)
 	if err != nil {
@@ -580,6 +582,7 @@ func (h *AdminHandler) rebalanceVault(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", id.String())
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodyBytes))
 	if err != nil {

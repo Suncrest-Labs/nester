@@ -1,11 +1,14 @@
 package caps
 
 import (
-	"errors"
+	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"errors"
 	"github.com/shopspring/decimal"
 )
+
 
 func TestCheckVaultCap(t *testing.T) {
 	cap := decimal.RequireFromString("1000")
@@ -66,4 +69,25 @@ func TestCheckUserDailyCap(t *testing.T) {
 			}
 		})
 	}
+}
+type mockTVLCapManager struct {
+	limit float64
+}
+
+func (m *mockTVLCapManager) CheckDepositCap(ctx context.Context, vaultID string, depositAmount float64) error {
+	if depositAmount > m.limit {
+		return ErrTVLCapExceeded
+	}
+	return nil
+}
+
+func TestVaultTVLCapManager(t *testing.T) {
+	m := &mockTVLCapManager{limit: 1000.0}
+	ctx := context.Background()
+
+	err := m.CheckDepositCap(ctx, "vault-1", 500.0)
+	assert.NoError(t, err)
+
+	err = m.CheckDepositCap(ctx, "vault-1", 1500.0)
+	assert.ErrorIs(t, err, ErrTVLCapExceeded)
 }

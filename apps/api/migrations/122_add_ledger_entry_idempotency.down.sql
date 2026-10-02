@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS uq_ledger_entries_domain_event_account;

@@ -99,6 +99,42 @@ func TestAPYDriftRebalanceHandler_SubmitsAndAudits(t *testing.T) {
 	}
 }
 
+// TestAPYDriftRebalanceHandler_AuditEntryCarriesJobCorrelationID covers
+// nester#1339: the audit entry this handler writes on successful submission
+// previously had no way to carry the id of the job run that produced it.
+// It must now reuse the enqueued job's own CorrelationID (set at enqueue
+// time by APYDriftDetector.evaluateAndEnqueue) rather than minting its own
+// or leaving it empty.
+func TestAPYDriftRebalanceHandler_AuditEntryCarriesJobCorrelationID(t *testing.T) {
+	vaultID := uuid.New()
+	admin := &fakeRebalanceTrigger{resp: admindomain.RebalanceResponse{
+		Status: admindomain.RebalanceStatusSubmitted,
+	}}
+	audit := &fakeAuditLogger{}
+	h := NewAPYDriftRebalanceJobHandler(admin, audit, nil)
+
+	job := testDriftJob(t, RebalanceDriftJobPayload{
+		VaultID:            vaultID,
+		CurrentTopProtocol: "protocol-a",
+		OptimalProtocol:    "protocol-b",
+		DriftBPS:           900,
+		ThresholdBPS:       200,
+		DetectedAt:         time.Now().UTC(),
+	})
+	job.CorrelationID = "corr-abc-123"
+
+	if err := h.Handle(context.Background(), job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if len(audit.entries) != 1 {
+		t.Fatalf("expected exactly 1 audit entry, got %d", len(audit.entries))
+	}
+	if audit.entries[0].CorrelationID != "corr-abc-123" {
+		t.Errorf("audit entry CorrelationID = %q, want %q", audit.entries[0].CorrelationID, "corr-abc-123")
+	}
+}
+
 func TestAPYDriftRebalanceHandler_TreatsInFlightAsNonRetryableNoOp(t *testing.T) {
 	admin := &fakeRebalanceTrigger{err: ErrRebalanceInFlight}
 	audit := &fakeAuditLogger{}

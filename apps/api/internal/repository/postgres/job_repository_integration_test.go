@@ -96,7 +96,10 @@ func TestJobRepository_ListDeadAndManualRetry(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	job, _, err := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "harvest", MaxAttempts: 1})
+	// RunAt is pinned to the same instant the dequeue below uses as its
+	// cursor; see the comment on this pattern in
+	// TestJobRepository_EnqueueDequeueComplete above.
+	job, _, err := repo.Enqueue(ctx, jobqueue.EnqueueInput{Type: "harvest", MaxAttempts: 1, RunAt: now})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

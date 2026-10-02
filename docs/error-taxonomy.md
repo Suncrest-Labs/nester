@@ -128,18 +128,36 @@ eight kinds. All of the above have tests, including the enforcement tests
 issue #1048 calls for (`TestKindHTTPStatusMapping`,
 `TestErrorHandler_NeverLeaksDriverOrSQLText`).
 
+**Domain error retrofit (nester#1341, done):** `internal/domain/ledger` and
+`internal/domain/vault`'s (including `vault`'s `deactivation.go`) exported
+sentinel errors are now `*apperror.AppError` values instead of plain
+`errors.New` strings, each carrying a stable `Kind`/`Code` reachable via
+`errors.As`. Every sentinel was converted *in place* — `var ErrVaultNotFound
+error = apperror.NewNotFound(...)` rather than a new variable — so it is the
+exact same error value it always was: every existing
+`errors.Is(err, vault.ErrVaultNotFound)` call site across the codebase
+(including `vault_handler.go`'s own `writeDomainError` dispatch) keeps
+compiling and behaving identically with no migration of its own required.
+This is a strictly additive capability (a caller *can* now read `Kind`/`Code`
+via `errors.As`), not a behavior change.
+
 **What is deliberately deferred, and why:**
 
 - **Handler migration.** `apperror`/`middleware.ErrorHandler` are not yet
   wired into any route. Every handler under `apps/api/internal/handler/`
   currently constructs its own `response.Response` inline and calls
   `response.WriteJSON` directly (see e.g. `watchlist_handler.go`), rather
-  than returning an `AppError` for the middleware to translate. Migrating
-  all of them is the "22 packages" scope the issue names — a large,
-  mechanical, but non-trivial change (every handler's function signature
-  and every route registration changes) that deserves its own PR, reviewed
-  independently of the taxonomy's design. This document exists so that PR
-  has a spec to migrate *to* rather than inventing one along the way.
+  than returning an `AppError` for the middleware to translate. This stays
+  true even after the domain retrofit above: `writeDomainError` still
+  dispatches on `errors.Is` against each named sentinel and writes its own
+  `response.WriteJSON` call per branch, exactly as before — it does not yet
+  read the now-available `Kind`/`Code` off the error. Migrating every
+  handler to `AppHandler`/`ErrorHandler` is the "22 packages" scope the
+  issue names — a large, mechanical, but non-trivial change (every handler's
+  function signature and every route registration changes) that deserves
+  its own PR, reviewed independently of the taxonomy's design. This document
+  exists so that PR has a spec to migrate *to* rather than inventing one
+  along the way.
 - **A third, separate error-response system.** `apps/api/internal/api/response.go`
   defines its own `ValidationError`/`FieldError` types, independent of both
   `apperror` and `apps/api/pkg/response`. Reconciling three parallel

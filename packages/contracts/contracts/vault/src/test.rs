@@ -20,7 +20,7 @@
 //! | `set_emergency_fee` | same as above | same as above |
 //! | `set_allocation_strategy` | same as above | same as above |
 //! | `set_rebalance_cooldown` | same as above | same as above |
-//! | `pause`, `unpause` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
+//! | `pause`, `unpause` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature`, `non_guardian_non_admin_cannot_pause` | `admin_entrypoints_accept_then_reject_revoked_admin`, `guardian_can_pause_immediately_without_admin`, `guardian_pause_blocks_deposits_and_withdrawals_immediately`, `guardian_pause_does_not_block_emergency_withdraw`, `guardian_cannot_unpause` |
 //! | `grant_role`, `revoke_role` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
 //! | `transfer_admin` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_transfer_wrappers_enforce_authorization` |
 //! | `accept_admin` | `accept_admin_rejects_wrong_successor`, `accept_admin_requires_successor_signature` | `admin_transfer_wrappers_enforce_authorization` / n/a |
@@ -44,8 +44,8 @@ extern crate std;
 use nester_access_control::Role;
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
-    testutils::{Address as _, Ledger, LedgerInfo},
-    token, Address, BytesN, Env, String, Symbol, Vec,
+    testutils::{Address as _, Events as _, Ledger, LedgerInfo},
+    token, Address, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
@@ -277,6 +277,33 @@ fn reinitialize_is_rejected() {
     let second_token = Address::generate(&_env);
     let second_vault_token = Address::generate(&_env);
     vault.initialize(&admin, &second_token, &second_vault_token, &treasury);
+}
+
+#[test]
+fn deposit_allowlist_gate_rejects_uninvited_users_and_allows_invited_users() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let invited = Address::generate(&env);
+    let uninvited = Address::generate(&env);
+    let amount = 100 * XLM;
+    mint(&token, &invited, amount);
+    mint(&token, &uninvited, amount);
+
+    vault.set_deposit_allowlist_enabled(&admin, &true);
+    assert!(vault.try_deposit(&uninvited, &amount, &0).is_err());
+
+    vault.set_deposit_allowlisted(&admin, &invited, &true);
+    assert!(vault.try_deposit(&invited, &amount, &0).is_ok());
+}
+
+#[test]
+fn deposit_allowlist_is_disabled_by_default() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let amount = 100 * XLM;
+    mint(&token, &user, amount);
+
+    assert!(!vault.deposit_allowlist_enabled());
+    assert!(vault.try_deposit(&user, &amount, &0).is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -1966,6 +1993,81 @@ fn get_min_deposit_returns_configured_value() {
 }
 
 // ---------------------------------------------------------------------------
+// Cap-change event emission (issue #1354): set_max_deposit/set_min_deposit
+// were silent on-chain; the off-chain indexer needs a CAP_CHG event to
+// reconstruct config state without extra RPC calls.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_max_deposit_emits_cap_changed_event() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_max_deposit(&admin, &(500 * XLM));
+
+    let events = env.events().all();
+    let (contract_id, topics, data) = events
+        .last()
+        .expect("set_max_deposit must emit an event")
+        .clone();
+    assert_eq!(contract_id, vault.address);
+
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
+    let topic2: Address = topics.get(2).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "VAULT"));
+    assert_eq!(topic1, Symbol::new(&env, "CAP_CHG"));
+    assert_eq!(topic2, admin);
+
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(decoded.field, Symbol::new(&env, "MAX_DEP"));
+    assert_eq!(decoded.old_value, i128::MAX);
+    assert_eq!(decoded.new_value, 500 * XLM);
+}
+
+#[test]
+fn set_min_deposit_emits_cap_changed_event() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    let events = env.events().all();
+    let (contract_id, topics, data) = events
+        .last()
+        .expect("set_min_deposit must emit an event")
+        .clone();
+    assert_eq!(contract_id, vault.address);
+
+    let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, Symbol::new(&env, "CAP_CHG"));
+
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(decoded.field, Symbol::new(&env, "MIN_DEP"));
+    assert_eq!(decoded.old_value, 0);
+    assert_eq!(decoded.new_value, 10 * XLM);
+}
+
+#[test]
+fn set_max_deposit_event_old_value_reflects_prior_setting() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_max_deposit(&admin, &(500 * XLM));
+    vault.set_max_deposit(&admin, &(750 * XLM));
+
+    let events = env.events().all();
+    let (_, _, data) = events
+        .last()
+        .expect("second set_max_deposit must emit")
+        .clone();
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(
+        decoded.old_value,
+        500 * XLM,
+        "must reflect the PRIOR cap, not a default"
+    );
+    assert_eq!(decoded.new_value, 750 * XLM);
+}
+
+// ---------------------------------------------------------------------------
 // Emergency Withdraw All Positions Tests (issue #736)
 // ---------------------------------------------------------------------------
 
@@ -2597,6 +2699,90 @@ fn operator_entrypoints_require_signature() {
         "record_source_allocation"
     );
     assert_rejected!(vault.try_rebalance(&operator), "rebalance");
+}
+
+// ---------------------------------------------------------------------------
+// Guardian emergency pause (issue #1387): a Guardian can pause deposits and
+// withdrawals immediately, with no timelock delay, during an active exploit.
+// This is the asymmetric safety design documented on `Role::Guardian`
+// (access_control's module docs, issue #820): Guardian can only ever make
+// the vault safer, never riskier, and reversing a Guardian pause requires
+// Admin via `unpause`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn guardian_can_pause_immediately_without_admin() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let guardian = Address::generate(&env);
+    vault.grant_role(&admin, &guardian, &Role::Guardian);
+
+    // No timelock wait of any kind — a single call pauses the vault.
+    assert!(!vault.is_paused());
+    vault.pause(&guardian);
+    assert!(vault.is_paused());
+}
+
+#[test]
+fn guardian_pause_blocks_deposits_and_withdrawals_immediately() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let guardian = Address::generate(&env);
+    vault.grant_role(&admin, &guardian, &Role::Guardian);
+
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(500 * XLM), &0);
+
+    vault.pause(&guardian);
+
+    assert_rejected!(vault.try_deposit(&user, &(100 * XLM), &0), "deposit");
+    assert_rejected!(vault.try_withdraw(&user, &(100 * XLM), &0), "withdraw");
+}
+
+#[test]
+fn non_guardian_non_admin_cannot_pause() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+    // Sanity: outsider holds no role at all, not even a weaker one.
+    let _ = &admin;
+
+    assert_rejected!(vault.try_pause(&outsider), "pause");
+    assert!(!vault.is_paused());
+}
+
+#[test]
+fn guardian_pause_does_not_block_emergency_withdraw() {
+    // The Guardian-triggered pause must leave the emergency exit open —
+    // pausing deposits/withdrawals must never also trap funds (see
+    // `emergency_withdraw_internal`'s doc comment: "a breaker that stops
+    // users from leaving is a trap, not a safety device").
+    let (env, admin, token, vault, _treasury) = setup();
+    let guardian = Address::generate(&env);
+    vault.grant_role(&admin, &guardian, &Role::Guardian);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+    mint(&token, &user, deposit_amount);
+    vault.deposit(&user, &deposit_amount, &0);
+
+    vault.pause(&guardian);
+
+    let returned = vault.emergency_withdraw(&user);
+    assert_eq!(returned, deposit_amount);
+    assert_eq!(vault.get_balance(&user), 0);
+}
+
+#[test]
+fn guardian_cannot_unpause() {
+    // The Guardian asymmetry: Guardian can make the vault safer (pause) but
+    // never riskier (unpause) — reversing a Guardian action always requires
+    // a higher role (Admin).
+    let (env, admin, _token, vault, _treasury) = setup();
+    let guardian = Address::generate(&env);
+    vault.grant_role(&admin, &guardian, &Role::Guardian);
+
+    vault.pause(&guardian);
+    assert_rejected!(vault.try_unpause(&guardian), "unpause");
+    assert!(vault.is_paused());
 }
 
 #[test]

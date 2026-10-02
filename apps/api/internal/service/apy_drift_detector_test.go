@@ -54,6 +54,7 @@ type fakeEnqueueCall struct {
 	jobType        string
 	payload        any
 	idempotencyKey string
+	correlationID  string
 }
 
 func (f *fakeEnqueuer) EnqueueJSON(_ context.Context, jobType string, payload any, opts ...jobqueue.EnqueueOption) (jobqueue.Job, error) {
@@ -64,8 +65,8 @@ func (f *fakeEnqueuer) EnqueueJSON(_ context.Context, jobType string, payload an
 	for _, opt := range opts {
 		opt(&in)
 	}
-	f.calls = append(f.calls, fakeEnqueueCall{jobType: jobType, payload: payload, idempotencyKey: in.IdempotencyKey})
-	return jobqueue.Job{ID: uuid.New(), Type: jobType}, nil
+	f.calls = append(f.calls, fakeEnqueueCall{jobType: jobType, payload: payload, idempotencyKey: in.IdempotencyKey, correlationID: in.CorrelationID})
+	return jobqueue.Job{ID: uuid.New(), Type: jobType, CorrelationID: in.CorrelationID}, nil
 }
 
 func apyYield(protocol string, apyPercent float64) scheduler.ProtocolYield {
@@ -186,6 +187,12 @@ func TestCheckAll_EnqueuesOnlyVaultsAboveThreshold(t *testing.T) {
 	}
 	if call.idempotencyKey == "" {
 		t.Error("expected a non-empty idempotency key")
+	}
+	// nester#1339: the enqueued job must carry a correlation id so the
+	// handler's audit entry (written on successful submission) can be
+	// traced back to this detection pass.
+	if call.correlationID == "" {
+		t.Error("expected a non-empty correlation id")
 	}
 }
 

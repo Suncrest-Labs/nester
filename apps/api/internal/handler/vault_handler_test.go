@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 // fakeAuthMiddleware injects an auth.User into the request context for testing.
@@ -484,4 +487,156 @@ func feePtr(fee decimal.Decimal) *decimal.Decimal {
 func cloneHandlerVault(model vault.Vault) vault.Vault {
 	model.Allocations = append([]vault.Allocation(nil), model.Allocations...)
 	return model
+}
+
+// TestWithMoneyPathFieldsPropagatesToLaterLogCalls confirms the core
+// mechanism #1342 relies on: binding vault_id/protocol_id onto the request
+// early in a handler makes them show up on every later log call for that
+// request - including writeDomainError's own failure log, which never
+// receives these fields as explicit arguments.
+func TestWithMoneyPathFieldsPropagatesToLaterLogCalls(t *testing.T) {
+	var buf bytes.Buffer
+	baseLogger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/vaults/abc/deposit", nil)
+	req = req.WithContext(logpkg.WithLogger(req.Context(), baseLogger))
+
+	req = withMoneyPathFields(req, "vault_id", "vault-123")
+
+	// Simulate a later call site - e.g. writeDomainError - that only has the
+	// request, not the vault id, and logs through logpkg.FromContext like
+	// every real call site does.
+	logpkg.FromContext(req.Context()).Error("vault handler failed", "error", "boom")
+
+	var entry map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &entry); err != nil {
+		t.Fatalf("log output is not valid JSON: %v (output: %q)", err, buf.String())
+	}
+	if entry["vault_id"] != "vault-123" {
+		t.Errorf("expected vault_id=vault-123 on the later log call, got %v (full entry: %v)", entry["vault_id"], entry)
+	}
+	if entry["error"] != "boom" {
+		t.Errorf("expected the later log call's own fields to still be present, got %v", entry["error"])
+	}
+}
+
+// TestWithMoneyPathFieldsSupportsMultiplePairs confirms the multi-field
+// case rebalancePosition needs (from_protocol_id and to_protocol_id
+// together), not just the single vault_id case.
+func TestWithMoneyPathFieldsSupportsMultiplePairs(t *testing.T) {
+	var buf bytes.Buffer
+	baseLogger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/vault/rebalance", nil)
+	req = req.WithContext(logpkg.WithLogger(req.Context(), baseLogger))
+
+	req = withMoneyPathFields(req, "vault_id", "vault-456", "from_protocol_id", "aave", "to_protocol_id", "compound")
+	logpkg.FromContext(req.Context()).Error("rebalance failed")
+
+	out := buf.String()
+	for _, want := range []string{`"vault_id":"vault-456"`, `"from_protocol_id":"aave"`, `"to_protocol_id":"compound"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected log output to contain %s, got %q", want, out)
+		}
+	}
+}
+
+// TestWithMoneyPathFieldsDoesNotMutateOriginalRequest confirms the
+// *http.Request returned is a distinct value - callers must use the
+// returned request from that point on (as every real call site does via
+// `r = withMoneyPathFields(r, ...)`), and the original is left untouched,
+// matching how http.Request.WithContext itself behaves.
+func TestWithMoneyPathFieldsDoesNotMutateOriginalRequest(t *testing.T) {
+	var buf bytes.Buffer
+	baseLogger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	original := httptest.NewRequest(http.MethodGet, "/api/v1/vaults/abc", nil)
+	original = original.WithContext(logpkg.WithLogger(original.Context(), baseLogger))
+
+	enriched := withMoneyPathFields(original, "vault_id", "vault-789")
+	if enriched == original {
+		t.Fatal("expected withMoneyPathFields to return a distinct *http.Request")
+	}
+
+	logpkg.FromContext(original.Context()).Info("using the original request")
+	logpkg.FromContext(enriched.Context()).Info("using the enriched request")
+
+	entries := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 log entries, got %d", len(entries))
+	}
+	if strings.Contains(entries[0], "vault_id") {
+		t.Errorf("the original request's logger must not have vault_id, got %q", entries[0])
+	}
+	if !strings.Contains(entries[1], `"vault_id":"vault-789"`) {
+		t.Errorf("the enriched request's logger must have vault_id, got %q", entries[1])
+	}
+}
+
+// errGetVaultBoom is an unmapped error: writeDomainError has no case for
+// it, so it falls through to the default branch, which is the one branch
+// that actually calls logpkg.FromContext(r.Context()).Error(...) (every
+// named branch above it - ErrVaultNotFound included - is a known, expected
+// outcome and deliberately not logged).
+var errGetVaultBoom = errors.New("boom: unmapped repository failure")
+
+// boomingGetVaultRepository wraps handlerRepository and makes GetVault fail
+// with an error writeDomainError doesn't recognize, so the request reaches
+// its logged default branch instead of a named 404 branch.
+type boomingGetVaultRepository struct {
+	*handlerRepository
+}
+
+func (r *boomingGetVaultRepository) GetVault(context.Context, uuid.UUID) (vault.Vault, error) {
+	return vault.Vault{}, errGetVaultBoom
+}
+
+// TestVaultHandlerInternalErrorLogsVaultID confirms the end-to-end path for
+// #1342: a real request through the handler that fails with an unmapped
+// (logged) error produces a failure log line carrying vault_id, proving
+// withMoneyPathFields and writeDomainError's default branch work together,
+// not just the helper in isolation.
+func TestVaultHandlerInternalErrorLogsVaultID(t *testing.T) {
+	repository := &boomingGetVaultRepository{handlerRepository: newHandlerRepository(uuid.New())}
+	handler := NewVaultHandler(service.NewVaultService(repository))
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	var buf bytes.Buffer
+	requestLogger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	server := httptest.NewServer(fakeAuthMiddleware(uuid.New())(middleware.Logging(requestLogger)(mux)))
+	defer server.Close()
+
+	vaultID := uuid.New()
+	resp, err := http.Get(server.URL + "/api/v1/vaults/" + vaultID.String())
+	if err != nil {
+		t.Fatalf("GET vault error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for the unmapped repository error, got %d", resp.StatusCode)
+	}
+
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line is not valid JSON: %v (line: %q)", err, line)
+		}
+		if entry["msg"] != "vault handler failed" {
+			continue
+		}
+		if entry["vault_id"] == vaultID.String() {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected the \"vault handler failed\" log line to carry vault_id=%s, got log output: %q", vaultID, buf.String())
+	}
 }

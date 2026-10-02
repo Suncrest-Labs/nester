@@ -36,6 +36,48 @@ Emitted when a user withdraws funds.
     }
     ```
 
+### HARVEST
+Emitted when yield is harvested for a single user position via `harvest`.
+- **Topics**: `(VAULT, HARVEST, user: Address)`
+- **Data**:
+    ```rust
+    {
+        gross_yield: i128,
+        performance_fee: i128,
+        net_yield: i128,
+        compounded: bool,
+        new_share_balance: i128,
+        user: Address
+    }
+    ```
+
+### HARV_VLT
+Emitted once per `harvest_vault` admin call (aggregate across every position harvested in that call).
+- **Topics**: `(VAULT, HARV_VLT, admin: Address)`
+- **Data**:
+    ```rust
+    {
+        total_gross_yield: i128,
+        total_fee_collected: i128,
+        total_net_yield: i128,
+        positions_harvested: u32
+    }
+    ```
+
+### CAP_CHG
+Emitted by `set_max_deposit` and `set_min_deposit`, issue #1354. Cap changes
+were previously silent on-chain; this lets the off-chain indexer reconstruct
+config state without extra RPC calls.
+- **Topics**: `(VAULT, CAP_CHG, admin: Address)`
+- **Data**:
+    ```rust
+    {
+        field: Symbol,   // "MAX_DEP" or "MIN_DEP"
+        old_value: i128,
+        new_value: i128
+    }
+    ```
+
 ### EMRG_WD
 Emitted once per position when a user emergency-exits all active positions via `emergency_withdraw_all`.
 - **Topics**: `(VAULT, EMRG_WD, user: Address)`

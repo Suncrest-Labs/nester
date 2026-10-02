@@ -1,10 +1,11 @@
 package vault
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/shopspring/decimal"
+
+	"github.com/suncrestlabs/nester/apps/api/pkg/apperror"
 )
 
 const (
@@ -12,15 +13,20 @@ const (
 	AllocationStatusDeactivated = "deactivated"
 )
 
+// Retrofitted onto apperror.AppError (nester#1341); see the larger doc
+// comment on model.go's sentinel block for why each stays the exact same
+// error value (errors.Is-compatible with every existing call site) and how
+// Kind was chosen. ErrYieldSourceNotFound is the only NotFound here - every
+// other sentinel describes a malformed migration request.
 var (
-	ErrYieldSourceNotFound         = errors.New("yield source not found")
-	ErrYieldSourceDeactivated      = errors.New("yield source is deactivated")
-	ErrMigrationTargetRequired     = errors.New("migration target is required")
-	ErrMigrationTargetInactive     = errors.New("migration target is not active")
-	ErrMigrationSourceActive       = errors.New("migration source is still active")
-	ErrMigrationSourceEqualsTarget = errors.New("migration source and target must differ")
-	ErrMigrationAmountInvalid      = errors.New("migration amount must be greater than zero")
-	ErrMigrationAmountExceeded     = errors.New("migration amount exceeds source position")
+	ErrYieldSourceNotFound         error = apperror.NewNotFound("VAULT_YIELD_SOURCE_NOT_FOUND", "yield source not found")
+	ErrYieldSourceDeactivated      error = apperror.NewValidation("VAULT_YIELD_SOURCE_DEACTIVATED", "yield source is deactivated")
+	ErrMigrationTargetRequired     error = apperror.NewValidation("VAULT_MIGRATION_TARGET_REQUIRED", "migration target is required")
+	ErrMigrationTargetInactive     error = apperror.NewValidation("VAULT_MIGRATION_TARGET_INACTIVE", "migration target is not active")
+	ErrMigrationSourceActive       error = apperror.NewValidation("VAULT_MIGRATION_SOURCE_ACTIVE", "migration source is still active")
+	ErrMigrationSourceEqualsTarget error = apperror.NewValidation("VAULT_MIGRATION_SOURCE_EQUALS_TARGET", "migration source and target must differ")
+	ErrMigrationAmountInvalid      error = apperror.NewValidation("VAULT_MIGRATION_AMOUNT_INVALID", "migration amount must be greater than zero")
+	ErrMigrationAmountExceeded     error = apperror.NewValidation("VAULT_MIGRATION_AMOUNT_EXCEEDED", "migration amount exceeds source position")
 )
 
 // MigrationTarget describes an active allocation that can receive a position

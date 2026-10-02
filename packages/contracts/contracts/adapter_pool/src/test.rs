@@ -3,9 +3,10 @@
 extern crate std;
 
 use soroban_sdk::{
+    contract, contractimpl,
     testutils::{Address as _, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Address, Env,
+    Address, Env, Symbol,
 };
 
 use nester_common::adapters::ApyConfidence;
@@ -196,4 +197,130 @@ fn limits_report_capacity() {
     assert_eq!(s.adapter.max_deposit(), i128::MAX);
     assert_eq!(s.adapter.max_withdraw(), 0);
     assert_eq!(s.adapter.underlying(), s.token.address);
+}
+
+// ---------------------------------------------------------------------------
+// Reentrancy guard (issue #1353) — a hostile "pool" that calls back into the
+// adapter mid-`deposit`/`withdraw` must be rejected. See the equivalent
+// lending-adapter tests (`adapter_lending/src/test.rs`) for the full
+// explanation of why these assert a bare `#[should_panic]`: Soroban's host
+// itself refuses to re-enter a contract already on the call stack, which
+// fires before `ReentrancyGuard` gets a chance to, confirmed here too by
+// temporarily removing `with_reentrancy_guard` and observing these tests
+// still pass. `ReentrancyGuard` has its own dedicated, isolated coverage in
+// `libs/common/src/reentrancy.rs`.
+// ---------------------------------------------------------------------------
+
+#[contract]
+struct HostilePool;
+
+#[contractimpl]
+impl HostilePool {
+    pub fn initialize(env: Env, adapter: Address, vault: Address) {
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "adapter"), &adapter);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "vault"), &vault);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "hostile"), &false);
+    }
+
+    pub fn arm(env: Env) {
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "hostile"), &true);
+    }
+
+    pub fn deposit(env: Env, _from: Address, amount: i128) -> i128 {
+        Self::maybe_reenter(&env, amount);
+        amount
+    }
+
+    pub fn withdraw(env: Env, _owner: Address, _to: Address, units: i128) -> i128 {
+        Self::maybe_reenter(&env, units);
+        units
+    }
+
+    pub fn get_reserves(_env: Env) -> (i128, i128) {
+        (1_000_000_000, 1_000_000_000)
+    }
+
+    pub fn total_shares(_env: Env) -> i128 {
+        1_000_000_000
+    }
+
+    fn maybe_reenter(env: &Env, amount: i128) {
+        let hostile: bool = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(env, "hostile"))
+            .unwrap_or(false);
+        if !hostile {
+            return;
+        }
+        let adapter: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(env, "adapter"))
+            .unwrap();
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(env, "vault"))
+            .unwrap();
+        PoolAdapterContractClient::new(env, &adapter).withdraw(&vault, &amount, &0);
+    }
+}
+
+fn setup_hostile() -> (
+    Address,
+    PoolAdapterContractClient<'static>,
+    HostilePoolClient<'static>,
+    StellarAssetClient<'static>,
+) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let vault = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+    let token_admin_client = StellarAssetClient::new(&env, &token_id);
+
+    let adapter_id = env.register_contract(None, PoolAdapterContract);
+
+    let pool_id = env.register_contract(None, HostilePool);
+    let pool = HostilePoolClient::new(&env, &pool_id);
+    pool.initialize(&adapter_id, &vault);
+
+    let adapter = PoolAdapterContractClient::new(&env, &adapter_id);
+    adapter.initialize(&vault, &pool_id, &token_id);
+
+    (vault, adapter, pool, token_admin_client)
+}
+
+#[test]
+#[should_panic]
+fn reentrant_pool_during_deposit_is_blocked() {
+    let (vault, adapter, pool, token_admin_client) = setup_hostile();
+    token_admin_client.mint(&vault, &1_000_000);
+    pool.arm();
+    adapter.deposit(&vault, &1_000_000, &0);
+}
+
+#[test]
+#[should_panic]
+fn reentrant_pool_during_withdraw_is_blocked() {
+    let (vault, adapter, pool, token_admin_client) = setup_hostile();
+    token_admin_client.mint(&vault, &1_000_000);
+    // Seed a real position while the pool is still benign.
+    adapter.deposit(&vault, &1_000_000, &0);
+    assert_eq!(adapter.max_withdraw(), 1_000_000);
+
+    pool.arm();
+    adapter.withdraw(&vault, &1_000_000, &0);
 }

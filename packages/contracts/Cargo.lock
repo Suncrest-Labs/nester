@@ -797,6 +797,7 @@ dependencies = [
 name = "nester-integration-tests"
 version = "0.1.0"
 dependencies = [
+ "adapter-pool-contract",
  "allocation-strategy-contract",
  "ed25519-dalek",
  "nester-access-control",

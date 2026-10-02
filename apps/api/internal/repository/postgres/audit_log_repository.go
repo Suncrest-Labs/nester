@@ -38,8 +38,8 @@ func (l *PostgresAuditLogger) Log(ctx context.Context, e audit.Entry) error {
 	}
 
 	_, err = l.db.ExecContext(ctx, `
-		INSERT INTO audit_logs (user_id, action, entity_type, entity_id, old_value, new_value, ip_address)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, userID, e.Action, e.EntityType, e.EntityID, oldJSON, newJSON, nullSQLString(e.IPAddress))
+		INSERT INTO audit_logs (user_id, action, entity_type, entity_id, old_value, new_value, ip_address, correlation_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, userID, e.Action, e.EntityType, e.EntityID, oldJSON, newJSON, nullSQLString(e.IPAddress), nullSQLString(e.CorrelationID))
 	return err
 }

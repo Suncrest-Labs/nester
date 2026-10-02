@@ -10,11 +10,7 @@
 
 extern crate std;
 
-use soroban_sdk::{
-    testutils::Address as _,
-    token::StellarAssetClient,
-    Address, Env,
-};
+use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env};
 
 use nester_test_utils::mocks::{MockBlendPool, MockBlendPoolClient};
 

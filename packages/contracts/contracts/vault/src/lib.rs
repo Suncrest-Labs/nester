@@ -165,6 +165,10 @@ const DEFAULT_MAX_REBALANCE_VALUE_BPS: u32 = rebalance::DEFAULT_MAX_REBALANCE_VA
 const DEFAULT_MAX_LEG_SLIPPAGE_BPS: u32 = rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING;
 const PNLTY_CHG: Symbol = symbol_short!("PNLTY_CHG");
 const PNLTY_DST: Symbol = symbol_short!("PNLTY_DST");
+/// Emitted by `set_max_deposit`/`set_min_deposit`, issue #1354: cap changes
+/// were silent on-chain, which the off-chain indexer needs to reconstruct
+/// config state without extra RPC calls.
+const CAP_CHG: Symbol = symbol_short!("CAP_CHG");
 /// Time-locked savings vault events (issue #802).
 const LOCK_OPEN: Symbol = symbol_short!("LOCK_OPEN");
 const LOCK_UNLK: Symbol = symbol_short!("LOCK_UNLK");
@@ -190,6 +194,17 @@ pub struct FeeConfig {
 pub struct FeeConfigUpdatedEventData {
     pub old_config: FeeConfig,
     pub new_config: FeeConfig,
+}
+
+/// Shared by `set_max_deposit`/`set_min_deposit`: which cap changed, and its
+/// old/new value. One struct for both setters (DRY) rather than a
+/// near-identical struct per field.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CapChangedEventData {
+    pub field: Symbol,
+    pub old_value: i128,
+    pub new_value: i128,
 }
 
 #[contracttype]
@@ -448,6 +463,8 @@ enum DataKey {
     SharePriceBaseline,
     SharePriceBaselineAt,
     SourceFailureCount,
+    DepositAllowlistEnabled,
+    DepositAllowlisted(Address),
     BreakerConfigV2,
     // Multi-asset vault support (#804)
     BasketAssets,         // Vec<AssetConfig> for multi-asset vaults
@@ -2274,7 +2291,63 @@ impl VaultContract {
         if amount <= 0 {
             panic_with_error!(&env, ContractError::ConfigOutOfRange);
         }
+        let old_value: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxDeposit)
+            .unwrap_or(i128::MAX);
         env.storage().instance().set(&DataKey::MaxDeposit, &amount);
+        emit_event(
+            &env,
+            VAULT,
+            CAP_CHG,
+            caller,
+            CapChangedEventData {
+                field: symbol_short!("MAX_DEP"),
+                old_value,
+                new_value: amount,
+            },
+        );
+    }
+
+    /// Enable or disable the mainnet deposit allowlist gate.
+    ///
+    /// The gate is disabled by default for backwards compatibility. When it is
+    /// enabled, only addresses explicitly added with
+    /// [`Self::set_deposit_allowlisted`] may deposit.
+    pub fn set_deposit_allowlist_enabled(env: Env, caller: Address, enabled: bool) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::DepositAllowlistEnabled, &enabled);
+    }
+
+    /// Add or remove one depositor from the controlled-rollout allowlist.
+    pub fn set_deposit_allowlisted(env: Env, caller: Address, depositor: Address, allowed: bool) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DepositAllowlisted(depositor), &allowed);
+    }
+
+    /// Returns whether the controlled-rollout deposit gate is enabled.
+    pub fn deposit_allowlist_enabled(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::DepositAllowlistEnabled)
+            .unwrap_or(false)
+    }
+
+    /// Returns whether `depositor` is currently admitted by the allowlist.
+    pub fn is_deposit_allowlisted(env: Env, depositor: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DepositAllowlisted(depositor))
+            .unwrap_or(false)
     }
 
     pub fn set_min_deposit(env: Env, caller: Address, amount: i128) {
@@ -2284,7 +2357,23 @@ impl VaultContract {
         if amount < 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
+        let old_value: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDeposit)
+            .unwrap_or(0);
         env.storage().instance().set(&DataKey::MinDeposit, &amount);
+        emit_event(
+            &env,
+            VAULT,
+            CAP_CHG,
+            caller,
+            CapChangedEventData {
+                field: symbol_short!("MIN_DEP"),
+                old_value,
+                new_value: amount,
+            },
+        );
     }
 
     pub fn get_min_deposit(env: Env) -> i128 {
@@ -3712,6 +3801,11 @@ impl VaultContract {
         }
 
         user.require_auth();
+        if Self::deposit_allowlist_enabled(env.clone())
+            && !Self::is_deposit_allowlisted(env.clone(), user.clone())
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
         accrue_management_fee(&env);
         release_vested_yield(&env);
 

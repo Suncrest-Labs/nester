@@ -134,6 +134,8 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/admin/backfill/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/dashboard", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/health", RequireRole: "admin"},
+	{Method: "GET", Path: "/api/v1/admin/jobs/dead", RequireRole: "admin"},
+	{Method: "GET", Path: "/api/v1/admin/maintenance", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/savings-goal-templates", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/scheduler/leadership", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/users/00000000-0000-0000-0000-000000000000/money-path", RequireRole: "admin"},
@@ -143,14 +145,17 @@ var authzMatrix = []AuthzRoute{
 	{Method: "PATCH", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/allocations/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/backfill", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/backfill/00000000-0000-0000-0000-000000000000/resume", RequireRole: "admin"},
+	{Method: "POST", Path: "/api/v1/admin/jobs/00000000-0000-0000-0000-000000000000/retry", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/savings-goal-templates", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/sync-events", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/allocations", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/pause", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/rebalance", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/unpause", RequireRole: "admin"},
+	{Method: "PUT", Path: "/api/v1/admin/maintenance", RequireRole: "admin"},
 
 	// analytics
+	{Method: "GET", Path: "/api/v1/analytics/protocols/comparison"},
 	{Method: "GET", Path: "/api/v1/analytics/users/00000000-0000-0000-0000-000000000000"},
 
 	// internal

@@ -295,9 +295,14 @@ func (d *APYDriftDetector) evaluateAndEnqueue(ctx context.Context, v vault.Vault
 	// in-flight guard would just reject anyway.
 	idempotencyKey := fmt.Sprintf("apy-drift:%s:%s", v.ID, payload.DetectedAt.Format("2006-01-02"))
 
+	// A fresh correlation id per enqueue (nester#1339): the job handler's own
+	// audit entry (written on successful submission, in
+	// NewAPYDriftRebalanceJobHandler) carries it through job.CorrelationID so
+	// it can be traced back to this specific detection pass.
 	job, err := d.jobs.EnqueueJSON(ctx, RebalanceDriftJobType, payload,
 		jobqueue.WithIdempotencyKey(idempotencyKey),
 		jobqueue.WithPriority(jobqueue.PriorityBalance),
+		jobqueue.WithCorrelationID(uuid.NewString()),
 	)
 	if err != nil {
 		d.logger.Error("apy drift: enqueue rebalance job failed",
@@ -380,10 +385,11 @@ func NewAPYDriftRebalanceJobHandler(admin RebalanceTrigger, auditLogger AuditLog
 			"detected_at":   p.DetectedAt,
 		})
 		if auditErr := auditLogger.Log(ctx, AuditEntry{
-			Action:     "vault.rebalance.apy_drift_triggered",
-			EntityType: "vault",
-			EntityID:   p.VaultID,
-			NewValue:   json.RawMessage(newValue),
+			Action:        "vault.rebalance.apy_drift_triggered",
+			EntityType:    "vault",
+			EntityID:      p.VaultID,
+			NewValue:      json.RawMessage(newValue),
+			CorrelationID: job.CorrelationID,
 		}); auditErr != nil {
 			// Audit failure must not fail (and therefore retry-loop) a
 			// rebalance that already succeeded on-chain; log and continue.

@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/suncrestlabs/nester/apps/api/pkg/apperror"
 )
 
 // Account types as defined in the issue.
@@ -20,12 +22,24 @@ const (
 	AccountTypeExternal = "external"
 )
 
+// These are retrofitted onto apperror.AppError (nester#1341, following the
+// taxonomy introduced in #1048) rather than plain errors.New values. Each
+// stays the exact same error value it always was, so every existing
+// errors.Is(err, ErrX) call site across the codebase keeps compiling and
+// behaving identically; callers that want the stable Kind/Code can now also
+// errors.As(err, &appErr) instead.
 var (
-	ErrInvalidAccountType = errors.New("invalid ledger account type")
-	ErrUnbalanced         = errors.New("ledger entries do not sum to zero")
-	ErrTooFewEntries      = errors.New("at least two entries required")
-	ErrEmptyTransactionID = errors.New("transaction_id is required")
-	ErrZeroAmount         = errors.New("amount must be non-zero")
+	ErrInvalidAccountType error = apperror.NewValidation("LEDGER_INVALID_ACCOUNT_TYPE", "invalid ledger account type")
+	ErrUnbalanced         error = apperror.NewValidation("LEDGER_UNBALANCED", "ledger entries do not sum to zero")
+	ErrTooFewEntries      error = apperror.NewValidation("LEDGER_TOO_FEW_ENTRIES", "at least two entries required")
+	ErrEmptyTransactionID error = apperror.NewValidation("LEDGER_EMPTY_TRANSACTION_ID", "transaction_id is required")
+	ErrZeroAmount         error = apperror.NewValidation("LEDGER_ZERO_AMOUNT", "amount must be non-zero")
+	// ErrAlreadyPosted is returned by PostEntries/PostEntriesTx when the same
+	// domain event (domain_event_type + domain_event_id) has already been
+	// posted. Callers should treat this as a no-op success rather than a
+	// hard failure, since it means a retried request found its postings
+	// already applied (nester#1309).
+	ErrAlreadyPosted error = apperror.NewConflict("LEDGER_ALREADY_POSTED", "ledger entries already posted for this domain event")
 )
 
 // ValidAccountTypes is the set of allowed account_type values.
@@ -67,7 +81,7 @@ type Entry struct {
 	ID              uuid.UUID `json:"id"`
 	TransactionID   uuid.UUID `json:"transaction_id"`
 	AccountID       uuid.UUID `json:"account_id"`
-	Amount          int64     `json:"amount"` // signed, stroops — never float
+	Amount          int64     `json:"amount"`    // signed, stroops — never float
 	Direction       string    `json:"direction"` // debit or credit, derived from amount sign
 	CreatedAt       time.Time `json:"created_at"`
 	DomainEventType string    `json:"domain_event_type,omitempty"` // deposit, withdraw, harvest, rebalance
@@ -149,21 +163,21 @@ func DecimalStringToStroops(s string) (int64, error) {
 
 // ReconciliationRecord stores a drift check result.
 type ReconciliationRecord struct {
-	ID                      uuid.UUID `json:"id"`
-	VaultID                 uuid.UUID `json:"vault_id"`
-	LedgerVaultPoolBalance  int64     `json:"ledger_vault_pool_balance"`
-	OnChainBalance          int64     `json:"on_chain_balance"`
-	Difference              int64     `json:"difference"`
-	Tolerance               int64     `json:"tolerance"`
-	Status                  string    `json:"status"` // ok, drift, error
-	Details                 string    `json:"details,omitempty"`
-	CreatedAt               time.Time `json:"created_at"`
+	ID                     uuid.UUID `json:"id"`
+	VaultID                uuid.UUID `json:"vault_id"`
+	LedgerVaultPoolBalance int64     `json:"ledger_vault_pool_balance"`
+	OnChainBalance         int64     `json:"on_chain_balance"`
+	Difference             int64     `json:"difference"`
+	Tolerance              int64     `json:"tolerance"`
+	Status                 string    `json:"status"` // ok, drift, error
+	Details                string    `json:"details,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
 }
 
 // BalanceMismatch is returned by the recompute-and-assert job.
 type BalanceMismatch struct {
-	AccountID uuid.UUID `json:"account_id"`
-	Cached    int64     `json:"cached"`
-	Computed  int64     `json:"computed"`
-	Difference int64    `json:"difference"`
+	AccountID  uuid.UUID `json:"account_id"`
+	Cached     int64     `json:"cached"`
+	Computed   int64     `json:"computed"`
+	Difference int64     `json:"difference"`
 }

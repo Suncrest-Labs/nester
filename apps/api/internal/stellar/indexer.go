@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -76,7 +77,13 @@ type IndexerOptions struct {
 }
 
 // StartEventIndexer launches the long-running event indexer.
-func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, opts IndexerOptions) {
+//
+// wg, if non-nil, is Add(1)-ed before the indexer's goroutine starts and
+// Done() is called when it returns (on context cancellation). A caller that
+// needs to wait for the indexer to actually stop during shutdown, rather
+// than just cancel its context and hope, passes its own shutdown WaitGroup
+// here (issue #786). Nil is fine wherever nothing needs to wait.
+func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sysRepo systemstate.Repository, opts IndexerOptions, wg *sync.WaitGroup) {
 	if strings.TrimSpace(opts.RPCURL) == "" {
 		logger.Warn("event indexer disabled: STELLAR_RPC_URL is empty")
 		return
@@ -100,7 +107,13 @@ func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sys
 		DepositObserver: opts.DepositObserver,
 	}
 
+	if wg != nil {
+		wg.Add(1)
+	}
 	go func() {
+		if wg != nil {
+			defer wg.Done()
+		}
 		ticker := time.NewTicker(IndexerPollInterval)
 		defer ticker.Stop()
 

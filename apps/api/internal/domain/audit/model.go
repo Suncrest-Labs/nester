@@ -15,4 +15,8 @@ type Entry struct {
 	OldValue   any
 	NewValue   any
 	IPAddress  string
+	// CorrelationID ties this entry back to the HTTP request or background
+	// job run that produced it (migration 122, nester#1339). Empty when the
+	// caller has no id to attach.
+	CorrelationID string
 }

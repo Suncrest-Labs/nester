@@ -189,6 +189,55 @@ func TestDataRetentionJob_AuditLogsEachDeletionWithCountAndCutoff(t *testing.T) 
 	}
 }
 
+// TestDataRetentionJob_AuditEntriesFromOneTickShareACorrelationID covers
+// nester#1339: entries written by this job previously carried no
+// correlation id at all, making a sweep untraceable back to the run that
+// produced it. Both tables' entries from the same Tick must now share one
+// non-empty id, and a second Tick must mint a different one.
+func TestDataRetentionJob_AuditEntriesFromOneTickShareACorrelationID(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	activity := &fakeActivityEventRepo{
+		rows: []time.Time{now.Add(-200 * 24 * time.Hour), now.Add(-200 * 24 * time.Hour)},
+	}
+	nudges := &fakeNudgeRetentionRepo{
+		rows: []time.Time{now.Add(-200 * 24 * time.Hour)},
+	}
+	auditLog := &fakeAuditLogger{}
+
+	job := NewDataRetentionJob(activity, nudges, auditLog, DataRetentionConfig{Now: func() time.Time { return now }}, nil)
+	job.Tick(context.Background())
+
+	if len(auditLog.entries) != 2 {
+		t.Fatalf("expected 2 audit entries, got %d", len(auditLog.entries))
+	}
+	firstTickID := auditLog.entries[0].CorrelationID
+	if firstTickID == "" {
+		t.Fatal("expected a non-empty correlation id on the first tick's entries")
+	}
+	for _, e := range auditLog.entries {
+		if e.CorrelationID != firstTickID {
+			t.Errorf("entity_type %q correlation id = %q, want %q (shared across the same tick)", e.EntityType, e.CorrelationID, firstTickID)
+		}
+	}
+
+	// A second tick (e.g. the next scheduled run) must mint its own id, not
+	// reuse the first run's.
+	activity.rows = []time.Time{now.Add(-200 * 24 * time.Hour)}
+	job.Tick(context.Background())
+
+	secondTickEntries := auditLog.entries[2:]
+	if len(secondTickEntries) != 1 {
+		t.Fatalf("expected 1 additional audit entry from the second tick, got %d", len(secondTickEntries))
+	}
+	secondTickID := secondTickEntries[0].CorrelationID
+	if secondTickID == "" {
+		t.Fatal("expected a non-empty correlation id on the second tick's entry")
+	}
+	if secondTickID == firstTickID {
+		t.Errorf("second tick reused the first tick's correlation id %q, want a distinct one", secondTickID)
+	}
+}
+
 func TestDataRetentionJob_DoesNotAuditLogWhenNothingWasDeleted(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	activity := &fakeActivityEventRepo{rows: []time.Time{now}} // recent, survives

@@ -26,7 +26,7 @@ use soroban_sdk::{
 };
 
 use nester_common::adapters::{AdapterApy, ApyConfidence, YieldAdapter};
-use nester_common::{emit_event, ContractError};
+use nester_common::{emit_event, with_reentrancy_guard, ContractError};
 
 const ADAPTER: Symbol = symbol_short!("ADAPTER");
 const DEPOSITED: Symbol = symbol_short!("DEPOSIT");
@@ -82,7 +82,9 @@ impl PoolAdapterContract {
         }
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage().instance().set(&DataKey::Pool, &pool);
-        env.storage().instance().set(&DataKey::Underlying, &underlying);
+        env.storage()
+            .instance()
+            .set(&DataKey::Underlying, &underlying);
         env.storage().instance().set(&DataKey::Units, &0i128);
     }
 
@@ -98,11 +100,8 @@ impl PoolAdapterContract {
     pub fn get_checkpoint(env: Env) -> Option<ApyCheckpoint> {
         env.storage().instance().get(&DataKey::Checkpoint)
     }
-}
 
-#[contractimpl]
-impl YieldAdapter for PoolAdapterContract {
-    fn deposit(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128 {
+    fn deposit_internal(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128 {
         from.require_auth();
         require_vault(&env, &from);
         if amount <= 0 {
@@ -129,7 +128,9 @@ impl YieldAdapter for PoolAdapterContract {
         }
 
         let held: i128 = env.storage().instance().get(&DataKey::Units).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Units, &(held + units));
+        env.storage()
+            .instance()
+            .set(&DataKey::Units, &(held + units));
 
         // The position basis changed — reset the derived-APY checkpoint so
         // deposits are never mistaken for yield.
@@ -145,7 +146,7 @@ impl YieldAdapter for PoolAdapterContract {
         units
     }
 
-    fn withdraw(env: Env, to: Address, units: i128, min_out: i128) -> i128 {
+    fn withdraw_internal(env: Env, to: Address, units: i128, min_out: i128) -> i128 {
         let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
         vault.require_auth();
         if units <= 0 {
@@ -175,7 +176,9 @@ impl YieldAdapter for PoolAdapterContract {
             panic_with_error!(&env, ContractError::SlippageExceeded);
         }
 
-        env.storage().instance().set(&DataKey::Units, &(held - units));
+        env.storage()
+            .instance()
+            .set(&DataKey::Units, &(held - units));
         token::Client::new(&env, &underlying).transfer(&me, &to, &assets);
 
         reset_checkpoint(&env);
@@ -191,6 +194,19 @@ impl YieldAdapter for PoolAdapterContract {
             },
         );
         assets
+    }
+}
+
+#[contractimpl]
+impl YieldAdapter for PoolAdapterContract {
+    fn deposit(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128 {
+        with_reentrancy_guard(env, |env| {
+            Self::deposit_internal(env, from, amount, min_units_out)
+        })
+    }
+
+    fn withdraw(env: Env, to: Address, units: i128, min_out: i128) -> i128 {
+        with_reentrancy_guard(env, |env| Self::withdraw_internal(env, to, units, min_out))
     }
 
     /// Pro-rata reserve valuation of the aggregate LP position. `_owner` is
@@ -277,13 +293,9 @@ fn lp_value(env: &Env) -> i128 {
     }
 
     let no_args: Vec<Val> = Vec::new(env);
-    let (reserve_a, _reserve_b): (i128, i128) = env.invoke_contract(
-        &pool,
-        &Symbol::new(env, "get_reserves"),
-        no_args.clone(),
-    );
-    let total_shares: i128 =
-        env.invoke_contract(&pool, &Symbol::new(env, "total_shares"), no_args);
+    let (reserve_a, _reserve_b): (i128, i128) =
+        env.invoke_contract(&pool, &Symbol::new(env, "get_reserves"), no_args.clone());
+    let total_shares: i128 = env.invoke_contract(&pool, &Symbol::new(env, "total_shares"), no_args);
 
     if total_shares <= 0 {
         return 0;

@@ -31,6 +31,15 @@ go-test-short:
 clean:
 	cd $(CONTRACTS_DIR) && $(CARGO) clean
 
+db-backup:
+	@bash scripts/db-backup.sh
+
+db-restore:
+	@bash scripts/db-restore.sh $(FILE)
+
+db-restore-drill:
+	@bash scripts/db-restore-drill.sh
+
 # Docker Compose — local development
 #
 # By default, all services bind to 127.0.0.1 (loopback only) for security.
@@ -73,29 +82,16 @@ dev-db-reset: ## Recreate the dev schema, re-run migrations, and re-seed
 	@until docker compose exec -T postgres psql -tA -U nester nester_dev -c "SELECT to_regclass('public.users')" | grep -q users; do sleep 1; done
 	$(MAKE) dev-seed
 
-# Backup / restore (nester#795). See docs/database-backup-restore.md for the
-# full runbook, retention/PITR guidance, and the restore-drill checklist.
+# Backup / restore (nester#795 / #1384 mainnet backup & encrypted off-site restore runbook).
 
-db-backup: ## Back up the dev database to ./backups/nester_<timestamp>.dump
-	DATABASE_DSN="postgres://nester:nester_dev_password@localhost:5432/nester_dev?sslmode=disable" \
-		scripts/db-backup.sh
+db-backup:
+	scripts/db-backup.sh
 
-db-restore: ## Restore a backup: make db-restore FILE=./backups/nester_<timestamp>.dump
-	@if [ -z "$(FILE)" ]; then \
-		echo "Usage: make db-restore FILE=./backups/nester_<timestamp>.dump"; \
-		exit 1; \
-	fi
-	DATABASE_DSN="postgres://nester:nester_dev_password@localhost:5432/nester_dev?sslmode=disable" \
-		scripts/db-restore.sh "$(FILE)"
+db-restore:
+	scripts/db-restore.sh $(FILE)
 
-db-restore-drill: ## Restore the most recent local backup into a scratch DB (nester_restore_drill) without touching nester_dev
-	@latest="$$(find ./backups -maxdepth 1 -name 'nester_*.dump' 2>/dev/null | sort | tail -1)"; \
-	if [ -z "$$latest" ]; then \
-		echo "No backups found in ./backups — run 'make db-backup' first."; \
-		exit 1; \
-	fi; \
-	echo "Restoring $$latest into scratch database nester_restore_drill ..."; \
-	docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U nester -d postgres -c "DROP DATABASE IF EXISTS nester_restore_drill;"; \
-	docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U nester -d postgres -c "CREATE DATABASE nester_restore_drill;"; \
-	DATABASE_DSN="postgres://nester:nester_dev_password@localhost:5432/nester_restore_drill?sslmode=disable" \
-		scripts/db-restore.sh "$$latest" "postgres://nester:nester_dev_password@localhost:5432/nester_restore_drill?sslmode=disable"
+db-restore-drill:
+	@echo "Running restore drill..."
+	@mkdir -p backups
+	@DATABASE_DSN="postgres://nester:nester_dev_password@localhost:5432/nester_dev?sslmode=disable" scripts/db-backup.sh
+	@scripts/db-restore-drill.sh

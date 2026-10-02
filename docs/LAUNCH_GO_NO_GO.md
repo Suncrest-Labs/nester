@@ -14,6 +14,7 @@ to be recorded against.
 |---|---|---|---|---|
 | Support can inspect a user's money-path state without a DB console | #1141 | | Manually look up a test user via the money-path endpoint | |
 | Support triage guide covers the top 4 report types | #1142 | | Guide reviewed by someone who will actually staff support | |
+| Mainnet support contact channels and escalation SLAs defined | #1144 | | Escalation tree and SLAs reviewed and published in `docs/SUPPORT_ESCALATION.md` | |
 | In-app problem report attaches context and shows it before sending | #1143 | | Manually trigger a report on staging, confirm no secrets in the payload | |
 | Deposit UI shows a real simulated quote, not amount==shares | #1129 (nester) | | Deposit on testnet, compare quoted vs. actual shares received | |
 | Contract tests exist for at least one core API response shape | #1130 (nester) | | `contracts.test.ts` passes in CI | |

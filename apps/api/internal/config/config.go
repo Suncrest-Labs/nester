@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/breaker"
@@ -24,6 +25,18 @@ import (
 // in source is what makes the check possible (nester#1035, G101).
 const defaultDevJWTSecret = "dev-nester-jwt-secret-change-in-production" // #nosec G101 -- known-bad placeholder that startup validation refuses, not a real secret
 
+// Stellar network passphrase constants (nester#1396). Named here so every
+// comparison in validation uses the same string rather than duplicating the
+// literal, and so a grep for the constant finds every assertion site.
+const (
+	// StellarMainnetPassphrase is the canonical passphrase for the Stellar
+	// public (mainnet) network.
+	StellarMainnetPassphrase = "Public Global Stellar Network ; September 2015"
+	// StellarTestnetPassphrase is the canonical passphrase for the Stellar
+	// testnet (SDF-operated).
+	StellarTestnetPassphrase = "Test SDF Network ; September 2015"
+)
+
 // maxKeyVersionLen bounds an account cipher key version label so it fits the
 // bank_accounts.key_version VARCHAR(32) column.
 const maxKeyVersionLen = 32
@@ -35,35 +48,37 @@ const maxKeyVersionLen = 32
 const maxDatabasePoolSize = 10000
 
 type Config struct {
-	environment          string
-	server               ServerConfig
-	database             DatabaseConfig
-	stellar              StellarConfig
-	allocation           AllocationConfig
-	redis                RedisConfig
-	auth                 AuthConfig
-	rateLimit            RateLimitConfig
-	log                  LogConfig
-	allowedOrigins       []string
-	performance          PerformanceConfig
-	tvl                  TVLConfig
-	apyRefresh           APYRefreshConfig
-	startup              StartupConfig
-	bankAccountCipherKey string
-	accountCipher        AccountCipherConfig
-	transactionPoller    TransactionPollerConfig
-	reconciliation       ReconciliationConfig
-	recurringDeposit     RecurringDepositConfig
-	jobQueue             JobQueueConfig
-	outbox               OutboxConfig
-	harvest              HarvestConfig
-	rebalancer           RebalancerConfig
-	schedulerLeadership  SchedulerLeadershipConfig
-	tracing              TracingConfig
-	metrics              MetricsConfig
-	indexer              IndexerConfig
-	circuitBreaker       CircuitBreakerConfig
-	rpcRetry             RPCRetryConfig
+	environment            string
+	server                 ServerConfig
+	database               DatabaseConfig
+	stellar                StellarConfig
+	allocation             AllocationConfig
+	redis                  RedisConfig
+	auth                   AuthConfig
+	rateLimit              RateLimitConfig
+	log                    LogConfig
+	allowedOrigins         []string
+	performance            PerformanceConfig
+	tvl                    TVLConfig
+	apyRefresh             APYRefreshConfig
+	startup                StartupConfig
+	bankAccountCipherKey   string
+	accountCipher          AccountCipherConfig
+	transactionPoller      TransactionPollerConfig
+	reconciliation         ReconciliationConfig
+	recurringDeposit       RecurringDepositConfig
+	jobQueue               JobQueueConfig
+	outbox                 OutboxConfig
+	harvest                HarvestConfig
+	canary                 CanaryConfig
+	rebalancer             RebalancerConfig
+	goalNotificationDigest GoalNotificationDigestConfig
+	schedulerLeadership    SchedulerLeadershipConfig
+	tracing                TracingConfig
+	metrics                MetricsConfig
+	indexer                IndexerConfig
+	circuitBreaker         CircuitBreakerConfig
+	rpcRetry               RPCRetryConfig
 }
 
 // CircuitBreakerConfig is the policy protecting the chain upstreams, Soroban
@@ -87,7 +102,7 @@ type CircuitBreakerConfig struct {
 	openDuration time.Duration
 
 	sorobanRPCOverride breakerOverride
-	horizonOverride     breakerOverride
+	horizonOverride    breakerOverride
 }
 
 // breakerOverride holds per-upstream threshold overrides. A nil pointer field
@@ -288,6 +303,24 @@ type StellarConfig struct {
 	operatorFundedDepositVaults string
 	// operatorFundedDepositMaxAmount caps a single operator-funded deposit.
 	operatorFundedDepositMaxAmount string
+	// mainnetVaultTVLCap is the hard ceiling on a single vault's total value
+	// locked, enforced only when networkPassphrase is the mainnet passphrase
+	// (nester#1376). Empty or non-positive means no cap. Kept as a single
+	// deployment-wide ceiling, separate from the per-vault soft_capacity
+	// column, since the goal is a blanket safety limit on mainnet exposure
+	// while it is unproven rather than a per-vault business limit.
+	mainnetVaultTVLCap string
+	// withdrawalBreakerEnabled turns the withdrawal circuit breaker
+	// (nester#1377) on or off. Defaults to off, matching
+	// vault.DefaultOutflowBreakerConfig(): it is new behaviour that can halt
+	// legitimate large withdrawals, so an operator opts in explicitly.
+	withdrawalBreakerEnabled bool
+	// withdrawalBreakerThresholdPercent is the rolling-window outflow
+	// percentage of a vault's TVL that halts it. e.g. 25 for 25%.
+	withdrawalBreakerThresholdPercent string
+	// withdrawalBreakerWindow is the rolling window the breaker sums
+	// outflows over, e.g. "1h".
+	withdrawalBreakerWindow time.Duration
 }
 
 type AllocationConfig struct {
@@ -314,6 +347,14 @@ type RateLimitConfig struct {
 	rebalanceWindow time.Duration
 	authLimit       int
 	authWindow      time.Duration
+	// Per-API-key limit (nester#1343), distinct from globalLimit/globalWindow
+	// which bound request rate per client IP. A single compromised or
+	// misbehaving integration holding the shared service API key can
+	// otherwise exhaust the IP-based budget for every other client sharing
+	// that address (e.g. several integrations behind one NAT gateway, or one
+	// bursty integration crowding out the rest on the same key).
+	apiKeyLimit  int
+	apiKeyWindow time.Duration
 	// Auth-failure lockout (nester#1104). Distinct from authLimit/authWindow,
 	// which bound request *rate*; these bound repeated *failures* and escalate
 	// a backoff the attacker cannot outrun by slowing down.
@@ -375,20 +416,24 @@ func Load() (*Config, error) {
 			connectionTimeout: loader.durationDefault("DATABASE_CONNECTION_TIMEOUT", 5*time.Second),
 		},
 		stellar: StellarConfig{
-			networkPassphrase:              loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
-			rpcURL:                         loader.requiredURL("STELLAR_RPC_URL"),
-			horizonURL:                     loader.requiredURL("STELLAR_HORIZON_URL"),
-			operatorSecret:                 loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
-			operatorFundedDepositsEnabled:  loader.boolDefault("STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED", false),
-			operatorFundedDepositVaults:    loader.stringDefault("STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS", ""),
-			operatorFundedDepositMaxAmount: loader.stringDefault("STELLAR_OPERATOR_FUNDED_DEPOSIT_MAX_AMOUNT", "0"),
-			operatorAddress:                loader.stringDefault("STELLAR_OPERATOR_ADDRESS", ""),
-			signerSocketPath:               loader.stringDefault("SIGNER_SOCKET_PATH", ""),
-			stellarUSDCIssuer:              loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
-			yieldRegistryContract:          loader.stringDefault("YIELD_REGISTRY_CONTRACT", ""),
-			allocationStrategyAddress:      loader.stringDefault("STELLAR_ALLOCATION_STRATEGY_ADDRESS", ""),
-			withdrawalSlippageBps:          loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
-			harvestDefaultCompound:         loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
+			networkPassphrase:                 loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
+			rpcURL:                            loader.requiredURL("STELLAR_RPC_URL"),
+			horizonURL:                        loader.requiredURL("STELLAR_HORIZON_URL"),
+			operatorSecret:                    loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
+			operatorFundedDepositsEnabled:     loader.boolDefault("STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED", false),
+			operatorFundedDepositVaults:       loader.stringDefault("STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS", ""),
+			operatorFundedDepositMaxAmount:    loader.stringDefault("STELLAR_OPERATOR_FUNDED_DEPOSIT_MAX_AMOUNT", "0"),
+			operatorAddress:                   loader.stringDefault("STELLAR_OPERATOR_ADDRESS", ""),
+			signerSocketPath:                  loader.stringDefault("SIGNER_SOCKET_PATH", ""),
+			stellarUSDCIssuer:                 loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+			yieldRegistryContract:             loader.stringDefault("YIELD_REGISTRY_CONTRACT", ""),
+			allocationStrategyAddress:         loader.stringDefault("STELLAR_ALLOCATION_STRATEGY_ADDRESS", ""),
+			withdrawalSlippageBps:             loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
+			harvestDefaultCompound:            loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
+			mainnetVaultTVLCap:                loader.stringDefault("STELLAR_MAINNET_VAULT_TVL_CAP", "0"),
+			withdrawalBreakerEnabled:          loader.boolDefault("WITHDRAWAL_BREAKER_ENABLED", false),
+			withdrawalBreakerThresholdPercent: loader.stringDefault("WITHDRAWAL_BREAKER_THRESHOLD_PERCENT", "25"),
+			withdrawalBreakerWindow:           loader.durationDefault("WITHDRAWAL_BREAKER_WINDOW", time.Hour),
 		},
 
 		allocation: AllocationConfig{
@@ -425,6 +470,14 @@ func Load() (*Config, error) {
 			rebalanceWindow: loader.durationDefault("RATELIMIT_REBALANCE_WINDOW", 1*time.Hour),
 			authLimit:       loader.intDefault("RATELIMIT_AUTH_LIMIT", 10),
 			authWindow:      loader.durationDefault("RATELIMIT_AUTH_WINDOW", 1*time.Minute),
+			// Deliberately tighter than globalLimit (300 vs. 100 req/min per
+			// IP): the API key is shared across every caller presenting it,
+			// so its own budget must be generous enough for legitimate
+			// multi-integration traffic while still capping any one key's
+			// total blast radius independent of how many distinct IPs it is
+			// used from.
+			apiKeyLimit:  loader.intDefault("RATELIMIT_APIKEY_LIMIT", 300),
+			apiKeyWindow: loader.durationDefault("RATELIMIT_APIKEY_WINDOW", 1*time.Minute),
 			// 5 failures in 15 minutes starts the backoff. A legitimate user
 			// retrying a flaky wallet signature stays well under it; a
 			// signature brute-force does not.
@@ -491,6 +544,16 @@ func Load() (*Config, error) {
 			margin:   loader.stringDefault("HARVEST_ENGINE_MARGIN", "0.10"),
 			gasFee:   loader.stringDefault("HARVEST_ENGINE_GAS_FEE", "0.05"),
 		},
+		canary: CanaryConfig{
+			// Defaults to disabled: the canary moves real funds on a real
+			// schedule, so an operator must explicitly opt in and configure
+			// a dedicated canary vault via CANARY_VAULT_ID.
+			enabled:          loader.boolDefault("CANARY_ENABLED", false),
+			interval:         loader.durationDefault("CANARY_INTERVAL", 5*time.Minute),
+			vaultID:          loader.uuidDefault("CANARY_VAULT_ID", uuid.Nil),
+			amount:           loader.stringDefault("CANARY_AMOUNT", "0.01"),
+			latencyThreshold: loader.durationDefault("CANARY_LATENCY_THRESHOLD", 60*time.Second),
+		},
 		jobQueue: JobQueueConfig{
 			enabled:            loader.boolDefault("JOB_QUEUE_ENABLED", true),
 			pollInterval:       loader.durationDefault("JOB_QUEUE_POLL_INTERVAL", time.Second),
@@ -529,6 +592,10 @@ func Load() (*Config, error) {
 			// the existing minAPYGainBPS/ExpectedGainBPS convention used
 			// throughout the scheduler package.
 			apyDriftThresholdBPS: int64(loader.intDefault("REBALANCE_APY_THRESHOLD", 200)),
+		},
+		goalNotificationDigest: GoalNotificationDigestConfig{
+			enabled:  loader.boolDefault("GOAL_NOTIFICATION_DIGEST_ENABLED", true),
+			interval: loader.durationDefault("GOAL_NOTIFICATION_DIGEST_INTERVAL", time.Hour),
 		},
 		schedulerLeadership: SchedulerLeadershipConfig{
 			lockKey:           int64(loader.intDefault("SCHEDULER_LEADER_LOCK_KEY", 846000)),
@@ -927,6 +994,25 @@ func (h HarvestConfig) Window() time.Duration   { return h.window }
 func (h HarvestConfig) Margin() string          { return h.margin }
 func (h HarvestConfig) GasFee() string          { return h.gasFee }
 
+// CanaryConfig governs the synthetic mainnet deposit/withdraw probe
+// (nester#1390). Disabled by default — operators must explicitly set
+// CANARY_ENABLED=true and configure a dedicated canary vault before the
+// probe will run.
+type CanaryConfig struct {
+	enabled          bool
+	interval         time.Duration
+	vaultID          uuid.UUID
+	amount           string
+	latencyThreshold time.Duration
+}
+
+func (c Config) Canary() CanaryConfig                { return c.canary }
+func (n CanaryConfig) Enabled() bool                 { return n.enabled }
+func (n CanaryConfig) Interval() time.Duration       { return n.interval }
+func (n CanaryConfig) VaultID() uuid.UUID            { return n.vaultID }
+func (n CanaryConfig) Amount() string                { return n.amount }
+func (n CanaryConfig) LatencyThreshold() time.Duration { return n.latencyThreshold }
+
 // RebalancerConfig governs the automated vault rebalance-decision loop
 // (nester#372; wired into main.go as part of #846). Money-moving: gated
 // behind scheduler leadership so only one instance evaluates and submits.
@@ -955,6 +1041,20 @@ func (r RebalancerConfig) MinAPYGainBPS() int64    { return r.minAPYGainBPS }
 // basis points (REBALANCE_APY_THRESHOLD, default 200 = 2%), used by the
 // APYDriftDetector (#613).
 func (r RebalancerConfig) APYDriftThresholdBPS() int64 { return r.apyDriftThresholdBPS }
+
+// GoalNotificationDigestConfig governs the per-goal digest flush loop
+// (nester#1340): how often it checks for due preferences to flush. Previously
+// hardcoded in main.go with no env var to tune it.
+type GoalNotificationDigestConfig struct {
+	enabled  bool
+	interval time.Duration
+}
+
+func (c Config) GoalNotificationDigest() GoalNotificationDigestConfig {
+	return c.goalNotificationDigest
+}
+func (g GoalNotificationDigestConfig) Enabled() bool           { return g.enabled }
+func (g GoalNotificationDigestConfig) Interval() time.Duration { return g.interval }
 
 // SchedulerLeadershipConfig governs the Postgres-advisory-lock leader
 // election that gates all five scheduler background job loops (#846). See
@@ -1175,6 +1275,14 @@ func (c *Config) validate(loader *envLoader) {
 	} else if c.rateLimit.authWindow < time.Millisecond {
 		loader.addError("RATELIMIT_AUTH_WINDOW must be at least 1ms")
 	}
+	if c.rateLimit.apiKeyLimit <= 0 {
+		loader.addError("RATELIMIT_APIKEY_LIMIT must be greater than 0")
+	}
+	if c.rateLimit.apiKeyWindow <= 0 {
+		loader.addError("RATELIMIT_APIKEY_WINDOW must be greater than 0")
+	} else if c.rateLimit.apiKeyWindow < time.Millisecond {
+		loader.addError("RATELIMIT_APIKEY_WINDOW must be at least 1ms")
+	}
 	if c.rateLimit.authFailureThreshold <= 0 {
 		loader.addError("AUTH_FAILURE_THRESHOLD must be greater than 0")
 	}
@@ -1277,6 +1385,8 @@ func (c *Config) validate(loader *envLoader) {
 		loader.addError("WITHDRAWAL_SLIPPAGE_BPS must be between 1 and 300")
 	}
 
+	validateStellarNetworkConsistency(c.stellar, loader)
+
 	if c.allocation.minWeightPercent < 1 || c.allocation.minWeightPercent > 100 {
 		loader.addError("MIN_ALLOCATION_WEIGHT must be between 1 and 100")
 	}
@@ -1303,6 +1413,88 @@ func validateAllowedOrigins(environment string, origins []string, loader *envLoa
 		}
 		if parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 			loader.addError(fmt.Sprintf("ALLOWED_ORIGINS entry %q must not contain a path, query, or fragment", origin))
+		}
+	}
+}
+
+// validateStellarNetworkConsistency asserts that the configured network
+// passphrase is consistent with the RPC and Horizon URLs, and that the
+// contract addresses are not left at their testnet defaults when the
+// passphrase indicates mainnet (nester#1396).
+//
+// The goal is to prevent the API from routing a mainnet-authenticated request
+// against testnet contracts or vice versa. A misconfigured deployment that
+// mixes environments can silently credit wrong amounts or target wrong
+// contracts; catching it at startup prevents both the data corruption and the
+// user-visible financial harm.
+//
+// URL heuristic: SDF's canonical hosts contain "testnet" or "futurenet" in
+// the hostname for testnet infrastructure and do not contain them for mainnet.
+// This is a best-effort check against the most common misconfiguration; a
+// custom node whose hostname does not follow SDF conventions (e.g. a private
+// network) is classified as "custom" and skipped, since the operator has
+// explicitly diverged from the standard naming.
+func validateStellarNetworkConsistency(s StellarConfig, loader *envLoader) {
+	passphrase := strings.TrimSpace(s.networkPassphrase)
+	if passphrase == "" {
+		// requiredString already recorded this error; do not pile on.
+		return
+	}
+
+	rpcURL := strings.ToLower(s.rpcURL)
+	horizonURL := strings.ToLower(s.horizonURL)
+
+	rpcIsTestnet := strings.Contains(rpcURL, "testnet") || strings.Contains(rpcURL, "futurenet")
+	horizonIsTestnet := strings.Contains(horizonURL, "testnet") || strings.Contains(horizonURL, "futurenet")
+
+	switch passphrase {
+	case StellarMainnetPassphrase:
+		if rpcIsTestnet {
+			loader.addError(
+				"STELLAR_RPC_URL appears to be a testnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to mainnet; " +
+					"set both to the same network to prevent cross-environment routing",
+			)
+		}
+		if horizonIsTestnet {
+			loader.addError(
+				"STELLAR_HORIZON_URL appears to be a testnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to mainnet; " +
+					"set both to the same network to prevent cross-environment routing",
+			)
+		}
+		// Contract addresses must be present on mainnet: a blank address would
+		// silently call address "" on-chain or skip the contract entirely, which
+		// is wrong in every mainnet scenario.
+		if strings.TrimSpace(s.yieldRegistryContract) == "" {
+			loader.addError(
+				"YIELD_REGISTRY_CONTRACT must be set when STELLAR_NETWORK_PASSPHRASE is the mainnet passphrase",
+			)
+		}
+		if strings.TrimSpace(s.allocationStrategyAddress) == "" {
+			loader.addError(
+				"STELLAR_ALLOCATION_STRATEGY_ADDRESS must be set when STELLAR_NETWORK_PASSPHRASE is the mainnet passphrase",
+			)
+		}
+
+	case StellarTestnetPassphrase:
+		// A testnet passphrase pointed at mainnet URLs is equally dangerous:
+		// testnet keys cannot sign mainnet transactions, but a bug that
+		// confused them could still leak information or charge fees on the
+		// wrong network.
+		rpcIsMainnetSDF := strings.Contains(rpcURL, "horizon.stellar.org") ||
+			(strings.Contains(rpcURL, "stellar.org") && !rpcIsTestnet)
+		horizonIsMainnetSDF := strings.Contains(horizonURL, "horizon.stellar.org") ||
+			(strings.Contains(horizonURL, "stellar.org") && !horizonIsTestnet)
+		if rpcIsMainnetSDF {
+			loader.addError(
+				"STELLAR_RPC_URL appears to be a mainnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to testnet; " +
+					"set both to the same network to prevent cross-environment routing",
+			)
+		}
+		if horizonIsMainnetSDF {
+			loader.addError(
+				"STELLAR_HORIZON_URL appears to be a mainnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to testnet; " +
+					"set both to the same network to prevent cross-environment routing",
+			)
 		}
 	}
 }
@@ -1387,6 +1579,31 @@ func (s StellarConfig) OperatorFundedDepositMaxAmount() string {
 	return s.operatorFundedDepositMaxAmount
 }
 
+// MainnetVaultTVLCap returns the configured hard ceiling on a single vault's
+// total value locked, enforced only on mainnet (nester#1376). Empty or
+// non-positive means no cap.
+func (s StellarConfig) MainnetVaultTVLCap() string {
+	return s.mainnetVaultTVLCap
+}
+
+// WithdrawalBreakerEnabled reports whether the withdrawal circuit breaker
+// (nester#1377) is on.
+func (s StellarConfig) WithdrawalBreakerEnabled() bool {
+	return s.withdrawalBreakerEnabled
+}
+
+// WithdrawalBreakerThresholdPercent is the rolling-window outflow
+// percentage of a vault's TVL that halts it, as a decimal string.
+func (s StellarConfig) WithdrawalBreakerThresholdPercent() string {
+	return s.withdrawalBreakerThresholdPercent
+}
+
+// WithdrawalBreakerWindow is the rolling window the breaker sums outflows
+// over.
+func (s StellarConfig) WithdrawalBreakerWindow() time.Duration {
+	return s.withdrawalBreakerWindow
+}
+
 // OperatorAddress returns the operator's public Stellar address. It is public
 // data and grants no signing capability.
 func (s StellarConfig) OperatorAddress() string {
@@ -1419,6 +1636,20 @@ func (s StellarConfig) WithdrawalSlippageBps() int {
 
 func (s StellarConfig) HarvestDefaultCompound() bool {
 	return s.harvestDefaultCompound
+}
+
+// NetworkEnv classifies the configured network passphrase into a stable label
+// (nester#1396). Callers use this to decide whether they are running against
+// mainnet or testnet without comparing the raw passphrase string.
+func (s StellarConfig) NetworkEnv() string {
+	switch strings.TrimSpace(s.networkPassphrase) {
+	case StellarMainnetPassphrase:
+		return "mainnet"
+	case StellarTestnetPassphrase:
+		return "testnet"
+	default:
+		return "custom"
+	}
 }
 
 func (a AllocationConfig) MinWeightPercent() int {
@@ -1495,6 +1726,16 @@ func (r RateLimitConfig) AuthLimit() int {
 
 func (r RateLimitConfig) AuthWindow() time.Duration {
 	return r.authWindow
+}
+
+// APIKeyLimit is the per-API-key request budget (nester#1343), independent
+// of and in addition to GlobalLimit's per-IP budget.
+func (r RateLimitConfig) APIKeyLimit() int {
+	return r.apiKeyLimit
+}
+
+func (r RateLimitConfig) APIKeyWindow() time.Duration {
+	return r.apiKeyWindow
 }
 
 // AuthFailureThreshold is how many failures inside AuthFailureWindow are
@@ -1578,6 +1819,19 @@ func (l *envLoader) stringDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func (l *envLoader) uuidDefault(key string, fallback uuid.UUID) uuid.UUID {
+	raw, ok := l.lookup(key)
+	if !ok || raw == "" {
+		return fallback
+	}
+	value, err := uuid.Parse(raw)
+	if err != nil {
+		l.addError(key + " must be a valid UUID")
+		return fallback
+	}
+	return value
 }
 
 func (l *envLoader) intDefault(key string, fallback int) int {

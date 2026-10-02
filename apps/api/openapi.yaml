@@ -198,6 +198,13 @@ paths:
       - Vaults
 components:
   schemas:
+    ApperrorFieldDetail:
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+      type: object
     OpenapiCreateVaultRequest:
       properties:
         contract_address:
@@ -261,10 +268,16 @@ components:
       properties:
         code:
           type: string
+        details:
+          items:
+            $ref: '#/components/schemas/ApperrorFieldDetail'
+          type: array
         message:
           type: string
         request_id:
           type: string
+        retryable:
+          type: boolean
       type: object
     UuidUUID:
       examples:

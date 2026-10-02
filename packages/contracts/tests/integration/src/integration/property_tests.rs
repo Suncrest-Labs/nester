@@ -305,6 +305,47 @@ proptest! {
     }
 
     #[test]
+    fn prop_withdrawals_alone_never_reduce_share_price(
+        withdrawals in prop::collection::vec((0usize..3, 1u16..=10_000u16), 1..20)
+    ) {
+        let (h, users) = setup_harness_with_users(3);
+        configure_invariant_harness(&h);
+
+        let mut fees = h.vault().get_fee_config();
+        fees.performance_fee_bps = 0;
+        fees.early_withdrawal_fee_bps = 0;
+        h.vault().set_fee_config(&h.admin, &fees);
+
+        for user in &users {
+            h.mint_deposit_tokens(user, 100_000 * XLM);
+            h.vault().deposit(user, &(100_000 * XLM), &0);
+        }
+
+        let mut previous_price = h.vault().share_price();
+        for (user_idx, withdrawal_bps) in withdrawals {
+            let user = &users[user_idx];
+            let owned = h.token().balance(user);
+            if owned == 0 {
+                continue;
+            }
+
+            let shares = (owned * i128::from(withdrawal_bps) / 10_000)
+                .max(1)
+                .min(owned);
+            h.vault().withdraw(user, &shares, &0);
+
+            let current_price = h.vault().share_price();
+            prop_assert!(
+                current_price >= previous_price,
+                "withdrawal-only sequence reduced share price: {} -> {}",
+                previous_price,
+                current_price
+            );
+            previous_price = current_price;
+        }
+    }
+
+    #[test]
     fn prop_round_trip_safety(amount in MIN_DEPOSIT..(100_000 * XLM)) {
         let (h, users) = setup_harness_with_users(1);
         configure_invariant_harness(&h);
