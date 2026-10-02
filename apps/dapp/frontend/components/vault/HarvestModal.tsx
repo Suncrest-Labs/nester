@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -23,6 +23,7 @@ import {
 import { useYieldHarvests } from "@/hooks/useYieldHarvests";
 import { cn } from "@/lib/utils";
 import { getExplorerTxUrl } from "@/utils/explorer";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 interface HarvestModalProps {
   open: boolean;
@@ -100,6 +101,16 @@ function ModalShell({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const titleId = "harvest-modal-title";
+  const subtitleId = "harvest-modal-subtitle";
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Escape must cancel without submitting, and focus must return to the
+  // trigger on close (nester#1128) — same contract as the deposit/withdraw
+  // shells, via the shared hook, so the harvest modal cannot drift out of
+  // parity with them.
+  useFocusTrap(dialogRef, open, { onEscape: onClose });
+
   return (
     <AnimatePresence>
       {open && (
@@ -111,6 +122,12 @@ function ModalShell({
         >
           <div className="flex min-h-full items-center justify-center">
             <motion.div
+              ref={dialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              aria-describedby={subtitleId}
+              tabIndex={-1}
               initial={{ opacity: 0, y: 24, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
@@ -122,10 +139,10 @@ function ModalShell({
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
                     Vault Action
                   </p>
-                  <h2 className="mt-2 font-heading text-2xl font-light text-foreground">
+                  <h2 id={titleId} className="mt-2 font-heading text-2xl font-light text-foreground">
                     {title}
                   </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
+                  <p id={subtitleId} className="mt-1 text-sm text-muted-foreground">
                     {subtitle}
                   </p>
                 </div>
