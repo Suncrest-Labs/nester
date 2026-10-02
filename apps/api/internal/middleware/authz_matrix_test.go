@@ -141,6 +141,8 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/admin/users/00000000-0000-0000-0000-000000000000/money-path", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/vaults", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
+	{Method: "GET", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/money-path/switches", RequireRole: "admin"},
+	{Method: "PUT", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/money-path/switches/deposit", RequireRole: "admin"},
 	{Method: "PATCH", Path: "/api/v1/admin/savings-goal-templates/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "PATCH", Path: "/api/v1/admin/vaults/00000000-0000-0000-0000-000000000000/allocations/00000000-0000-0000-0000-000000000000", RequireRole: "admin"},
 	{Method: "POST", Path: "/api/v1/admin/backfill", RequireRole: "admin"},

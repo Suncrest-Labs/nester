@@ -81,6 +81,10 @@ type Config struct {
 	circuitBreaker         CircuitBreakerConfig
 	rpcRetry               RPCRetryConfig
 	launchCaps             LaunchCapsConfig
+
+	// protocolTVLAnomalyDropPct is the single-interval TVL drop (percent)
+	// that flags a protocol as anomalous.
+	protocolTVLAnomalyDropPct float64
 }
 
 // CircuitBreakerConfig is the policy protecting the chain upstreams, Soroban
@@ -576,6 +580,8 @@ func Load() (*Config, error) {
 			interval: loader.durationDefault("RECONCILE_INTERVAL", 5*time.Minute),
 			dryRun:   loader.boolDefault("RECONCILE_DRY_RUN", false),
 		},
+		// Matches protocoltvl.DefaultAnomalyDropPct.
+		protocolTVLAnomalyDropPct: loader.floatDefault("PROTOCOL_TVL_ANOMALY_DROP_PCT", 10.0),
 		recurringDeposit: RecurringDepositConfig{
 			enabled:    loader.boolDefault("RECURRING_DEPOSIT_ENABLED", true),
 			interval:   loader.durationDefault("RECURRING_DEPOSIT_INTERVAL", time.Hour),
@@ -940,6 +946,12 @@ func (c Config) Reconciliation() ReconciliationConfig {
 	return c.reconciliation
 }
 
+// ProtocolTVLAnomalyDropPct is the percentage TVL must fall between two
+// consecutive snapshots for a protocol to be flagged as anomalous.
+func (c Config) ProtocolTVLAnomalyDropPct() float64 {
+	return c.protocolTVLAnomalyDropPct
+}
+
 func (r ReconciliationConfig) Enabled() bool {
 	return r.enabled
 }
@@ -1131,6 +1143,9 @@ func (j JobQueueConfig) StatsInterval() time.Duration     { return j.statsInterv
 func (j JobQueueConfig) DrainTimeout() time.Duration      { return j.drainTimeout }
 
 func (c *Config) validate(loader *envLoader) {
+	if c.protocolTVLAnomalyDropPct <= 0 || c.protocolTVLAnomalyDropPct > 100 {
+		loader.addError("PROTOCOL_TVL_ANOMALY_DROP_PCT must be greater than 0 and at most 100")
+	}
 	if strings.TrimSpace(c.server.host) == "" {
 		loader.addError("SERVER_HOST is required")
 	}

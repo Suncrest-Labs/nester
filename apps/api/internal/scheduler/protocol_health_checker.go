@@ -56,6 +56,11 @@ type DegradedSourceNotifier interface {
 type ProtocolHealthConfig struct {
 	Enabled  bool
 	Interval time.Duration
+
+	// AnomalyDropPct is the percentage TVL must fall between two consecutive
+	// snapshots to be flagged as an anomaly. <= 0 uses
+	// protocoltvl.DefaultAnomalyDropPct.
+	AnomalyDropPct float64
 }
 
 const defaultProtocolHealthInterval = 30 * time.Minute
@@ -264,8 +269,31 @@ func (j *ProtocolHealthChecker) checkProtocol(ctx context.Context, slug string, 
 		return
 	}
 
+	// Read the previous snapshot before inserting the new one so the anomaly
+	// check compares consecutive snapshot intervals.
+	prior, err := j.repo.LatestSnapshot(ctx, slug)
+	if err != nil {
+		j.logger.Warn("protocol health checker: latest snapshot fetch failed", "protocol", slug, "error", err)
+		prior = nil
+	}
+
 	if err := j.repo.InsertSnapshot(ctx, slug, currentTVL); err != nil {
 		j.logger.Warn("protocol health checker: snapshot insert failed", "protocol", slug, "error", err)
+	}
+
+	// Sudden-drop anomaly detection: a large single-interval TVL fall points
+	// at an exploit or bug, so it is surfaced to the deterioration pipeline
+	// immediately rather than waiting for the 24h/20% check below.
+	if anomaly := protocoltvl.DetectAnomaly(slug, prior, currentTVL, j.cfg.AnomalyDropPct, time.Now()); anomaly != nil {
+		j.logger.Error("protocol TVL anomaly detected",
+			"protocol", slug,
+			"drop_pct", fmt.Sprintf("%.1f", anomaly.DropPct),
+			"previous_tvl", fmt.Sprintf("%.2f", anomaly.PreviousTVLUSD),
+			"current_tvl", fmt.Sprintf("%.2f", anomaly.CurrentTVLUSD),
+		)
+		if j.deterioration != nil {
+			j.deterioration.HandleTVLAnomaly(ctx, *anomaly)
+		}
 	}
 
 	// Predictive deterioration scoring (#857) is a continuous signal

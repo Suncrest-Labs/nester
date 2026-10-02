@@ -167,6 +167,11 @@ type VaultService struct {
 	// underlying money movement, since the balance change has already been
 	// durably committed by the time the audit append runs.
 	balanceAudit BalanceAuditRecorder
+	// vaultMoneyPathSwitches gates deposits and withdrawals on a per-vault
+	// pause (#1322), so one vault can be stopped while the rest keep
+	// serving. Optional for the same reason as the global gate: a nil gate
+	// allows everything. Production wires it in SetVaultMoneyPathSwitches.
+	vaultMoneyPathSwitches VaultMoneyPathGate
 	// depositAllowlist gates individual deposits by user ID during the
 	// mainnet controlled-rollout window (nester#1389). Optional: a nil gate
 	// allows all users.
@@ -314,6 +319,18 @@ func (s *VaultService) SetMoneyPathSwitches(gate MoneyPathGate) {
 	s.moneyPathSwitches = gate
 }
 
+// VaultMoneyPathGate reports whether a money-path operation may proceed on
+// one vault. Declared here rather than taking *VaultMoneyPathSwitchService so
+// tests can substitute a gate without a database.
+type VaultMoneyPathGate interface {
+	EnsureVaultAllowed(ctx context.Context, vaultID uuid.UUID, op moneypath.Operation) error
+}
+
+// SetVaultMoneyPathSwitches installs the per-vault pause gate (#1322).
+func (s *VaultService) SetVaultMoneyPathSwitches(gate VaultMoneyPathGate) {
+	s.vaultMoneyPathSwitches = gate
+}
+
 // ensureMoneyPathAllowed refuses the operation when its global switch is
 // engaged. A nil gate allows everything.
 func (s *VaultService) ensureMoneyPathAllowed(ctx context.Context, op moneypath.Operation) error {
@@ -321,6 +338,16 @@ func (s *VaultService) ensureMoneyPathAllowed(ctx context.Context, op moneypath.
 		return nil
 	}
 	return s.moneyPathSwitches.EnsureAllowed(ctx, op)
+}
+
+// ensureVaultMoneyPathAllowed refuses the operation when this vault's own
+// switch for op is engaged. A nil gate or a nil vault id allows, leaving
+// vault-id validation to the caller.
+func (s *VaultService) ensureVaultMoneyPathAllowed(ctx context.Context, vaultID uuid.UUID, op moneypath.Operation) error {
+	if s.vaultMoneyPathSwitches == nil {
+		return nil
+	}
+	return s.vaultMoneyPathSwitches.EnsureVaultAllowed(ctx, vaultID, op)
 }
 
 // DepositAllowlistGate controls per-user deposit access during the mainnet
@@ -601,6 +628,13 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 
 	if input.VaultID == uuid.Nil {
 		return vault.Vault{}, vault.ErrInvalidVault
+	}
+	// Per-vault pause (#1322). Checked once the vault id is known, before
+	// any validation or chain interaction: an engaged switch on this vault
+	// stops the deposit regardless of what was submitted, and does not
+	// touch any other vault.
+	if err := s.ensureVaultMoneyPathAllowed(ctx, input.VaultID, moneypath.OperationDeposit); err != nil {
+		return vault.Vault{}, err
 	}
 	if input.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.Vault{}, vault.ErrInvalidAmount
@@ -965,6 +999,12 @@ func (s *VaultService) RecordWithdrawal(ctx context.Context, input RecordWithdra
 
 	if input.VaultID == uuid.Nil {
 		return vault.Vault{}, vault.ErrInvalidVault
+	}
+	// Per-vault pause (#1322), independent of the deposit switch on the
+	// same vault: the common case is stopping new money entering one vault
+	// while still letting its users take theirs out.
+	if err := s.ensureVaultMoneyPathAllowed(ctx, input.VaultID, moneypath.OperationWithdrawal); err != nil {
+		return vault.Vault{}, err
 	}
 	if input.Amount.Cmp(decimal.Zero) <= 0 {
 		return vault.Vault{}, vault.ErrInvalidAmount
@@ -1551,6 +1591,12 @@ func (s *VaultService) RebalancePosition(ctx context.Context, input RebalancePos
 
 	if input.VaultID == uuid.Nil || input.UserID == uuid.Nil {
 		return RebalancePositionResult{}, vault.ErrInvalidVault
+	}
+	// Per-vault pause (#1322), bound to the withdrawal side like the global
+	// switch: a rebalance moves this vault's funds between protocols and
+	// reaches the chain. EmergencyWithdraw stays ungated on the same vault.
+	if err := s.ensureVaultMoneyPathAllowed(ctx, input.VaultID, moneypath.OperationWithdrawal); err != nil {
+		return RebalancePositionResult{}, err
 	}
 	if input.Amount.Cmp(decimal.Zero) <= 0 {
 		return RebalancePositionResult{}, vault.ErrInvalidAmount

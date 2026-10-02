@@ -28,6 +28,16 @@ const AnomalyJumpMultiplier = 3.0
 // produce huge percentage swings that are usually normal, not anomalous.
 const AnomalyJumpMinPriorAPY = "0.5"
 
+// FlagReasonOracleGap is stored on synthetic snapshots written when the
+// oracle/collector cannot produce a live reading for consecutive poll cycles
+// (#1319). Downstream history and comparison endpoints must treat these as
+// explicit gap markers, not as fresh observations of the last-good APY.
+const FlagReasonOracleGap = "gap:oracle_unreachable"
+
+// GapMarkerPrefix is the prefix used for all oracle gap FlagReason values so
+// IsGapMarker can recognize both the canonical reason and reason+detail forms.
+const GapMarkerPrefix = "gap:"
+
 type APYSnapshot struct {
 	ID           uuid.UUID       `json:"id"`
 	ProtocolSlug string          `json:"protocol_slug"`
@@ -42,6 +52,33 @@ type APYSnapshot struct {
 	Flagged bool `json:"flagged"`
 	// FlagReason explains why Flagged is true. Empty when Flagged is false.
 	FlagReason string `json:"flag_reason,omitempty"`
+}
+
+// IsGapMarker reports whether s is a synthetic gap row written because the
+// oracle was unreachable for one or more collection cycles (#1319).
+func IsGapMarker(s APYSnapshot) bool {
+	if !s.Flagged {
+		return false
+	}
+	return strings.HasPrefix(s.FlagReason, GapMarkerPrefix)
+}
+
+// NewGapMarker builds a flagged snapshot for protocol at capturedAt, carrying
+// the last-good APY/TVL so charts stay continuous while still labeling the gap.
+func NewGapMarker(protocolSlug string, lastGood APYSnapshot, capturedAt time.Time, consecutiveFails int) APYSnapshot {
+	reason := FlagReasonOracleGap
+	if consecutiveFails > 0 {
+		reason = fmt.Sprintf("%s consecutive_cycles=%d", FlagReasonOracleGap, consecutiveFails)
+	}
+	return APYSnapshot{
+		ID:           uuid.New(),
+		ProtocolSlug: protocolSlug,
+		APY:          lastGood.APY,
+		TVL:          lastGood.TVL,
+		CapturedAt:   capturedAt.UTC(),
+		Flagged:      true,
+		FlagReason:   reason,
+	}
 }
 
 // DetectAnomalousJump compares a new snapshot's APY against the protocol's

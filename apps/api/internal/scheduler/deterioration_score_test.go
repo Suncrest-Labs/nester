@@ -111,6 +111,85 @@ func TestScore_GraduatedLevelsMapMonotonically(t *testing.T) {
 	}
 }
 
+func TestScore_CombinedSignalsAcrossThresholds(t *testing.T) {
+	// Golden probabilities use the current normalized weights (TVL 2.2,
+	// APY z-score 1.6, gap 1.3, instability 0.8) and logistic bias -4.
+	// Nearby inputs on each side of a threshold check both the sum and tier.
+	tests := []struct {
+		name            string
+		indicators      deterioration.Indicators
+		wantProbability float64
+		wantLevel       deterioration.Level
+	}{
+		{
+			name:            "outflow and APY below mild",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 50, APYAbnormalityZScore: 1.75, SampleCount: 10},
+			wantProbability: 0.295948372383,
+			wantLevel:       deterioration.LevelNone,
+		},
+		{
+			name:            "outflow and APY reach mild",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 50, APYAbnormalityZScore: 1.8, SampleCount: 10},
+			wantProbability: 0.301534783997,
+			wantLevel:       deterioration.LevelMild,
+		},
+		{
+			name:            "instability below moderate",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 50, APYAbnormalityZScore: 3, PriceInstability: 0.25, SampleCount: 10},
+			wantProbability: 0.549833997312,
+			wantLevel:       deterioration.LevelMild,
+		},
+		{
+			name:            "instability reaches moderate",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 50, APYAbnormalityZScore: 3, PriceInstability: 0.26, SampleCount: 10},
+			wantProbability: 0.553791022949,
+			wantLevel:       deterioration.LevelModerate,
+		},
+		{
+			name:            "gap below severe",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 50, APYAbnormalityZScore: 3, ReportedVsDerivedGapPct: 39.9, SampleCount: 10},
+			wantProbability: 0.749650658332,
+			wantLevel:       deterioration.LevelModerate,
+		},
+		{
+			name:            "gap reaches severe",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 50, APYAbnormalityZScore: 3, ReportedVsDerivedGapPct: 40, SampleCount: 4},
+			wantProbability: 0.750260105595,
+			wantLevel:       deterioration.LevelSevere,
+		},
+		{
+			name:            "same signals with thin sample cap",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 50, APYAbnormalityZScore: 3, ReportedVsDerivedGapPct: 40, SampleCount: 3},
+			wantProbability: 0.74,
+			wantLevel:       deterioration.LevelModerate,
+		},
+		{
+			name:            "partial outflow with APY and gap",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 40, APYAbnormalityZScore: 3, ReportedVsDerivedGapPct: 40, SampleCount: 10},
+			wantProbability: 0.659260388451,
+			wantLevel:       deterioration.LevelModerate,
+		},
+		{
+			name:            "all four signals with APY collapse",
+			indicators:      deterioration.Indicators{TVLOutflowVelocityPct: 50, APYAbnormalityZScore: -3, ReportedVsDerivedGapPct: 40, PriceInstability: 0.5, SampleCount: 10},
+			wantProbability: 0.869891525637,
+			wantLevel:       deterioration.LevelSevere,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assessment := Score("combined-protocol", tt.indicators)
+			if math.Abs(assessment.Probability-tt.wantProbability) > 1e-9 {
+				t.Errorf("Probability = %.12f, want %.12f", assessment.Probability, tt.wantProbability)
+			}
+			if assessment.Level != tt.wantLevel {
+				t.Errorf("Level = %s, want %s", assessment.Level, tt.wantLevel)
+			}
+		})
+	}
+}
+
 func TestComputeIndicators_TVLOutflowVelocity(t *testing.T) {
 	tvl := tvlSeries(1_000_000, 600_000) // 40% decline
 	ind := ComputeIndicators(tvl, nil)

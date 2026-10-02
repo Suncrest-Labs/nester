@@ -16,6 +16,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	admindomain "github.com/suncrestlabs/nester/apps/api/internal/domain/admin"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/backfill"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/moneypath"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsgoal"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
@@ -125,6 +126,14 @@ func (noopAuditChainVerifier) RunOnce(_ context.Context) (bool, int64, error) {
 	return true, 0, nil
 }
 
+// VaultMoneyPathSwitchService is the slice of the per-vault pause service the
+// admin handler needs (#1322), declared here so tests can substitute one
+// without a database.
+type VaultMoneyPathSwitchService interface {
+	List(ctx context.Context, vaultID uuid.UUID) ([]moneypath.VaultSwitch, error)
+	SetPaused(ctx context.Context, vaultID uuid.UUID, op moneypath.Operation, paused bool, reason string, actor *uuid.UUID, ipAddress string) (moneypath.VaultSwitch, error)
+}
+
 type AdminHandler struct {
 	service            adminService
 	userService        *service.UserService
@@ -136,6 +145,9 @@ type AdminHandler struct {
 	portfolioService   *service.PortfolioService
 	transactionService *service.TransactionService
 	moneyPathAudit     service.AuditLogger
+	// vaultPause backs the per-vault deposit/withdrawal pause switches
+	// (#1322). Optional; the routes report 503 until it is wired.
+	vaultPause VaultMoneyPathSwitchService
 }
 
 func NewAdminHandler(svc adminService, userSvc *service.UserService) *AdminHandler {
@@ -157,6 +169,14 @@ func (h *AdminHandler) SetMoneyPathServices(portfolioSvc *service.PortfolioServi
 	if auditLogger != nil {
 		h.moneyPathAudit = auditLogger
 	}
+}
+
+// SetVaultMoneyPathSwitches wires the per-vault deposit/withdrawal pause
+// switches (#1322): the operator-facing half of the control that lets one
+// vault be paused without a full system halt. Registered under
+// /api/v1/admin/, so the production auth rules gate it on the admin role.
+func (h *AdminHandler) SetVaultMoneyPathSwitches(svc VaultMoneyPathSwitchService) {
+	h.vaultPause = svc
 }
 
 // SetAuditChainVerifier wires the audit chain verifier so operators can trigger
@@ -222,6 +242,11 @@ func (h *AdminHandler) Register(mux routeMux) {
 	mux.HandleFunc("GET /api/v1/admin/vaults/{id}", h.getVaultDetail)
 	mux.HandleFunc("POST /api/v1/admin/vaults/{id}/pause", h.pauseVault)
 	mux.HandleFunc("POST /api/v1/admin/vaults/{id}/unpause", h.unpauseVault)
+	// Per-vault money-path pause (#1322): stop deposits or withdrawals on
+	// one vault while every other vault keeps operating. Distinct from
+	// /pause above, which pauses the whole vault.
+	mux.HandleFunc("GET /api/v1/admin/vaults/{id}/money-path/switches", h.listVaultPauseSwitches)
+	mux.HandleFunc("PUT /api/v1/admin/vaults/{id}/money-path/switches/{operation}", h.setVaultPauseSwitch)
 	mux.HandleFunc("POST /api/v1/admin/vaults/{id}/rebalance", h.rebalanceVault)
 	mux.HandleFunc("GET /api/v1/vaults/{id}/rebalance-history", h.getRebalanceHistory)
 	mux.HandleFunc("POST /api/v1/admin/vaults/{id}/allocations", h.createAllocation)
@@ -574,6 +599,135 @@ func (h *AdminHandler) unpauseVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.WriteJSON(w, http.StatusOK, response.OK(result))
+}
+
+// vaultPauseSwitchResponse is the admin-facing shape of one per-vault switch.
+// UpdatedAt is a pointer so a vault whose switch has never been set reports
+// no timestamp rather than Go's zero time.
+type vaultPauseSwitchResponse struct {
+	VaultID   string     `json:"vault_id"`
+	Operation string     `json:"operation"`
+	Paused    bool       `json:"paused"`
+	Reason    string     `json:"reason"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+func toVaultPauseSwitchResponse(s moneypath.VaultSwitch) vaultPauseSwitchResponse {
+	out := vaultPauseSwitchResponse{
+		VaultID:   s.VaultID.String(),
+		Operation: string(s.Operation),
+		Paused:    s.Paused,
+		Reason:    s.Reason,
+	}
+	if !s.UpdatedAt.IsZero() {
+		updated := s.UpdatedAt
+		out.UpdatedAt = &updated
+	}
+	return out
+}
+
+// listVaultPauseSwitches handles
+// GET /api/v1/admin/vaults/{id}/money-path/switches (#1322): the current
+// deposit and withdrawal pause state of one vault. Both operations are always
+// present, so an admin view can render a switch that has never been touched
+// rather than infer its absence.
+func (h *AdminHandler) listVaultPauseSwitches(w http.ResponseWriter, r *http.Request) {
+	if h.vaultPause == nil {
+		h.writeVaultPauseNotConfigured(w)
+		return
+	}
+
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	switches, err := h.vaultPause.List(r.Context(), vaultID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+
+	out := make([]vaultPauseSwitchResponse, 0, len(switches))
+	for _, s := range switches {
+		out = append(out, toVaultPauseSwitchResponse(s))
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(out))
+}
+
+type setVaultPauseRequest struct {
+	Paused *bool  `json:"paused"`
+	Reason string `json:"reason"`
+}
+
+// setVaultPauseSwitch handles
+// PUT /api/v1/admin/vaults/{id}/money-path/switches/{operation} (#1322):
+// engage or release one operation's switch on one vault, leaving every other
+// vault — and the other operation on this vault — untouched.
+func (h *AdminHandler) setVaultPauseSwitch(w http.ResponseWriter, r *http.Request) {
+	if h.vaultPause == nil {
+		h.writeVaultPauseNotConfigured(w)
+		return
+	}
+
+	vaultID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
+		return
+	}
+
+	op := moneypath.Operation(r.PathValue("operation"))
+	if !op.Valid() {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.ValidationErr("operation must be one of: deposit, withdrawal"))
+		return
+	}
+
+	var req setVaultPauseRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+		return
+	}
+	// Required rather than defaulted: a body that forgot the field would
+	// otherwise silently release a switch someone engaged during an incident.
+	if req.Paused == nil {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.ValidationErr("paused is required and must be true or false"))
+		return
+	}
+
+	var actor *uuid.UUID
+	if user, ok := auth.GetUserFromContext(r.Context()); ok {
+		if id, err := uuid.Parse(user.ID); err == nil {
+			actor = &id
+		}
+	}
+
+	updated, err := h.vaultPause.SetPaused(r.Context(), vaultID, op, *req.Paused, req.Reason, actor, clientIP(r))
+	if err != nil {
+		if errors.Is(err, moneypath.ErrUnknownOperation) {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.ValidationErr("operation must be one of: deposit, withdrawal"))
+			return
+		}
+		h.writeError(w, r, err)
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, response.OK(toVaultPauseSwitchResponse(updated)))
+}
+
+// writeVaultPauseNotConfigured mirrors the money-path support tooling: a
+// deployment with no switch service wired must say so, not 500 or silently
+// report every vault as open.
+func (h *AdminHandler) writeVaultPauseNotConfigured(w http.ResponseWriter) {
+	response.WriteJSON(w, http.StatusServiceUnavailable, response.Response{
+		Success: false,
+		Error: &response.ErrorBody{
+			Code:    "VAULT_PAUSE_NOT_CONFIGURED",
+			Message: "per-vault pause switches are not configured on this instance",
+		},
+	})
 }
 
 func (h *AdminHandler) rebalanceVault(w http.ResponseWriter, r *http.Request) {

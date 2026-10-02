@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -89,10 +90,10 @@ func TestAPYService_FlagIfAnomalous_SpikeIsFlagged(t *testing.T) {
 
 	got := svc.flagIfAnomalous(context.Background(), snap)
 	if !got.Flagged {
-		t.Fatal("expected an 8x APY jump to be flagged")
+		t.Fatal("expected spike to be flagged")
 	}
 	if got.FlagReason == "" {
-		t.Fatal("expected a non-empty flag reason")
+		t.Fatal("expected non-empty flag reason")
 	}
 }
 
@@ -171,4 +172,102 @@ func TestAPYService_Poll_PersistsFlaggedSnapshots(t *testing.T) {
 	if len(repo.upserted) != 1 || !repo.upserted[0].Flagged {
 		t.Fatal("expected the flagged snapshot to still be persisted, not rejected")
 	}
+}
+
+func TestAPYService_GapMarkersAfterConsecutiveFailures(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeAPYSnapshotRepo{
+		snapshots: []apysnapshot.APYSnapshot{
+			{
+				ID:           uuid.New(),
+				ProtocolSlug: "blend",
+				APY:          decimal.RequireFromString("8.5"),
+				TVL:          decimal.RequireFromString("1000000"),
+				CapturedAt:   now.Add(-6 * time.Hour),
+			},
+		},
+	}
+	svc := NewAPYService(repo)
+	svc.knownProtocols = map[string]struct{}{"blend": {}}
+	svc.defiLlamaURL = "http://127.0.0.1:1/pools" // forced connection failure
+	svc.httpClient = &http.Client{Timeout: 50 * time.Millisecond}
+
+	// First failure: below threshold — no gap marker.
+	svc.PollOnce(context.Background())
+	if svc.consecutiveFails != 1 {
+		t.Fatalf("consecutiveFails=%d want 1", svc.consecutiveFails)
+	}
+	if countGapUpserts(repo) != 0 {
+		t.Fatalf("unexpected gap markers after 1 failure: %d", countGapUpserts(repo))
+	}
+
+	// Second failure: threshold met — gap marker written.
+	svc.PollOnce(context.Background())
+	if svc.consecutiveFails < 2 {
+		t.Fatalf("consecutiveFails=%d want >=2", svc.consecutiveFails)
+	}
+	if countGapUpserts(repo) < 1 {
+		t.Fatalf("expected at least one gap marker after consecutive failures, got %d", countGapUpserts(repo))
+	}
+	last := repo.upserted[len(repo.upserted)-1]
+	if !apysnapshot.IsGapMarker(last) {
+		t.Fatalf("last upsert not a gap marker: flagged=%v reason=%q", last.Flagged, last.FlagReason)
+	}
+	if last.ProtocolSlug != "blend" {
+		t.Fatalf("protocol=%s want blend", last.ProtocolSlug)
+	}
+	if !last.APY.Equal(decimal.RequireFromString("8.5")) {
+		t.Fatalf("gap marker should carry last-good APY, got %s", last.APY)
+	}
+}
+
+func TestAPYService_GetHistoryMarksGaps(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeAPYSnapshotRepo{
+		snapshots: []apysnapshot.APYSnapshot{
+			{
+				ID:           uuid.New(),
+				ProtocolSlug: "blend",
+				APY:          decimal.RequireFromString("8.5"),
+				TVL:          decimal.RequireFromString("1"),
+				CapturedAt:   now.Add(-12 * time.Hour),
+			},
+			apysnapshot.NewGapMarker(
+				"blend",
+				apysnapshot.APYSnapshot{
+					APY: decimal.RequireFromString("8.5"),
+					TVL: decimal.RequireFromString("1"),
+				},
+				now.Add(-6*time.Hour),
+				2,
+			),
+		},
+	}
+	svc := NewAPYService(repo)
+	hist, err := svc.GetHistory(context.Background(), "blend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist.Snapshots) != 2 {
+		t.Fatalf("len=%d want 2", len(hist.Snapshots))
+	}
+	if hist.Snapshots[0].Gap {
+		t.Fatal("first point should not be a gap")
+	}
+	if !hist.Snapshots[1].Gap {
+		t.Fatal("second point should be marked gap")
+	}
+	if hist.Snapshots[1].FlagReason == "" {
+		t.Fatal("expected flag_reason on gap entry")
+	}
+}
+
+func countGapUpserts(repo *fakeAPYSnapshotRepo) int {
+	n := 0
+	for _, s := range repo.upserted {
+		if apysnapshot.IsGapMarker(s) {
+			n++
+		}
+	}
+	return n
 }

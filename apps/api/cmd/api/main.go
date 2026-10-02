@@ -651,6 +651,17 @@ func run() error {
 	// Append-only balance-change audit trail (#1124).
 	vaultService.SetBalanceAuditRecorder(postgres.NewBalanceAuditRepository(db))
 
+	// Per-vault pause switches (#1322): the global switches above stop an
+	// operation everywhere, which is too blunt when one vault is misbehaving.
+	// These scope the same control to one vault, and are exposed through the
+	// admin handler so an operator can pause it without a full system halt.
+	// Wired the same way (setter, optional) so services built for tests keep
+	// working unchanged.
+	vaultMoneyPathSwitchService := service.NewVaultMoneyPathSwitchService(
+		postgres.NewVaultMoneyPathSwitchRepository(db), auditLogger)
+	vaultService.SetVaultMoneyPathSwitches(vaultMoneyPathSwitchService)
+	adminHandler.SetVaultMoneyPathSwitches(vaultMoneyPathSwitchService)
+
 	activityEventRepo := postgres.NewActivityEventRepository(db)
 	nudgeHistoryRepo := postgres.NewNudgeHistoryRepository(db)
 	nudgeOutcomeService := service.NewNudgeOutcomeService(nudgeHistoryRepo)
@@ -1076,8 +1087,9 @@ func run() error {
 	// Protocol health checker — alerts users when a protocol's TVL drops >20% in 24h.
 	protocolHealthChecker := scheduler.NewProtocolHealthChecker(
 		scheduler.ProtocolHealthConfig{
-			Enabled:  true,
-			Interval: 30 * time.Minute,
+			Enabled:        true,
+			Interval:       30 * time.Minute,
+			AnomalyDropPct: cfg.ProtocolTVLAnomalyDropPct(),
 		},
 		vaultRepository,
 		yieldSvc,

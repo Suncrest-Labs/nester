@@ -3,12 +3,14 @@ package performance
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/analytics"
 	perfdom "github.com/suncrestlabs/nester/apps/api/internal/domain/performance"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
@@ -62,6 +64,94 @@ func snap(vaultID uuid.UUID, at time.Time, balance, yield int64) perfdom.Snapsho
 		TotalBalance:     decimal.NewFromInt(balance),
 		TotalYieldEarned: decimal.NewFromInt(yield),
 		SnapshotAt:       at,
+	}
+}
+
+func assertFiniteAnalyticsRates(t *testing.T, resp *analytics.AnalyticsResponse) {
+	t.Helper()
+	for name, value := range map[string]float64{
+		"average APY":    resp.PerformanceMetrics.AverageAPY,
+		"best vault APY": resp.PerformanceMetrics.BestVaultAPY,
+		"yield change":   resp.PerformanceMetrics.YieldChangePCT,
+	} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			t.Errorf("%s must be finite, got %v", name, value)
+		}
+	}
+	for _, allocation := range resp.CurrentAllocation {
+		if math.IsNaN(allocation.AllocationPCT) || math.IsInf(allocation.AllocationPCT, 0) ||
+			math.IsNaN(allocation.APY) || math.IsInf(allocation.APY, 0) {
+			t.Errorf("allocation rates must be finite, got %+v", allocation)
+		}
+	}
+}
+
+func TestGetUserAnalytics_ZeroBalanceHasNoRatesOrAllocation(t *testing.T) {
+	vaultID := uuid.New()
+	at := day(t, "2026-03-01T12:00:00Z")
+	svc := NewService(
+		&analyticsSnapshotRepo{history: map[uuid.UUID][]perfdom.Snapshot{
+			vaultID: {snap(vaultID, at, 0, 0)},
+		}},
+		&analyticsVaultRepo{vaults: []vault.Vault{{
+			ID: vaultID,
+			Allocations: []vault.Allocation{{
+				Protocol: "blend", Amount: decimal.Zero, APY: decimal.NewFromInt(8),
+			}},
+		}}},
+	)
+
+	resp, err := svc.GetUserAnalytics(context.Background(), uuid.New(), at.Add(-time.Hour), at)
+	if err != nil {
+		t.Fatalf("GetUserAnalytics: %v", err)
+	}
+	assertFiniteAnalyticsRates(t, resp)
+	if resp.PerformanceMetrics.AverageAPY != 0 || resp.PerformanceMetrics.BestVaultAPY != 0 || resp.PerformanceMetrics.BestVaultName != "" {
+		t.Errorf("zero balance must not report a vault APY or portfolio average, got %+v", resp.PerformanceMetrics)
+	}
+	if len(resp.CurrentAllocation) != 0 {
+		t.Errorf("zero balance must not report a current allocation, got %+v", resp.CurrentAllocation)
+	}
+	if len(resp.DailySnapshots) != 1 || !resp.DailySnapshots[0].TotalBalanceUSD.IsZero() {
+		t.Errorf("expected one zero-balance snapshot, got %+v", resp.DailySnapshots)
+	}
+}
+
+func TestGetUserAnalytics_SingleDataPointPreservesRatesAndYield(t *testing.T) {
+	vaultID := uuid.New()
+	at := day(t, "2026-03-01T12:00:00Z")
+	svc := NewService(
+		&analyticsSnapshotRepo{history: map[uuid.UUID][]perfdom.Snapshot{
+			vaultID: {snap(vaultID, at, 100, 5)},
+		}},
+		&analyticsVaultRepo{vaults: []vault.Vault{{
+			ID: vaultID, ContractAddress: "CVAULT", CurrentBalance: decimal.NewFromInt(100),
+			YieldEarned: decimal.NewFromInt(5), TotalDeposited: decimal.NewFromInt(95),
+			Allocations: []vault.Allocation{{
+				Protocol: "blend", Amount: decimal.NewFromInt(100), APY: decimal.NewFromInt(8),
+			}},
+		}}},
+	)
+
+	resp, err := svc.GetUserAnalytics(context.Background(), uuid.New(), at.Add(-time.Hour), at)
+	if err != nil {
+		t.Fatalf("GetUserAnalytics: %v", err)
+	}
+	assertFiniteAnalyticsRates(t, resp)
+	if len(resp.DailySnapshots) != 1 || resp.DailySnapshots[0].Date != "2026-03-01" ||
+		!resp.DailySnapshots[0].TotalBalanceUSD.Equal(decimal.NewFromInt(100)) ||
+		!resp.DailySnapshots[0].YieldEarnedUSD.Equal(decimal.NewFromInt(5)) {
+		t.Errorf("single snapshot must retain its balance and yield, got %+v", resp.DailySnapshots)
+	}
+	if len(resp.VaultMonthlyYield) != 1 || resp.VaultMonthlyYield[0].Month != "2026-03" ||
+		!resp.VaultMonthlyYield[0].YieldUSD.Equal(decimal.NewFromInt(5)) {
+		t.Errorf("single snapshot must produce one monthly yield, got %+v", resp.VaultMonthlyYield)
+	}
+	if len(resp.CurrentAllocation) != 1 || resp.CurrentAllocation[0].AllocationPCT != 100 || resp.CurrentAllocation[0].APY != 8 {
+		t.Errorf("one funded allocation must retain its full weight and APY, got %+v", resp.CurrentAllocation)
+	}
+	if resp.PerformanceMetrics.AverageAPY != 8 || resp.PerformanceMetrics.BestVaultAPY != 8 || resp.PerformanceMetrics.BestVaultName != "CVAULT" {
+		t.Errorf("one funded vault must retain its APY as the average and best, got %+v", resp.PerformanceMetrics)
 	}
 }
 

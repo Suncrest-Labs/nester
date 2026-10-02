@@ -73,3 +73,23 @@ Every assessment (not just ones that cross a threshold) is recorded to
 `deterioration_assessments`, so a probability can later be checked against
 what actually happened to the protocol — the calibration-validation loop the
 issue asks for.
+
+## Sudden TVL-drop anomaly detection
+
+Separate from the 24h/20% alert and from the scored indicators above,
+`protocoltvl.DetectAnomaly` flags a protocol whose TVL falls by more than a
+configurable percentage between two **consecutive snapshots** — the signature
+of an exploit or a bug rather than gradual outflow.
+
+- Each tick, `ProtocolHealthChecker` reads the previous snapshot, inserts the
+  new one, and compares them. The threshold is `PROTOCOL_TVL_ANOMALY_DROP_PCT`
+  (default `10`, valid range `(0, 100]`).
+- A prior snapshot older than `protocoltvl.AnomalyMaxSnapshotAge` (2h) is
+  ignored, so a scheduler outage does not make an ordinary decline look sudden.
+- A detected anomaly is logged at error level and passed to
+  `DeteriorationEngine.HandleTVLAnomaly`, which records a **moderate**
+  assessment and a `recommend_rebalance` action and alerts operators.
+- It deliberately never triggers an automatic rebalance by itself: a single
+  reading can be a bad data point, so moving funds stays with the scored,
+  multi-indicator severe path or an operator decision.
+

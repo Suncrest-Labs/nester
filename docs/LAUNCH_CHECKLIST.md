@@ -21,11 +21,13 @@ This document defines the strict, mandatory checklist required for the Nester ma
   - Protocol administrative keys, upgrade authorities, and treasury controls are transitioned to a secure multisig (e.g., Stellar multisig / Stellar Enterprise Fund standard with a threshold of $M$-of-$N$).
   - Timelock contracts are deployed and configured with the required delay for parameter updates and contract upgrades.
   - Multisig signers are distributed across independent parties and hardware keys are verified.
+  - Signer set, key custody standards, and the rotation procedure are documented in [`docs/security/multisig-signers.md`](security/multisig-signers.md) with the signer registry filled in.
 
 - [ ] **3. Monitoring Live**
   - Prometheus scraping, Grafana dashboards, and alert receivers (PagerDuty / Slack / webhooks) are fully deployed and operational for mainnet endpoints.
   - Synthetic probes (`synthetic-probes.yml`) and critical SLO alerts (`SLOTargetDown`, error budget burn rates, high latency) are verified and firing correctly in staging.
   - Metrics listeners and ledger/event indexer lag tracking are active.
+  - The [30-day heightened-monitoring plan](POST_LAUNCH_MONITORING.md) is staffed with a named daily-reviewer rota for Day 0–30.
 
 - [ ] **4. Runbooks Written**
   - All operational runbooks under `docs/observability/runbooks/` (including API availability, database failover, monitoring down, and incident response) are reviewed and tested in staging drills.

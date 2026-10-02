@@ -1,5 +1,5 @@
-// Package moneypath holds the global pause switch for deposits and
-// withdrawals (nester#1120).
+// Package moneypath holds the pause switches for deposits and withdrawals:
+// the global pair (nester#1120) and the per-vault pair (nester#1322).
 //
 // Kept dependency-free, like domain/audit, so the service layer and the
 // postgres repository can both depend on it without repository -> service
