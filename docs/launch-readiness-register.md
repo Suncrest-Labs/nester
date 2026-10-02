@@ -185,7 +185,7 @@ Status: Resolved | Open | Needs more info
 #### [DB-02] Migrations 005-006
 - **Status:** Resolved
 - **Evidence:** migration: apps/api/migrations/005_create_allocations_table.sql
-- **Notes:** Allocations table (settlements were removed with the offramp; migration 118 drops the table)
+- **Notes:** Allocations table (settlements were removed with the offramp; migration 121 drops the table)
 
 #### [DB-10] seed.sql schema mismatch
 - **Status:** Open

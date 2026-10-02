@@ -20,6 +20,7 @@ import (
 	"github.com/stellar/go/xdr"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/telemetry"
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 var (
@@ -562,7 +563,7 @@ func (c *ContractInvoker) send(ctx context.Context, txB64 string) (string, error
 	// the response never came back. It is what the reconciler measures the
 	// RPC's memory window against.
 	if err := c.submissions.MarkSubmitted(ctx, stored.ID, time.Now().UTC()); err != nil {
-		c.logSubmission("failed to record submission attempt", stored, "error", err.Error())
+		c.logSubmission(ctx, "failed to record submission attempt", stored, "error", err.Error())
 	}
 
 	if submitErr != nil {
@@ -572,7 +573,7 @@ func (c *ContractInvoker) send(ctx context.Context, txB64 string) (string, error
 		//
 		// There is deliberately no resubmit on this path, and no state
 		// transition to failed. Both would be guesses.
-		c.logSubmission("submission response lost; awaiting chain reconciliation", stored,
+		c.logSubmission(ctx, "submission response lost; awaiting chain reconciliation", stored,
 			"error", submitErr.Error())
 		return stored.TransactionHash, fmt.Errorf("%w (submission %s pending reconciliation): %w",
 			ErrSubmissionUnresolved, stored.ID, submitErr)
@@ -618,8 +619,16 @@ func existingSubmissionResult(stored SubmissionIntent) error {
 
 // logSubmission emits a structured submission event. It never records the
 // signed envelope or any key material — only the record's own identifiers.
-func (c *ContractInvoker) logSubmission(msg string, intent SubmissionIntent, extra ...any) {
-	if c.logger == nil {
+// The request-scoped logger from ctx is preferred over the injected one so
+// that chain submissions carry the same correlation id as the request that
+// triggered them (#1111); c.logger remains the fallback for submissions with
+// no request context, such as the reconciler's.
+func (c *ContractInvoker) logSubmission(ctx context.Context, msg string, intent SubmissionIntent, extra ...any) {
+	logger := c.logger
+	if requestID := logpkg.RequestIDFromContext(ctx); requestID != "" {
+		logger = logpkg.FromContext(ctx)
+	}
+	if logger == nil {
 		return
 	}
 	attrs := append([]any{
@@ -627,7 +636,7 @@ func (c *ContractInvoker) logSubmission(msg string, intent SubmissionIntent, ext
 		"transaction_hash", intent.TransactionHash,
 		"state", string(intent.State),
 	}, extra...)
-	c.logger.Warn(msg, attrs...)
+	logger.Warn(msg, attrs...)
 }
 
 func (c *ContractInvoker) waitForTx(ctx context.Context, hash string) error {

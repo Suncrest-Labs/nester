@@ -171,7 +171,6 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 ];
 
 
-
 export default function SettingsPage() {
   const { isConnected, address } = useWallet();
   const router = useRouter();
@@ -267,8 +266,6 @@ export default function SettingsPage() {
                 </div>
               </motion.div>
             )}
-
-            
 
             {activeTab === "security" && (
               <motion.div

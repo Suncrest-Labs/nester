@@ -283,3 +283,56 @@ export function stroopsToNumber(stroops: bigint, decimals: number): number {
 export function stroopsToDecimalString(stroops: bigint, decimals: number): string {
   return formatStroopsToDisplay(stroops, decimals);
 }
+
+// ─── Vault selection ────────────────────────────────────────────────────────
+
+/**
+ * Minimal shape a vault needs to expose for withdrawal source selection.
+ */
+export interface VaultBalanceLike {
+  current_balance: string | number;
+}
+
+/**
+ * Pick the single largest-balance vault from a set of candidates (e.g. all
+ * active vaults matching the selected send asset). Withdrawals always debit
+ * exactly one vault, so displayed/validated "available balance" must be a
+ * single vault's balance, not a sum across vaults — otherwise a user could be
+ * validated against an aggregate no single vault can actually cover.
+ *
+ * Uses decimal.js (not Number()) to avoid floating-point comparison drift.
+ */
+export function pickLargestBalanceVault<T extends VaultBalanceLike>(
+  candidates: T[]
+): T | null {
+  return candidates.reduce<T | null>((best, v) => {
+    if (!best) return v;
+    return new Decimal(v.current_balance || 0).greaterThan(
+      new Decimal(best.current_balance || 0)
+    )
+      ? v
+      : best;
+  }, null);
+}
+
+/**
+ * Select the vault a withdrawal of `amount` should actually debit: the
+ * single active/matching vault with sufficient balance for the requested
+ * amount, preferring the largest-balance qualifying vault when several
+ * qualify. No multi-vault debit splitting — if no single vault has enough
+ * even though the candidates collectively would, this returns null so the
+ * caller can surface a clear error instead of silently failing later.
+ *
+ * @param candidates Vaults already filtered to active + matching asset.
+ * @param amount The requested withdrawal amount (human-readable units).
+ */
+export function selectSourceVault<T extends VaultBalanceLike>(
+  candidates: T[],
+  amount: number
+): T | null {
+  const required = new Decimal(amount || 0);
+  const qualifying = candidates.filter((v) =>
+    new Decimal(v.current_balance || 0).greaterThanOrEqualTo(required)
+  );
+  return pickLargestBalanceVault(qualifying);
+}

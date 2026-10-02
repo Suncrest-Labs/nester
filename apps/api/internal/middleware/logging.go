@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"regexp"
 	"runtime/debug"
 	"time"
 
@@ -11,6 +12,26 @@ import (
 
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
+
+// maxRequestIDLen bounds how much of a client-supplied X-Request-ID we will
+// trust. This value flows into logs, the jobs table (CorrelationID, TEXT),
+// and worker logs, so it must not be allowed to grow unbounded.
+const maxRequestIDLen = 128
+
+// validRequestID restricts a client-supplied X-Request-ID to a safe charset
+// (alphanumeric plus -_.) so it can't be used to inject control characters
+// or otherwise abuse downstream log/storage consumers.
+var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// sanitizeRequestID returns the client-supplied request ID as-is if it is
+// within bounds and safely formatted; otherwise it mints a fresh
+// server-generated ID rather than rejecting the request.
+func sanitizeRequestID(id string) string {
+	if id == "" || len(id) > maxRequestIDLen || !validRequestID.MatchString(id) {
+		return uuid.NewString()
+	}
+	return id
+}
 
 type statusRecorder struct {
 	http.ResponseWriter
@@ -26,11 +47,9 @@ func Logging(baseLogger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Honour a client-supplied correlation ID (e.g. from a gateway or test
-			// harness); otherwise mint a fresh UUIDv4 for this request.
-			requestID := r.Header.Get("X-Request-ID")
-			if requestID == "" {
-				requestID = uuid.NewString()
-			}
+			// harness) when it is safely bounded; otherwise mint a fresh UUIDv4
+			// for this request rather than trusting an unbounded client header.
+			requestID := sanitizeRequestID(r.Header.Get("X-Request-ID"))
 
 			requestLogger := baseLogger.With("request_id", requestID)
 

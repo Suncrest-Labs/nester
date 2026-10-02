@@ -4,7 +4,6 @@ import { useWallet } from "@/components/wallet-provider";
 import { useState, useEffect } from "react";
 import PortfolioChart from "@/components/analytics/PortfolioChart";
 import { VaultComparison } from "@/components/analytics/VaultComparison";
-import { BenchmarkCard } from "@/components/analytics/BenchmarkCard";
 import { AllocationPieChart } from "@/components/analytics/AllocationPieChart";
 import { YieldBreakdownChart } from "@/components/analytics/YieldBreakdownChart";
 import { PerformanceMetricsCards } from "@/components/analytics/PerformanceMetricsCards";
@@ -183,13 +182,11 @@ export default function AnalyticsPage() {
       {/* Section 5: Vault Comparison */}
       <VaultComparison vaults={vaultComparisonData} />
 
-      {/* Section 6: Benchmark Card */}
-      <BenchmarkCard 
-        userAPY={analyticsData.performance_metrics.average_apy}
-        defiLlamaAPY={6.5} // placeholder, would come from API in real implementation
-        nigeriaBankRate={3.5}
-        nigeriaInflationRate={25}
-      />
+      {/* Section 6: Benchmark Card — external comparison rates (DeFi average,
+          Nigerian bank rate, Nigerian inflation) have no live data source
+          wired up yet. Rather than show fabricated numbers next to the
+          user's real APY, this section is omitted until a real source is
+          integrated (nester#1125). */}
     </div>
   );
 }

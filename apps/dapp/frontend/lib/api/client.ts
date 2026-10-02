@@ -141,7 +141,13 @@ async function apiFetch<T>(
   init?: RequestInit & { skipAuth?: boolean; _isRetry?: boolean }
 ): Promise<T> {
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    // Omit Content-Type for FormData bodies (e.g. KYC document uploads) so
+    // the browser sets `multipart/form-data; boundary=...` itself — setting
+    // it manually here would drop the boundary and the server couldn't
+    // parse the multipart body.
+    ...(typeof FormData !== "undefined" && init?.body instanceof FormData
+      ? {}
+      : { "Content-Type": "application/json" }),
     ...(init?.headers as Record<string, string>),
   };
 
