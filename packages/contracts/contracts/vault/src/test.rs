@@ -1701,10 +1701,71 @@ fn test_harvest_resets_user_yield_to_zero() {
     assert_eq!(first.gross_yield, 300 * XLM);
     assert!(first.compounded);
 
-    // Second harvest on the same user should return zeros
+    // Second harvest on the same user should return zeros (after the
+    // minimum harvest interval has elapsed).
+    advance_time(&env, vault.get_min_harvest_interval());
     let second = vault.harvest(&user);
     assert_eq!(second.gross_yield, 0);
     assert!(!second.compounded);
+}
+
+#[test]
+fn test_harvest_rate_limited_within_interval() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let deposit = 1_000 * XLM;
+    mint(&token, &user, deposit);
+    vault.deposit(&user, &deposit, &0);
+
+    vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.report_yield(&admin, &(300 * XLM));
+    fully_vest(&env, &vault, &admin);
+
+    vault.harvest(&user);
+    advance_time(&env, vault.get_min_harvest_interval() - 1);
+    // TimelockNotReady (#12): the interval has not elapsed yet.
+    assert!(vault.try_harvest(&user).is_err());
+
+    advance_time(&env, 1);
+    assert!(vault.try_harvest(&user).is_ok());
+}
+
+#[test]
+fn test_harvest_rate_limit_is_per_user() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    mint(&token, &alice, 1_000 * XLM);
+    mint(&token, &bob, 1_000 * XLM);
+    vault.deposit(&alice, &(1_000 * XLM), &0);
+    vault.deposit(&bob, &(1_000 * XLM), &0);
+
+    vault.harvest(&alice);
+    // Alice's harvest must not block Bob.
+    assert!(vault.try_harvest(&bob).is_ok());
+    assert!(vault.try_harvest(&alice).is_err());
+}
+
+#[test]
+fn test_set_min_harvest_interval_admin_only_and_bounded() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+    assert_eq!(vault.get_min_harvest_interval(), 3600);
+
+    assert!(vault.try_set_min_harvest_interval(&outsider, &60).is_err());
+    assert!(vault
+        .try_set_min_harvest_interval(&admin, &(7 * 24 * 3600 + 1))
+        .is_err());
+
+    vault.set_min_harvest_interval(&admin, &0);
+    assert_eq!(vault.get_min_harvest_interval(), 0);
+
+    // With the limit disabled, back-to-back harvests succeed.
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(1_000 * XLM), &0);
+    vault.harvest(&user);
+    assert!(vault.try_harvest(&user).is_ok());
 }
 
 #[test]

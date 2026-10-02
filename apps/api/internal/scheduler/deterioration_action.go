@@ -114,6 +114,33 @@ func (e *DeteriorationEngine) DispatchAction(ctx context.Context, assessment det
 	}
 }
 
+// HandleTVLAnomaly surfaces a sudden single-interval TVL drop (a possible
+// exploit or bug) to the deterioration pipeline. It records a moderate
+// assessment and a rebalance recommendation and alerts operators. It
+// deliberately stops short of LevelSevere: a one-interval drop can also be a
+// bad data point, and automatic capital movement should rest on the scored
+// multi-indicator assessment, not a single reading. Operators decide whether
+// to act on the recommendation.
+func (e *DeteriorationEngine) HandleTVLAnomaly(ctx context.Context, anomaly protocoltvl.Anomaly) {
+	assessment := deterioration.Assessment{
+		ProtocolSlug: anomaly.ProtocolSlug,
+		Indicators: deterioration.Indicators{
+			TVLOutflowVelocityPct: anomaly.DropPct,
+			SampleCount:           2,
+		},
+		Probability: ThresholdModerate,
+		Level:       deterioration.LevelModerate,
+		Explanation: "TVL anomaly: " + anomaly.Explanation(),
+		AssessedAt:  anomaly.DetectedAt,
+	}
+
+	if err := e.repo.RecordAssessment(ctx, assessment); err != nil {
+		e.logger.Warn("deterioration engine: record anomaly assessment failed", "protocol", assessment.ProtocolSlug, "error", err)
+	}
+	e.recordAction(ctx, assessment, deterioration.ActionRecommendRebalance, nil, nil, "")
+	e.notifyOperators(ctx, assessment)
+}
+
 // triggerAutomaticRebalances submits a protective rebalance for every
 // active vault allocated to the deteriorating protocol. Each attempt
 // (success or failure) is individually audited — #857 is explicit that

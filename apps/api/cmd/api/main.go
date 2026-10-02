@@ -1044,8 +1044,9 @@ func run() error {
 	// Protocol health checker — alerts users when a protocol's TVL drops >20% in 24h.
 	protocolHealthChecker := scheduler.NewProtocolHealthChecker(
 		scheduler.ProtocolHealthConfig{
-			Enabled:  true,
-			Interval: 30 * time.Minute,
+			Enabled:        true,
+			Interval:       30 * time.Minute,
+			AnomalyDropPct: cfg.ProtocolTVLAnomalyDropPct(),
 		},
 		vaultRepository,
 		yieldSvc,

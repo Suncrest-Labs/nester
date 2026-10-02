@@ -242,7 +242,8 @@ proptest! {
                     if shares == 0 {
                         continue;
                     }
-                    h.vault().harvest(&users[user_idx]);
+                    // Repeat harvests inside the min interval are rejected by design.
+                    let _ = h.vault().try_harvest(&users[user_idx]);
                     // NOTE: Per-user harvest does NOT reduce share price for other holders.
                     // The fee is paid by burning the harvesting user's own shares (fixed in #1157).
                     // Therefore, this is NOT a loss_event.

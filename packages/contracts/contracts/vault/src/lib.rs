@@ -151,6 +151,11 @@ const YIELD_STREAM_STARTED: Symbol = symbol_short!("YLD_STRT");
 const YIELD_RELEASED: Symbol = symbol_short!("YLD_RLSD");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
 const DEFAULT_REBALANCE_COOLDOWN: u64 = 3600;
+/// Default minimum seconds between two `harvest` calls by the same user.
+const DEFAULT_MIN_HARVEST_INTERVAL: u64 = 3600;
+/// Upper bound on the configurable harvest interval (7 days), so a
+/// misconfiguration cannot lock users out of harvesting indefinitely.
+const MAX_HARVEST_INTERVAL: u64 = 7 * 24 * 3600;
 /// Default rebalance slippage tolerance: 50 bps (0.5%) — issue #638.
 const DEFAULT_REBALANCE_SLIPPAGE_BPS: u32 = 50;
 /// Upper bound on the configurable rebalance slippage tolerance (50%).
@@ -443,6 +448,7 @@ enum DataKey {
     UserYield(Address),
     TotalReportedYield,
     LastHarvestAt(Address),
+    MinHarvestInterval,
     FirstDepositAt(Address),
     PerformanceFeeTiers,
     ExitFeeTiers,
@@ -1973,6 +1979,13 @@ fn set_last_harvest_at(env: &Env, user: &Address, ts: u64) {
         .set(&DataKey::LastHarvestAt(user.clone()), &ts);
 }
 
+fn get_min_harvest_interval(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinHarvestInterval)
+        .unwrap_or(DEFAULT_MIN_HARVEST_INTERVAL)
+}
+
 /// Fee adjustments are gated to Admin or the narrower [`Role::FeeManager`]
 /// (issue #820) — an operational key can be granted just this role instead
 /// of full Admin.
@@ -2656,6 +2669,23 @@ impl VaultContract {
             .set(&DataKey::RebalanceCooldown, &seconds);
     }
 
+    /// Set the minimum seconds between two `harvest` calls by the same user.
+    /// Admin only; capped at [`MAX_HARVEST_INTERVAL`]. Zero disables the limit.
+    pub fn set_min_harvest_interval(env: Env, caller: Address, seconds: u64) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        if seconds > MAX_HARVEST_INTERVAL {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::MinHarvestInterval, &seconds);
+    }
+
+    pub fn get_min_harvest_interval(env: Env) -> u64 {
+        get_min_harvest_interval(&env)
+    }
+
     pub fn get_rebalance_cooldown(env: Env) -> u64 {
         env.storage()
             .instance()
@@ -2931,13 +2961,25 @@ impl VaultContract {
         require_active(&env);
         breaker::require_not_full_halt(&env);
         user.require_auth();
+
+        // Rate limit (gas-griefing guard): a user may not re-harvest until
+        // the configured interval has elapsed. The first harvest is always
+        // allowed. Reuses TimelockNotReady because the error enum is at the
+        // 50-variant cap.
+        let now = env.ledger().timestamp();
+        let last_harvest = get_last_harvest_at(&env, &user);
+        if last_harvest != 0
+            && now < last_harvest.saturating_add(get_min_harvest_interval(&env))
+        {
+            panic_with_error!(&env, ContractError::TimelockNotReady);
+        }
+
         release_vested_yield(&env);
 
         let shares = get_shares(&env, &user);
         let redeemable = vault_token_client(&env).amount_for_shares(&shares);
         let principal = get_user_principal(&env, &user);
         let gross_yield = redeemable.saturating_sub(principal);
-        let now = env.ledger().timestamp();
 
         if gross_yield <= 0 {
             set_last_harvest_at(&env, &user, now);
