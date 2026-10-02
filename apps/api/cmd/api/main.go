@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -34,6 +36,8 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/outbox"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/usersignal"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
+	"github.com/suncrestlabs/nester/apps/api/internal/flags"
 	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/harvest"
@@ -112,9 +116,9 @@ func main() {
 // passphrase is never echoed into the log.
 func stellarNetworkLabel(passphrase string) string {
 	switch passphrase {
-	case "Public Global Stellar Network ; September 2015":
+	case config.StellarMainnetPassphrase:
 		return "pubnet"
-	case "Test SDF Network ; September 2015":
+	case config.StellarTestnetPassphrase:
 		return "testnet"
 	case "Test SDF Future Network ; October 2022":
 		return "futurenet"
@@ -150,6 +154,14 @@ func run() error {
 	// of only unwinding via defer after the HTTP server finishes draining.
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Every long-lived background worker below (schedulers, trackers, the
+	// event indexer, the transaction poller, notifier jobs) registers on
+	// this WaitGroup so shutdown can wait for them to actually observe
+	// cancellation and return, not just cancel their contexts and hope
+	// (issue #786). A one-shot goroutine that already bounds its own
+	// lifetime (e.g. the yield-cache warm below) does not need to join it.
+	var workers sync.WaitGroup
 
 	// Distributed tracing (#1054). Installed before any dependency is opened
 	// so the pool, cache and HTTP clients below are all created against a
@@ -253,7 +265,11 @@ func run() error {
 		},
 		baseLogger.WithGroup("scheduler-leadership"),
 	)
-	go schedulerLeadership.Run(shutdownCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		schedulerLeadership.Run(shutdownCtx)
+	}()
 
 	systemStateRepository := postgres.NewSystemStateRepository(db)
 
@@ -305,6 +321,25 @@ func run() error {
 	// Deposit and withdrawal SLIs (nester#1056).
 	vaultService.SetMetrics(appMetrics)
 	vaultService.SetHarvestDefaultCompound(cfg.Stellar().HarvestDefaultCompound())
+	// Mainnet-only hard TVL cap per vault (nester#1376): never enforced off
+	// mainnet, and only enforced on mainnet when a positive cap is configured.
+	isMainnet := cfg.Stellar().NetworkPassphrase() == "Public Global Stellar Network ; September 2015"
+	tvlCap, err := decimal.NewFromString(cfg.Stellar().MainnetVaultTVLCap())
+	if err != nil {
+		return fmt.Errorf("parse STELLAR_MAINNET_VAULT_TVL_CAP: %w", err)
+	}
+	vaultService.SetTVLCapManager(service.NewMainnetTVLCapManager(isMainnet, tvlCap))
+	// Withdrawal circuit breaker (nester#1377): configurable threshold and
+	// window instead of the hardcoded default.
+	breakerThreshold, err := decimal.NewFromString(cfg.Stellar().WithdrawalBreakerThresholdPercent())
+	if err != nil {
+		return fmt.Errorf("parse WITHDRAWAL_BREAKER_THRESHOLD_PERCENT: %w", err)
+	}
+	vaultService.SetOutflowBreakerConfig(vault.OutflowBreakerConfig{
+		Enabled:          cfg.Stellar().WithdrawalBreakerEnabled(),
+		ThresholdPercent: breakerThreshold,
+		Window:           cfg.Stellar().WithdrawalBreakerWindow(),
+	})
 	vaultHandler := handler.NewVaultHandler(vaultService)
 
 	yieldHarvestRepository := postgres.NewYieldHarvestRepository(db)
@@ -476,13 +511,17 @@ func run() error {
 	)
 	adminService.SetTemplateRepository(goalTemplateRepo)
 	adminHandler := handler.NewAdminHandler(adminService, userService)
-	adminHandler.SetEventSyncer(&stellarpkg.EventSyncer{
+	// DepositObserver is attached below, once savingsGamificationSvc exists
+	// (this EventSyncer is held by pointer, so setting the field later still
+	// reaches the same instance the admin handler holds).
+	adminEventSyncer := &stellarpkg.EventSyncer{
 		DB:         db,
 		SysRepo:    systemStateRepository,
 		RPCURL:     cfg.Stellar().RPCURL(),
 		Logger:     baseLogger,
 		RPCOptions: sorobanRPCOptions,
-	})
+	}
+	adminHandler.SetEventSyncer(adminEventSyncer)
 	adminHandler.SetLeadership(schedulerLeadership)
 
 	// Historical chain backfill/resync tool (#840): operator-triggered via
@@ -542,6 +581,19 @@ func run() error {
 	sessionRepository := postgres.NewSessionRepository(db)
 	auditLogger := postgres.NewPostgresAuditLogger(db)
 	anomalyDetector := service.NoopAnomalyDetector{}
+
+	// Mainnet deposit allowlist gate (#1389): controlled rollout of mainnet
+	// deposits via a feature flag (cohort allowlist or percentage rollout).
+	// Fails closed — if the flag store is unreachable or the flag is
+	// unconfigured, deposits are blocked, not allowed (see
+	// FlagDepositAllowlistGate's RegisterFailSafe(..., false) call).
+	flagStore, err := flags.NewStore(db, flagAuditAdapter{auditLogger}, nil)
+	if err != nil {
+		baseLogger.Error("failed to initialize feature flag store", "error", err)
+		os.Exit(1)
+	}
+	flagEvaluator := flags.NewEvaluator(flagStore)
+	vaultService.SetDepositAllowlist(service.NewFlagDepositAllowlistGate(flagEvaluator))
 
 	// Issue #1141: support tooling to inspect a user's money-path state.
 	adminHandler.SetMoneyPathServices(portfolioService, transactionService, auditLogger)
@@ -641,9 +693,13 @@ func run() error {
 		return claims.Subject, claims.SessionID, nil
 	}, cfg.AllowedOrigins(), redisClient, maxWSConnsPerIP)
 
-	wsCtx, wsCancel := context.WithCancel(context.Background())
+	wsCtx, wsCancel := context.WithCancel(shutdownCtx)
 	defer wsCancel()
-	go wsHub.Run(wsCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		wsHub.Run(wsCtx)
+	}()
 	vaultHandler.SetWSHub(wsHub)
 
 	// Real-time portfolio valuation (#832): aggregates each user's positions,
@@ -659,6 +715,10 @@ func run() error {
 		Cache:     valuation.NewCache(30 * time.Second),
 		Notifier:  valuation.NewWSNotifier(wsHub, baseLogger.WithGroup("valuation")),
 		Logger:    baseLogger.WithGroup("valuation"),
+		// Balance staleness (nester#1109): the same indexer freshness tracker
+		// that backs the lag metrics and alert (nester#1088) so the
+		// valuation's staleness verdict can never disagree with them.
+		Freshness: indexerFreshness,
 	})
 	valuationHandler := handler.NewValuationHandler(valuationService)
 
@@ -699,9 +759,11 @@ func run() error {
 		contractReader,
 		cfg.Performance().SnapshotInterval(),
 	)
-	trackerCtx, cancelTracker := context.WithCancel(context.Background())
+	trackerCtx, cancelTracker := context.WithCancel(shutdownCtx)
 	defer cancelTracker()
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		if err := tracker.Run(trackerCtx); err != nil && !errors.Is(err, context.Canceled) {
 			baseLogger.Error("performance tracker stopped", "error", err.Error())
 		}
@@ -717,9 +779,11 @@ func run() error {
 		contractReader,
 		cfg.TVL().RefreshInterval(),
 	).WithLogger(baseLogger.WithGroup("tvl-tracker"))
-	tvlCtx, cancelTVL := context.WithCancel(context.Background())
+	tvlCtx, cancelTVL := context.WithCancel(shutdownCtx)
 	defer cancelTVL()
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		if err := tvlTracker.Run(tvlCtx); err != nil && !errors.Is(err, context.Canceled) {
 			baseLogger.Error("tvl tracker stopped", "error", err.Error())
 		}
@@ -749,9 +813,11 @@ func run() error {
 			})
 		},
 	).WithLogger(baseLogger.WithGroup("apy-refresher"))
-	apyCtx, cancelAPY := context.WithCancel(context.Background())
+	apyCtx, cancelAPY := context.WithCancel(shutdownCtx)
 	defer cancelAPY()
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		if err := apyRefresher.Run(apyCtx); err != nil && !errors.Is(err, context.Canceled) {
 			baseLogger.Error("apy refresher stopped", "error", err.Error())
 		}
@@ -791,16 +857,22 @@ func run() error {
 	// poller's findings reach the log only, so a divergence — a balance that
 	// disagrees with the chain — is invisible to alerting.
 	txPoller.SetMetrics(appMetrics)
-	pollerCtx, cancelPoller := context.WithCancel(context.Background())
+	pollerCtx, cancelPoller := context.WithCancel(shutdownCtx)
 	defer cancelPoller()
-	go txPoller.Run(pollerCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		txPoller.Run(pollerCtx)
+	}()
 
 	// Age the reconcile gauge between passes (#1108). RecordReconcileRun
 	// resets it to zero on each completed pass; nothing else would move it, so
 	// a poller that dies would leave the gauge frozen at zero and read as
 	// "just reconciled" forever — the same failure mode the indexer's
 	// lag_last_sample_age gauge exists to prevent.
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		const reconcileAgeInterval = 15 * time.Second
 		ticker := time.NewTicker(reconcileAgeInterval)
 		defer ticker.Stop()
@@ -867,18 +939,31 @@ func run() error {
 	depHTTPClient := &http.Client{Timeout: cfg.Startup().DependencyTimeout()}
 
 	healthDependencies := healthDeps{
-		ready:        &ready,
-		pingDB:       pgPool.Ping,
-		poolStats:    pgxPoolStats(pgPool),
-		probeTimeout: cfg.Database().ConnectionTimeout(),
-		httpClient:   depHTTPClient,
-		horizonURL:   cfg.Stellar().HorizonURL(),
-		rpcURL:       cfg.Stellar().RPCURL(),
-		startedAt:    startedAt,
-		environment:  cfg.Environment(),
-		buildVersion: version,
-		buildCommit:  buildCommit(),
-		breakers:     chainBreakers.readers(),
+		ready:           &ready,
+		pingDB:          pgPool.Ping,
+		poolStats:       pgxPoolStats(pgPool),
+		probeTimeout:    cfg.Database().ConnectionTimeout(),
+		httpClient:      depHTTPClient,
+		horizonURL:      cfg.Stellar().HorizonURL(),
+		rpcURL:          cfg.Stellar().RPCURL(),
+		startedAt:       startedAt,
+		environment:     cfg.Environment(),
+		buildVersion:    version,
+		buildCommit:     buildCommit(),
+		breakers:        chainBreakers.readers(),
+		freshnessReader: indexerFreshness,
+		// Readiness gets its own probe rather than reusing the breaker-wrapped
+		// clients built for the invokers below: a health check is a
+		// diagnostic, and an open breaker must not be able to report RPC as
+		// unreachable when it has in fact recovered (see the comment on
+		// healthDeps.breakers).
+		pingRPC: func(ctx context.Context) error {
+			result := stellarpkg.PingSorobanRPC(ctx, depHTTPClient, cfg.Stellar().RPCURL())
+			if !result.OK {
+				return errors.New(result.Error)
+			}
+			return nil
+		},
 	}
 	// Left nil when Redis is unconfigured, so readiness does not fail an
 	// instance that is deliberately running on the in-memory fallbacks.
@@ -923,15 +1008,21 @@ func run() error {
 	analyticsHandler := handler.NewAnalyticsHandler(performanceService)
 	analyticsHandler.Register(mux)
 
+	// Protocol-level yield comparison over time (#1324).
+	protocolComparisonRepo := postgres.NewAnalyticsComparisonRepository(db)
+	protocolComparisonService := service.NewProtocolComparisonService(protocolComparisonRepo)
+	protocolComparisonHandler := handler.NewProtocolComparisonHandler(protocolComparisonService)
+	protocolComparisonHandler.Register(mux)
+
+	// System-wide maintenance mode (#1328): halt or read-only, gated to admins.
+	maintenanceHandler := handler.NewMaintenanceHandler(systemStateRepository)
+	maintenanceHandler.Register(mux)
+	maintenanceGate := middleware.NewMaintenanceGate(systemStateRepository, 5*time.Second)
+
 	// Risk service
 	riskService := services.NewRiskService(vaultRepository, db)
 	riskHandler := handler.NewRiskHandler(riskService)
 	riskHandler.Register(mux)
-
-	// Vault analytics (APY volatility, Sharpe, Sortino, drawdown, win rate)
-	vaultAnalyticsSvc := service.NewVaultAnalyticsService(performanceRepository)
-	vaultAnalyticsHandler := handler.NewVaultAnalyticsHandler(vaultAnalyticsSvc)
-	vaultAnalyticsHandler.Register(mux)
 
 	// Yield opportunities (DeFiLlama Stellar pools)
 	yieldSvc := service.NewYieldService("")
@@ -958,6 +1049,29 @@ func run() error {
 	yieldHandler.Register(mux)
 	yieldBookmarkHandler := handler.NewYieldBookmarkHandler(yieldBookmarkSvc)
 	yieldBookmarkHandler.Register(mux)
+
+	// APY drift detector (#613): compares each vault's current allocation
+	// APY against the yield registry above and, once the durable job queue
+	// is wired in further down (SetJobEnqueuer), enqueues a rebalance job on
+	// threshold drift. Constructed here (rather than down with the job
+	// queue) so the read-only GetDriftState path is available for the vault
+	// analytics endpoint immediately; jobs is nil until SetJobEnqueuer runs,
+	// during which CheckAll safely no-ops (see NewAPYDriftDetector's doc).
+	apyDriftDetector := service.NewAPYDriftDetector(
+		vaultRepository,
+		service.NewYieldServiceRegistryAdapter(yieldSvc),
+		nil,
+		cfg.Rebalancer().APYDriftThresholdBPS(),
+		0,
+		baseLogger.WithGroup("apy-drift"),
+	)
+	apyDriftDetector.SetLeaderChecker(schedulerLeadership)
+
+	// Vault analytics (APY volatility, Sharpe, Sortino, drawdown, win rate,
+	// plus live APY-drift state from apyDriftDetector above).
+	vaultAnalyticsSvc := service.NewVaultAnalyticsService(performanceRepository)
+	vaultAnalyticsHandler := handler.NewVaultAnalyticsHandler(vaultAnalyticsSvc, apyDriftDetector)
+	vaultAnalyticsHandler.Register(mux)
 
 	// Protocol health checker — alerts users when a protocol's TVL drops >20% in 24h.
 	protocolHealthChecker := scheduler.NewProtocolHealthChecker(
@@ -990,9 +1104,13 @@ func run() error {
 	)
 	protocolHealthChecker.SetDeteriorationEngine(deteriorationEngine)
 
-	protocolHealthCtx, cancelProtocolHealth := context.WithCancel(context.Background())
+	protocolHealthCtx, cancelProtocolHealth := context.WithCancel(shutdownCtx)
 	defer cancelProtocolHealth()
-	go protocolHealthChecker.Run(protocolHealthCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		protocolHealthChecker.Run(protocolHealthCtx)
+	}()
 
 	// APY deviation alert (#846): notifies a vault's users when its APY drops
 	// >20% from its 30-day mean. Notification-only, but gated behind
@@ -1024,9 +1142,13 @@ func run() error {
 		baseLogger.WithGroup("apy-deviation"),
 	)
 	apyDeviationJob.SetLeaderChecker(schedulerLeadership)
-	apyDeviationCtx, cancelAPYDeviation := context.WithCancel(context.Background())
+	apyDeviationCtx, cancelAPYDeviation := context.WithCancel(shutdownCtx)
 	defer cancelAPYDeviation()
-	go apyDeviationJob.Run(apyDeviationCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		apyDeviationJob.Run(apyDeviationCtx)
+	}()
 
 	// User watchlist
 	watchlistSvc := service.NewWatchlistService(db)
@@ -1078,9 +1200,13 @@ func run() error {
 		nudgeEngineSvc,
 		baseLogger.WithGroup("nudge-engine"),
 	)
-	nudgeCtx, cancelNudge := context.WithCancel(context.Background())
+	nudgeCtx, cancelNudge := context.WithCancel(shutdownCtx)
 	defer cancelNudge()
-	go nudgeEngineJob.Run(nudgeCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		nudgeEngineJob.Run(nudgeCtx)
+	}()
 
 	// Durable async job queue (#824): the shared worker pool and producer
 	// client. Hoisted here (rather than further down where the harvest/
@@ -1090,6 +1216,21 @@ func run() error {
 	jobQueueRepo := postgres.NewJobRepository(db)
 	jobQueueMetrics := jobqueue.NewStdMetrics()
 	jobQueueClient := jobqueue.NewClient(jobQueueRepo, jobQueueMetrics)
+
+	// APY drift detector (#613), continued from its construction above: the
+	// durable job queue it needs to actually enqueue rebalances now exists,
+	// so wire it in and start the periodic sweep. The job handler itself is
+	// registered further down, alongside jobWorker's other handlers (jobWorker
+	// isn't constructed yet at this point in main). adminService (constructed
+	// earlier) satisfies service.RebalanceTrigger directly.
+	apyDriftDetector.SetJobEnqueuer(jobQueueClient)
+	apyDriftCtx, cancelAPYDrift := context.WithCancel(shutdownCtx)
+	defer cancelAPYDrift()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		apyDriftDetector.Run(apyDriftCtx)
+	}()
 
 	// Outbound webhooks (#836): subscriptions with SSRF-validated targets and
 	// encrypted signing secrets; delivery goes through the durable job queue
@@ -1149,6 +1290,11 @@ func run() error {
 		service.DispatcherGamificationNotifier{Dispatcher: notificationDispatcher2},
 	)
 	savingsGoalSvc.SetGamificationRecorder(savingsGamificationSvc)
+	// General vault deposits (not just goal-tied ones) also drive the streak
+	// engine, via the chain indexer's post-commit deposit notification.
+	// Wired into both the live poller and the admin one-shot sync so whichever
+	// applies a given event first is also the one that notifies it.
+	adminEventSyncer.DepositObserver = savingsGamificationSvc
 	savingsGamificationHandler := handler.NewSavingsGamificationHandler(savingsGamificationSvc)
 	savingsGamificationHandler.Register(mux)
 	savingsGoalSvc.SetTemplateRepository(goalTemplateRepo)
@@ -1163,14 +1309,21 @@ func run() error {
 	savingsGoalHandler.Register(mux)
 
 	goalNotificationDigestJob := scheduler.NewGoalNotificationDigestJob(
-		scheduler.GoalNotificationDigestConfig{Enabled: true, Interval: time.Hour},
+		scheduler.GoalNotificationDigestConfig{
+			Enabled:  cfg.GoalNotificationDigest().Enabled(),
+			Interval: cfg.GoalNotificationDigest().Interval(),
+		},
 		goalNotificationRepo,
 		notificationDispatcher2,
 		baseLogger.WithGroup("goal-notification-digest"),
 	)
-	goalDigestCtx, cancelGoalDigest := context.WithCancel(context.Background())
+	goalDigestCtx, cancelGoalDigest := context.WithCancel(shutdownCtx)
 	defer cancelGoalDigest()
-	go goalNotificationDigestJob.Run(goalDigestCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		goalNotificationDigestJob.Run(goalDigestCtx)
+	}()
 
 	savingsScheduleHandler := handler.NewSavingsScheduleHandler(savingsScheduleSvc)
 	savingsScheduleHandler.Register(mux)
@@ -1208,6 +1361,10 @@ func run() error {
 	// adapter to actually redeliver.
 	notificationDispatcher2.SetRetryEnqueuer(notifications.NewJobQueueRetryEnqueuer(jobQueueClient))
 
+	// Dead-letter inspection and manual retry (#1329), gated to admins.
+	jobQueueAdminHandler := handler.NewJobQueueAdminHandler(jobQueueRepo)
+	jobQueueAdminHandler.Register(mux)
+
 	// Recurring deposit sweep (#846): classified SINGLETON (money-moving —
 	// see RecurringDepositJob's doc comment). The sweep loop itself only
 	// enqueues a durable per-occurrence job onto jobQueueClient rather than
@@ -1225,9 +1382,13 @@ func run() error {
 		baseLogger.WithGroup("recurring-deposit"),
 	)
 	recurringDepositJob.SetLeaderChecker(schedulerLeadership)
-	recurringCtx, cancelRecurring := context.WithCancel(context.Background())
+	recurringCtx, cancelRecurring := context.WithCancel(shutdownCtx)
 	defer cancelRecurring()
-	go recurringDepositJob.Run(recurringCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		recurringDepositJob.Run(recurringCtx)
+	}()
 
 	// Savings goal soft-delete recovery purge (#924): hard-deletes goals
 	// whose deleted_at is older than savingsgoal.SavingsGoalRecoveryWindow.
@@ -1238,9 +1399,13 @@ func run() error {
 		baseLogger.WithGroup("savings-goal-purge"),
 	)
 	savingsGoalPurgeJob.SetLeaderChecker(schedulerLeadership)
-	savingsGoalPurgeCtx, cancelSavingsGoalPurge := context.WithCancel(context.Background())
+	savingsGoalPurgeCtx, cancelSavingsGoalPurge := context.WithCancel(shutdownCtx)
 	defer cancelSavingsGoalPurge()
-	go savingsGoalPurgeJob.Run(savingsGoalPurgeCtx, 24*time.Hour)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		savingsGoalPurgeJob.Run(savingsGoalPurgeCtx, 24*time.Hour)
+	}()
 
 	// Data retention sweep (#1226): hard-deletes activity_events and
 	// nudge_dispatch_log (nudge_outcomes cascades) rows past their retention
@@ -1258,9 +1423,38 @@ func run() error {
 		baseLogger.WithGroup("data-retention"),
 	)
 	dataRetentionJob.SetLeaderChecker(schedulerLeadership)
-	dataRetentionCtx, cancelDataRetention := context.WithCancel(context.Background())
+	dataRetentionCtx, cancelDataRetention := context.WithCancel(shutdownCtx)
 	defer cancelDataRetention()
-	go dataRetentionJob.Run(dataRetentionCtx, 24*time.Hour)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		dataRetentionJob.Run(dataRetentionCtx, 24*time.Hour)
+	}()
+
+	// Synthetic mainnet deposit/withdraw canary (#1390): probes a dedicated
+	// canary vault on a fixed schedule so an alert fires before users report
+	// problems. Disabled by default (CANARY_ENABLED) since it moves real
+	// funds; the invoker below is a stub that logs and errors rather than
+	// touching the chain — wiring a real on-chain probe implementation is
+	// tracked as a mainnet-launch follow-up, but the scheduled-job
+	// infrastructure runs end to end so enabling it is a config flip once
+	// that invoker lands.
+	canaryJob := scheduler.NewCanaryJob(
+		scheduler.CanaryConfig{
+			Enabled:          cfg.Canary().Enabled(),
+			Interval:         cfg.Canary().Interval(),
+			VaultID:          cfg.Canary().VaultID(),
+			Amount:           cfg.Canary().Amount(),
+			LatencyThreshold: cfg.Canary().LatencyThreshold(),
+		},
+		stubCanaryInvoker{},
+		appMetrics,
+		baseLogger.WithGroup("canary"),
+	)
+	canaryJob.SetLeaderChecker(schedulerLeadership)
+	canaryCtx, cancelCanary := context.WithCancel(context.Background())
+	defer cancelCanary()
+	go canaryJob.Run(canaryCtx)
 
 	jobWorker := jobqueue.NewWorker(
 		jobQueueRepo,
@@ -1314,6 +1508,12 @@ func run() error {
 			baseLogger.WithGroup("recurring-deposit-handler"),
 		), 0)
 
+	// APY drift rebalance (#613): processes the jobs apyDriftDetector (above)
+	// enqueues, by driving the same admin rebalance path
+	// POST /api/v1/admin/vaults/{id}/rebalance uses.
+	jobWorker.Register(service.RebalanceDriftJobType,
+		service.NewAPYDriftRebalanceJobHandler(adminService, auditLogger, baseLogger.WithGroup("apy-drift-rebalance-handler")), 0)
+
 	// Webhook delivery (#836): one attempt per job invocation; the queue's
 	// own retry/backoff/dead-letter drives everything past that (see
 	// WebhookDeliveryJobHandler's doc comment). Concurrency uses the
@@ -1360,9 +1560,13 @@ func run() error {
 		baseLogger.WithGroup("outbox-relay"),
 		outboxMetrics,
 	)
-	outboxCtx, cancelOutbox := context.WithCancel(context.Background())
+	outboxCtx, cancelOutbox := context.WithCancel(shutdownCtx)
 	defer cancelOutbox()
-	go func() { _ = outboxRelay.Run(outboxCtx) }()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_ = outboxRelay.Run(outboxCtx)
+	}()
 
 	// Retention: without it the outbox only ever grows, on the write path of
 	// every domain transaction that inserts into it. Leader-gated because
@@ -1372,9 +1576,13 @@ func run() error {
 		DeadRetention:       cfg.Outbox().DeadRetention(),
 	}, baseLogger.WithGroup("outbox-retention"), outboxMetrics)
 	outboxRetentionJob.SetLeaderChecker(schedulerLeadership)
-	outboxRetentionCtx, cancelOutboxRetention := context.WithCancel(context.Background())
+	outboxRetentionCtx, cancelOutboxRetention := context.WithCancel(shutdownCtx)
 	defer cancelOutboxRetention()
-	go outboxRetentionJob.Run(outboxRetentionCtx, cfg.Outbox().RetentionInterval())
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		outboxRetentionJob.Run(outboxRetentionCtx, cfg.Outbox().RetentionInterval())
+	}()
 
 	harvestEngine := harvest.New(
 		harvest.Config{
@@ -1390,13 +1598,19 @@ func run() error {
 	)
 	harvestHandler := handler.NewHarvestHandler(harvestEngine)
 	harvestHandler.Register(mux)
-	harvestCtx, cancelHarvest := context.WithCancel(context.Background())
+	harvestCtx, cancelHarvest := context.WithCancel(shutdownCtx)
 	defer cancelHarvest()
-	go harvestEngine.Run(harvestCtx)
-
-	jobQueueCtx, cancelJobQueue := context.WithCancel(context.Background())
-	defer cancelJobQueue()
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
+		harvestEngine.Run(harvestCtx)
+	}()
+
+	jobQueueCtx, cancelJobQueue := context.WithCancel(shutdownCtx)
+	defer cancelJobQueue()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
 		if err := jobWorker.Run(jobQueueCtx); err != nil && !errors.Is(err, context.Canceled) {
 			baseLogger.Error("job queue worker stopped", "error", err.Error())
 		}
@@ -1421,9 +1635,13 @@ func run() error {
 		baseLogger.WithGroup("ledger-verification"),
 	)
 	ledgerVerificationJob.SetLeaderChecker(schedulerLeadership)
-	verificationCtx, cancelVerification := context.WithCancel(context.Background())
+	verificationCtx, cancelVerification := context.WithCancel(shutdownCtx)
 	defer cancelVerification()
-	go ledgerVerificationJob.Run(verificationCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		ledgerVerificationJob.Run(verificationCtx)
+	}()
 
 	// Ledger reconciliation job: compares ledger vault-pool vs on-chain and sum
 	// user positions vs share price.
@@ -1442,9 +1660,13 @@ func run() error {
 		Config:      ledgerDomainConfig(),
 	})
 	ledgerReconciliationJob.SetLeaderChecker(schedulerLeadership)
-	reconciliationCtx, cancelReconciliation := context.WithCancel(context.Background())
+	reconciliationCtx, cancelReconciliation := context.WithCancel(shutdownCtx)
 	defer cancelReconciliation()
-	go ledgerReconciliationJob.Run(reconciliationCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		ledgerReconciliationJob.Run(reconciliationCtx)
+	}()
 
 	performanceSnapshotsHandler := handler.NewPerformanceSnapshotsHandler(performanceService)
 	performanceSnapshotsHandler.Register(mux)
@@ -1456,9 +1678,13 @@ func run() error {
 	apySvc := service.NewAPYService(apySnapshotRepo)
 	apyHandler := handler.NewAPYHandler(apySvc)
 	apyHandler.Register(mux)
-	apySchedulerCtx, cancelAPYScheduler := context.WithCancel(context.Background())
+	apySchedulerCtx, cancelAPYScheduler := context.WithCancel(shutdownCtx)
 	defer cancelAPYScheduler()
-	go apySvc.StartScheduler(apySchedulerCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		apySvc.StartScheduler(apySchedulerCtx)
+	}()
 
 	// walletBindingCacheTTL bounds how long a stale wallet binding can still
 	// be accepted after the account's wallet changes. Short enough that a
@@ -1491,6 +1717,17 @@ func run() error {
 	// distributed across instances when Redis is configured.
 	globalLimiter := middleware.GlobalRateLimiter(
 		middleware.NewLimiter(redisClient, "global", cfg.RateLimit().GlobalLimit(), cfg.RateLimit().GlobalWindow()),
+		[]string{"/health", "/healthz", "/readyz", "/metrics"},
+	)
+	// apiKeyLimiter bounds every request per bearer credential (nester#1343),
+	// independent of globalLimiter's per-IP budget -- a single compromised or
+	// misbehaving integration holding the shared service API key cannot
+	// exhaust the IP-based budget for other clients on the same address, and
+	// cannot evade its own limit by rotating source IPs. Requests with no
+	// bearer token (anonymous, or JWT-authenticated -- those already get
+	// per-user isolation elsewhere) pass through untouched.
+	apiKeyLimiter := middleware.APIKeyRateLimiter(
+		middleware.NewLimiter(redisClient, "apikey", cfg.RateLimit().APIKeyLimit(), cfg.RateLimit().APIKeyWindow()),
 		[]string{"/health", "/healthz", "/readyz", "/metrics"},
 	)
 	// authRouteLimiter applies a strict per-IP limit to the unauthenticated auth
@@ -1541,9 +1778,13 @@ func run() error {
 	}
 	idempotencyRoutes = append(idempotencyRoutes, middleware.VaultMoneyPathIdempotencyRoutes()...)
 	idempotencyMiddleware := middleware.IdempotencyMiddleware(idempotencyStore, idempotencyRoutes)
-	idempotencyPurgeCtx, cancelIdempotencyPurge := context.WithCancel(context.Background())
+	idempotencyPurgeCtx, cancelIdempotencyPurge := context.WithCancel(shutdownCtx)
 	defer cancelIdempotencyPurge()
-	go runIdempotencyPurge(idempotencyPurgeCtx, idempotencyStore, baseLogger.WithGroup("idempotency-purge"))
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		runIdempotencyPurge(idempotencyPurgeCtx, idempotencyStore, baseLogger.WithGroup("idempotency-purge"))
+	}()
 
 	// costQuota meters downstream *work* per authenticated user, where the
 	// limiters above meter request *count* per IP. Both apply: a caller can
@@ -1624,23 +1865,27 @@ func run() error {
 						// indexed data is.
 						middleware.IndexerFreshness(indexerFreshness)(
 							globalLimiter(
-								authRouteLimiter(
-									// Inside the per-IP limiter so an already
-									// rate-limited request never reaches the
-									// lockout bookkeeping (nester#1104).
-									authGuard(
-										writeLimiter(
-											authenticator(
-												walletBinding(
-													idempotencyMiddleware(
-														costQuota(
-															walletLimiter(
-																middleware.LimitRequestBody(1 * 1024 * 1024)(
-																	middleware.Logging(baseLogger)(
-																		middleware.Tracing(
-																			cfg.Tracing().ServiceName(),
-																			cfg.Tracing().LatencyThreshold(),
-																		)(mux),
+								apiKeyLimiter(
+									authRouteLimiter(
+										// Inside the per-IP limiter so an already
+										// rate-limited request never reaches the
+										// lockout bookkeeping (nester#1104).
+										authGuard(
+											writeLimiter(
+												authenticator(
+													maintenanceGate.Middleware(authRules)(
+														walletBinding(
+															idempotencyMiddleware(
+																costQuota(
+																	walletLimiter(
+																		middleware.LimitRequestBody(1 * 1024 * 1024)(
+																			middleware.Logging(baseLogger)(
+																				middleware.Tracing(
+																					cfg.Tracing().ServiceName(),
+																					cfg.Tracing().LatencyThreshold(),
+																				)(mux),
+																			),
+																		),
 																	),
 																),
 															),
@@ -1699,7 +1944,11 @@ func run() error {
 		// Same leader gate the rebalancer and protocol-health jobs use, so
 		// one instance sweeps rather than every replica.
 		submissionReconciler.SetLeaderChecker(schedulerLeadership)
-		go submissionReconciler.Run(shutdownCtx)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			submissionReconciler.Run(shutdownCtx)
+		}()
 	}
 
 	// Vault-balance reconciliation (nester#1082). The scheduled safety net for
@@ -1752,18 +2001,50 @@ func run() error {
 	if err := appMetrics.RegisterBalanceReconcileAge(balanceReconciler.AgeSample); err != nil {
 		baseLogger.Error("failed to register balance reconcile age collector", "error", err)
 	}
-	go balanceReconciler.Run(shutdownCtx)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		balanceReconciler.Run(shutdownCtx)
+	}()
+
+	// Stellar operational account reserve monitoring (nester#1392): poll the
+	// operator's native XLM balance from Horizon on a fixed interval and
+	// expose it as a scrape-time series (freshness-collector pattern) so
+	// monitoring/alerts/stellar_reserve.yml can page before the account runs
+	// dry of the reserve it needs for trustlines/sponsorships.
+	if operatorAddress := cfg.Stellar().OperatorAddress(); operatorAddress != "" {
+		safeReserveXLM := 5.0
+		if v := os.Getenv("STELLAR_OPERATIONAL_ACCOUNT_SAFE_RESERVE_XLM"); v != "" {
+			if parsed, err := strconv.ParseFloat(v, 64); err == nil && parsed > 0 {
+				safeReserveXLM = parsed
+			}
+		}
+		reserveMonitor := stellarpkg.NewAccountReserveSampler(
+			&http.Client{Timeout: 10 * time.Second},
+			cfg.Stellar().HorizonURL(),
+			operatorAddress,
+			safeReserveXLM,
+			baseLogger.WithGroup("stellar-reserve-monitor"),
+		)
+		if err := appMetrics.RegisterStellarAccountReserve("operator", reserveMonitor.Sample); err != nil {
+			baseLogger.Error("failed to register stellar account reserve collector", "error", err)
+		}
+		go reserveMonitor.Run(shutdownCtx, time.Minute)
+	} else {
+		baseLogger.Warn("STELLAR_OPERATOR_ADDRESS unset: stellar account reserve monitoring disabled")
+	}
 
 	// Balance-freshness SLI (nester#1056, nester#1088): the indexer samples
 	// its own position against the network tip on every tick and publishes it
 	// to the freshness tracker, which the metrics collector and the API
 	// freshness headers both read.
 	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, stellarpkg.IndexerOptions{
-		RPCURL:     cfg.Stellar().RPCURL(),
-		HTTPClient: chainBreakers.client(appMetrics, stellarpkg.IndexerRequestTimeout, metrics.UpstreamSorobanRPC),
-		RPCOptions: sorobanRPCOptions,
-		Recorder:   indexerFreshness,
-	})
+		RPCURL:          cfg.Stellar().RPCURL(),
+		HTTPClient:      chainBreakers.client(appMetrics, stellarpkg.IndexerRequestTimeout, metrics.UpstreamSorobanRPC),
+		RPCOptions:      sorobanRPCOptions,
+		Recorder:        indexerFreshness,
+		DepositObserver: savingsGamificationSvc,
+	}, &workers)
 
 	// The metrics endpoint runs on its own listener so it is never reachable
 	// through the public port. It is not registered on mux at any point, so
@@ -1820,6 +2101,30 @@ func run() error {
 
 	if err := <-serverErr; err != nil {
 		return err
+	}
+
+	// Every background worker above shares shutdownCtx (or a context derived
+	// from it), so stop() at the top of this function already told all of
+	// them to return. This just waits for that to actually finish, instead
+	// of exiting the process while one is still mid-cycle (issue #786): the
+	// scenario that risks a partial write, or, for the event indexer
+	// specifically, a cursor that advanced past an event whose mutation did
+	// not land.
+	//
+	// Bounded by the same graceful-shutdown deadline as the HTTP drain
+	// above rather than waiting a second time: a worker that ignores
+	// cancellation is a bug to fix, not something worth doubling the
+	// shutdown budget for.
+	workersDone := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(workersDone)
+	}()
+	select {
+	case <-workersDone:
+		baseLogger.Info("background workers drained")
+	case <-ctx.Done():
+		baseLogger.Warn("background workers did not finish draining before the shutdown deadline; exiting anyway")
 	}
 
 	baseLogger.Info("server stopped",
@@ -1905,19 +2210,23 @@ type chainBreakerSet struct {
 //
 // Two breakers, not one: Soroban RPC and Horizon fail independently, and a
 // Horizon outage shedding Soroban traffic would take deposits offline for a
-// dependency they do not need. They share a *policy* because both degrade the
-// same way, but never state.
+// dependency they do not need. They share a *policy* by default because both
+// degrade the same way, but never state — and either one's thresholds can be
+// overridden independently via CIRCUIT_BREAKER_SOROBAN_RPC_*/
+// CIRCUIT_BREAKER_HORIZON_* (nester#1314) when an upstream's actual SLA
+// warrants different numbers.
 func newChainBreakers(cfg *config.Config, m *metrics.Metrics, logger *slog.Logger) (*chainBreakerSet, error) {
 	if !cfg.CircuitBreaker().Enabled() {
 		logger.Warn("chain circuit breakers are disabled; a degraded Soroban RPC or Horizon will not be shed")
 		return nil, nil
 	}
 
-	policy := cfg.CircuitBreaker().Policy()
+	sorobanPolicy := cfg.CircuitBreaker().SorobanRPCPolicy()
+	horizonPolicy := cfg.CircuitBreaker().HorizonPolicy()
 	onTransition := chainBreakerLogger(logger.WithGroup("circuit-breaker"))
 
-	sorobanBreaker := breaker.New(string(metrics.UpstreamSorobanRPC), policy, onTransition)
-	horizonBreaker := breaker.New(string(metrics.UpstreamHorizon), policy, onTransition)
+	sorobanBreaker := breaker.New(string(metrics.UpstreamSorobanRPC), sorobanPolicy, onTransition)
+	horizonBreaker := breaker.New(string(metrics.UpstreamHorizon), horizonPolicy, onTransition)
 
 	router := breaker.NewRouter()
 	if err := router.Register(cfg.Stellar().RPCURL(), sorobanBreaker); err != nil {
@@ -1938,10 +2247,14 @@ func newChainBreakers(cfg *config.Config, m *metrics.Metrics, logger *slog.Logge
 	}
 
 	logger.Info("chain circuit breakers enabled",
-		"failure_ratio", policy.FailureRatio,
-		"min_requests", policy.MinRequests,
-		"window", policy.Window.String(),
-		"open_duration", policy.OpenDuration.String(),
+		"soroban_rpc_failure_ratio", sorobanPolicy.FailureRatio,
+		"soroban_rpc_min_requests", sorobanPolicy.MinRequests,
+		"soroban_rpc_window", sorobanPolicy.Window.String(),
+		"soroban_rpc_open_duration", sorobanPolicy.OpenDuration.String(),
+		"horizon_failure_ratio", horizonPolicy.FailureRatio,
+		"horizon_min_requests", horizonPolicy.MinRequests,
+		"horizon_window", horizonPolicy.Window.String(),
+		"horizon_open_duration", horizonPolicy.OpenDuration.String(),
 	)
 
 	return &chainBreakerSet{router: router}, nil
@@ -2091,6 +2404,34 @@ type healthDeps struct {
 	// "reachable, but breaker still open" is exactly what tells an operator
 	// recovery is one probe away.
 	breakers map[metrics.Upstream]*breaker.Breaker
+
+	// freshnessReader backs the readiness staleness gate (nester#1107). It is
+	// the same freshness.Tracker the indexer publishes to and the API
+	// freshness headers read, so /readyz can never disagree with what a
+	// response's own X-Indexer-Stale header says. nil means no reader was
+	// wired (a build that never started the indexer, or a test that does not
+	// care about this axis), and indexerStale treats that as "not stale"
+	// rather than pulling every such instance out of rotation.
+	freshnessReader freshness.Reader
+
+	// pingRPC probes Soroban RPC for readiness (nester#1107). Unlike
+	// pingRedis, this is never nil in production — the API cannot serve a
+	// single deposit or withdrawal route without RPC — so, unlike Redis, its
+	// absence is not treated as "not configured" and skipped; readinessHandler
+	// requires it to be set.
+	pingRPC healthProbe
+}
+
+// indexerStale reports whether the indexed view is beyond its staleness
+// budget. A nil reader — no freshness tracker wired — is reported as not
+// stale rather than unknown: readiness has no positive evidence of staleness
+// to act on, and failing every such instance closed would turn a missing
+// collector into an outage instead of the diagnostic gap it actually is.
+func indexerStale(reader freshness.Reader) bool {
+	if reader == nil {
+		return false
+	}
+	return reader.Snapshot().Stale
 }
 
 // registerHealthRoutes wires the liveness, readiness, and diagnostic health
@@ -2115,12 +2456,23 @@ func registerHealthRoutes(mux *http.ServeMux, deps healthDeps) {
 // readinessHandler reports whether this instance should be sent traffic.
 //
 // It fails closed on every dependency the instance cannot serve correct
-// responses without: PostgreSQL, and — when configured — Redis, which backs
-// the token-revocation cache and the distributed rate limiters, so an instance
-// that has lost it would honour revoked sessions and under-count limits. A
-// pool that is saturated rather than down surfaces identically: the ping
-// blocks waiting for a free connection and probeTimeout turns that into a
-// failure.
+// responses without: PostgreSQL; Redis, when configured, which backs the
+// token-revocation cache and the distributed rate limiters, so an instance
+// that has lost it would honour revoked sessions and under-count limits;
+// Soroban RPC, without which no deposit, withdrawal, or vault route can
+// complete (nester#1107); and the indexed view's own staleness budget, since
+// an instance serving balances it knows are stale should not be the one
+// taking traffic either. A pool that is saturated rather than down surfaces
+// identically to a hard failure: the ping blocks waiting for a free
+// connection and probeTimeout turns that into one.
+//
+// Horizon is deliberately not part of this list — see detailedHealthHandler's
+// "degraded" branch, which is where Horizon and (redundantly) Soroban RPC
+// outages are reported without evicting the instance from rotation for a
+// dependency degradation this handler treats as fatal to the whole instance.
+// The two checks answer different questions: detailedHealthHandler asks
+// "what, if anything, is wrong", readinessHandler asks "should this instance
+// receive traffic at all".
 func readinessHandler(deps healthDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -2148,6 +2500,21 @@ func readinessHandler(deps healthDeps) http.HandlerFunc {
 				_, _ = w.Write([]byte("redis unavailable"))
 				return
 			}
+		}
+		if deps.pingRPC != nil {
+			rpcCtx, rpcCancel := context.WithTimeout(r.Context(), deps.probeTimeout)
+			rpcErr := deps.pingRPC(rpcCtx)
+			rpcCancel()
+			if rpcErr != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("soroban rpc unavailable"))
+				return
+			}
+		}
+		if indexerStale(deps.freshnessReader) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("indexer stale"))
+			return
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -2465,10 +2832,38 @@ func (a *reconciliationVaultListerAdapter) ListActiveForReconciliation(ctx conte
 	return out, nil
 }
 
+// flagAuditAdapter adapts service.AuditLogger to flags.AuditRecorder so
+// every feature-flag change (including flips of the mainnet deposit
+// allowlist) is traceable through the platform's existing audit log.
+type flagAuditAdapter struct {
+	logger service.AuditLogger
+}
+
+func (a flagAuditAdapter) RecordFlagChange(ctx context.Context, actor, name string, before, after *flags.Flag) error {
+	return a.logger.Log(ctx, service.AuditEntry{
+		Action:     "flag.change",
+		EntityType: "feature_flag",
+		OldValue:   before,
+		NewValue:   after,
+	})
+}
+
+// stubCanaryInvoker is a placeholder scheduler.CanaryInvoker. It keeps the
+// canary job's scheduling/leader-election/metrics infrastructure running
+// end to end without touching the chain. It must be replaced with an
+// implementation that performs a real deposit/withdraw round trip against
+// the configured canary vault before CANARY_ENABLED is turned on for a
+// mainnet environment (nester#1390 follow-up).
+type stubCanaryInvoker struct{}
+
+func (stubCanaryInvoker) CanaryDeposit(ctx context.Context, vaultID uuid.UUID, amount string) (string, error) {
+	return "", fmt.Errorf("canary: no real invoker configured (stubCanaryInvoker); see nester#1390 follow-up")
+}
+
+func (stubCanaryInvoker) CanaryWithdraw(ctx context.Context, vaultID uuid.UUID, txHash string) (string, error) {
+	return "", fmt.Errorf("canary: no real invoker configured (stubCanaryInvoker); see nester#1390 follow-up")
+}
+
 func ledgerDomainConfig() ledger.ReconciliationConfig {
-	return ledger.ReconciliationConfig{
-		Enabled:          true,
-		Interval:         5 * time.Minute,
-		ToleranceStroops: 1_000_000, // 0.1 USDC
-	}
+	return scheduler.LedgerReconciliationConfigFromEnv(true, 5*time.Minute, 1_000_000) // 0.1 USDC tolerance
 }

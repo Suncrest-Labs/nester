@@ -84,7 +84,9 @@ reconciled before the rollback can proceed.
 3. **Roll back the database, if required.** Only if the bad deploy included a
    migration. Check that migration's `.down.sql` header first: if it declares
    itself irreversible, restore from the pre-deployment snapshot instead of
-   running the down migration.
+   running the down migration. See `docs/database-backup-restore.md` for how
+   backups are taken, how to restore one (including the migration-version
+   reconciliation check), and production PITR.
 4. **Verify.** Confirm `/health/detailed` reports the expected previous
    `version` and `commit`, that `status` is `ok`, and that database, Redis,
    Horizon and Soroban RPC all report healthy.

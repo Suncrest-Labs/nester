@@ -44,6 +44,160 @@ func TestGamificationUsesUserLocalDay(t *testing.T) {
 	}
 }
 
+// TestGamificationLocalDayAcrossDateLine proves the streak is bucketed by the
+// user's local calendar day, not the UTC day the event happens to arrive in.
+// Both date-line directions are checked against a UTC-bucketing control that
+// would get the wrong answer, so a regression to naive UTC bucketing fails
+// loudly instead of only failing for one hemisphere.
+func TestGamificationLocalDayAcrossDateLine(t *testing.T) {
+	cases := []struct {
+		name         string
+		timezone     string
+		occurredAt   time.Time
+		wantLocalDay string
+		utcDay       string
+	}{
+		{
+			// UTC+14: local day rolls over to the next UTC day.
+			name:         "far ahead of UTC (Kiritimati, UTC+14)",
+			timezone:     "Pacific/Kiritimati",
+			occurredAt:   time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC),
+			wantLocalDay: "2026-01-02",
+			utcDay:       "2026-01-01",
+		},
+		{
+			// UTC-11: local day is still the previous UTC day.
+			name:         "far behind UTC (Niue, UTC-11)",
+			timezone:     "Pacific/Niue",
+			occurredAt:   time.Date(2026, 1, 2, 5, 0, 0, 0, time.UTC),
+			wantLocalDay: "2026-01-01",
+			utcDay:       "2026-01-02",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.wantLocalDay == tc.utcDay {
+				t.Fatalf("test case is not actually date-line-adjacent: local day equals UTC day")
+			}
+			userID := uuid.New()
+			engine := NewGamificationEngine(DefaultQualifyingRule())
+			state := GamificationState{UserID: userID, Timezone: tc.timezone, CurrentLevel: 1}
+
+			event := SavingEvent{
+				EventID:      "evt-1",
+				UserID:       userID,
+				Type:         "deposit_confirmed",
+				Amount:       decimal.NewFromInt(10),
+				NetAmount:    decimal.NewFromInt(10),
+				UserTimezone: tc.timezone,
+				OccurredAt:   tc.occurredAt,
+			}
+			_, transition, err := engine.Apply(state, event)
+			if err != nil {
+				t.Fatalf("Apply() error = %v", err)
+			}
+			if transition.LocalDay != tc.wantLocalDay {
+				t.Fatalf("local day = %s, want %s (a naive UTC bucketing would give %s)", transition.LocalDay, tc.wantLocalDay, tc.utcDay)
+			}
+		})
+	}
+}
+
+// TestGamificationTwoConsecutiveLocalDaysCanSpanTwoUTCDays proves the streak
+// counts by local calendar day: two deposits on consecutive local days, whose
+// timestamps happen to fall two UTC calendar days apart because of the
+// timezone offset, must extend the streak by one day and must not consume
+// the grace day.
+func TestGamificationTwoConsecutiveLocalDaysCanSpanTwoUTCDays(t *testing.T) {
+	userID := uuid.New()
+	engine := NewGamificationEngine(DefaultQualifyingRule())
+	state := GamificationState{UserID: userID, Timezone: "Pacific/Kiritimati", CurrentLevel: 1}
+
+	// 2026-01-01 23:00 UTC -> local day 2026-01-02 (Kiritimati is UTC+14).
+	first := qualifyingEvent(userID, "evt-1", time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC))
+	state, transition, err := engine.Apply(state, first)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if transition.LocalDay != "2026-01-02" || state.CurrentStreakDays != 1 {
+		t.Fatalf("first day = %s/%d, want 2026-01-02/1", transition.LocalDay, state.CurrentStreakDays)
+	}
+
+	// 2026-01-03 01:00 UTC -> local day 2026-01-03, the very next local day,
+	// even though the UTC calendar date moved by two days.
+	second := qualifyingEvent(userID, "evt-2", time.Date(2026, 1, 3, 1, 0, 0, 0, time.UTC))
+	state, transition, err = engine.Apply(state, second)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if transition.LocalDay != "2026-01-03" {
+		t.Fatalf("second local day = %s, want 2026-01-03", transition.LocalDay)
+	}
+	if state.CurrentStreakDays != 2 {
+		t.Fatalf("current streak = %d, want 2 (consecutive local days must not need the grace day)", state.CurrentStreakDays)
+	}
+	if state.GraceUsedForDay != "" {
+		t.Fatalf("grace used for day = %q, want unused: consecutive local days must not consume it", state.GraceUsedForDay)
+	}
+}
+
+// TestGamificationLateEventDoesNotRegressStreak is a regression test: an
+// event for a local day earlier than the streak's LastQualifiedDay (e.g. an
+// out-of-order on-chain event, or a split-deposit request that finishes
+// processing after a later deposit already qualified) must not move the
+// streak's bookmark backwards. Doing so previously caused the *next* real
+// deposit to measure its gap from the wrong (earlier) day, incorrectly
+// resetting the streak or burning the grace day.
+func TestGamificationLateEventDoesNotRegressStreak(t *testing.T) {
+	userID := uuid.New()
+	engine := NewGamificationEngine(DefaultQualifyingRule())
+	state := GamificationState{
+		UserID:            userID,
+		Timezone:          "UTC",
+		CurrentLevel:      1,
+		CurrentStreakDays: 3,
+		LongestStreakDays: 3,
+		LastQualifiedDay:  "2026-01-03",
+	}
+
+	// A late event for 2026-01-01, two days before the streak's current
+	// bookmark, arrives after the fact (e.g. backfilled or delayed).
+	late := qualifyingEvent(userID, "evt-late", time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	late.UserTimezone = "UTC"
+	next, transition, err := engine.Apply(state, late)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !transition.Qualified {
+		t.Fatalf("late event should still qualify (the saving is real), reason = %q", transition.Reason)
+	}
+	if next.LastQualifiedDay != "2026-01-03" {
+		t.Fatalf("LastQualifiedDay regressed to %s, want unchanged 2026-01-03", next.LastQualifiedDay)
+	}
+	if next.CurrentStreakDays != 3 {
+		t.Fatalf("current streak = %d, want unchanged 3", next.CurrentStreakDays)
+	}
+	if !next.TotalSaved.Equal(decimal.NewFromInt(10)) {
+		t.Fatalf("total saved = %s, want 10: the late deposit itself must still count", next.TotalSaved.String())
+	}
+
+	// The next real deposit, for 2026-01-04, must extend from the correct
+	// (unregressed) bookmark rather than from the late event's day.
+	realNext := qualifyingEvent(userID, "evt-3", time.Date(2026, 1, 4, 12, 0, 0, 0, time.UTC))
+	realNext.UserTimezone = "UTC"
+	final, transition, err := engine.Apply(next, realNext)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if final.CurrentStreakDays != 4 {
+		t.Fatalf("current streak after real next-day deposit = %d, want 4 (streak should extend normally, not have been corrupted by the late event)", final.CurrentStreakDays)
+	}
+	if transition.Reason != "qualified net saving" {
+		t.Fatalf("reason = %q, want qualified net saving", transition.Reason)
+	}
+}
+
 func TestGamificationGracePeriodPreservesStreakOnce(t *testing.T) {
 	userID := uuid.New()
 	engine := NewGamificationEngine(DefaultQualifyingRule())

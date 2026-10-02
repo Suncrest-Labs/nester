@@ -1,0 +1,12 @@
+groups:
+  - name: stellar_reserve_alerts
+    rules:
+      - alert: StellarOperationalAccountLowReserve
+        expr: nester_stellar_account_balance_xlm < nester_stellar_account_safe_reserve_xlm
+        for: 5m
+        labels:
+          severity: critical
+          network: mainnet
+        annotations:
+          summary: "Stellar operational account balance is below the safe reserve threshold"
+          description: "The mainnet operational account XLM balance is {{ $value }}, which is below the required safe reserve threshold. Trustlines and sponsorships may fail."

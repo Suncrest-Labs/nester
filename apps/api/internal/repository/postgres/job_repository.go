@@ -258,6 +258,72 @@ func (r *JobRepository) Stats(ctx context.Context, now time.Time) (jobqueue.Stat
 	return s, rows.Err()
 }
 
+// GetByID returns a single job by id, for admin inspection (#1329).
+func (r *JobRepository) GetByID(ctx context.Context, id uuid.UUID) (jobqueue.Job, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE id = $1`, id)
+	job, err := scanJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return jobqueue.Job{}, jobqueue.ErrNotFound
+	}
+	return job, err
+}
+
+// ListDead returns dead-letter jobs, most recently updated first (#1329).
+func (r *JobRepository) ListDead(ctx context.Context, limit, offset int) ([]jobqueue.Job, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT `+jobColumns+`
+		FROM jobs
+		WHERE status = 'dead'
+		ORDER BY updated_at DESC
+		LIMIT $1 OFFSET $2`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []jobqueue.Job
+	for rows.Next() {
+		job, err := scanJobRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+// ManualRetry resets a dead job back to pending (#1329): clears last_error and
+// the lease, and resets attempts to 0 so it gets the job's full MaxAttempts
+// budget again. No-op (ErrNotFound) if the job isn't currently dead.
+func (r *JobRepository) ManualRetry(ctx context.Context, id uuid.UUID, runAt time.Time) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'pending', attempts = 0, next_run_at = $2,
+		    last_error = NULL, leased_until = NULL, updated_at = NOW()
+		WHERE id = $1 AND status = 'dead'`,
+		id, runAt,
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return jobqueue.ErrNotFound
+	}
+	return nil
+}
+
 func scanJob(row *sql.Row) (jobqueue.Job, error)       { return scanJobFrom(row) }
 func scanJobRows(rows *sql.Rows) (jobqueue.Job, error) { return scanJobFrom(rows) }
 

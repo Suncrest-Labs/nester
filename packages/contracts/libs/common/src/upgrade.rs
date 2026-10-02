@@ -3,9 +3,7 @@
 //! Provides standardized functions to manage timelock-governed in-place WASM upgrades
 //! and contract schema migrations.
 
-use soroban_sdk::{
-    contracttype, panic_with_error, symbol_short, Address, BytesN, Env, Symbol,
-};
+use soroban_sdk::{contracttype, panic_with_error, symbol_short, Address, BytesN, Env, Symbol};
 
 use crate::{
     emit_event, ContractError, UpgradeCancelledEventData, UpgradeExecutedEventData,
@@ -129,7 +127,8 @@ impl Upgrade {
             panic_with_error!(env, ContractError::UpgradeHashMismatch);
         }
 
-        env.deployer().update_current_contract_wasm(pending.wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(pending.wasm_hash.clone());
 
         env.storage()
             .instance()

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/audit"
+	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
 
 // DataRetentionAuditLogger is the narrow subset of service.AuditLogger this
@@ -138,11 +139,17 @@ func (j *DataRetentionJob) Run(ctx context.Context, interval time.Duration) {
 // Tick runs a single retention sweep. Exported for tests. Each table's
 // deletion (and its audit log entry) is independent — a failure on one does
 // not block the other, since neither depends on the other's cutoff.
+//
+// A fresh correlation id is minted once per tick (nester#1339) and carried
+// on ctx for the rest of the sweep, so every audit_logs row this run writes
+// — across both tables — shares one id and can be traced back to this
+// specific run.
 func (j *DataRetentionJob) Tick(ctx context.Context) {
 	if !j.isLeader() {
 		return
 	}
 
+	ctx = logpkg.WithCorrelationID(ctx, uuid.NewString())
 	now := j.cfg.Now()
 
 	if j.activity != nil {
@@ -199,6 +206,7 @@ func (j *DataRetentionJob) audit(ctx context.Context, action, entityType string,
 			"deleted_count": deletedCount,
 			"cutoff":        cutoff.Format(time.RFC3339),
 		},
+		CorrelationID: logpkg.CorrelationIDFromContext(ctx),
 	}
 	if err := j.auditLog.Log(ctx, entry); err != nil {
 		j.logger.Warn("data retention: audit log write failed", "error", err.Error(), "entity_type", entityType)

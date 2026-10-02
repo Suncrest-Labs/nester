@@ -80,6 +80,24 @@ func (r *APYSnapshotRepository) PruneOlderThan(ctx context.Context, age time.Dur
 	return err
 }
 
+// DownsampleOlderThan keeps, for each (protocol_slug, UTC day) older than the
+// cutoff, only the snapshot with the latest captured_at, and deletes the rest.
+// Rows at or after the cutoff keep their native (hourly) granularity.
+func (r *APYSnapshotRepository) DownsampleOlderThan(ctx context.Context, age time.Duration) error {
+	cutoff := time.Now().UTC().Add(-age)
+	const q = `
+		DELETE FROM apy_snapshots
+		WHERE captured_at < $1
+		  AND id NOT IN (
+			SELECT DISTINCT ON (protocol_slug, date_trunc('day', captured_at)) id
+			FROM apy_snapshots
+			WHERE captured_at < $1
+			ORDER BY protocol_slug, date_trunc('day', captured_at), captured_at DESC
+		  )`
+	_, err := r.db.ExecContext(ctx, q, cutoff)
+	return err
+}
+
 func scanAPYSnapshot(row interface {
 	Scan(dest ...any) error
 }) (apysnapshot.APYSnapshot, error) {

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,5 +302,135 @@ func TestNewLimiterFallsBackToMemoryWithoutRedis(t *testing.T) {
 	// A different key is unaffected.
 	if allowed, _ := l.Allow(t.Context(), "k2"); !allowed {
 		t.Fatal("first request for second key: got denied, want allowed")
+	}
+}
+
+// --- API key limiter: excluded paths always pass ---
+
+func TestAPIKeyRateLimiterExcludesHealthAndMetrics(t *testing.T) {
+	const limit = 1
+	l := NewLimiter(nil, "apikey", limit, time.Second)
+	handler := APIKeyRateLimiter(l, []string{"/health", "/healthz", "/readyz", "/metrics"})(ok200)
+
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		for i := 0; i < limit+3; i++ {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer same-service-key")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s request %d: got %d, want 200 (excluded path must never be limited)", path, i+1, rec.Code)
+			}
+		}
+	}
+}
+
+// --- API key limiter: requests with no bearer token pass through untouched ---
+
+func TestAPIKeyRateLimiterSkipsRequestsWithNoBearerToken(t *testing.T) {
+	const limit = 1
+	l := NewLimiter(nil, "apikey", limit, time.Second)
+	handler := APIKeyRateLimiter(l, nil)(ok200)
+
+	for i := 0; i < limit+3; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/vaults", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("anonymous request %d: got %d, want 200 (no key to limit on)", i+1, rec.Code)
+		}
+	}
+}
+
+// --- API key limiter: over-limit requests are rejected with Retry-After ---
+
+func TestAPIKeyRateLimiterLimitsPerKey(t *testing.T) {
+	const limit = 3
+	l := NewLimiter(nil, "apikey", limit, time.Second)
+	handler := APIKeyRateLimiter(l, nil)(ok200)
+
+	send := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/vaults", nil)
+		req.Header.Set("Authorization", "Bearer service-key-a")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for i := 0; i < limit; i++ {
+		if rec := send(); rec.Code != http.StatusOK {
+			t.Fatalf("request %d: got %d, want 200", i+1, rec.Code)
+		}
+	}
+
+	rec := send()
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-limit request: got %d, want 429", rec.Code)
+	}
+	ra := rec.Header().Get("Retry-After")
+	if secs, err := strconv.Atoi(ra); err != nil || secs < 1 {
+		t.Fatalf("Retry-After = %q, want positive integer seconds", ra)
+	}
+}
+
+// --- API key limiter: per-key isolation, independent of the presenting IP ---
+//
+// This is the behaviour issue nester#1343 asks for: one key's budget is
+// shared across every IP it is presented from (a single misbehaving
+// integration cannot dodge its own limit by rotating source addresses), and
+// is entirely independent of a different key's budget, even from the same IP
+// (one compromised/misbehaving key cannot exhaust another caller's budget).
+
+func TestAPIKeyRateLimiterPerKeyIsolationIndependentOfIP(t *testing.T) {
+	const limit = 1
+	l := NewLimiter(nil, "apikey", limit, time.Second)
+	handler := APIKeyRateLimiter(l, nil)(ok200)
+
+	send := func(key, ip string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/vaults", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.RemoteAddr = ip + ":4444"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Key A's budget is shared across two different source IPs: the second
+	// call, from a different address, still hits the same bucket.
+	if got := send("key-a", "10.0.0.1"); got != http.StatusOK {
+		t.Fatalf("key A from IP 1: got %d, want 200", got)
+	}
+	if got := send("key-a", "10.0.0.2"); got != http.StatusTooManyRequests {
+		t.Fatalf("key A from IP 2 (same key, different IP): got %d, want 429 (shared bucket)", got)
+	}
+
+	// Key B, even from one of the same IPs key A already used, has its own
+	// independent bucket.
+	if got := send("key-b", "10.0.0.1"); got != http.StatusOK {
+		t.Fatalf("key B from IP 1 (different key, reused IP): got %d, want 200 (independent bucket)", got)
+	}
+}
+
+// --- API key limiter: the key is derived from the token, not logged/stored raw ---
+
+func TestAPIKeyRateLimiterKeyIsHashedNotRawToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/vaults", nil)
+	req.Header.Set("Authorization", "Bearer my-secret-service-key")
+
+	key := apiKeyRateLimitKey(req)
+	if key == "" {
+		t.Fatal("apiKeyRateLimitKey returned empty for a request with a bearer token")
+	}
+	if strings.Contains(key, "my-secret-service-key") {
+		t.Fatalf("rate-limit key embeds the raw token: %q", key)
+	}
+	if !strings.HasPrefix(key, apiKeyRateLimitKeyPrefix) {
+		t.Fatalf("rate-limit key %q missing expected prefix %q", key, apiKeyRateLimitKeyPrefix)
+	}
+
+	// Deterministic: the same token always maps to the same key, so repeated
+	// requests with the same credential share one bucket.
+	if got := apiKeyRateLimitKey(req); got != key {
+		t.Fatalf("apiKeyRateLimitKey is not deterministic: got %q, want %q", got, key)
 	}
 }

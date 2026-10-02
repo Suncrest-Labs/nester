@@ -6,22 +6,22 @@ pub mod constants;
 pub mod errors;
 pub mod events;
 pub mod fees;
+pub mod goal_effort;
 pub mod reentrancy;
 pub mod storage;
 pub mod upgrade;
 
 pub use adapters::{AdapterApy, ApyConfidence, YieldAdapterClient};
 pub use attestation::{
-    build_payload_bytes, verify_attestation, Attestation, AttestedField, AttestationPayload,
+    build_payload_bytes, verify_attestation, Attestation, AttestationPayload, AttestedField,
     FIELD_APY, FIELD_TVL,
 };
 pub use constants::*;
 pub use errors::ContractError;
 pub use events::*;
-pub use reentrancy::{CalleeAllowlist, ReentrancyGuard, with_reentrancy_guard};
+pub use reentrancy::{with_reentrancy_guard, CalleeAllowlist, ReentrancyGuard};
 pub use storage::*;
 pub use upgrade::*;
-
 
 use soroban_sdk::{contractclient, contracttype, Address, Env};
 

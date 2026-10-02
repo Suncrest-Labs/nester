@@ -1,0 +1,370 @@
+openapi: 3.1.0
+info:
+  description: 'Generated from Go source (issue #1058). Currently covers the vault
+    lifecycle routes only — see internal/openapi/spec.go for scope.'
+  title: Nester API
+  version: 1.0.0
+paths:
+  /api/v1/vaults:
+    post:
+      description: Registers a new vault for the authenticated user against a Soroban
+        contract address.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenapiCreateVaultRequest'
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiVaultResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Unauthorized
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Conflict
+      summary: Create a vault
+      tags:
+      - Vaults
+  /api/v1/vaults/{id}:
+    get:
+      description: 'Returns a vault owned by the authenticated caller. Returns 404,
+        not 403, for a vault owned by someone else — see vault_handler.go''s getVault
+        for why: a 403 here would let a caller enumerate other users'' vault IDs.'
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          $ref: '#/components/schemas/UuidUUID'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiVaultResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Not Found
+      summary: Get a vault
+      tags:
+      - Vaults
+  /api/v1/vaults/{id}/deposit:
+    post:
+      description: Records a deposit against the vault. When deposit verification
+        is configured, tx_hash is required and the credited amount is read from the
+        on-chain event rather than the request body (nester#1075).
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          $ref: '#/components/schemas/UuidUUID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenapiDepositRequest'
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiVaultResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Service Unavailable
+      summary: Deposit into a vault
+      tags:
+      - Vaults
+  /api/v1/vaults/{id}/withdraw:
+    post:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          $ref: '#/components/schemas/UuidUUID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenapiWithdrawRequest'
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiVaultResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Service Unavailable
+      summary: Withdraw from a vault
+      tags:
+      - Vaults
+components:
+  schemas:
+    ApperrorFieldDetail:
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+      type: object
+    OpenapiCreateVaultRequest:
+      properties:
+        contract_address:
+          description: 56-character Soroban contract address starting with 'C'
+          type: string
+        currency:
+          type: string
+        status:
+          type: string
+      required:
+      - contract_address
+      - currency
+      type: object
+    OpenapiDepositRequest:
+      properties:
+        amount:
+          description: Decimal string amount, must be > 0
+          type: string
+        asset:
+          type: string
+        tx_hash:
+          description: On-chain transaction hash; required when deposit verification
+            is configured
+          type: string
+      required:
+      - amount
+      - asset
+      type: object
+    OpenapiErrorResponse:
+      properties:
+        error:
+          $ref: '#/components/schemas/ResponseErrorBody'
+          type: "null"
+        success:
+          examples:
+          - false
+          type: boolean
+      type: object
+    OpenapiVaultResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/VaultVault'
+        success:
+          examples:
+          - true
+          type: boolean
+      type: object
+    OpenapiWithdrawRequest:
+      properties:
+        amount:
+          type: string
+        asset:
+          type: string
+        tx_hash:
+          type: string
+      required:
+      - amount
+      - asset
+      type: object
+    ResponseErrorBody:
+      properties:
+        code:
+          type: string
+        details:
+          items:
+            $ref: '#/components/schemas/ApperrorFieldDetail'
+          type: array
+        message:
+          type: string
+        request_id:
+          type: string
+        retryable:
+          type: boolean
+      type: object
+    UuidUUID:
+      examples:
+      - 248df4b7-aa70-47b8-a036-33ac447e668d
+      format: uuid
+      type: string
+    VaultAllocation:
+      properties:
+        allocated_at:
+          format: date-time
+          type: string
+        amount:
+          type: string
+        apy:
+          type: string
+        id:
+          $ref: '#/components/schemas/UuidUUID'
+        protocol:
+          type: string
+        status:
+          type: string
+        updated_at:
+          format: date-time
+          type:
+          - "null"
+          - string
+        vault_id:
+          $ref: '#/components/schemas/UuidUUID'
+      type: object
+    VaultVault:
+      properties:
+        allocations:
+          items:
+            $ref: '#/components/schemas/VaultAllocation'
+          type: array
+        capacity_warning_pct:
+          type:
+          - "null"
+          - number
+        contract_address:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        currency:
+          type: string
+        current_balance:
+          type: string
+        deleted_at:
+          format: date-time
+          type:
+          - "null"
+          - string
+        fees_paid:
+          type: string
+        harvest_frequency:
+          type: string
+        id:
+          $ref: '#/components/schemas/UuidUUID'
+        last_apy_alert_sent_at:
+          format: date-time
+          type:
+          - "null"
+          - string
+        last_harvested_at:
+          format: date-time
+          type:
+          - "null"
+          - string
+        last_synced_at:
+          format: date-time
+          type:
+          - "null"
+          - string
+        soft_capacity:
+          type:
+          - string
+          - "null"
+        status:
+          type: string
+        total_deposited:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          $ref: '#/components/schemas/UuidUUID'
+        yield_earned:
+          type: string
+      type: object

@@ -20,7 +20,7 @@
 //! | `set_emergency_fee` | same as above | same as above |
 //! | `set_allocation_strategy` | same as above | same as above |
 //! | `set_rebalance_cooldown` | same as above | same as above |
-//! | `pause`, `unpause` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
+//! | `pause`, `unpause` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature`, `non_guardian_non_admin_cannot_pause` | `admin_entrypoints_accept_then_reject_revoked_admin`, `guardian_can_pause_immediately_without_admin`, `guardian_pause_blocks_deposits_and_withdrawals_immediately`, `guardian_pause_does_not_block_emergency_withdraw`, `guardian_cannot_unpause` |
 //! | `grant_role`, `revoke_role` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
 //! | `transfer_admin` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_transfer_wrappers_enforce_authorization` |
 //! | `accept_admin` | `accept_admin_rejects_wrong_successor`, `accept_admin_requires_successor_signature` | `admin_transfer_wrappers_enforce_authorization` / n/a |
@@ -33,14 +33,19 @@
 //! | `withdraw` | `withdraw_without_user_signature_is_rejected` | `full_withdrawal_leaves_zero_balance` / n/a |
 //! | `emergency_withdraw` | `emergency_withdraw_without_user_signature_is_rejected` | `emergency_withdraw_works_when_paused` / n/a |
 //! | `emergency_withdraw_all` | `emergency_withdraw_all_without_user_signature_is_rejected` | `emergency_withdraw_all_exits_all_active_positions` / n/a |
+//! | `deposit_locked` | `deposit_locked_without_user_signature_is_rejected` | `deposit_locked_creates_a_position_at_the_tier_boost` / n/a |
+//! | `unlock_position` | `unlock_position_without_user_signature_is_rejected` | `unlock_position_moves_shares_to_flexible_after_maturity` / n/a |
+//! | `break_lock` | `break_lock_without_user_signature_is_rejected` | `break_lock_returns_value_minus_decayed_penalty` / n/a |
+//! | `set_lock_tiers` | `admin_entrypoints_reject_outsider`, `admin_entrypoints_require_admin_signature` | `admin_entrypoints_accept_then_reject_revoked_admin` |
+//! | `set_lock_break_penalty_bps` | same as above | same as above |
 
 extern crate std;
 
 use nester_access_control::Role;
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
-    testutils::{Address as _, Ledger, LedgerInfo},
-    token, Address, Env, String, Symbol,
+    testutils::{Address as _, Events as _, Ledger, LedgerInfo},
+    token, Address, Env, IntoVal, String, Symbol, Vec,
 };
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
@@ -236,6 +241,22 @@ fn advance_time(env: &Env, seconds: u64) {
     });
 }
 
+/// Advance past a `report_yield` call's vesting window (issue #803's
+/// default: 24h) and force the vested amount to actually release into
+/// `TotalAssets`. A zero-amount `report_yield` call is a side-effect-free
+/// way to trigger the release (it still runs `release_vested_yield` at its
+/// own top, before the zero-amount early return), since a pure view like
+/// `total_assets()`/`share_price()` never releases anything itself.
+///
+/// Many tests written before vesting existed call `report_yield` and
+/// immediately assume its full effect lands in the very next call — this
+/// makes that assumption true again without changing what each test is
+/// actually asserting.
+fn fully_vest(env: &Env, vault: &VaultContractClient, admin: &Address) {
+    advance_time(env, vault.get_yield_vesting_period() + 1);
+    vault.report_yield(admin, &0);
+}
+
 // ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
@@ -256,6 +277,33 @@ fn reinitialize_is_rejected() {
     let second_token = Address::generate(&_env);
     let second_vault_token = Address::generate(&_env);
     vault.initialize(&admin, &second_token, &second_vault_token, &treasury);
+}
+
+#[test]
+fn deposit_allowlist_gate_rejects_uninvited_users_and_allows_invited_users() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let invited = Address::generate(&env);
+    let uninvited = Address::generate(&env);
+    let amount = 100 * XLM;
+    mint(&token, &invited, amount);
+    mint(&token, &uninvited, amount);
+
+    vault.set_deposit_allowlist_enabled(&admin, &true);
+    assert!(vault.try_deposit(&uninvited, &amount, &0).is_err());
+
+    vault.set_deposit_allowlisted(&admin, &invited, &true);
+    assert!(vault.try_deposit(&invited, &amount, &0).is_ok());
+}
+
+#[test]
+fn deposit_allowlist_is_disabled_by_default() {
+    let (env, _admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    let amount = 100 * XLM;
+    mint(&token, &user, amount);
+
+    assert!(!vault.deposit_allowlist_enabled());
+    assert!(vault.try_deposit(&user, &amount, &0).is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -476,8 +524,21 @@ fn withdrawal_charges_perf_fee_only_on_realized_user_yield() {
     vault.deposit(&user, &deposit, &0);
     vault.grant_role(&admin, &admin, &Role::Manager);
 
+    // Zero the management fee: this test's exact expected numbers predate
+    // fully_vest's real time-advance below, which would otherwise accrue a
+    // small management fee this test isn't about.
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.management_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
     // Double share price in accounting so user has 1000 of realized yield.
+    // A short vesting period lands the report well inside the 1-day
+    // MinLockPeriod, matching this test's "early fee = 2" expectation
+    // (the default 24h vesting window would land exactly at/past the lock
+    // boundary).
+    vault.set_yield_vesting_period(&admin, &(60 * 60));
     vault.report_yield(&admin, &deposit);
+    fully_vest(&env, &vault, &admin);
     // Add liquid reserves so transfer can satisfy the larger withdrawal amount.
     vault.deposit(&liquidity_provider, &deposit, &0);
 
@@ -499,14 +560,19 @@ fn performance_fee_charges_only_realized_yield_not_principal() {
     mint(&token, &user_a, 2_000 * XLM);
     mint(&token, &user_b, 2_000 * XLM);
 
-    // Disable early withdrawal fee so this test isolates performance fee behavior.
+    // Disable early withdrawal and management fees so this test isolates
+    // performance fee behavior. Management fee matters here specifically
+    // because fully_vest below advances real time, which would otherwise
+    // accrue a small but nonzero management fee this test isn't about.
     let mut fee_config: FeeConfig = vault.get_fee_config();
     fee_config.early_withdrawal_fee_bps = 0;
+    fee_config.management_fee_bps = 0;
     vault.set_fee_config(&admin, &fee_config);
 
     vault.grant_role(&admin, &admin, &Role::Manager);
     vault.deposit(&user_a, &(1_000 * XLM), &0);
     vault.report_yield(&admin, &(100 * XLM));
+    fully_vest(&env, &vault, &admin);
 
     // User B enters after yield is already reflected in share price.
     let user_b_shares = vault.deposit(&user_b, &(1_000 * XLM), &0);
@@ -663,10 +729,11 @@ fn withdraw_reverts_when_min_assets_out_is_not_met() {
 // post-fee amount actually transferred, so a caller can use it directly as
 // `min_assets_out` for a fee-bearing withdrawal without tripping slippage.
 //
-// No time is advanced, so no management fee accrues (elapsed = 0) and the
-// preview models every fee the withdrawal applies exactly: the reported yield
-// triggers a performance fee, and remaining inside the MinLockPeriod triggers
-// the early-withdrawal fee.
+// Management fee is zeroed so the preview models every fee the withdrawal
+// applies exactly despite fully_vest below genuinely advancing real time
+// (issue #803's vesting needs a real elapsed window to release the report):
+// the reported yield triggers a performance fee, and remaining inside the
+// MinLockPeriod triggers the early-withdrawal fee.
 #[test]
 fn withdrawal_fee_preview_net_is_slippage_safe_as_min_assets_out() {
     let (env, admin, token, vault, _treasury) = setup();
@@ -675,8 +742,18 @@ fn withdrawal_fee_preview_net_is_slippage_safe_as_min_assets_out() {
     mint(&token, &user, deposit);
     vault.deposit(&user, &deposit, &0);
 
+    let mut fee_config: FeeConfig = vault.get_fee_config();
+    fee_config.management_fee_bps = 0;
+    vault.set_fee_config(&admin, &fee_config);
+
+    // A short vesting period lands the report well inside the 1-day
+    // MinLockPeriod, so the early-withdrawal-fee assertion below still
+    // applies (the default 24h vesting window would land exactly at/past
+    // the lock boundary).
     vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.set_yield_vesting_period(&admin, &(60 * 60));
     vault.report_yield(&admin, &(500 * XLM));
+    fully_vest(&env, &vault, &admin);
     // Back the reported yield with real tokens so the vault can pay it out
     // (report_yield only updates share-price accounting).
     mint(&token, &vault.address, 500 * XLM);
@@ -1182,9 +1259,15 @@ fn test_read_only_queries() {
     assert_eq!(vault.total_shares(), deposit);
     assert_eq!(vault.share_price(), 10_000_000); // 1.0 share price initialized
 
-    // Simulate yield
+    // Simulate yield. Reports vest linearly (issue #803's default: 24h),
+    // so use the minimum allowed window (1h) here, short enough to fully
+    // land while still leaving the rest of DAY/2 comfortably inside the
+    // MinLockPeriod (= DAY) window the early-withdrawal-fee assertion below
+    // needs.
     vault.grant_role(&admin, &admin, &Role::Manager);
+    vault.set_yield_vesting_period(&admin, &(60 * 60));
     vault.report_yield(&admin, &(500 * XLM));
+    fully_vest(&env, &vault, &admin);
 
     assert_eq!(vault.total_shares(), deposit);
     assert_eq!(vault.share_price(), 15_000_000); // 1.5 share price
@@ -1525,6 +1608,7 @@ fn per_user_harvest_pays_the_treasury_the_full_fee() {
     vault.grant_role(&admin, &user, &Role::Manager);
     let yield_amount = 500 * XLM;
     vault.report_yield(&user, &yield_amount);
+    fully_vest(&env, &vault, &user);
 
     let treasury_token = token::Client::new(&env, &token.address);
     let before = treasury_token.balance(&treasury);
@@ -1581,6 +1665,7 @@ fn test_harvest_fee_calculation() {
     vault.grant_role(&admin, &admin, &Role::Manager);
     let yield_amount = 1_000 * XLM;
     vault.report_yield(&admin, &yield_amount);
+    fully_vest(&env, &vault, &admin);
 
     let result = vault.harvest(&user);
 
@@ -1610,6 +1695,7 @@ fn test_harvest_resets_user_yield_to_zero() {
 
     vault.grant_role(&admin, &admin, &Role::Manager);
     vault.report_yield(&admin, &(300 * XLM));
+    fully_vest(&env, &vault, &admin);
 
     let first = vault.harvest(&user);
     assert_eq!(first.gross_yield, 300 * XLM);
@@ -1692,6 +1778,7 @@ fn harvest_fee_burns_only_the_harvesting_users_shares() {
 
     vault.grant_role(&admin, &admin, &Role::Manager);
     vault.report_yield(&admin, &(500 * XLM));
+    fully_vest(&env, &vault, &admin);
 
     let shares_before = vault.get_shares(&user);
     let result = vault.harvest(&user);
@@ -1723,6 +1810,7 @@ fn performance_fee_does_not_dilute_passive_holders() {
     vault.grant_role(&admin, &admin, &Role::Manager);
     mint(&token, &vault.address, yield_amount);
     vault.report_yield(&admin, &yield_amount);
+    fully_vest(&env, &vault, &admin);
 
     let passive_value_before = vault.get_balance(&passive_holder);
     let share_price_before = vault.share_price();
@@ -1734,7 +1822,10 @@ fn performance_fee_does_not_dilute_passive_holders() {
     let passive_value_after = vault.get_balance(&passive_holder);
     let treasury_after = token::Client::new(&env, &token.address).balance(&treasury);
 
-    assert!(result.performance_fee > 0, "the regression must exercise a fee");
+    assert!(
+        result.performance_fee > 0,
+        "the regression must exercise a fee"
+    );
     assert!(
         share_price_after >= share_price_before,
         "one user's performance fee must not lower the exchange rate"
@@ -1899,6 +1990,81 @@ fn get_min_deposit_returns_configured_value() {
     let (_env, admin, _token, vault, _treasury) = setup();
     vault.set_min_deposit(&admin, &(10 * XLM));
     assert_eq!(vault.get_min_deposit(), 10 * XLM);
+}
+
+// ---------------------------------------------------------------------------
+// Cap-change event emission (issue #1354): set_max_deposit/set_min_deposit
+// were silent on-chain; the off-chain indexer needs a CAP_CHG event to
+// reconstruct config state without extra RPC calls.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_max_deposit_emits_cap_changed_event() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_max_deposit(&admin, &(500 * XLM));
+
+    let events = env.events().all();
+    let (contract_id, topics, data) = events
+        .last()
+        .expect("set_max_deposit must emit an event")
+        .clone();
+    assert_eq!(contract_id, vault.address);
+
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
+    let topic2: Address = topics.get(2).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "VAULT"));
+    assert_eq!(topic1, Symbol::new(&env, "CAP_CHG"));
+    assert_eq!(topic2, admin);
+
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(decoded.field, Symbol::new(&env, "MAX_DEP"));
+    assert_eq!(decoded.old_value, i128::MAX);
+    assert_eq!(decoded.new_value, 500 * XLM);
+}
+
+#[test]
+fn set_min_deposit_emits_cap_changed_event() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_min_deposit(&admin, &(10 * XLM));
+
+    let events = env.events().all();
+    let (contract_id, topics, data) = events
+        .last()
+        .expect("set_min_deposit must emit an event")
+        .clone();
+    assert_eq!(contract_id, vault.address);
+
+    let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, Symbol::new(&env, "CAP_CHG"));
+
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(decoded.field, Symbol::new(&env, "MIN_DEP"));
+    assert_eq!(decoded.old_value, 0);
+    assert_eq!(decoded.new_value, 10 * XLM);
+}
+
+#[test]
+fn set_max_deposit_event_old_value_reflects_prior_setting() {
+    let (env, admin, _token, vault, _treasury) = setup();
+
+    vault.set_max_deposit(&admin, &(500 * XLM));
+    vault.set_max_deposit(&admin, &(750 * XLM));
+
+    let events = env.events().all();
+    let (_, _, data) = events
+        .last()
+        .expect("second set_max_deposit must emit")
+        .clone();
+    let decoded: crate::CapChangedEventData = data.into_val(&env);
+    assert_eq!(
+        decoded.old_value,
+        500 * XLM,
+        "must reflect the PRIOR cap, not a default"
+    );
+    assert_eq!(decoded.new_value, 750 * XLM);
 }
 
 // ---------------------------------------------------------------------------
@@ -2437,6 +2603,90 @@ fn operator_entrypoints_require_signature() {
     assert_rejected!(vault.try_rebalance(&operator), "rebalance");
 }
 
+// ---------------------------------------------------------------------------
+// Guardian emergency pause (issue #1387): a Guardian can pause deposits and
+// withdrawals immediately, with no timelock delay, during an active exploit.
+// This is the asymmetric safety design documented on `Role::Guardian`
+// (access_control's module docs, issue #820): Guardian can only ever make
+// the vault safer, never riskier, and reversing a Guardian pause requires
+// Admin via `unpause`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn guardian_can_pause_immediately_without_admin() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let guardian = Address::generate(&env);
+    vault.grant_role(&admin, &guardian, &Role::Guardian);
+
+    // No timelock wait of any kind — a single call pauses the vault.
+    assert!(!vault.is_paused());
+    vault.pause(&guardian);
+    assert!(vault.is_paused());
+}
+
+#[test]
+fn guardian_pause_blocks_deposits_and_withdrawals_immediately() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let guardian = Address::generate(&env);
+    vault.grant_role(&admin, &guardian, &Role::Guardian);
+
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(500 * XLM), &0);
+
+    vault.pause(&guardian);
+
+    assert_rejected!(vault.try_deposit(&user, &(100 * XLM), &0), "deposit");
+    assert_rejected!(vault.try_withdraw(&user, &(100 * XLM), &0), "withdraw");
+}
+
+#[test]
+fn non_guardian_non_admin_cannot_pause() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+    // Sanity: outsider holds no role at all, not even a weaker one.
+    let _ = &admin;
+
+    assert_rejected!(vault.try_pause(&outsider), "pause");
+    assert!(!vault.is_paused());
+}
+
+#[test]
+fn guardian_pause_does_not_block_emergency_withdraw() {
+    // The Guardian-triggered pause must leave the emergency exit open —
+    // pausing deposits/withdrawals must never also trap funds (see
+    // `emergency_withdraw_internal`'s doc comment: "a breaker that stops
+    // users from leaving is a trap, not a safety device").
+    let (env, admin, token, vault, _treasury) = setup();
+    let guardian = Address::generate(&env);
+    vault.grant_role(&admin, &guardian, &Role::Guardian);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 1_000 * XLM;
+    mint(&token, &user, deposit_amount);
+    vault.deposit(&user, &deposit_amount, &0);
+
+    vault.pause(&guardian);
+
+    let returned = vault.emergency_withdraw(&user);
+    assert_eq!(returned, deposit_amount);
+    assert_eq!(vault.get_balance(&user), 0);
+}
+
+#[test]
+fn guardian_cannot_unpause() {
+    // The Guardian asymmetry: Guardian can make the vault safer (pause) but
+    // never riskier (unpause) — reversing a Guardian action always requires
+    // a higher role (Admin).
+    let (env, admin, _token, vault, _treasury) = setup();
+    let guardian = Address::generate(&env);
+    vault.grant_role(&admin, &guardian, &Role::Guardian);
+
+    vault.pause(&guardian);
+    assert_rejected!(vault.try_unpause(&guardian), "unpause");
+    assert!(vault.is_paused());
+}
+
 #[test]
 fn deposit_without_user_signature_is_rejected() {
     let (env, _admin, token, vault, _treasury) = setup();
@@ -2652,10 +2902,12 @@ mod proptests {
 
             let price_before = vault.share_price();
 
-            // Positive yield increases share price
+            // Positive yield increases share price, once vested (issue
+            // #803's linear vesting means it is not reflected instantly).
             let yield_val = initial_deposit * yield_pct / 100;
             vault.grant_role(&admin, &admin, &Role::Manager);
             vault.report_yield(&admin, &yield_val);
+            fully_vest(&env, &vault, &admin);
 
             let price_after_yield = vault.share_price();
             prop_assert!(
@@ -2768,3 +3020,379 @@ mod proptests {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Time-locked savings vault (issue #802)
+// ---------------------------------------------------------------------------
+
+mod locks_test {
+    use super::*;
+    use crate::locks::LockTier;
+
+    const THIRTY_DAYS: u64 = 30 * DAY;
+    const NINETY_DAYS: u64 = 90 * DAY;
+
+    #[test]
+    fn deposit_locked_creates_a_position_at_the_tier_boost() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        assert_eq!(lock_id, 0);
+
+        let view = vault.get_locked_positions(&user);
+        assert_eq!(view.positions.len(), 1);
+        let position = view.positions.get(0).unwrap();
+        assert_eq!(position.shares, 500 * XLM);
+        assert_eq!(position.boost_bps, 11_000);
+        assert_eq!(position.unlock_at, position.created_at + THIRTY_DAYS);
+        assert_eq!(view.total_locked_shares, 500 * XLM);
+
+        // Locked shares still count toward the total balance...
+        assert_eq!(vault.get_balance(&user), 500 * XLM);
+        // ...but are not free to withdraw as flexible shares.
+        let result = vault.try_withdraw(&user, &(1 * XLM), &0);
+        assert!(
+            result.is_err(),
+            "withdraw must reject shares that are locked"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #19)")]
+    fn deposit_locked_rejects_a_duration_not_matching_any_tier() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        vault.deposit_locked(&user, &(500 * XLM), &0, &(THIRTY_DAYS + 1));
+    }
+
+    #[test]
+    #[should_panic]
+    fn deposit_locked_without_user_signature_is_rejected() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        env.mock_auths(&[]);
+        vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn deposit_locked_rejects_past_the_per_user_open_lock_cap() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000_000 * XLM);
+
+        for _ in 0..20 {
+            vault.deposit_locked(&user, &(1 * XLM), &0, &THIRTY_DAYS);
+        }
+        // The 21st simultaneously open lock must be rejected.
+        vault.deposit_locked(&user, &(1 * XLM), &0, &THIRTY_DAYS);
+    }
+
+    #[test]
+    fn unlock_position_moves_shares_to_flexible_after_maturity() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        advance_time(&env, THIRTY_DAYS + 1);
+
+        let unlocked_shares = vault.unlock_position(&user, &lock_id);
+        assert_eq!(unlocked_shares, 500 * XLM);
+
+        let view = vault.get_locked_positions(&user);
+        assert_eq!(view.positions.len(), 0);
+        assert_eq!(view.total_locked_shares, 0);
+
+        // Now free to withdraw as an ordinary flexible balance.
+        vault.withdraw(&user, &(500 * XLM), &0);
+        assert_eq!(vault.get_balance(&user), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn unlock_position_before_maturity_is_rejected() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        vault.unlock_position(&user, &lock_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn unlock_position_rejects_an_unknown_lock_id() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        vault.unlock_position(&user, &999);
+    }
+
+    #[test]
+    #[should_panic]
+    fn unlock_position_without_user_signature_is_rejected() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        advance_time(&env, THIRTY_DAYS + 1);
+
+        env.mock_auths(&[]);
+        vault.unlock_position(&user, &lock_id);
+    }
+
+    #[test]
+    fn break_lock_returns_value_minus_decayed_penalty() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        // Break immediately: elapsed ≈ 0, so the penalty should be the full
+        // configured rate (default 10%) of the position's asset value.
+        let returned = vault.break_lock(&user, &lock_id);
+        let expected_penalty = 500 * XLM * 1_000 / 10_000;
+        assert_eq!(returned, 500 * XLM - expected_penalty);
+
+        let view = vault.get_locked_positions(&user);
+        assert_eq!(view.positions.len(), 0);
+        assert_eq!(
+            token::Client::new(&env, &token.address).balance(&user),
+            500 * XLM + returned
+        );
+    }
+
+    #[test]
+    fn break_lock_near_maturity_charges_a_decayed_penalty() {
+        // Break with 1% of the lock's duration remaining: the linear decay
+        // (integer division on whole seconds) leaves a small but nonzero
+        // penalty here, unlike breaking with only 1 second left (out of 30
+        // days), which floors to exactly zero — both are correct floor-
+        // division outcomes, not a rounding bug.
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        advance_time(&env, THIRTY_DAYS - THIRTY_DAYS / 100);
+
+        let returned = vault.break_lock(&user, &lock_id);
+        assert!(
+            returned > 0 && returned < 500 * XLM,
+            "penalty must still be nonzero this close to maturity, but nearly all value should be returned: got {}",
+            returned
+        );
+        assert!(
+            returned >= 500 * XLM - (500 * XLM * 1_000 / 10_000),
+            "penalty must have decayed to well under the full day-one rate this close to maturity: got {}",
+            returned
+        );
+    }
+
+    #[test]
+    fn break_lock_one_second_before_maturity_rounds_the_penalty_to_zero() {
+        // A single remaining second out of a 30-day term underflows the
+        // linear-decay integer division to exactly zero bps — full asset
+        // value comes back, same as breaking exactly at maturity would.
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        advance_time(&env, THIRTY_DAYS - 1);
+
+        let returned = vault.break_lock(&user, &lock_id);
+        assert_eq!(returned, 500 * XLM);
+    }
+
+    #[test]
+    #[should_panic]
+    fn break_lock_without_user_signature_is_rejected() {
+        let (env, _admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        env.mock_auths(&[]);
+        vault.break_lock(&user, &lock_id);
+    }
+
+    #[test]
+    fn locked_positions_earn_a_disproportionate_share_of_yield() {
+        let (env, admin, token, vault, _treasury) = setup();
+        let locked_user = Address::generate(&env);
+        let flexible_user = Address::generate(&env);
+        mint(&token, &locked_user, 1_000 * XLM);
+        mint(&token, &flexible_user, 1_000 * XLM);
+
+        let lock_id = vault.deposit_locked(&locked_user, &(500 * XLM), &0, &NINETY_DAYS);
+        vault.deposit(&flexible_user, &(500 * XLM), &0);
+
+        vault.grant_role(&admin, &admin, &Role::Manager);
+        vault.report_yield(&admin, &(100 * XLM));
+        fully_vest(&env, &vault, &admin);
+
+        let view = vault.get_locked_positions(&locked_user);
+        let position = view.positions.get(0).unwrap();
+
+        // The 90-day tier boost is 1.25x (12_500 bps); the locked position
+        // must end up worth strictly more than a flat 50/50 split of the
+        // yield (550 XLM each) would give it, and the flexible depositor's
+        // balance must correspondingly be worth strictly less.
+        assert!(
+            position.shares > 500 * XLM,
+            "locked position must be minted extra boost shares"
+        );
+        let locked_value = vault.preview_withdraw(&position.shares);
+        let flexible_value = vault.preview_withdraw(&vault.get_shares(&flexible_user));
+        assert!(
+            locked_value > 550 * XLM,
+            "boosted lock must earn more than an even split of yield: got {}",
+            locked_value
+        );
+        assert!(
+            flexible_value < 550 * XLM,
+            "flexible depositor must earn less than an even split, having subsidized the boost: got {}",
+            flexible_value
+        );
+        // Conserves total value up to the tiny management fee accrued over
+        // fully_vest's ~24h time advance (negligible at this scale, but
+        // nonzero, so this is a tolerance check rather than exact equality).
+        let combined = locked_value + flexible_value;
+        let expected = 1000 * XLM + 100 * XLM;
+        assert!(
+            (expected - combined).abs() < XLM / 100,
+            "yield split must conserve total value (mod tiny fee accrual): got {}, expected ~{}",
+            combined,
+            expected
+        );
+
+        let _ = lock_id;
+    }
+
+    #[test]
+    fn locked_position_degenerates_to_unboosted_at_exactly_one_x() {
+        let (env, admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        let mut tiers = Vec::new(&env);
+        tiers.push_back(LockTier {
+            duration_secs: THIRTY_DAYS,
+            boost_bps: 10_000, // exactly 1x — no boost
+        });
+        vault.set_lock_tiers(&admin, &tiers);
+
+        vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        vault.grant_role(&admin, &admin, &Role::Manager);
+        vault.report_yield(&admin, &(100 * XLM));
+        fully_vest(&env, &vault, &admin);
+
+        let view = vault.get_locked_positions(&user);
+        let position = view.positions.get(0).unwrap();
+        assert_eq!(
+            position.shares,
+            500 * XLM,
+            "a 1x tier must mint zero extra boost shares"
+        );
+    }
+
+    #[test]
+    fn get_lock_tiers_defaults_to_the_configured_constants() {
+        let (_env, _admin, _token, vault, _treasury) = setup();
+        let tiers = vault.get_lock_tiers();
+        assert_eq!(tiers.len(), 4);
+        assert_eq!(tiers.get(0).unwrap().duration_secs, THIRTY_DAYS);
+        assert_eq!(tiers.get(0).unwrap().boost_bps, 11_000);
+    }
+
+    #[test]
+    fn set_lock_tiers_by_admin_replaces_the_table() {
+        let (env, admin, _token, vault, _treasury) = setup();
+        let mut tiers = Vec::new(&env);
+        tiers.push_back(LockTier {
+            duration_secs: 7 * DAY,
+            boost_bps: 10_500,
+        });
+        vault.set_lock_tiers(&admin, &tiers);
+
+        let stored = vault.get_lock_tiers();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored.get(0).unwrap().duration_secs, 7 * DAY);
+    }
+
+    #[test]
+    #[should_panic]
+    fn set_lock_tiers_by_non_admin_panics() {
+        let (env, _admin, _token, vault, _treasury) = setup();
+        let outsider = Address::generate(&env);
+        let mut tiers = Vec::new(&env);
+        tiers.push_back(LockTier {
+            duration_secs: 7 * DAY,
+            boost_bps: 10_500,
+        });
+        vault.set_lock_tiers(&outsider, &tiers);
+    }
+
+    #[test]
+    fn get_lock_break_penalty_bps_defaults_to_the_configured_constant() {
+        let (_env, _admin, _token, vault, _treasury) = setup();
+        assert_eq!(vault.get_lock_break_penalty_bps(), 1_000);
+    }
+
+    #[test]
+    fn set_lock_break_penalty_bps_by_admin_updates_it() {
+        let (_env, admin, _token, vault, _treasury) = setup();
+        vault.set_lock_break_penalty_bps(&admin, &2_000);
+        assert_eq!(vault.get_lock_break_penalty_bps(), 2_000);
+    }
+
+    #[test]
+    #[should_panic]
+    fn set_lock_break_penalty_bps_by_non_admin_panics() {
+        let (env, _admin, _token, vault, _treasury) = setup();
+        let outsider = Address::generate(&env);
+        vault.set_lock_break_penalty_bps(&outsider, &2_000);
+    }
+
+    #[test]
+    #[should_panic]
+    fn set_lock_break_penalty_bps_above_max_panics() {
+        let (_env, admin, _token, vault, _treasury) = setup();
+        vault.set_lock_break_penalty_bps(&admin, &3_001);
+    }
+
+    #[test]
+    fn emergency_withdraw_exits_a_locked_position_when_paused() {
+        // Issue #802's explicit acceptance criterion: emergency paths must
+        // ignore locks entirely. `emergency_withdraw` operates on the
+        // user's total (flexible + locked) share balance with no
+        // lock-awareness, so a paused vault must let a locked depositor
+        // out in full, same as a flexible one.
+        let (env, admin, token, vault, _treasury) = setup();
+        let user = Address::generate(&env);
+        mint(&token, &user, 1_000 * XLM);
+
+        vault.deposit_locked(&user, &(500 * XLM), &0, &THIRTY_DAYS);
+        vault.pause(&admin);
+
+        let returned = vault.emergency_withdraw(&user);
+        assert_eq!(returned, 500 * XLM);
+        assert_eq!(vault.get_balance(&user), 0);
+
+        // The lock bookkeeping is now orphaned (the position's shares no
+        // longer exist), but reading it back must stay safe rather than
+        // panic or underflow.
+        let view = vault.get_locked_positions(&user);
+        assert_eq!(view.total_locked_shares, 500 * XLM);
+    }
+}

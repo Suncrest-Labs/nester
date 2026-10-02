@@ -62,6 +62,40 @@ type GoalValuation struct {
 	ProgressBps   int             `json:"progress_bps"`
 }
 
+// Staleness classifies how trustworthy a Valuation's snapshot is for display,
+// independent of Confidence (which reflects price-oracle quality, not indexer
+// lag). See ClassifyStaleness (nester#1109).
+type Staleness string
+
+const (
+	// StalenessFresh means indexed data was within budget when this valuation
+	// was generated.
+	StalenessFresh Staleness = "fresh"
+	// StalenessStale means indexed data had fallen behind the staleness
+	// budget when this valuation was generated — the figure is real but old,
+	// and a client must say so rather than presenting it as current.
+	StalenessStale Staleness = "stale"
+	// StalenessUnknown means no freshness signal was available at all (e.g.
+	// the indexer has never sampled, or the service was not wired to a
+	// freshness reader). Unknown is deliberately distinct from Fresh: absence
+	// of evidence of staleness is not evidence of freshness.
+	StalenessUnknown Staleness = "unknown"
+)
+
+// ClassifyStaleness derives a Staleness from a freshness sample. sampled
+// mirrors freshness.Snapshot.Sampled: false means the indexer has never
+// reported, in which case lag and stale are meaningless and StalenessUnknown
+// is returned regardless of their values.
+func ClassifyStaleness(sampled bool, stale bool) Staleness {
+	if !sampled {
+		return StalenessUnknown
+	}
+	if stale {
+		return StalenessStale
+	}
+	return StalenessFresh
+}
+
 // Valuation is the full real-time portfolio valuation for one user: a structured
 // breakdown per vault and per goal, split principal vs yield, locked vs flexible,
 // and settled vs pending, plus claimable rewards and an overall confidence.
@@ -71,6 +105,13 @@ type GoalValuation struct {
 type Valuation struct {
 	UserID      uuid.UUID `json:"user_id"`
 	GeneratedAt time.Time `json:"generated_at"`
+
+	// AsOfLedger is the indexed ledger this valuation's underlying positions
+	// were read as of. Zero when Staleness is StalenessUnknown — a caller
+	// must check Staleness before trusting AsOfLedger as a real ledger
+	// number, since ledger 0 is otherwise indistinguishable from "unset."
+	AsOfLedger uint64    `json:"as_of_ledger"`
+	Staleness  Staleness `json:"staleness"`
 
 	TotalValueUSDC       decimal.Decimal `json:"total_value_usdc"`
 	PrincipalUSDC        decimal.Decimal `json:"principal_usdc"`

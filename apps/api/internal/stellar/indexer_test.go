@@ -3,12 +3,104 @@ package stellar
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
+	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 )
+
+// TestStartEventIndexer_JoinsWaitGroupOnCancellation is the issue #786
+// regression test: the caller's shutdown WaitGroup must not return from
+// Wait() until the indexer's own goroutine has actually observed context
+// cancellation and returned, not merely had its context cancelled.
+func TestStartEventIndexer_JoinsWaitGroupOnCancellation(t *testing.T) {
+	db, _, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	sysRepo := newStubSysRepo()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+
+	StartEventIndexer(ctx, logger, db, sysRepo, IndexerOptions{
+		RPCURL: "https://example.invalid/soroban/rpc",
+	}, &wg)
+
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// The goroutine observed ctx.Done() and returned before its next
+		// tick, exactly as PollEvents' per-event transaction guarantees
+		// require: shutdown must not race an in-flight poll.
+	case <-time.After(2 * time.Second):
+		t.Fatal("wg.Wait() did not return after the indexer's context was cancelled")
+	}
+}
+
+// TestStartEventIndexer_NilWaitGroupIsSafe confirms the nil-wg path (every
+// call site that has no shutdown coordination to do) still starts and stops
+// cleanly rather than nil-pointer panicking on wg.Add/wg.Done.
+func TestStartEventIndexer_NilWaitGroupIsSafe(t *testing.T) {
+	db, _, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	sysRepo := newStubSysRepo()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	assert.NotPanics(t, func() {
+		StartEventIndexer(ctx, logger, db, sysRepo, IndexerOptions{
+			RPCURL: "https://example.invalid/soroban/rpc",
+		}, nil)
+	})
+}
+
+// TestStartEventIndexer_EmptyRPCURLDisablesIndexer confirms the disabled
+// path (no RPC configured) still accepts a wg without leaking an Add(1)
+// that is never matched by a Done(), which would hang any caller's
+// wg.Wait() forever.
+func TestStartEventIndexer_EmptyRPCURLDisablesIndexer(t *testing.T) {
+	db, _, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	sysRepo := newStubSysRepo()
+
+	var wg sync.WaitGroup
+	StartEventIndexer(context.Background(), logger, db, sysRepo, IndexerOptions{
+		RPCURL: "",
+	}, &wg)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wg.Wait() hung: StartEventIndexer must not Add(1) without a matching Done() when disabled")
+	}
+}
 
 func TestApplyIndexedEvent_Deposit_ProcessesOnce(t *testing.T) {
 	db, mock, err := sqlmock.New()

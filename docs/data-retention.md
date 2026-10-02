@@ -46,7 +46,7 @@ answer to work from instead of having to make the call under a deadline.
 | Audit logs | `audit_logs` | Indefinite | None — exempt by design | Exempt (see below) |
 | Processed chain events | `processed_events` | 90 days | Not yet implemented | Stated, not yet enforced |
 | Performance snapshots | performance snapshot tables | 2 years | Not yet implemented | Stated, not yet enforced |
-| Account deletion (user-initiated) | cross-table | N/A — see below | Not yet implemented | Stated, not yet enforced |
+| Account deletion (user-initiated) | cross-table | N/A — user requested hard/soft erasure of PII & portfolio metadata, subject to regulatory / financial audit holds | Not implemented — no account-deletion path exists in this codebase | **Not implemented — mainnet launch blocker** |
 
 ### Activity events — 180 days, enforced
 
@@ -127,7 +127,7 @@ while keeping rolled-up minute/hour/day aggregates) and needs its cutoff
 reconciled against that existing mechanism rather than introduced as an
 independent, possibly-conflicting deletion path.
 
-### Account deletion (user-initiated) — not yet enforced
+### Account deletion (user-initiated) — not implemented, mainnet launch blocker
 
 There is currently no account-deletion path in this codebase at all — a user
 cannot request their account be closed and their data removed. This is a
@@ -136,7 +136,10 @@ balances that must be settled or transferred before an account can close,
 and every category above needs its own deletion-vs-anonymisation answer
 applied in the context of "this whole account is going away," not just "this
 one row aged out"). Flagged here as the gap it is rather than silently
-absent from the policy.
+absent from the policy — this is a real, falsifiable compliance gap, not a
+reviewed-and-closed item, and it must be built and reviewed before mainnet
+handles real user funds and PII. No open issue currently tracks building
+this; one should be filed before mainnet launch planning finalizes.
 
 ## Deletion is itself audit-logged
 

@@ -1,5 +1,5 @@
-use soroban_sdk::{panic_with_error, Address, Env, Vec};
 use nester_common::{AssetConfig, BasketValuation, ContractError, PriceInfo};
+use soroban_sdk::{panic_with_error, Address, Env, Vec};
 
 /// Maximum number of assets allowed in a multi-asset basket
 pub const MAX_BASKET_SIZE: u32 = 10;
@@ -33,11 +33,11 @@ pub fn validate_basket_config(env: &Env, assets: &Vec<AssetConfig>) -> Result<()
         total_weight = total_weight
             .checked_add(asset.target_weight_bps)
             .ok_or(ContractError::ArithmeticOverflow)?;
-        
+
         if asset.target_weight_bps == 0 {
             return Err(ContractError::InvalidAmount);
         }
-        
+
         if asset.max_deposit_cap <= 0 {
             return Err(ContractError::InvalidAmount);
         }
@@ -90,17 +90,13 @@ pub fn calculate_basket_value(
             let scaled_balance = balance
                 .checked_div(10_i128.pow(asset.decimals))
                 .unwrap_or(0);
-            
-            scaled_balance
-                .checked_mul(price_info.price)
-                .unwrap_or(0)
+
+            scaled_balance.checked_mul(price_info.price).unwrap_or(0)
         };
 
-        total_value = total_value
-            .checked_add(asset_value)
-            .unwrap_or_else(|| {
-                panic_with_error!(env, ContractError::ArithmeticOverflow);
-            });
+        total_value = total_value.checked_add(asset_value).unwrap_or_else(|| {
+            panic_with_error!(env, ContractError::ArithmeticOverflow);
+        });
     }
 
     BasketValuation {
@@ -175,7 +171,7 @@ mod tests {
     fn test_validate_basket_config_success() {
         let env = Env::default();
         let mut assets = Vec::new(&env);
-        
+
         assets.push_back(AssetConfig {
             token: Address::generate(&env),
             target_weight_bps: 5000,
@@ -183,7 +179,7 @@ mod tests {
             price_feed_id: 1,
             max_deposit_cap: 1_000_000 * 10_i128.pow(7),
         });
-        
+
         assets.push_back(AssetConfig {
             token: Address::generate(&env),
             target_weight_bps: 5000,
@@ -199,7 +195,7 @@ mod tests {
     fn test_validate_basket_config_wrong_weight_sum() {
         let env = Env::default();
         let mut assets = Vec::new(&env);
-        
+
         assets.push_back(AssetConfig {
             token: Address::generate(&env),
             target_weight_bps: 6000, // Wrong total (6000 + 5000 = 11000)
@@ -207,7 +203,7 @@ mod tests {
             price_feed_id: 1,
             max_deposit_cap: 1_000_000 * 10_i128.pow(7),
         });
-        
+
         assets.push_back(AssetConfig {
             token: Address::generate(&env),
             target_weight_bps: 5000,
@@ -260,7 +256,7 @@ mod tests {
         });
 
         let valuation = calculate_basket_value(&env, &assets, &balances, &prices);
-        
+
         // Expected: 1000 * $1.00 + 10000 * $0.10 = $2000
         assert_eq!(valuation.total_value, 2000 * 10_i128.pow(7));
         assert!(valuation.is_valid);
@@ -269,19 +265,19 @@ mod tests {
     #[test]
     fn test_price_deviation_validation() {
         let env = Env::default();
-        
+
         // Normal case: 5% deviation (within 10% limit)
         assert!(validate_price_deviation(&env, 105, 100).is_ok());
-        
+
         // Edge case: exactly 10% deviation (should pass)
         assert!(validate_price_deviation(&env, 110, 100).is_ok());
-        
+
         // Violation: 15% deviation (exceeds 10% limit)
         assert_eq!(
             validate_price_deviation(&env, 115, 100).unwrap_err(),
             ContractError::SlippageExceeded
         );
-        
+
         // First price (no previous price)
         assert!(validate_price_deviation(&env, 100, 0).is_ok());
     }
@@ -290,10 +286,13 @@ mod tests {
     fn test_normalize_to_usdc_decimals() {
         // Same decimals (7)
         assert_eq!(normalize_to_usdc_decimals(1000_0000000, 7), 1000_0000000);
-        
+
         // More decimals (18 -> 7, divide by 10^11)
-        assert_eq!(normalize_to_usdc_decimals(1000_000000000000000000, 18), 1000_0000000);
-        
+        assert_eq!(
+            normalize_to_usdc_decimals(1000_000000000000000000, 18),
+            1000_0000000
+        );
+
         // Fewer decimals (6 -> 7, multiply by 10)
         assert_eq!(normalize_to_usdc_decimals(1000_000000, 6), 1000_0000000);
     }

@@ -105,7 +105,35 @@ type sloCollectors struct {
 	reconcileLastRunAge     prometheus.Gauge
 	pendingSubmissions      prometheus.Gauge
 	pendingSubmissionOldest prometheus.Gauge
+
+	// Synthetic canary probe (nester#1390). A single counter and histogram
+	// record the outcome and latency of each scheduled deposit→withdraw round
+	// trip, making a probe failure immediately visible as a Prometheus alert
+	// rather than waiting for a user report.
+	canaryProbesTotal    *prometheus.CounterVec
+	canaryProbeDuration  *prometheus.HistogramVec
+	canaryLastProbeAge   prometheus.Gauge
 }
+
+// CanaryOutcome is the terminal classification of one synthetic probe run
+// (nester#1390). Three outcomes are enough to drive alerting: success, a
+// success that exceeded the configured latency threshold, and outright failure.
+// Keeping them separate means an alert can distinguish "the chain is slow" from
+// "the chain is down", which require different responses.
+type CanaryOutcome string
+
+const (
+	// CanaryOutcomeSucceeded means the deposit and withdrawal both completed
+	// within the configured latency threshold.
+	CanaryOutcomeSucceeded CanaryOutcome = "succeeded"
+	// CanaryOutcomeSlow means both operations completed but the round-trip
+	// exceeded the configured threshold. The probe passed functionally; the
+	// alert fires to give the team early warning of performance degradation.
+	CanaryOutcomeSlow CanaryOutcome = "slow"
+	// CanaryOutcomeFailed means at least one operation returned an error.
+	// This is the critical signal that something is broken for real users.
+	CanaryOutcomeFailed CanaryOutcome = "failed"
+)
 
 // ReconcileOutcome is the terminal classification of one reconciliation pass.
 //
@@ -236,6 +264,33 @@ func newSLOCollectors() *sloCollectors {
 			Name:      "pending_oldest_age_seconds",
 			Help:      "Age of the oldest transaction still awaiting a terminal status.",
 		}),
+
+		// Canary probe instrumentation (nester#1390). The counter and
+		// histogram together answer "are probes succeeding?" and "how long
+		// does a round trip take?". canaryLastProbeAge is the age of the most
+		// recent completed probe in seconds; alerting on it catches a stuck
+		// or disabled probe before it causes a blind spot.
+		canaryProbesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: Namespace,
+			Subsystem: "canary",
+			Name:      "probes_total",
+			Help:      "Outcomes of synthetic deposit/withdraw canary probes, by outcome.",
+		}, []string{"outcome"}),
+
+		canaryProbeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Subsystem: "canary",
+			Name:      "probe_duration_seconds",
+			Help:      "End-to-end latency of synthetic deposit/withdraw canary probes, by outcome.",
+			Buckets:   flowDurationBuckets,
+		}, []string{"outcome"}),
+
+		canaryLastProbeAge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "canary",
+			Name:      "last_probe_age_seconds",
+			Help:      "Seconds since the last canary probe completed (any outcome). Alerts when this exceeds the probe interval.",
+		}),
 	}
 }
 
@@ -248,6 +303,9 @@ func (c *sloCollectors) collectors() []prometheus.Collector {
 		c.reconcileLastRunAge,
 		c.pendingSubmissions,
 		c.pendingSubmissionOldest,
+		c.canaryProbesTotal,
+		c.canaryProbeDuration,
+		c.canaryLastProbeAge,
 	}
 }
 
@@ -345,4 +403,18 @@ func (m *Metrics) SetPendingSubmissions(count int, oldest time.Duration) {
 		return
 	}
 	m.slo.pendingSubmissionOldest.Set(oldest.Seconds())
+}
+
+// RecordCanaryProbe records the outcome and latency of one synthetic
+// deposit/withdraw probe run (nester#1390). It also resets the last-probe-age
+// gauge so an alert can distinguish "probe ran and failed" from "probe stopped
+// running entirely".
+func (m *Metrics) RecordCanaryProbe(outcome CanaryOutcome, duration time.Duration) {
+	if m == nil {
+		return
+	}
+
+	m.slo.canaryProbesTotal.WithLabelValues(string(outcome)).Inc()
+	m.slo.canaryProbeDuration.WithLabelValues(string(outcome)).Observe(duration.Seconds())
+	m.slo.canaryLastProbeAge.Set(0)
 }

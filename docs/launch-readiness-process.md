@@ -275,6 +275,21 @@ Once resolved, add to register:
 
 ### Before Major Release (e.g., mainnet deployment)
 
+#### Controlled deposit rollout
+
+The vault deposit gate is disabled by default. Before opening mainnet deposits,
+an admin can stage a cohort without changing the deposit API:
+
+1. Add each invited wallet with `set_deposit_allowlisted(caller, wallet, true)`.
+2. Enable enforcement with `set_deposit_allowlist_enabled(caller, true)`.
+3. Verify an invited wallet can deposit and an unlisted wallet is rejected.
+4. Add later cohorts with `set_deposit_allowlisted`; disable the gate only after
+   the controlled rollout is complete.
+
+The gate applies to both flexible and time-locked deposits because the latter
+reuses the vault's common deposit path. Allowlist changes require the vault
+admin's Soroban authorization.
+
 1. **Run verification script**: `node scripts/verify-prd-refs.js`
    - All Resolved entries must have valid evidence
    - No "— (" marks in Evidence column

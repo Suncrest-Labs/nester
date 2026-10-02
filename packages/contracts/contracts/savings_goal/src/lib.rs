@@ -77,6 +77,50 @@ pub struct Goal {
     pub created_at: u64,
 }
 
+/// A fixed-size, exact summary of a goal's contribution timeline, updated
+/// incrementally by every `contribute()` call (issue #819).
+///
+/// This registry does not store a per-contribution history: an unbounded
+/// list would grow storage rent and read cost with every deposit and would
+/// need re-scanning at claim time. This summary costs the same constant
+/// amount on every `contribute()` and every read, and is exact (not an
+/// approximation) for every field it tracks — see
+/// `goal_effort::fold_timeline` for a proof that replaying an explicit
+/// contribution list produces the identical summary.
+#[contracttype]
+#[derive(Clone, Debug, Default)]
+pub struct ContributionStats {
+    /// Total number of `contribute()` calls recorded for this goal.
+    pub contribution_count: u32,
+    /// Number of distinct 7-day periods (since `created_at`) in which at
+    /// least one contribution landed.
+    pub distinct_periods: u32,
+    /// Bitmask of which 7-day periods (since `created_at`) have already
+    /// contributed to `distinct_periods`, so a second deposit in the same
+    /// period does not double count it. Bounded to 64 periods (~1.2 years);
+    /// a goal running longer than that stops gaining new distinct-period
+    /// credit, which only makes the anti-gaming check harder to satisfy,
+    /// never easier.
+    periods_seen_mask: u64,
+    /// The largest single contribution ever recorded for this goal.
+    pub largest_contribution: i128,
+    /// The exact time-integral of the contributed balance, in
+    /// amount-seconds: sum over every interval between contributions (or
+    /// between the last contribution and now) of `balance * duration`.
+    /// This is the effort metric's raw input — a balance held for twice as
+    /// long contributes twice the area, matching the issue's requirement
+    /// that effort scale with sustained saving, not just the final total.
+    pub balance_time_integral: i128,
+    /// Ledger timestamp this summary was last updated at, needed to accrue
+    /// the integral's final open interval.
+    pub last_updated_at: u64,
+    /// Ledger timestamp the goal transitioned to `Completed`, or 0 if it
+    /// has not. `Goal` itself only carries current status, not history, so
+    /// this is the durable record a claim contract needs to check
+    /// on-time completion against the goal's deadline.
+    pub completed_at: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct GoalCreatedEventData {
@@ -128,6 +172,8 @@ enum DataKey {
     ContributorAmount(soroban_sdk::BytesN<32>, Address),
     /// Address of the deployed vault factory, used to validate vaults.
     VaultFactory,
+    /// goal_id → ContributionStats
+    ContributionStats(soroban_sdk::BytesN<32>),
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +222,11 @@ impl SavingsGoalContract {
     ) {
         owner.require_auth();
 
-        if env.storage().instance().has(&DataKey::Goal(goal_id.clone())) {
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::Goal(goal_id.clone()))
+        {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
         if target_amount <= 0 {
@@ -228,7 +278,12 @@ impl SavingsGoalContract {
     /// * [`ContractError::InvalidOperation`] if the goal is not `Active`.
     /// * [`ContractError::ExceedsLimit`] if `contributor` is new and the goal
     ///   already tracks [`MAX_CONTRIBUTORS_PER_GOAL`] distinct contributors.
-    pub fn contribute(env: Env, contributor: Address, goal_id: soroban_sdk::BytesN<32>, amount: i128) {
+    pub fn contribute(
+        env: Env,
+        contributor: Address,
+        goal_id: soroban_sdk::BytesN<32>,
+        amount: i128,
+    ) {
         contributor.require_auth();
 
         if amount <= 0 {
@@ -241,6 +296,7 @@ impl SavingsGoalContract {
         }
 
         record_contribution(&env, &goal_id, &mut goal, &contributor, amount);
+        record_contribution_stats(&env, &goal_id, &goal, amount);
 
         goal.contributed += amount;
 
@@ -366,6 +422,16 @@ impl SavingsGoalContract {
         get_goal_or_panic(&env, &goal_id).contributors
     }
 
+    /// The exact, incrementally-maintained contribution-timeline summary for
+    /// `goal_id` (issue #819). Defaulted (all zero) for a goal that has
+    /// never received a contribution.
+    pub fn get_contribution_stats(env: Env, goal_id: soroban_sdk::BytesN<32>) -> ContributionStats {
+        env.storage()
+            .instance()
+            .get(&DataKey::ContributionStats(goal_id))
+            .unwrap_or_default()
+    }
+
     // -----------------------------------------------------------------------
     // Role management — delegates to nester_access_control
     // -----------------------------------------------------------------------
@@ -426,6 +492,57 @@ fn record_contribution(
     env.storage().instance().set(&key, &(prev + amount));
 }
 
+/// Number of seconds in one contribution "period", used to bucket
+/// contributions into distinct periods for #819's anti-gaming rule and to
+/// bound `ContributionStats::periods_seen_mask` to a fixed 64 bits.
+const CONTRIBUTION_PERIOD_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+/// Update `goal_id`'s [`ContributionStats`] for a new contribution of
+/// `amount` landing at the current ledger time.
+///
+/// Called with the *pre-contribution* balance still in `goal.contributed`
+/// (i.e. before the caller adds `amount` to it), so the time-integral
+/// correctly attributes the interval since the last update to the balance
+/// that was actually held during that interval, not the balance after this
+/// contribution lands.
+fn record_contribution_stats(
+    env: &Env,
+    goal_id: &soroban_sdk::BytesN<32>,
+    goal: &Goal,
+    amount: i128,
+) {
+    let key = DataKey::ContributionStats(goal_id.clone());
+    let mut stats: ContributionStats = env.storage().instance().get(&key).unwrap_or_default();
+    let now = env.ledger().timestamp();
+
+    let since = if stats.last_updated_at == 0 {
+        goal.created_at
+    } else {
+        stats.last_updated_at
+    };
+    let elapsed = now.saturating_sub(since);
+    stats.balance_time_integral = stats
+        .balance_time_integral
+        .saturating_add(goal.contributed.saturating_mul(elapsed as i128));
+
+    stats.contribution_count += 1;
+    if amount > stats.largest_contribution {
+        stats.largest_contribution = amount;
+    }
+
+    let period = (now.saturating_sub(goal.created_at)) / CONTRIBUTION_PERIOD_SECONDS;
+    if period < 64 {
+        let bit = 1u64 << period;
+        if stats.periods_seen_mask & bit == 0 {
+            stats.periods_seen_mask |= bit;
+            stats.distinct_periods += 1;
+        }
+    }
+
+    stats.last_updated_at = now;
+    env.storage().instance().set(&key, &stats);
+}
+
 /// Set the bit for any milestone threshold newly crossed by `goal.contributed`
 /// and emit `goal_milestone_reached` for each. A bit can only transition from
 /// unset to set once, so this is idempotent across retried/duplicate calls.
@@ -453,11 +570,34 @@ fn attest_new_milestones(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mu
 
 fn complete_goal(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mut Goal) {
     goal.status = GoalStatus::Completed;
+    let now = env.ledger().timestamp();
+
+    // Close out the time-integral's final open interval (the balance held
+    // between the last contribution and this completion) and record
+    // completion. Not folded into record_contribution_stats: finalize_goal
+    // can complete a goal with no new contribution, potentially long after
+    // the last one, so this closing interval needs its own accrual step
+    // regardless of which path completed the goal.
+    let key = DataKey::ContributionStats(goal_id.clone());
+    let mut stats: ContributionStats = env.storage().instance().get(&key).unwrap_or_default();
+    let since = if stats.last_updated_at == 0 {
+        goal.created_at
+    } else {
+        stats.last_updated_at
+    };
+    let elapsed = now.saturating_sub(since);
+    stats.balance_time_integral = stats
+        .balance_time_integral
+        .saturating_add(goal.contributed.saturating_mul(elapsed as i128));
+    stats.last_updated_at = now;
+    stats.completed_at = now;
+    env.storage().instance().set(&key, &stats);
+
     env.events().publish(
         (SAVINGS_GOAL, GOAL_COMPLETED, goal_id.clone()),
         GoalCompletedEventData {
             contributed: goal.contributed,
-            timestamp: env.ledger().timestamp(),
+            timestamp: now,
         },
     );
 }

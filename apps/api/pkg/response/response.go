@@ -3,6 +3,8 @@ package response
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/suncrestlabs/nester/apps/api/pkg/apperror"
 )
 
 type Response struct {
@@ -13,9 +15,11 @@ type Response struct {
 }
 
 type ErrorBody struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id,omitempty"`
+	Code      string                 `json:"code"`
+	Message   string                 `json:"message"`
+	RequestID string                 `json:"request_id,omitempty"`
+	Retryable bool                   `json:"retryable"`
+	Details   []apperror.FieldDetail `json:"details,omitempty"`
 }
 
 type Meta struct {
@@ -100,6 +104,22 @@ func ErrWithRequestID(status int, code string, message string, requestID string)
 	}
 }
 
+// FromAppError builds the standard error envelope from an *apperror.AppError
+// (issue #1048): Retryable and, for validation errors, per-field Details are
+// derived from the error's Kind rather than the caller having to know them.
+func FromAppError(err *apperror.AppError, requestID string) Response {
+	return Response{
+		Success: false,
+		Error: &ErrorBody{
+			Code:      err.Code,
+			Message:   err.Message,
+			RequestID: requestID,
+			Retryable: err.Kind.Retryable(),
+			Details:   err.Details,
+		},
+	}
+}
+
 // NotFound returns a standard Not Found error response
 func NotFound(resource string) Response {
 	return Response{
@@ -131,4 +151,3 @@ func WriteJSON(w http.ResponseWriter, status int, data Response) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }
-

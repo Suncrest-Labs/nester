@@ -4,7 +4,7 @@
 extern crate std;
 
 use nester_access_control::Role;
-use nester_common::{build_payload_bytes, Attestation, AttestedField, AttestationPayload};
+use nester_common::{build_payload_bytes, Attestation, AttestationPayload, AttestedField};
 use nester_test_utils::{register_reentrant_strategy, HostileVaultHarness, NesterHarness};
 use soroban_sdk::{
     symbol_short,
@@ -130,10 +130,20 @@ fn registered_strategy_rebalance_invokes_allowlisted_callee() {
 
     let aave = symbol_short!("aave");
     let blend = symbol_short!("blend");
-    h.registry()
-        .register_source(&h.admin, &aave, &h.create_user(), &None, &nester_common::ProtocolType::Lending);
-    h.registry()
-        .register_source(&h.admin, &blend, &h.create_user(), &None, &nester_common::ProtocolType::Lending);
+    h.registry().register_source(
+        &h.admin,
+        &aave,
+        &h.create_user(),
+        &None,
+        &nester_common::ProtocolType::Lending,
+    );
+    h.registry().register_source(
+        &h.admin,
+        &blend,
+        &h.create_user(),
+        &None,
+        &nester_common::ProtocolType::Lending,
+    );
     h.strategy()
         .update_strategy_params(&h.admin, &500u32, &10_000u32, &100u32);
     let weights = soroban_sdk::vec![
@@ -416,7 +426,7 @@ fn depositor_who_exits_before_distribution_is_not_retroactively_affected() {
 /// Generate a fresh ed25519 signing key and return the raw secret bytes and
 /// raw public-key bytes (32 bytes each).
 fn generate_ed25519_keypair() -> ([u8; 32], [u8; 32]) {
-    use ed25519_dalek::{SigningKey};
+    use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
     let signing_key = SigningKey::generate(&mut OsRng);
     let secret_bytes: [u8; 32] = signing_key.to_bytes();
@@ -459,22 +469,21 @@ fn make_attestation(
 /// attester, returning the keypair and source id.
 fn setup_attested_registry() -> (
     NesterHarness,
-    [u8; 32],  // secret key
-    [u8; 32],  // public key
+    [u8; 32], // secret key
+    [u8; 32], // public key
     soroban_sdk::Symbol,
 ) {
     let h = NesterHarness::setup();
     let (secret, public) = generate_ed25519_keypair();
 
     let source_id = symbol_short!("aave");
-    h.registry()
-        .register_source(
-            &h.admin,
-            &source_id,
-            &h.create_user(),
-            &None,
-            &nester_common::ProtocolType::Lending,
-        );
+    h.registry().register_source(
+        &h.admin,
+        &source_id,
+        &h.create_user(),
+        &None,
+        &nester_common::ProtocolType::Lending,
+    );
 
     h.registry().register_attester(
         &h.admin,
@@ -751,8 +760,7 @@ fn attested_value_that_violates_deviation_limit_is_rejected() {
     );
 
     // Now tighten the deviation threshold to 100 bps.
-    h.registry()
-        .set_apy_deviation_threshold(&h.admin, &100u32);
+    h.registry().set_apy_deviation_threshold(&h.admin, &100u32);
 
     // Attempt to set APY = 9999 bps — change of 9499 bps, far exceeds 100 bps.
     let out_of_band_apy: u32 = 9_999;
@@ -808,7 +816,7 @@ fn tampered_payload_signature_is_rejected() {
     h.registry().update_apy_attested(
         &h.admin,
         &source_id,
-        &9000,    // different value from what was signed
+        &9000, // different value from what was signed
         &valid_from,
         &valid_until,
         &attestations,
@@ -822,14 +830,13 @@ fn tampered_payload_signature_is_rejected() {
 fn update_status_works_without_attesters() {
     let h = NesterHarness::setup();
     let source_id = symbol_short!("aave");
-    h.registry()
-        .register_source(
-            &h.admin,
-            &source_id,
-            &h.create_user(),
-            &None,
-            &nester_common::ProtocolType::Lending,
-        );
+    h.registry().register_source(
+        &h.admin,
+        &source_id,
+        &h.create_user(),
+        &None,
+        &nester_common::ProtocolType::Lending,
+    );
 
     // No attesters registered — but update_status must still work.
     h.registry()
@@ -848,14 +855,13 @@ fn two_of_two_threshold_succeeds() {
     let (secret2, public2) = generate_ed25519_keypair();
 
     let source_id = symbol_short!("blend");
-    h.registry()
-        .register_source(
-            &h.admin,
-            &source_id,
-            &h.create_user(),
-            &None,
-            &nester_common::ProtocolType::Lending,
-        );
+    h.registry().register_source(
+        &h.admin,
+        &source_id,
+        &h.create_user(),
+        &None,
+        &nester_common::ProtocolType::Lending,
+    );
     h.registry().register_attester(
         &h.admin,
         &BytesN::from_array(&h.env, &public1),
@@ -900,4 +906,390 @@ fn two_of_two_threshold_succeeds() {
 
     let source = h.registry().get_source(&source_id);
     assert_eq!(source.current_apy_bps, new_apy);
+}
+
+// ---------------------------------------------------------------------------
+// Time-vested yield reports: sniping resistance (issue #803)
+//
+// report_yield no longer applies a positive amount to TotalAssets/share
+// price instantly; it vests linearly over `get_yield_vesting_period()`
+// (default 24h). These exercise the actual attack the feature exists to
+// prevent — depositing right before a report, then withdrawing quickly, to
+// capture disproportionate share-price appreciation from that report —
+// against the REAL payout path (deposit/withdraw/harvest), not a parallel
+// accounting view, since this design keeps yield inside share price rather
+// than tracking a separate per-user entitlement.
+// ---------------------------------------------------------------------------
+
+fn grant_yield_reporter(h: &NesterHarness) {
+    h.vault().grant_role(&h.admin, &h.admin, &Role::Manager);
+}
+
+fn accrue_yield_for_test(h: &NesterHarness, amount: i128) {
+    h.mint_deposit_tokens(&h.vault_id, amount);
+    h.vault().report_yield(&h.admin, &amount);
+}
+
+fn advance_time(h: &NesterHarness, seconds: u64) {
+    let now = h.env.ledger().timestamp();
+    h.env.ledger().set_timestamp(now + seconds);
+}
+
+/// Zero every fee and disable the circuit breaker so the sniping-resistance
+/// assertions below isolate share-price/vesting arithmetic, matching
+/// share_price_tests.rs's convention for the same reason.
+fn isolate_share_price(h: &NesterHarness) {
+    h.vault().set_fee_config(
+        &h.admin,
+        &vault_contract::FeeConfig {
+            performance_fee_bps: 0,
+            management_fee_bps: 0,
+            early_withdrawal_fee_bps: 0,
+            treasury_address: h.treasury_id.clone(),
+        },
+    );
+    h.vault().set_circuit_breaker_config(
+        &h.admin,
+        &vault_contract::CircuitBreakerConfig {
+            threshold_bps: 10_000,
+            window_seconds: 7_200,
+        },
+    );
+}
+
+/// `VaultContract::withdraw` returns the CALLER'S REMAINING share balance,
+/// not the assets paid out (see `withdraw_internal`'s final `new_user_shares`
+/// return) — so these tests measure actual payout via the deposit token's
+/// own balance delta, exactly like `fee_tests.rs`'s treasury-payout
+/// assertions do, rather than trusting withdraw's return value as a payout
+/// amount.
+fn withdraw_all_and_measure_payout(h: &NesterHarness, user: &Address) -> i128 {
+    let before = token::Client::new(&h.env, &h.deposit_token_id).balance(user);
+    let shares = h.token().balance(user);
+    h.vault().withdraw(user, &shares, &0);
+    let after = token::Client::new(&h.env, &h.deposit_token_id).balance(user);
+    after - before
+}
+
+#[test]
+fn snipe_deposit_immediately_before_report_then_immediate_withdraw_captures_almost_nothing() {
+    let h = NesterHarness::setup();
+    grant_yield_reporter(&h);
+    isolate_share_price(&h);
+
+    let long_holder = h.create_user();
+    h.mint_deposit_tokens(&long_holder, 10_000_000);
+    h.vault().deposit(&long_holder, &10_000_000, &0);
+
+    // Attacker deposits an equal amount immediately before the report.
+    let attacker = h.create_user();
+    h.mint_deposit_tokens(&attacker, 10_000_000);
+    h.vault().deposit(&attacker, &10_000_000, &0);
+
+    accrue_yield_for_test(&h, 2_000_000);
+
+    // The classic snipe: withdraw again immediately (same ledger timestamp),
+    // before any real time has passed for the report to vest.
+    let attacker_out = withdraw_all_and_measure_payout(&h, &attacker);
+    let attacker_profit = attacker_out - 10_000_000;
+
+    // Bounded by construction: at t=0 into a 24h vesting window, essentially
+    // nothing has vested yet, so the attacker's payout is at most their
+    // original principal plus a negligible rounding sliver — nowhere near
+    // their naive 1,000,000 (half the report) "fair per-share slice".
+    assert!(
+        attacker_profit < 100,
+        "attacker profit from an instant snipe-and-exit must be near zero, got {attacker_profit}"
+    );
+}
+
+#[test]
+fn snipe_deposit_captures_only_the_fraction_of_the_report_that_vests_before_exit() {
+    let h = NesterHarness::setup();
+    grant_yield_reporter(&h);
+    isolate_share_price(&h);
+
+    let long_holder = h.create_user();
+    h.mint_deposit_tokens(&long_holder, 10_000_000);
+    h.vault().deposit(&long_holder, &10_000_000, &0);
+
+    let attacker = h.create_user();
+    h.mint_deposit_tokens(&attacker, 10_000_000);
+    h.vault().deposit(&attacker, &10_000_000, &0);
+
+    accrue_yield_for_test(&h, 2_000_000); // vests over 24h by default
+
+    // Attacker holds for only 1/24th of the vesting window (1 hour) before
+    // exiting — a snipe that at least waits a little, rather than the same
+    // instant.
+    advance_time(&h, 60 * 60);
+    let attacker_out = withdraw_all_and_measure_payout(&h, &attacker);
+    let attacker_profit = attacker_out - 10_000_000;
+
+    // At most ~1/24th of the attacker's fair per-share slice of the full
+    // report (1,000,000) should have vested and be capturable: comfortably
+    // under half of a full 24h holder's eventual share, with real headroom
+    // for the fee/rounding this vault also applies on withdrawal.
+    assert!(
+        attacker_profit < 100_000,
+        "attacker profit after holding only 1/24 of the vesting window must be far below the full per-share report share (1,000,000), got {attacker_profit}"
+    );
+}
+
+#[test]
+fn long_tenured_holder_who_waits_out_the_vesting_window_captures_the_full_report() {
+    let h = NesterHarness::setup();
+    grant_yield_reporter(&h);
+    isolate_share_price(&h);
+
+    let long_holder = h.create_user();
+    h.mint_deposit_tokens(&long_holder, 10_000_000);
+    h.vault().deposit(&long_holder, &10_000_000, &0);
+
+    accrue_yield_for_test(&h, 1_000_000);
+
+    // Nobody else ever deposits; the long holder waits the full vesting
+    // window out before withdrawing everything.
+    advance_time(&h, 24 * 60 * 60);
+    let out = withdraw_all_and_measure_payout(&h, &long_holder);
+    let profit = out - 10_000_000;
+
+    assert_eq!(
+        profit, 1_000_000,
+        "a holder who genuinely waits out the full vesting window captures the entire report"
+    );
+}
+
+#[test]
+fn depositing_after_a_report_still_shares_in_whatever_has_not_yet_vested() {
+    // Unlike a per-user checkpoint model, vesting is a property of the
+    // STREAM, not of any one address: once yield is inside share price,
+    // whoever holds shares while the remainder vests shares in it — this is
+    // an intentional, documented trade-off of choosing "vest into share
+    // price" over "track individual entitlement" (see report_yield's doc
+    // comment). What this test pins down is that the SHARE captured is
+    // bounded by how much is actually still vesting, not the whole
+    // historical report.
+    let h = NesterHarness::setup();
+    grant_yield_reporter(&h);
+    isolate_share_price(&h);
+
+    let long_holder = h.create_user();
+    h.mint_deposit_tokens(&long_holder, 10_000_000);
+    h.vault().deposit(&long_holder, &10_000_000, &0);
+
+    accrue_yield_for_test(&h, 2_400_000); // 24h window: 100,000/hour
+
+    // Half the window elapses with only the long holder present.
+    advance_time(&h, 12 * 60 * 60);
+
+    // A late depositor joins now, matching the long holder's shares.
+    let late = h.create_user();
+    h.mint_deposit_tokens(&late, 10_000_000);
+    // Half the report (1,200,000) has already vested into share price by
+    // now, so the late depositor's shares cost proportionally more — they
+    // are buying INTO the appreciated price, not getting it for free.
+    h.vault().deposit(&late, &10_000_000, &0);
+
+    // The remaining window elapses; the remaining half of the report vests
+    // while both hold equal shares, so it splits evenly between them.
+    advance_time(&h, 12 * 60 * 60);
+
+    let long_out = withdraw_all_and_measure_payout(&h, &long_holder);
+    let late_out = withdraw_all_and_measure_payout(&h, &late);
+
+    // The long holder's total profit (bought in before any vesting, present
+    // for the whole window) must exceed the late depositor's (bought in
+    // after half had already vested into the price they paid).
+    assert!(
+        long_out - 10_000_000 > late_out - 10_000_000,
+        "a holder present for the full vesting window must out-earn one who joined halfway through: long={} late={}",
+        long_out - 10_000_000,
+        late_out - 10_000_000
+    );
+}
+
+#[test]
+fn a_second_report_folds_in_the_first_reports_unvested_remainder() {
+    let h = NesterHarness::setup();
+    grant_yield_reporter(&h);
+    isolate_share_price(&h);
+
+    let user = h.create_user();
+    h.mint_deposit_tokens(&user, 10_000_000);
+    h.vault().deposit(&user, &10_000_000, &0);
+
+    accrue_yield_for_test(&h, 1_000_000);
+    advance_time(&h, 60 * 60); // 1 hour into the first 24h stream
+
+    // A second report lands before the first has finished vesting.
+    accrue_yield_for_test(&h, 500_000);
+
+    let pending = h.vault().pending_vesting_yield();
+    // Approximately the unvested remainder of report 1 (~958,333) plus all
+    // of report 2 (500,000) — comfortably more than either report alone,
+    // proving the first report's progress was neither discarded nor
+    // double-counted (it would exceed 1,500,000 only if genuinely
+    // double-applied).
+    assert!(
+        pending > 1_300_000 && pending <= 1_500_000,
+        "expected the unvested remainder of report 1 plus all of report 2, got {pending}"
+    );
+}
+
+#[test]
+fn impairment_applies_immediately_without_vesting() {
+    let h = NesterHarness::setup();
+    grant_yield_reporter(&h);
+    isolate_share_price(&h);
+
+    let user = h.create_user();
+    h.mint_deposit_tokens(&user, 10_000_000);
+    h.vault().deposit(&user, &10_000_000, &0);
+
+    accrue_yield_for_test(&h, 2_000_000);
+    advance_time(&h, 24 * 60 * 60); // fully vested
+
+    let before_loss = h
+        .vault()
+        .withdrawal_fee_preview(&user, &h.token().balance(&user));
+    let _ = before_loss;
+
+    // A loss is reported (negative amount) — unlike a gain, this must land
+    // immediately, not vest, so share price reflects the impairment right
+    // away rather than overstating holder value while it "vests down".
+    h.mint_deposit_tokens(&h.vault_id, 0); // no-op, keeps parity with accrue_yield_for_test's shape
+    h.vault().report_yield(&h.admin, &(-1_000_000));
+
+    let pending = h.vault().pending_vesting_yield();
+    assert_eq!(
+        pending, 0,
+        "an impairment must not be queued as a vesting stream; it applies to TotalAssets immediately"
+    );
+}
+
+#[test]
+fn withdrawing_immediately_after_a_fully_vested_report_pays_out_the_full_amount() {
+    let h = NesterHarness::setup();
+    grant_yield_reporter(&h);
+    isolate_share_price(&h);
+
+    let user = h.create_user();
+    h.mint_deposit_tokens(&user, 10_000_000);
+    h.vault().deposit(&user, &10_000_000, &0);
+
+    accrue_yield_for_test(&h, 500_000);
+    advance_time(&h, 24 * 60 * 60); // fully vested
+
+    let before = token::Client::new(&h.env, &h.deposit_token_id).balance(&user);
+    h.vault().withdraw(&user, &4_000_000, &0);
+    let out = token::Client::new(&h.env, &h.deposit_token_id).balance(&user) - before;
+    // 4/10 of principal (10,000,000) plus 4/10 of the fully-vested yield
+    // (500,000) = 4,000,000 + 200,000 = 4,200,000.
+    assert_eq!(
+        out, 4_200_000,
+        "a fully-vested report must be reflected in share price exactly like the pre-vesting instant-application model was"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Time-locked savings vault: adversarial scenarios (issue #802)
+// ---------------------------------------------------------------------------
+
+const LOCK_TIER_SECS: u64 = 30 * 86_400;
+
+#[test]
+fn breaking_a_lock_near_maturity_charges_a_much_smaller_penalty_than_breaking_immediately() {
+    // The linear decay is integer division on whole seconds, so breaking
+    // with only 1 second left out of a 30-day term floors to exactly zero
+    // bps (see contracts/vault/src/test.rs's
+    // break_lock_one_second_before_maturity_rounds_the_penalty_to_zero for
+    // the unit-level confirmation of that same floor). This test instead
+    // breaks with 1% of the term remaining, which is the smallest remaining
+    // fraction that still yields a nonzero, meaningfully decayed penalty —
+    // and confirms it, rather than a naive "1 second before maturity",
+    // actually demonstrates the decay end-to-end through the real harness.
+    // Two entirely separate harnesses (not two users sharing one vault) so
+    // that the baseline break's own penalty-retention (it stays in the
+    // vault and raises share price for remaining holders, by design) can
+    // never leak into the near-maturity scenario's own accounting.
+    let baseline_h = NesterHarness::setup();
+    let baseline_user = baseline_h.create_user();
+    baseline_h.mint_deposit_tokens(&baseline_user, 10_000_000);
+    let baseline_lock =
+        baseline_h
+            .vault()
+            .deposit_locked(&baseline_user, &10_000_000, &0, &LOCK_TIER_SECS);
+    let full_penalty_returned = baseline_h
+        .vault()
+        .break_lock(&baseline_user, &baseline_lock);
+    let full_penalty = 10_000_000 - full_penalty_returned;
+
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+    h.mint_deposit_tokens(&user, 10_000_000);
+    let lock_id = h
+        .vault()
+        .deposit_locked(&user, &10_000_000, &0, &LOCK_TIER_SECS);
+
+    advance_time(&h, LOCK_TIER_SECS - LOCK_TIER_SECS / 100);
+    let near_maturity_returned = h.vault().break_lock(&user, &lock_id);
+    let near_maturity_penalty = 10_000_000 - near_maturity_returned;
+
+    assert!(
+        near_maturity_penalty > 0,
+        "penalty must still be nonzero this close to maturity"
+    );
+    assert!(
+        near_maturity_penalty < full_penalty,
+        "penalty near maturity ({near_maturity_penalty}) must have decayed well below the day-one penalty ({full_penalty})"
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn opening_the_maximum_number_of_locks_rejects_the_next_one() {
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+    // MAX_OPEN_LOCKS_PER_USER = 20 — mint enough for 21 dust-sized locks.
+    h.mint_deposit_tokens(&user, nester_common::MIN_DEPOSIT_AMOUNT * 21);
+
+    for _ in 0..20 {
+        h.vault().deposit_locked(
+            &user,
+            &nester_common::MIN_DEPOSIT_AMOUNT,
+            &0,
+            &LOCK_TIER_SECS,
+        );
+    }
+    // The 21st simultaneously open lock must be rejected by the per-user cap.
+    h.vault().deposit_locked(
+        &user,
+        &nester_common::MIN_DEPOSIT_AMOUNT,
+        &0,
+        &LOCK_TIER_SECS,
+    );
+}
+
+#[test]
+fn emergency_withdraw_exits_a_locked_position_when_paused() {
+    // Issue #802's explicit acceptance criterion: emergency paths ignore
+    // locks entirely. emergency_withdraw operates on the user's total
+    // (flexible + locked) vault_token balance with no lock-awareness at
+    // all, so a locked depositor must be able to exit in full through it
+    // even while the vault is paused and their lock has not matured.
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+    h.mint_deposit_tokens(&user, 10_000_000);
+
+    h.vault()
+        .deposit_locked(&user, &10_000_000, &0, &LOCK_TIER_SECS);
+    h.vault().pause(&h.admin);
+
+    let returned = h.vault().emergency_withdraw(&user);
+    assert_eq!(
+        returned, 10_000_000,
+        "a locked position must exit in full through the emergency path, ignoring the lock and its unmatured status"
+    );
+    assert_eq!(h.vault().get_balance(&user), 0);
 }

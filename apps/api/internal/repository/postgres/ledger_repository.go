@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/ledger"
 )
@@ -248,7 +250,7 @@ func (r *LedgerRepository) PostEntries(ctx context.Context, entries []ledger.Ent
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := r.postEntriesTx(ctx, tx, entries); err != nil {
-		return err
+		return mapLedgerError(err)
 	}
 	return tx.Commit()
 }
@@ -261,7 +263,26 @@ func (r *LedgerRepository) PostEntriesTx(ctx context.Context, tx *sql.Tx, entrie
 	if tx == nil {
 		return errors.New("tx is required")
 	}
-	return r.postEntriesTx(ctx, tx, entries)
+	if err := r.postEntriesTx(ctx, tx, entries); err != nil {
+		return mapLedgerError(err)
+	}
+	return nil
+}
+
+// mapLedgerError translates a duplicate-key violation on the ledger_entries
+// idempotency index (uq_ledger_entries_domain_event_account, migration 122)
+// into ledger.ErrAlreadyPosted, so a retried request (webhook redelivery,
+// client retry) is treated as "already applied" rather than a hard failure
+// (nester#1309). Follows the same errors.As(*pgconn.PgError) pattern as
+// mapRepositoryError/mapUserError elsewhere in this package.
+func mapLedgerError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if pgErr.Code == "23505" && strings.Contains(pgErr.ConstraintName, "ledger_entries_domain_event_account") {
+			return ledger.ErrAlreadyPosted
+		}
+	}
+	return err
 }
 
 func (r *LedgerRepository) postEntriesTx(ctx context.Context, tx *sql.Tx, entries []ledger.Entry) error {

@@ -11,6 +11,29 @@ import {
   sanitizeContext,
   REDACTED,
 } from "@/lib/observability/sanitize";
+import {
+  setLastRequestId,
+  resetLastRequestId,
+} from "@/lib/observability/request-id";
+
+// Hoisted so the vi.mock factory below (itself hoisted above these imports at
+// runtime) can close over the same spies the tests assert against.
+const sentryMocks = vi.hoisted(() => ({
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
+  setTag: vi.fn(),
+  setContext: vi.fn(),
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  withScope: (cb: (scope: unknown) => void) =>
+    cb({
+      setTag: sentryMocks.setTag,
+      setContext: sentryMocks.setContext,
+    }),
+  captureException: sentryMocks.captureException,
+  captureMessage: sentryMocks.captureMessage,
+}));
 
 const WALLET = "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
 const CONTRACT = "CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
@@ -143,6 +166,20 @@ describe("buildErrorEvent", () => {
     expect(event).not.toHaveProperty("stack");
   });
 
+  it("is undefined when no X-Request-ID has been seen yet", () => {
+    resetLastRequestId();
+    const event = buildErrorEvent({ error: new Error("boom"), route: "/portfolio" });
+    expect(event.requestId).toBeUndefined();
+  });
+
+  it("includes the most recently seen X-Request-ID for correlation with backend logs", () => {
+    resetLastRequestId();
+    setLastRequestId("req-77f3");
+    const event = buildErrorEvent({ error: new Error("boom"), route: "/portfolio" });
+    expect(event.requestId).toBe("req-77f3");
+    resetLastRequestId();
+  });
+
   it("scrubs wallet addresses, balances and tokens out of the payload", () => {
     const event = buildErrorEvent({
       error: new Error(
@@ -210,5 +247,82 @@ describe("reportError", () => {
     expect(payload).not.toContain(JWT);
     expect(payload).not.toContain("9,900.12");
     expect(payload).not.toContain("9900.12");
+  });
+});
+
+describe("reportError -> Sentry sink", () => {
+  const { captureException, captureMessage, setTag, setContext } = sentryMocks;
+
+  const originalDsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
+
+  beforeEach(() => {
+    resetErrorReportDedupe();
+    resetLastRequestId();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    captureException.mockClear();
+    captureMessage.mockClear();
+    setTag.mockClear();
+    setContext.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalDsn === undefined) delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+    else process.env.NEXT_PUBLIC_SENTRY_DSN = originalDsn;
+  });
+
+  it("does not import or call the Sentry SDK when no DSN is configured", async () => {
+    delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+    reportError({ error: new Error("no dsn"), route: "/vaults", boundary: "vaults" });
+
+    // Give the (never-taken) dynamic-import path a chance to resolve before
+    // asserting a negative, so this isn't just passing by not having waited.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captureException).not.toHaveBeenCalled();
+    expect(captureMessage).not.toHaveBeenCalled();
+  });
+
+  it("forwards an Error to Sentry.captureException, tagged with boundary/category/route", async () => {
+    process.env.NEXT_PUBLIC_SENTRY_DSN = "https://key@o0.ingest.sentry.io/1";
+    setLastRequestId("req-99");
+
+    const error = new Error("vault sync failed");
+    reportError({ error, route: "/vaults", boundary: "vaults", context: { section: "vaults" } });
+
+    // reportToSentry's dynamic import + .then chain resolves asynchronously;
+    // poll rather than assume a fixed number of microtask ticks.
+    await vi.waitFor(() => expect(captureException).toHaveBeenCalled());
+
+    expect(captureException).toHaveBeenCalledWith(error);
+    expect(captureMessage).not.toHaveBeenCalled();
+    expect(setTag).toHaveBeenCalledWith("boundary", "vaults");
+    expect(setTag).toHaveBeenCalledWith("category", "render");
+    expect(setTag).toHaveBeenCalledWith("route", "/vaults");
+    expect(setTag).toHaveBeenCalledWith("request_id", "req-99");
+    expect(setContext).toHaveBeenCalledWith("client_error", { section: "vaults" });
+  });
+
+  it("does not tag request_id when no request has been observed", async () => {
+    process.env.NEXT_PUBLIC_SENTRY_DSN = "https://key@o0.ingest.sentry.io/1";
+    resetLastRequestId();
+
+    reportError({ error: new Error("boom"), route: "/vaults", boundary: "vaults" });
+    await vi.waitFor(() => expect(captureException).toHaveBeenCalled());
+
+    const requestIdCalls = setTag.mock.calls.filter(([key]) => key === "request_id");
+    expect(requestIdCalls).toHaveLength(0);
+  });
+
+  it("falls back to captureMessage for a non-Error thrown value, using the scrubbed message", async () => {
+    process.env.NEXT_PUBLIC_SENTRY_DSN = "https://key@o0.ingest.sentry.io/1";
+
+    reportError({ error: `failed for ${WALLET}`, route: "/vaults", boundary: "vaults" });
+    await vi.waitFor(() => expect(captureMessage).toHaveBeenCalled());
+
+    expect(captureException).not.toHaveBeenCalled();
+    expect(captureMessage).toHaveBeenCalledTimes(1);
+    const [message] = captureMessage.mock.calls[0];
+    expect(message).not.toContain(WALLET);
   });
 });

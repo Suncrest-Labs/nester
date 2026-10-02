@@ -170,11 +170,23 @@ func (e Engine) Apply(state GamificationState, event SavingEvent) (GamificationS
 		return state, transition, nil
 	}
 
-	state.CurrentStreakDays, state.GraceUsedForDay = nextStreakLength(state, day, e.Rule.GraceDays)
-	if state.CurrentStreakDays > state.LongestStreakDays {
-		state.LongestStreakDays = state.CurrentStreakDays
+	// A late-arriving event for a day earlier than the streak's current
+	// bookmark (out-of-order delivery, or a backfilled/replayed on-chain
+	// event landing after a more recent deposit already qualified) must not
+	// move the streak backwards. Comparing calendar days (not wall-clock
+	// arrival order) is what "day" already encodes, so this check is purely
+	// "is this day at least as new as what we've already recorded".
+	isNewOrCurrentDay := state.LastQualifiedDay == "" || !dayBefore(day, state.LastQualifiedDay)
+	if isNewOrCurrentDay {
+		state.CurrentStreakDays, state.GraceUsedForDay = nextStreakLength(state, day, e.Rule.GraceDays)
+		if state.CurrentStreakDays > state.LongestStreakDays {
+			state.LongestStreakDays = state.CurrentStreakDays
+		}
+		state.LastQualifiedDay = day
 	}
-	state.LastQualifiedDay = day
+	// The saving itself is real regardless of arrival order, so totals,
+	// score, level and achievements still reflect it even when the streak
+	// bookkeeping above was left untouched.
 	state.TotalSaved = state.TotalSaved.Add(event.NetAmount)
 	state.GoalsCompleted += event.GoalsCompletedDelta
 	state.DurableScore = DurableScore(state)
@@ -298,6 +310,18 @@ func localDay(t time.Time, timezone string) (string, error) {
 		return "", ErrInvalidTimezone
 	}
 	return t.In(loc).Format("2006-01-02"), nil
+}
+
+// dayBefore reports whether a is strictly before b, comparing two
+// "2006-01-02" local-day strings. An unparseable day is treated as not
+// before, so a malformed value cannot regress an otherwise-valid streak.
+func dayBefore(a, b string) bool {
+	da, err1 := time.Parse("2006-01-02", a)
+	db, err2 := time.Parse("2006-01-02", b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return da.Before(db)
 }
 
 func nextStreakLength(state GamificationState, day string, graceDays int) (int, string) {

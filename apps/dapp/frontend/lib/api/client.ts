@@ -4,6 +4,7 @@ import {
   setAccessToken,
   clearTokens,
 } from "@/lib/auth/token-store";
+import { setLastRequestId } from "@/lib/observability/request-id";
 
 /**
  * Typed API client for the Nester Go backend.
@@ -89,6 +90,8 @@ async function performRefresh(): Promise<{ access_token: string }> {
     throw new ApiError(0, "NETWORK_ERROR", "Could not reach the server to refresh the session");
   }
 
+  setLastRequestId(res.headers.get("X-Request-ID"));
+
   const body = await res.text();
   let json: ApiEnvelope<{ access_token: string }> | null = null;
   if (body.trim()) {
@@ -162,6 +165,8 @@ async function apiFetch<T>(
     ...init,
     headers,
   });
+
+  setLastRequestId(res.headers.get("X-Request-ID"));
 
   // A 401 on an authenticated request means the access token expired (it's
   // short-lived by design) — transparently refresh once and retry, rather
@@ -250,13 +255,6 @@ export interface ApiUser {
   display_name: string;
   created_at: string;
   updated_at: string;
-}
-
-export interface ApiKYCStatus {
-  status: "unverified" | "pending" | "verified" | "rejected";
-  submitted_at?: string;
-  reviewed_at?: string;
-  rejection_reason?: string;
 }
 
 export interface ApiPerformanceSummary {
@@ -363,18 +361,6 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ wallet_address: walletAddress, display_name: displayName }),
         skipAuth: true,
-      }),
-  },
-
-  /** KYC status + submission (nester#1125 — replaces settings-page mock state) */
-  kyc: {
-    getStatus: (userId: string) =>
-      apiFetch<ApiKYCStatus>(`/users/kyc/${userId}`),
-
-    submit: (userId: string, formData: FormData) =>
-      apiFetch<{ status: string }>(`/users/kyc/${userId}`, {
-        method: "POST",
-        body: formData,
       }),
   },
 

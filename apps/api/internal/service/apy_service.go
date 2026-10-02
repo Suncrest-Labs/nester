@@ -18,6 +18,10 @@ const (
 	apyPollInterval  = 6 * time.Hour
 	apyHistoryWindow = 30 * 24 * time.Hour
 	apyPruneAge      = 90 * 24 * time.Hour
+	// apyDownsampleAge is how old a snapshot must be before it is collapsed
+	// from hourly to one-per-day. Chosen well inside apyHistoryWindow so the
+	// 30-day history view always sees full hourly resolution (#1318).
+	apyDownsampleAge = 7 * 24 * time.Hour
 	// apyAnomalyLookback bounds how far back the poller will look for a
 	// "previous" snapshot to compare against when flagging implausible jumps
 	// (#941). A prior snapshot older than this is treated as no baseline,
@@ -103,6 +107,9 @@ func (s *APYService) poll(ctx context.Context) {
 		if err := s.repo.Upsert(ctx, snap); err != nil {
 			s.logger.Error("apy poller: upsert failed", "protocol", snap.ProtocolSlug, "error", err.Error())
 		}
+	}
+	if err := s.repo.DownsampleOlderThan(ctx, apyDownsampleAge); err != nil {
+		s.logger.Error("apy poller: downsample failed", "error", err.Error())
 	}
 	if err := s.repo.PruneOlderThan(ctx, apyPruneAge); err != nil {
 		s.logger.Error("apy poller: prune failed", "error", err.Error())

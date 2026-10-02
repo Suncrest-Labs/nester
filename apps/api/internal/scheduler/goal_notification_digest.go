@@ -88,7 +88,14 @@ func (j *GoalNotificationDigestJob) Run(ctx context.Context) {
 	}
 }
 
-// Tick runs a single pass over all due preferences. Exported for tests.
+// Tick runs a single pass over all due preferences. Preferences are grouped
+// by UserID and flushed together (nester#1340): a user with several goals
+// all on "daily" digest, all due in the same pass, previously received one
+// separate email per goal. Grouping here — rather than in the store/SQL
+// layer — needs no schema or Repository interface change, since ListDue's
+// results already carry UserID per preference.
+//
+// Exported for tests.
 func (j *GoalNotificationDigestJob) Tick(ctx context.Context) {
 	now := j.clock()
 	due, err := j.store.ListDue(ctx, now)
@@ -96,42 +103,80 @@ func (j *GoalNotificationDigestJob) Tick(ctx context.Context) {
 		j.logger.Error("goal notification digest job: list due failed", "error", err)
 		return
 	}
+
+	byUser := make(map[uuid.UUID][]goalnotification.Preference)
+	order := make([]uuid.UUID, 0, len(due))
 	for _, pref := range due {
-		j.flush(ctx, pref, now)
+		if _, seen := byUser[pref.UserID]; !seen {
+			order = append(order, pref.UserID)
+		}
+		byUser[pref.UserID] = append(byUser[pref.UserID], pref)
+	}
+
+	for _, userID := range order {
+		j.flushUser(ctx, userID, byUser[userID], now)
 	}
 }
 
-func (j *GoalNotificationDigestJob) flush(ctx context.Context, pref goalnotification.Preference, now time.Time) {
-	items, err := j.store.ListQueuedItems(ctx, pref.GoalID)
-	if err != nil {
-		j.logger.Warn("goal notification digest job: list queued items failed", "goal_id", pref.GoalID, "error", err)
-		return
+// flushUser combines the queued items across every one of userID's due
+// goals into a single dispatched notification, then clears the queue and
+// marks each goal's digest as sent individually — clearing/marking stays
+// per-goal because ClearQueuedItems and MarkDigestSent are scoped to a
+// single goal_id in both the Repository interface and the underlying
+// tables; only the outward-facing Send call is batched.
+func (j *GoalNotificationDigestJob) flushUser(ctx context.Context, userID uuid.UUID, prefs []goalnotification.Preference, now time.Time) {
+	type goalItems struct {
+		goalID uuid.UUID
+		items  []goalnotification.DigestItem
 	}
-	if len(items) == 0 {
+
+	var perGoal []goalItems
+	totalItems := 0
+	goalIDs := make([]string, 0, len(prefs))
+	for _, pref := range prefs {
+		items, err := j.store.ListQueuedItems(ctx, pref.GoalID)
+		if err != nil {
+			j.logger.Warn("goal notification digest job: list queued items failed", "goal_id", pref.GoalID, "error", err)
+			continue
+		}
+		if len(items) == 0 {
+			continue
+		}
+		perGoal = append(perGoal, goalItems{goalID: pref.GoalID, items: items})
+		totalItems += len(items)
+		goalIDs = append(goalIDs, pref.GoalID.String())
+	}
+	if len(perGoal) == 0 {
 		return
 	}
 
-	ids := make([]uuid.UUID, 0, len(items))
-	body := fmt.Sprintf("%d update(s) on your savings goal:\n", len(items))
-	for _, item := range items {
-		ids = append(ids, item.ID)
-		body += fmt.Sprintf("- %s\n", item.Body)
-	}
-
-	if j.dispatcher != nil {
-		if err := j.dispatcher.Send(ctx, pref.UserID, notifications.EventGoalMilestone, "Savings goal digest", body, map[string]any{
-			"goal_id": pref.GoalID.String(),
-			"count":   len(items),
-		}); err != nil {
-			j.logger.Warn("goal notification digest job: send failed", "goal_id", pref.GoalID, "error", err)
+	body := fmt.Sprintf("%d update(s) across %d of your savings goals:\n", totalItems, len(perGoal))
+	for _, g := range perGoal {
+		for _, item := range g.items {
+			body += fmt.Sprintf("- %s\n", item.Body)
 		}
 	}
 
-	if err := j.store.ClearQueuedItems(ctx, pref.GoalID, ids); err != nil {
-		j.logger.Warn("goal notification digest job: clear queue failed", "goal_id", pref.GoalID, "error", err)
-		return
+	if j.dispatcher != nil {
+		if err := j.dispatcher.Send(ctx, userID, notifications.EventGoalMilestone, "Savings goal digest", body, map[string]any{
+			"goal_ids": goalIDs,
+			"count":    totalItems,
+		}); err != nil {
+			j.logger.Warn("goal notification digest job: send failed", "user_id", userID, "goal_ids", goalIDs, "error", err)
+		}
 	}
-	if err := j.store.MarkDigestSent(ctx, pref.GoalID, now); err != nil {
-		j.logger.Warn("goal notification digest job: mark sent failed", "goal_id", pref.GoalID, "error", err)
+
+	for _, g := range perGoal {
+		ids := make([]uuid.UUID, 0, len(g.items))
+		for _, item := range g.items {
+			ids = append(ids, item.ID)
+		}
+		if err := j.store.ClearQueuedItems(ctx, g.goalID, ids); err != nil {
+			j.logger.Warn("goal notification digest job: clear queue failed", "goal_id", g.goalID, "error", err)
+			continue
+		}
+		if err := j.store.MarkDigestSent(ctx, g.goalID, now); err != nil {
+			j.logger.Warn("goal notification digest job: mark sent failed", "goal_id", g.goalID, "error", err)
+		}
 	}
 }

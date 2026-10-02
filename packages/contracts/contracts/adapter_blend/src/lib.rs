@@ -123,9 +123,9 @@ fn submit_one(env: &Env, request: BlendRequest) -> BlendPositions {
         &Symbol::new(env, "submit"),
         soroban_sdk::vec![
             env,
-            me.into_val(env),  // from: whose position changes
-            me.into_val(env),  // spender: who pays the tokens
-            me.into_val(env),  // to: who receives withdrawn tokens
+            me.into_val(env), // from: whose position changes
+            me.into_val(env), // spender: who pays the tokens
+            me.into_val(env), // to: who receives withdrawn tokens
             requests.into_val(env),
         ],
     )
@@ -149,7 +149,9 @@ impl BlendAdapterContract {
         }
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage().instance().set(&DataKey::Pool, &pool);
-        env.storage().instance().set(&DataKey::Underlying, &underlying);
+        env.storage()
+            .instance()
+            .set(&DataKey::Underlying, &underlying);
         env.storage()
             .instance()
             .set(&DataKey::ReserveIndex, &reserve_index);
@@ -287,7 +289,10 @@ impl YieldAdapter for BlendAdapterContract {
             ADAPTER,
             WITHDRAWN,
             to,
-            AdapterMovedEventData { amount: assets, units },
+            AdapterMovedEventData {
+                amount: assets,
+                units,
+            },
         );
         assets
     }
@@ -344,3 +349,6 @@ mod test;
 
 #[cfg(test)]
 mod interface_test;
+
+#[cfg(test)]
+mod real_pool_test;

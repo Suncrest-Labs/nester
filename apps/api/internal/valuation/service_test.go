@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/portfolio"
+	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
 )
 
 type fakePositions struct {
@@ -91,5 +92,83 @@ func TestService_InvalidateRecomputesAndPushes(t *testing.T) {
 	}
 	if _, ok := svc.cache.Get(uid); !ok {
 		t.Fatal("expected cache to be repopulated after invalidation recompute")
+	}
+}
+
+// TestService_ValuationStaleness_Unknown covers nester#1109: a Service with
+// no freshness reader configured must report StalenessUnknown, not a
+// fabricated "fresh" — absence of a staleness signal is not evidence of
+// freshness.
+func TestService_ValuationStaleness_Unknown(t *testing.T) {
+	pos := &fakePositions{list: []Position{{VaultID: uuid.New(), Asset: "USDC", Principal: dec("10")}}}
+	svc := newTestService(pos, nil)
+
+	val, err := svc.GetValuation(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("GetValuation: %v", err)
+	}
+	if val.Staleness != portfolio.StalenessUnknown {
+		t.Fatalf("Staleness = %q, want %q", val.Staleness, portfolio.StalenessUnknown)
+	}
+	if val.AsOfLedger != 0 {
+		t.Fatalf("AsOfLedger = %d, want 0 when unknown", val.AsOfLedger)
+	}
+}
+
+// TestService_ValuationStaleness_Fresh covers the fresh case: a freshness
+// tracker sampled within budget must report StalenessFresh and stamp the
+// real indexed ledger onto the valuation.
+func TestService_ValuationStaleness_Fresh(t *testing.T) {
+	tracker := freshness.NewTracker(5 * time.Minute)
+	tracker.Observe(1_000, 1_002)
+
+	pos := &fakePositions{list: []Position{{VaultID: uuid.New(), Asset: "USDC", Principal: dec("10")}}}
+	svc := NewService(Deps{
+		Positions: pos,
+		Oracle:    NewStaticOracle(nil),
+		Cache:     NewCache(time.Minute),
+		Freshness: tracker,
+	})
+
+	val, err := svc.GetValuation(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("GetValuation: %v", err)
+	}
+	if val.Staleness != portfolio.StalenessFresh {
+		t.Fatalf("Staleness = %q, want %q", val.Staleness, portfolio.StalenessFresh)
+	}
+	if val.AsOfLedger != 1_000 {
+		t.Fatalf("AsOfLedger = %d, want 1000", val.AsOfLedger)
+	}
+}
+
+// TestService_ValuationStaleness_Stale covers the stale case: a freshness
+// tracker sampled long enough ago (beyond its budget) must report
+// StalenessStale while still surfacing the real (old) ledger it was last
+// sampled at, rather than withholding it.
+func TestService_ValuationStaleness_Stale(t *testing.T) {
+	now := time.Now()
+	clock := func() time.Time { return now }
+	tracker := freshness.NewTrackerWithClock(time.Minute, clock)
+	tracker.Observe(1_000, 1_000)
+	now = now.Add(5 * time.Minute) // advance the clock well past the 1-minute budget
+
+	pos := &fakePositions{list: []Position{{VaultID: uuid.New(), Asset: "USDC", Principal: dec("10")}}}
+	svc := NewService(Deps{
+		Positions: pos,
+		Oracle:    NewStaticOracle(nil),
+		Cache:     NewCache(time.Minute),
+		Freshness: tracker,
+	})
+
+	val, err := svc.GetValuation(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("GetValuation: %v", err)
+	}
+	if val.Staleness != portfolio.StalenessStale {
+		t.Fatalf("Staleness = %q, want %q", val.Staleness, portfolio.StalenessStale)
+	}
+	if val.AsOfLedger != 1_000 {
+		t.Fatalf("AsOfLedger = %d, want 1000 (the last real sample, even though stale)", val.AsOfLedger)
 	}
 }

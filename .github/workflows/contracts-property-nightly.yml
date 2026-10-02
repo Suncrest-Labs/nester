@@ -27,3 +27,36 @@ jobs:
         env:
           PROPTEST_CASES: "256"
         run: cargo test -p nester-integration-tests property_tests -- --nocapture
+
+  vault-conversion-fuzz:
+    name: Fuzz vault conversion arithmetic
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/contracts/contracts/vault/fuzz
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo-fuzz's sanitizer/coverage instrumentation needs nightly's
+      # unstable -Zsanitizer flags; the rest of the contracts workspace
+      # builds on stable (see the share-accounting job above), so this is
+      # scoped to this one job rather than changing the repo default.
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # 600s matches this job's 20-minute timeout with headroom for
+      # toolchain/instrumented-build time, which dominates the wall clock
+      # here far more than the actual fuzzing does.
+      - name: Fuzz conversion_math
+        run: cargo fuzz run conversion_math -- -max_total_time=600
+
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vault-conversion-fuzz-artifacts
+          path: packages/contracts/contracts/vault/fuzz/artifacts/conversion_math/
+          retention-days: 30

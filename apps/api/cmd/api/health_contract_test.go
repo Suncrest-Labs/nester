@@ -11,6 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
+	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
 )
 
 // The health endpoints are the contract every orchestrator, load balancer, and
@@ -84,6 +87,14 @@ type healthContractCase struct {
 	redisNotConfigured bool
 	horizonHealthy     bool
 	sorobanHealthy     bool
+	// indexerStale drives /readyz's staleness gate (nester#1107). The zero
+	// value (not stale) is the common case; cases that want the gate to fire
+	// set this explicitly rather than sorobanHealthy, which is a separate axis
+	// (RPC reachability, not indexer lag).
+	indexerStale bool
+	// noFreshnessReader simulates an instance built without a freshness
+	// tracker wired at all, as opposed to one wired and reporting fresh.
+	noFreshnessReader bool
 
 	wantCode        int
 	wantContentType string
@@ -159,7 +170,7 @@ func TestHealthEndpointContract(t *testing.T) {
 		},
 		{
 			name: "readyz fails when redis is unavailable", path: "/readyz",
-			ready: true, redisErr: leakyRedisError,
+			ready: true, redisErr: leakyRedisError, horizonHealthy: true, sorobanHealthy: true,
 			wantCode: http.StatusServiceUnavailable, wantContentType: livenessContentType,
 			wantBody: "redis unavailable",
 		},
@@ -167,14 +178,52 @@ func TestHealthEndpointContract(t *testing.T) {
 			// Redis is optional: an instance deliberately running on the
 			// in-memory fallbacks is ready, not degraded.
 			name: "readyz reports ok when redis is not configured", path: "/readyz",
-			ready: true, redisNotConfigured: true,
+			ready: true, redisNotConfigured: true, horizonHealthy: true, sorobanHealthy: true,
 			wantCode: http.StatusOK, wantContentType: livenessContentType, wantBody: "ok",
 		},
 		{
-			// Stellar outages degrade individual routes; they must not pull
-			// the whole instance out of rotation.
-			name: "readyz stays ok when stellar dependencies are down", path: "/readyz",
-			ready:    true,
+			// Horizon is diagnostic-only for readiness: the API can still
+			// serve most routes without it, so an outage there degrades
+			// individual routes rather than pulling the whole instance out of
+			// rotation. Soroban RPC is healthy in this case specifically so
+			// it isolates the Horizon axis from the RPC axis below.
+			name: "readyz stays ok when horizon is down but rpc is up", path: "/readyz",
+			ready: true, sorobanHealthy: true,
+			wantCode: http.StatusOK, wantContentType: livenessContentType, wantBody: "ok",
+		},
+		{
+			// Unlike Horizon, Soroban RPC gates readiness (nester#1107): no
+			// deposit, withdrawal, or vault route can complete without it, so
+			// an instance that cannot reach it should not receive traffic.
+			name: "readyz fails when soroban rpc is unreachable", path: "/readyz",
+			ready: true, horizonHealthy: true,
+			wantCode: http.StatusServiceUnavailable, wantContentType: livenessContentType,
+			wantBody: "soroban rpc unavailable",
+		},
+		{
+			name: "readyz fails when the indexer exceeds its staleness budget", path: "/readyz",
+			ready: true, horizonHealthy: true, sorobanHealthy: true, indexerStale: true,
+			wantCode: http.StatusServiceUnavailable, wantContentType: livenessContentType,
+			wantBody: "indexer stale",
+		},
+		{
+			// The database/redis/rpc checks run before the staleness gate, so
+			// a database outage still reports as "database unavailable" even
+			// when the indexer is also stale — the first hard failure wins
+			// rather than staleness masking it.
+			name: "readyz reports the database over a stale indexer", path: "/readyz",
+			ready: true, dbErr: leakyDBError, horizonHealthy: true, sorobanHealthy: true, indexerStale: true,
+			wantCode: http.StatusServiceUnavailable, wantContentType: livenessContentType,
+			wantBody: "database unavailable",
+		},
+		{
+			// An instance built without a freshness tracker wired at all
+			// (noFreshnessReader) is not the same as one wired and reporting
+			// fresh — but readiness treats the absence as "not stale" rather
+			// than failing an instance closed over a missing diagnostic (see
+			// indexerStale's doc comment in main.go).
+			name: "readyz stays ok when no freshness reader is wired", path: "/readyz",
+			ready: true, horizonHealthy: true, sorobanHealthy: true, noFreshnessReader: true,
 			wantCode: http.StatusOK, wantContentType: livenessContentType, wantBody: "ok",
 		},
 
@@ -445,6 +494,15 @@ func sortedKeys(object map[string]json.RawMessage) []string {
 	return keys
 }
 
+// stubFreshnessReader is a fixed freshness.Reader, following the same
+// pattern as middleware.stubReader: a value rather than a live tracker, so a
+// case can pin exactly the staleness state readinessHandler must react to.
+type stubFreshnessReader struct {
+	snapshot freshness.Snapshot
+}
+
+func (s stubFreshnessReader) Snapshot() freshness.Snapshot { return s.snapshot }
+
 // healthDeps builds the production dependency set for one case, with every
 // dependency stubbed: the probes are closures over the case's error fields,
 // and the Stellar endpoints are local httptest servers.
@@ -453,6 +511,7 @@ func (tc healthContractCase) healthDeps(t *testing.T) healthDeps {
 
 	horizon := newHorizonStub(t, tc.horizonHealthy)
 	soroban := newSorobanStub(t, tc.sorobanHealthy)
+	sorobanClient := &http.Client{Timeout: 2 * time.Second}
 
 	ready := new(atomic.Bool)
 	ready.Store(tc.ready)
@@ -470,9 +529,23 @@ func (tc healthContractCase) healthDeps(t *testing.T) healthDeps {
 		startedAt:    time.Now().Add(-90 * time.Second),
 		environment:  "test",
 		buildVersion: "test-build",
+		// Routed through the real probe function against the local stub, the
+		// same way production wires it, so this proves the probe integrates
+		// correctly rather than just that a closure can return an error
+		// (nester#1107).
+		pingRPC: func(ctx context.Context) error {
+			result := stellarpkg.PingSorobanRPC(ctx, sorobanClient, soroban.URL)
+			if !result.OK {
+				return errors.New(result.Error)
+			}
+			return nil
+		},
 	}
 	if !tc.redisNotConfigured {
 		deps.pingRedis = func(context.Context) error { return tc.redisErr }
+	}
+	if !tc.noFreshnessReader {
+		deps.freshnessReader = stubFreshnessReader{snapshot: freshness.Snapshot{Stale: tc.indexerStale}}
 	}
 	return deps
 }

@@ -371,6 +371,122 @@ pub fn split_penalty(escrow: i128, depositor_share_bps: u32) -> (i128, i128, i12
     (depositor_slice, treasury_slice, dust)
 }
 
+// ---------------------------------------------------------------------------
+// Time-locked savings vault (issue #802)
+// ---------------------------------------------------------------------------
+
+/// Early-break penalty rate for a lock, decaying linearly from
+/// `full_penalty_bps` at creation down to zero at maturity: someone breaking
+/// a lock one second before it matures is not charged the same as someone
+/// breaking it on day one. `elapsed_secs` and `total_duration_secs` describe
+/// how far through the term the lock is; a lock already past maturity (this
+/// function is never meant to be called for one, but defensively) returns 0.
+pub fn lock_break_penalty_bps(
+    full_penalty_bps: u32,
+    elapsed_secs: u64,
+    total_duration_secs: u64,
+) -> u32 {
+    if total_duration_secs == 0 || elapsed_secs >= total_duration_secs {
+        return 0;
+    }
+    let remaining = total_duration_secs - elapsed_secs;
+    // full_penalty_bps * remaining / total_duration_secs, computed in i128 to
+    // reuse the same overflow-checked mul_div as everywhere else in this
+    // file rather than a separate u64 path.
+    mul_div(
+        full_penalty_bps as i128,
+        remaining as i128,
+        total_duration_secs as i128,
+    )
+    .unwrap_or(0) as u32
+}
+
+/// New total share count for one locked position after a boosted yield
+/// report, so that its value gain works out to exactly its boost-weighted
+/// slice of the reported yield — see the module doc on
+/// `contracts/vault/src/locks.rs` for the full derivation. Returns the
+/// position's unchanged share count on any degenerate input (zero weight,
+/// zero yield) rather than erroring, since those are "nothing to boost"
+/// cases, not failures.
+///
+/// - `position_shares`: this position's current share count.
+/// - `boost_bps`: this position's boost multiplier in basis points (10_000 =
+///   1x, i.e. no boost).
+/// - `total_assets`, `total_supply`: the vault's totals *before* this yield
+///   report is applied.
+/// - `total_weight`: sum over every locked position (and the flexible pool,
+///   counted at 1x) of `shares * boost_bps`, using the SAME total_assets/
+///   total_supply snapshot as this call — the flexible pool's own shares are
+///   never minted here, only every open locked position is, one at a time,
+///   all against this one shared `total_weight`.
+/// - `yield_amount`: the yield being reported this round (must be positive;
+///   an impairment never boosts).
+#[allow(clippy::too_many_arguments)]
+pub fn boosted_shares_after_yield(
+    position_shares: i128,
+    boost_bps: u32,
+    total_assets: i128,
+    total_supply: i128,
+    total_weight: i128,
+    yield_amount: i128,
+) -> Result<i128, ContractError> {
+    if position_shares <= 0 || total_weight <= 0 || yield_amount <= 0 || total_supply <= 0 {
+        return Ok(position_shares);
+    }
+
+    // Derivation (plain, unscaled units first): the flexible pool's shares
+    // never change count, so its post-report value is fixed at
+    // `F * P_new` where P_new is the new global share price. Solving the
+    // flexible pool's own conservation equation
+    // `F * P_new == F*(TA/TS) + Y*F/W` (its old value plus its
+    // weight-proportional slice of the yield, W = total weight) for P_new,
+    // the F terms cancel and give the strikingly simple
+    // `P_new = TA/TS + Y/W`. Every locked position i then just needs
+    // `new_shares_i = target_value_i / P_new`, where
+    // `target_value_i = s_i*(TA/TS) + Y*s_i*b_i/W` (old value plus its own
+    // weight-proportional slice, at its own boost b_i). Substituting P_new
+    // and simplifying: `new_shares_i = s_i * (TA*W + TS*Y*b_i) / (TA*W + TS*Y)`.
+    // This conserves total value exactly (sum of every pool's post-report
+    // value, including the untouched flexible pool, equals TA + Y) and
+    // degenerates to `new_shares_i == s_i` at b_i == 1x (no boost, matching
+    // the flexible pool's own unminted behaviour) — both verified in the
+    // tests below.
+    //
+    // total_weight (W) and boost_bps (b_i) arrive in basis points
+    // (BASIS_POINT_SCALE = 1x) rather than plain multipliers, so the plain
+    // formula above is scaled by BASIS_POINT_SCALE to clear the fraction:
+    // `new_shares_i = s_i * (TA*W_bps + TS*Y*boost_bps) / (TA*W_bps + TS*Y*BASIS_POINT_SCALE)`.
+    // Note the asymmetry: only the yield term in the denominator gets the
+    // extra BASIS_POINT_SCALE factor (matching the plain formula's bare `Y`
+    // there), not the TA*W term again — getting this backwards was caught by
+    // `boosted_shares_matches_the_worked_two_pool_example` during development.
+    let ta_w = total_assets
+        .checked_mul(total_weight)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    let ts_y = total_supply
+        .checked_mul(yield_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+
+    let numerator = ta_w
+        .checked_add(
+            ts_y.checked_mul(boost_bps as i128)
+                .ok_or(ContractError::ArithmeticOverflow)?,
+        )
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    let denominator = ta_w
+        .checked_add(
+            ts_y.checked_mul(BASIS_POINT_SCALE)
+                .ok_or(ContractError::ArithmeticOverflow)?,
+        )
+        .ok_or(ContractError::ArithmeticOverflow)?;
+
+    if denominator == 0 {
+        return Ok(position_shares);
+    }
+
+    mul_div(position_shares, numerator, denominator)
+}
+
 #[cfg(test)]
 mod penalty_split_tests {
     use super::*;
@@ -490,5 +606,124 @@ mod tests {
     fn withdrawal_fee_zero_amount_returns_zero() {
         assert_eq!(calculate_withdrawal_fee(0, 100).unwrap(), 0);
         assert_eq!(calculate_withdrawal_fee(1000, 0).unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn lock_break_penalty_is_full_at_creation() {
+        // elapsed = 0: the full configured penalty applies.
+        assert_eq!(lock_break_penalty_bps(1000, 0, 90 * 86400), 1000);
+    }
+
+    #[test]
+    fn lock_break_penalty_decays_linearly_at_the_midpoint() {
+        // 50% elapsed -> 50% of the full penalty remains.
+        assert_eq!(lock_break_penalty_bps(1000, 45 * 86400, 90 * 86400), 500);
+    }
+
+    #[test]
+    fn lock_break_penalty_is_nearly_zero_just_before_maturity() {
+        // 99% elapsed -> roughly 1% of the full penalty remains.
+        let bps = lock_break_penalty_bps(1000, 89 * 86400 + 86400 * 99 / 100, 90 * 86400);
+        assert!(bps <= 10, "expected a small residual penalty, got {bps}");
+    }
+
+    #[test]
+    fn lock_break_penalty_is_zero_at_or_after_maturity() {
+        assert_eq!(lock_break_penalty_bps(1000, 90 * 86400, 90 * 86400), 0);
+        assert_eq!(lock_break_penalty_bps(1000, 91 * 86400, 90 * 86400), 0);
+    }
+
+    #[test]
+    fn lock_break_penalty_zero_duration_is_zero() {
+        assert_eq!(lock_break_penalty_bps(1000, 0, 0), 0);
+    }
+
+    /// Matches the worked example from the design derivation: TA=1000,
+    /// TS=1000, flexible=500 shares (boost 1x), locked=500 shares (boost
+    /// 2x), yield=100. Locked should end up with exactly 531.25 -> 531
+    /// (mul_div rounds down) shares.
+    #[test]
+    fn boosted_shares_matches_the_worked_two_pool_example() {
+        let total_weight = 500 * 10_000 + 500 * 20_000; // flexible@1x + locked@2x, in bps-scaled shares
+        let new_shares =
+            boosted_shares_after_yield(500, 20_000, 1000, 1000, total_weight, 100).unwrap();
+        // Exact rational answer is 531.25; integer division rounds down to 531.
+        assert_eq!(new_shares, 531);
+    }
+
+    #[test]
+    fn boosted_shares_at_1x_boost_is_unchanged() {
+        // A boost of exactly 1x (10_000 bps) must never mint anything, since
+        // that position's shares already appreciate correctly through the
+        // ordinary share-price rise, same as the flexible pool.
+        let total_weight = 1000 * 10_000; // single pool, all at 1x
+        let new_shares =
+            boosted_shares_after_yield(1000, 10_000, 1000, 1000, total_weight, 100).unwrap();
+        assert_eq!(new_shares, 1000);
+    }
+
+    #[test]
+    fn boosted_shares_conserves_total_value_across_all_pools() {
+        // Full end-to-end conservation check, not just one pool's share
+        // count: flexible (500 @ 1x) keeps its share count; locked (500 @
+        // 2x) mints via the function under test. Total post-yield value
+        // (at the resulting share price) must equal total_assets + yield,
+        // to within integer-rounding dust.
+        let flexible_shares: i128 = 500;
+        let locked_shares: i128 = 500;
+        let boost_bps: u32 = 20_000;
+        let total_assets: i128 = 1000;
+        let total_supply: i128 = 1000;
+        let yield_amount: i128 = 100;
+        let total_weight = flexible_shares * 10_000 + locked_shares * boost_bps as i128;
+
+        let locked_new_shares = boosted_shares_after_yield(
+            locked_shares,
+            boost_bps,
+            total_assets,
+            total_supply,
+            total_weight,
+            yield_amount,
+        )
+        .unwrap();
+        let minted = locked_new_shares - locked_shares;
+        let new_total_supply = total_supply + minted;
+        let new_total_assets = total_assets + yield_amount;
+
+        let flexible_value = flexible_shares * new_total_assets / new_total_supply;
+        let locked_value = locked_new_shares * new_total_assets / new_total_supply;
+        let total_value = flexible_value + locked_value;
+
+        // Rounding dust is at most a handful of base units on these small
+        // numbers; the total must never exceed the real assets (that would
+        // be inflation) and must be very close to it (not badly short).
+        assert!(total_value <= new_total_assets);
+        assert!(total_value >= new_total_assets - 2);
+    }
+
+    #[test]
+    fn boosted_shares_no_panic_at_extreme_values() {
+        let result = boosted_shares_after_yield(
+            i128::MAX / 4,
+            50_000,
+            i128::MAX / 4,
+            i128::MAX / 4,
+            i128::MAX / 4,
+            i128::MAX / 4,
+        );
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn boosted_shares_zero_yield_is_unchanged() {
+        assert_eq!(
+            boosted_shares_after_yield(500, 20_000, 1000, 1000, 1_500_000, 0).unwrap(),
+            500
+        );
     }
 }

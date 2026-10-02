@@ -60,6 +60,16 @@ func TestRecordDepositUpdatesBalancesAtomically(t *testing.T) {
 
 	// RecordDeposit now runs inside a transaction and also inserts a ledger entry.
 	mock.ExpectBegin()
+	// Vault cap check (nester#1316): locks the vaults row and reads
+	// soft_capacity before crediting. No cap set here, so it's a no-op.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT current_balance, soft_capacity FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`)).
+		WithArgs(vaultID.String()).
+		WillReturnRows(sqlmock.NewRows([]string{"current_balance", "soft_capacity"}).AddRow("0", nil))
+	// Per-user daily cap check (nester#1316): locks the user row. No cap set
+	// here, so the rolling-total query is skipped.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT daily_deposit_cap FROM users WHERE id = $1 FOR UPDATE`)).
+		WithArgs(userID.String()).
+		WillReturnRows(sqlmock.NewRows([]string{"daily_deposit_cap"}).AddRow(nil))
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE vaults
 		 SET total_deposited = total_deposited + $2::numeric,
 		     current_balance = current_balance + $2::numeric,

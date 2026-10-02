@@ -178,6 +178,51 @@ func (m *memRepo) Stats(_ context.Context, now time.Time) (Stats, error) {
 	return s, nil
 }
 
+func (m *memRepo) GetByID(_ context.Context, id uuid.UUID) (Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j, ok := m.jobs[id]
+	if !ok {
+		return Job{}, ErrNotFound
+	}
+	return *j, nil
+}
+
+func (m *memRepo) ListDead(_ context.Context, limit, offset int) ([]Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var dead []Job
+	for _, j := range m.jobs {
+		if j.Status == StatusDead {
+			dead = append(dead, *j)
+		}
+	}
+	if offset < len(dead) {
+		dead = dead[offset:]
+	} else {
+		dead = nil
+	}
+	if limit > 0 && limit < len(dead) {
+		dead = dead[:limit]
+	}
+	return dead, nil
+}
+
+func (m *memRepo) ManualRetry(_ context.Context, id uuid.UUID, runAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j, ok := m.jobs[id]
+	if !ok || j.Status != StatusDead {
+		return ErrNotFound
+	}
+	j.Status = StatusPending
+	j.Attempts = 0
+	j.NextRunAt = runAt
+	j.LastError = ""
+	j.LeasedUntil = nil
+	return nil
+}
+
 func (m *memRepo) get(id uuid.UUID) Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()

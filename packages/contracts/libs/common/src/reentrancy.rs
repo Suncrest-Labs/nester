@@ -22,11 +22,15 @@ impl ReentrancyGuard {
     }
 
     pub fn exit(env: &Env) {
-        env.storage().temporary().remove(&storage::reentrancy_lock_key());
+        env.storage()
+            .temporary()
+            .remove(&storage::reentrancy_lock_key());
     }
 
     pub fn is_locked(env: &Env) -> bool {
-        env.storage().temporary().has(&storage::reentrancy_lock_key())
+        env.storage()
+            .temporary()
+            .has(&storage::reentrancy_lock_key())
     }
 }
 

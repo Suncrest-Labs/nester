@@ -220,11 +220,15 @@ func (r *Relay) reconcile(ctx context.Context) int {
 
 		switch status {
 		case jobqueue.StatusSucceeded:
-			if err := r.repo.MarkDispatched(ctx, e.ID, r.clock()); err != nil {
+			now := r.clock()
+			if err := r.repo.MarkDispatched(ctx, e.ID, now); err != nil {
 				r.logger.Error("outbox relay: mark dispatched failed", "outbox_id", e.ID, "error", err)
 				continue
 			}
 			r.metrics.IncDispatched(e.EventType)
+			// End-to-end since the event was written (nester#1311) — the
+			// figure an integrator's own latency is actually bounded by.
+			r.metrics.ObserveTimeToDelivery(e.EventType, now.Sub(e.CreatedAt))
 			r.logger.Debug("outbox event delivered",
 				"outbox_id", e.ID, "event_type", e.EventType, "dedupe_key", e.DedupeKey)
 			resolved++
@@ -310,6 +314,14 @@ func (r *Relay) dispatch(ctx context.Context) int {
 			continue
 		}
 		r.metrics.IncRelayed(e.EventType)
+		if e.Attempts == 0 {
+			// Only the event's real first hand-off, not a re-hand-off after
+			// Release, counts toward this metric (nester#1311) — a released
+			// event's first attempt already happened and was already
+			// recorded; recording it again on every retry would understate
+			// how slow the very first hand-off actually was.
+			r.metrics.ObserveTimeToFirstAttempt(e.EventType, r.clock().Sub(e.CreatedAt))
+		}
 		r.logger.Debug("outbox event handed to job queue",
 			"outbox_id", e.ID, "event_type", e.EventType, "job_id", job.ID, "dedupe_key", e.DedupeKey)
 		dispatched++

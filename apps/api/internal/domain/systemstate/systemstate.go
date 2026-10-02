@@ -19,6 +19,21 @@ const (
 	// KeyLastLedger is the event-indexer cursor: the last Stellar ledger
 	// sequence that was successfully processed.
 	KeyLastLedger = "event_indexer.last_ledger"
+
+	// KeyMaintenanceMode holds the current maintenance mode value: "", "halt",
+	// or "readonly". Checked by middleware on every mutating request.
+	KeyMaintenanceMode = "maintenance.mode"
+)
+
+// Maintenance mode values stored under KeyMaintenanceMode.
+const (
+	// ModeOff is normal operation.
+	ModeOff = ""
+	// ModeHalt rejects all requests except public/health routes.
+	ModeHalt = "halt"
+	// ModeReadOnly allows GET requests through but blocks all mutations
+	// (POST/PUT/PATCH/DELETE), for lower-impact maintenance windows.
+	ModeReadOnly = "readonly"
 )
 
 // Repository is the persistence interface for the system_state table.

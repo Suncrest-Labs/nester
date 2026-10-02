@@ -3,6 +3,7 @@ import {
   sanitizeRoute,
   sanitizeText,
 } from "@/lib/observability/sanitize";
+import { getLastRequestId } from "@/lib/observability/request-id";
 
 export type ErrorCategory =
   | "render"
@@ -33,6 +34,12 @@ export interface ClientErrorEvent {
   timestamp: string;
   environment: string;
   context: Record<string, unknown>;
+  /**
+   * X-Request-ID of the most recent API response, when one has been seen.
+   * Lets a Sentry event (and the console/beacon sinks) be correlated with the
+   * backend log line / trace span for the request that likely caused it.
+   */
+  requestId?: string;
 }
 
 /** Endpoint is opt-in; without it the event still reaches the console sink. */
@@ -97,6 +104,7 @@ export function buildErrorEvent({
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV ?? "development",
     context: sanitizeContext(context ?? {}),
+    requestId: getLastRequestId(),
   };
 }
 
@@ -144,5 +152,42 @@ export function reportError(input: ReportErrorInput): ClientErrorEvent {
     }
   }
 
+  reportToSentry(input.error, event);
+
   return event;
+}
+
+/**
+ * Forward the same scrubbed event to Sentry, when configured. Dynamically
+ * imported so a build with no DSN never even evaluates the SDK from this
+ * path, and a failure to load/report never masks the original error — this
+ * sink is best-effort exactly like the sendBeacon sink above.
+ */
+function reportToSentry(error: unknown, event: ClientErrorEvent): void {
+  if (!process.env.NEXT_PUBLIC_SENTRY_DSN) return;
+
+  import("@sentry/nextjs")
+    .then((Sentry) => {
+      Sentry.withScope((scope) => {
+        scope.setTag("boundary", event.boundary);
+        scope.setTag("category", event.category);
+        scope.setTag("route", event.route);
+        if (event.requestId) scope.setTag("request_id", event.requestId);
+        if (event.digest) scope.setTag("digest", event.digest);
+        scope.setContext("client_error", event.context);
+
+        if (error instanceof Error) {
+          Sentry.captureException(error);
+        } else {
+          // Sentry only accepts synthetic exceptions for non-Error values;
+          // the (already-scrubbed) message is what actually gets sent since
+          // beforeSend re-scrubs it, matching the console/beacon sinks.
+          Sentry.captureMessage(event.message, "error");
+        }
+      });
+    })
+    .catch(() => {
+      // Telemetry is best-effort; a Sentry SDK load failure must not surface
+      // as a user-visible error.
+    });
 }

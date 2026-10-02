@@ -20,6 +20,11 @@ type YieldComparisonEntry struct {
 // YieldComparison is the side-by-side collection of active yield sources.
 type YieldComparison struct {
 	Protocols []YieldComparisonEntry `json:"protocols"`
+	// Meta carries the same data-freshness signal GetYieldOpportunitiesByTier
+	// returns, so a comparison served from stale cache (after an upstream
+	// failure) is distinguishable from a fresh one instead of looking like an
+	// ordinary successful response.
+	Meta YieldMeta `json:"meta"`
 }
 
 // GetYieldComparison returns one comparison entry per active protocol. When a
@@ -33,7 +38,12 @@ func (s *YieldService) GetYieldComparison(ctx context.Context, chain string, lim
 		limit = 100
 	}
 
-	opportunities, err := s.GetYieldOpportunitiesByTier(ctx, chain, limit, "")
+	// Fetch every eligible pool (limit=0) so aggregation sees all active
+	// protocols before the requested limit is applied to the sorted,
+	// protocol-level result below. Passing limit here would truncate pools
+	// pre-aggregation, which can drop active protocols or under-count a
+	// protocol's TVL/APY when it has multiple pools.
+	opportunities, err := s.GetYieldOpportunitiesByTier(ctx, chain, 0, "")
 	if err != nil {
 		return YieldComparison{}, err
 	}
@@ -100,5 +110,5 @@ func (s *YieldService) GetYieldComparison(ctx context.Context, chain string, lim
 		result = result[:limit]
 	}
 
-	return YieldComparison{Protocols: result}, nil
+	return YieldComparison{Protocols: result, Meta: opportunities.Meta}, nil
 }

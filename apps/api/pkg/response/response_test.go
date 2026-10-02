@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/suncrestlabs/nester/apps/api/pkg/apperror"
 )
 
 func TestHelpers(t *testing.T) {
@@ -63,4 +64,36 @@ func TestWriteJSON(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, body.Success)
 	assert.Equal(t, "written", body.Data)
+}
+
+// TestFromAppError covers issue #1048's envelope construction: Code,
+// Message, Retryable and Details must all come from the AppError, not be
+// re-derived or guessed by the caller.
+func TestFromAppError(t *testing.T) {
+	t.Run("non-retryable kind", func(t *testing.T) {
+		appErr := apperror.NewNotFound("VAULT_NOT_FOUND", "vault does not exist")
+		resp := FromAppError(appErr, "req-123")
+
+		assert.False(t, resp.Success)
+		assert.Equal(t, "VAULT_NOT_FOUND", resp.Error.Code)
+		assert.Equal(t, "vault does not exist", resp.Error.Message)
+		assert.Equal(t, "req-123", resp.Error.RequestID)
+		assert.False(t, resp.Error.Retryable)
+		assert.Nil(t, resp.Error.Details)
+	})
+
+	t.Run("retryable kind", func(t *testing.T) {
+		appErr := apperror.NewUpstreamUnavailable("SOROBAN_DOWN", "soroban rpc unavailable")
+		resp := FromAppError(appErr, "req-456")
+
+		assert.True(t, resp.Error.Retryable)
+	})
+
+	t.Run("validation error carries field details", func(t *testing.T) {
+		details := []apperror.FieldDetail{{Field: "amount", Message: "must be positive"}}
+		appErr := apperror.NewValidationWithDetails("VALIDATION_FAILED", "invalid request", details)
+		resp := FromAppError(appErr, "req-789")
+
+		assert.Equal(t, details, resp.Error.Details)
+	})
 }

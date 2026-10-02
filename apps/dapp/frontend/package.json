@@ -42,7 +42,8 @@
     "tailwind-merge": "^2.6.0",
     "zod": "^4.3.6",
     "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.8"
+    "jspdf-autotable": "^5.0.8",
+    "@sentry/nextjs": "^11.0.0"
   },
   "overrides": {
     "defu": ">=6.1.5"

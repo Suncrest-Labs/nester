@@ -15,7 +15,7 @@
 extern crate std;
 
 use proptest::prelude::*;
-use soroban_sdk::Address;
+use soroban_sdk::{testutils::Ledger as _, Address};
 
 use nester_access_control::Role;
 use nester_test_utils::NesterHarness;
@@ -28,7 +28,7 @@ const MIN_DEPOSIT: i128 = 10_000_000;
 enum VaultOp {
     Deposit { user_idx: usize, amount: i128 },
     Withdraw { user_idx: usize, share_bps: u32 },
-    Harvest { user_idx: usize },          // Per-user harvest triggers performance fee (issue #1029)
+    Harvest { user_idx: usize }, // Per-user harvest triggers performance fee (issue #1029)
     ReportYield { yield_bps: u32 },
     ReportLoss { loss_bps: u32 },
     CollectFees,
@@ -305,6 +305,47 @@ proptest! {
     }
 
     #[test]
+    fn prop_withdrawals_alone_never_reduce_share_price(
+        withdrawals in prop::collection::vec((0usize..3, 1u16..=10_000u16), 1..20)
+    ) {
+        let (h, users) = setup_harness_with_users(3);
+        configure_invariant_harness(&h);
+
+        let mut fees = h.vault().get_fee_config();
+        fees.performance_fee_bps = 0;
+        fees.early_withdrawal_fee_bps = 0;
+        h.vault().set_fee_config(&h.admin, &fees);
+
+        for user in &users {
+            h.mint_deposit_tokens(user, 100_000 * XLM);
+            h.vault().deposit(user, &(100_000 * XLM), &0);
+        }
+
+        let mut previous_price = h.vault().share_price();
+        for (user_idx, withdrawal_bps) in withdrawals {
+            let user = &users[user_idx];
+            let owned = h.token().balance(user);
+            if owned == 0 {
+                continue;
+            }
+
+            let shares = (owned * i128::from(withdrawal_bps) / 10_000)
+                .max(1)
+                .min(owned);
+            h.vault().withdraw(user, &shares, &0);
+
+            let current_price = h.vault().share_price();
+            prop_assert!(
+                current_price >= previous_price,
+                "withdrawal-only sequence reduced share price: {} -> {}",
+                previous_price,
+                current_price
+            );
+            previous_price = current_price;
+        }
+    }
+
+    #[test]
     fn prop_round_trip_safety(amount in MIN_DEPOSIT..(100_000 * XLM)) {
         let (h, users) = setup_harness_with_users(1);
         configure_invariant_harness(&h);
@@ -432,6 +473,13 @@ fn regression_collect_fees_with_exhausted_reserves_does_not_panic() {
     h.mint_deposit_tokens(&h.vault_id, yield_amount);
     h.vault().report_yield(&h.admin, &yield_amount);
 
+    // The report vests linearly over 24h (issue #803's default); advance
+    // past that window so the withdrawals below see real yield-backed
+    // value and accrue a performance fee, matching this test's premise.
+    h.env.ledger().with_mut(|l| {
+        l.timestamp += h.vault().get_yield_vesting_period() + 1;
+    });
+
     let first_balance = h.token().balance(&users[1]);
     let first_withdrawal = (first_balance * 8_953 / 10_000).max(1);
     h.vault().withdraw(&users[1], &first_withdrawal, &0);
@@ -503,6 +551,13 @@ fn regression_1029_harvest_pays_treasury_correctly() {
     let yield_amount = deposit_amount * 50 / 100; // 50% yield
     h.mint_deposit_tokens(&h.vault_id, yield_amount);
     h.vault().report_yield(&h.admin, &yield_amount);
+
+    // The report vests linearly over 24h (issue #803's default); advance
+    // past that window so harvest below sees the full amount, matching this
+    // test's "treasury receives the full reported fee" premise.
+    h.env.ledger().with_mut(|l| {
+        l.timestamp += h.vault().get_yield_vesting_period() + 1;
+    });
 
     // Get treasury address from fee config
     let fee_config = h.vault().get_fee_config();

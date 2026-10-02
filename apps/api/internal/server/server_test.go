@@ -583,3 +583,106 @@ func TestGracefulShutdown_ExitsWithinConfiguredTimeout(t *testing.T) {
 		t.Fatal("server did not exit within configured timeout")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown — draining in-flight money-path work (nester#786)
+// ---------------------------------------------------------------------------
+
+func TestGracefulShutdown_DrainsInFlightMoneyPathWorkMidDeposit(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen error = %v", err)
+	}
+
+	tracker := server.NewInFlightTracker()
+	operationStarted := make(chan struct{})
+	operationFinished := make(chan struct{})
+
+	handler, mux := server.New(silentLogger(), noopChecker, defaultTestOrigins)
+	mux.HandleFunc("POST /api/v1/deposits", func(w http.ResponseWriter, r *http.Request) {
+		// Simulate money-path work registration
+		defer tracker.Track("dep-123")()
+		close(operationStarted)
+
+		// Wait for simulated mid-deposit work execution
+		select {
+		case <-operationFinished:
+		case <-time.After(2 * time.Second):
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"settled","id":"dep-123"}`))
+	})
+
+	srv := &http.Server{Handler: handler}
+	go srv.Serve(ln) //nolint:errcheck
+
+	// Trigger an in-flight deposit request
+	client := &http.Client{}
+	addr := fmt.Sprintf("http://%s/api/v1/deposits", ln.Addr())
+
+	respCh := make(chan *http.Response, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		resp, err := client.Post(addr, "application/json", strings.NewReader(`{"amount":"100"}`))
+		if err != nil {
+			errCh <- err
+			return
+		}
+		respCh <- resp
+	}()
+
+	// Wait for the deposit to enter the handler
+	select {
+	case <-operationStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for deposit operation to start")
+	}
+
+	// Simulate SIGTERM / shutdown signal arriving mid-deposit.
+	// The server must wait for in-flight tracker to drain before completing shutdown.
+	shutdownErrCh := make(chan error, 1)
+	go func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		
+		// Wait for active in-flight operations tracked by tracker first (draining money-path work)
+		tracker.Wait(2*time.Second, silentLogger())
+
+		shutdownErrCh <- srv.Shutdown(shutCtx)
+	}()
+
+	// Complete the mid-deposit operation
+	close(operationFinished)
+
+	// Assert shutdown succeeds cleanly without abandoning state
+	select {
+	case err := <-shutdownErrCh:
+		if err != nil {
+			t.Errorf("server shutdown returned error during money-path drain: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for graceful shutdown to finish draining")
+	}
+
+	// Assert deposit response completed successfully (recoverable / settled record)
+	select {
+	case resp := <-respCh:
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected status 200 for drained deposit, got %d", resp.StatusCode)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			t.Fatalf("failed to decode deposit response: %v", err)
+		}
+		if payload["status"] != "settled" {
+			t.Errorf("expected settled status, got %v", payload["status"])
+		}
+	case err := <-errCh:
+		t.Fatalf("deposit request failed: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for deposit HTTP response")
+	}
+}

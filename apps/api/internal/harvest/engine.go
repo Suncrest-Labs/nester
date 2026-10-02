@@ -229,6 +229,7 @@ func (e *Engine) evaluateAndEnqueue(ctx context.Context, v VaultYield) (bool, er
 	_, err = e.queue.Enqueue(ctx, jobqueue.EnqueueInput{
 		Type:           e.cfg.jobType(),
 		Payload:        payload,
+		Priority:       jobqueue.PriorityBalance,
 		IdempotencyKey: e.idempotencyKey(v.VaultID),
 		MaxAttempts:    e.cfg.MaxAttempts,
 	})

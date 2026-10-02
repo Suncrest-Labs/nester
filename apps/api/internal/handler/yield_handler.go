@@ -21,6 +21,7 @@ import (
 type YieldOpportunitiesProvider interface {
 	GetYieldOpportunitiesByTier(ctx context.Context, chain string, limit int, tier string) (*service.YieldOpportunitiesResponse, error)
 	CompareProtocols(ctx context.Context, protocols []string) ([]service.ProtocolSummary, error)
+	GetYieldComparison(ctx context.Context, chain string, limit int) (service.YieldComparison, error)
 	GetProtocol(ctx context.Context, slug string) (*service.ProtocolDetail, error)
 	ProtocolTVL(ctx context.Context, protocolSlug string) (float64, error)
 }
@@ -51,6 +52,7 @@ func (h *YieldHandler) SetTVLRepository(repo protocoltvl.Repository) {
 func (h *YieldHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/yield-opportunities", h.list)
 	mux.HandleFunc("GET /api/v1/yield-opportunities/compare", h.compare)
+	mux.HandleFunc("GET /api/v1/yield-opportunities/compare-all", h.compareAll)
 	mux.HandleFunc("GET /api/v1/yields", h.list)
 	mux.HandleFunc("GET /api/v1/yields/{protocol_slug}", h.getProtocol)
 }
@@ -83,6 +85,48 @@ func (h *YieldHandler) compare(w http.ResponseWriter, r *http.Request) {
 
 // maxYieldCompare mirrors the service's upper bound for query parsing capacity.
 const maxYieldCompare = 5
+
+// maxYieldComparisonLimit mirrors GetYieldComparison's own cap, so a
+// malformed limit is rejected here with the same bound the service would
+// otherwise silently clamp to.
+const maxYieldComparisonLimit = 100
+
+// compareAll returns a side-by-side comparison across every active yield
+// source (nester#950), unlike compare above, which requires the caller to
+// name 2-5 protocols. There is no protocol selection here: the whole point is
+// to save the dapp from first listing opportunities and then choosing which
+// ones to compare.
+func (h *YieldHandler) compareAll(w http.ResponseWriter, r *http.Request) {
+	chain := strings.TrimSpace(r.URL.Query().Get("chain"))
+	if chain == "" {
+		chain = "Stellar"
+	}
+
+	limit := maxYieldComparisonLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > maxYieldComparisonLimit {
+			response.WriteJSON(w, http.StatusBadRequest, response.Err(http.StatusBadRequest, "INVALID_LIMIT", "limit must be between 1 and 100"))
+			return
+		}
+		limit = parsed
+	}
+
+	comparison, err := h.svc.GetYieldComparison(r.Context(), chain, limit)
+	if err != nil {
+		logpkg.FromContext(r.Context()).Error("yield comparison failed", "chain", chain, "error", err.Error())
+		response.WriteJSON(w, http.StatusServiceUnavailable, response.Err(http.StatusServiceUnavailable, "UPSTREAM_ERROR", "yield data temporarily unavailable"))
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, response.Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"data": comparison.Protocols,
+			"meta": comparison.Meta,
+		},
+	})
+}
 
 func (h *YieldHandler) list(w http.ResponseWriter, r *http.Request) {
 	chain := strings.TrimSpace(r.URL.Query().Get("chain"))

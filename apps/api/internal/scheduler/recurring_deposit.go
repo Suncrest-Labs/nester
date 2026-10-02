@@ -269,6 +269,7 @@ func (j *RecurringDepositJob) processSchedule(ctx context.Context, schedule savi
 	if _, err := j.queue.Enqueue(ctx, jobqueue.EnqueueInput{
 		Type:           RecurringDepositJobType,
 		Payload:        payload,
+		Priority:       jobqueue.PriorityBalance,
 		IdempotencyKey: recurringDepositIdempotencyKey(schedule.ID, schedule.NextRunAt, j.cfg.window()),
 		CorrelationID:  schedule.ID.String(),
 	}); err != nil {

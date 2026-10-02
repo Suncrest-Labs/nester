@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check clippy build test test-short integration-test clean dev dev-external dev-down dev-reset dev-logs dev-db go-test go-test-short
+.PHONY: fmt fmt-check clippy build test test-short integration-test clean dev dev-external dev-down dev-reset dev-logs dev-db go-test go-test-short db-backup db-restore db-restore-drill
 
 CARGO := cargo
 CONTRACTS_DIR := packages/contracts
@@ -30,6 +30,15 @@ go-test-short:
 
 clean:
 	cd $(CONTRACTS_DIR) && $(CARGO) clean
+
+db-backup:
+	@bash scripts/db-backup.sh
+
+db-restore:
+	@bash scripts/db-restore.sh $(FILE)
+
+db-restore-drill:
+	@bash scripts/db-restore-drill.sh
 
 # Docker Compose — local development
 #
@@ -72,3 +81,17 @@ dev-db-reset: ## Recreate the dev schema, re-run migrations, and re-seed
 	@echo "Waiting for migrations to apply..."
 	@until docker compose exec -T postgres psql -tA -U nester nester_dev -c "SELECT to_regclass('public.users')" | grep -q users; do sleep 1; done
 	$(MAKE) dev-seed
+
+# Backup / restore (nester#795 / #1384 mainnet backup & encrypted off-site restore runbook).
+
+db-backup:
+	scripts/db-backup.sh
+
+db-restore:
+	scripts/db-restore.sh $(FILE)
+
+db-restore-drill:
+	@echo "Running restore drill..."
+	@mkdir -p backups
+	@DATABASE_DSN="postgres://nester:nester_dev_password@localhost:5432/nester_dev?sslmode=disable" scripts/db-backup.sh
+	@scripts/db-restore-drill.sh

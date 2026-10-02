@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/balanceaudit"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 )
 
@@ -315,6 +316,82 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, recor
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Vault cap check (nester#1316): SELECT ... FOR UPDATE locks the vaults
+	// row before the credit, so a concurrent deposit on the same vault queues
+	// on this lock and re-reads the post-credit balance, same as
+	// RecordWithdrawal's FOR UPDATE (nester#1084).
+	var rawBalance string
+	var rawCap sql.NullString
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT current_balance, soft_capacity FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		id.String(),
+	).Scan(&rawBalance, &rawCap); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return vault.ErrVaultNotFound
+		}
+		return mapRepositoryError(err)
+	}
+
+	if rawCap.Valid {
+		vaultCap, err := decimal.NewFromString(rawCap.String)
+		if err != nil {
+			return fmt.Errorf("parse soft_capacity: %w", err)
+		}
+		balance, err := decimal.NewFromString(rawBalance)
+		if err != nil {
+			return fmt.Errorf("parse current_balance: %w", err)
+		}
+		if err := caps.CheckVaultCap(balance, &vaultCap, record.Amount); err != nil {
+			return err
+		}
+	}
+
+	// Per-user rolling 24h cap check (nester#1316): lock the user's row so a
+	// second concurrent deposit by the same user cannot read the same
+	// pre-deposit rolling total and also pass. The sum below runs while that
+	// lock is held and while this deposit's own row has not yet been
+	// inserted into vault_transactions, so it is added explicitly.
+	if record.UserID != uuid.Nil {
+		var rawUserCap sql.NullString
+		if err := tx.QueryRowContext(
+			ctx,
+			`SELECT daily_deposit_cap FROM users WHERE id = $1 FOR UPDATE`,
+			record.UserID.String(),
+		).Scan(&rawUserCap); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return mapRepositoryError(err)
+		}
+
+		if rawUserCap.Valid {
+			userCap, err := decimal.NewFromString(rawUserCap.String)
+			if err != nil {
+				return fmt.Errorf("parse daily_deposit_cap: %w", err)
+			}
+
+			var rawRolling sql.NullString
+			if err := tx.QueryRowContext(
+				ctx,
+				`SELECT SUM(amount) FROM vault_transactions
+				 WHERE user_id = $1 AND type = 'deposit' AND created_at >= NOW() - INTERVAL '24 hours'`,
+				record.UserID.String(),
+			).Scan(&rawRolling); err != nil {
+				return mapRepositoryError(err)
+			}
+
+			rolling := decimal.Zero
+			if rawRolling.Valid {
+				rolling, err = decimal.NewFromString(rawRolling.String)
+				if err != nil {
+					return fmt.Errorf("parse rolling deposit total: %w", err)
+				}
+			}
+
+			if err := caps.CheckUserDailyCap(rolling, &userCap, record.Amount); err != nil {
+				return err
+			}
+		}
+	}
+
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE vaults
@@ -328,12 +405,9 @@ func (r *VaultRepository) RecordDeposit(ctx context.Context, id uuid.UUID, recor
 	if err != nil {
 		return mapRepositoryError(err)
 	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
+	if rowsAffected, err := result.RowsAffected(); err != nil {
 		return err
-	}
-	if rowsAffected == 0 {
+	} else if rowsAffected == 0 {
 		return vault.ErrVaultNotFound
 	}
 

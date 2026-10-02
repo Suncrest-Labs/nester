@@ -3,12 +3,12 @@
 mod basket;
 mod breaker;
 pub mod conversion;
+pub mod locks;
 
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN,
-    Env,
-    IntoVal, Symbol, Val, Vec,
+    Env, IntoVal, Symbol, Val, Vec,
 };
 
 pub use breaker::{BreakerConfig, BreakerStatus, Severity, TripReason};
@@ -99,6 +99,31 @@ impl<'a> VaultTokenContractClient<'a> {
     fn total_supply(&self) -> i128 {
         self.call("total_supply", soroban_sdk::vec![self.env])
     }
+
+    /// Issue #802: mints boost shares without changing total_assets.
+    fn mint_boost_shares(&self, to: &Address, shares: &i128) {
+        self.call(
+            "mint_boost_shares",
+            soroban_sdk::vec![
+                self.env,
+                to.clone().into_val(self.env),
+                (*shares).into_val(self.env)
+            ],
+        )
+    }
+
+    /// Issue #802: burns a broken lock's shares without changing
+    /// total_assets (the vault handles the asset-side reduction itself).
+    fn burn_shares(&self, from: &Address, shares: &i128) {
+        self.call(
+            "burn_shares",
+            soroban_sdk::vec![
+                self.env,
+                from.clone().into_val(self.env),
+                (*shares).into_val(self.env)
+            ],
+        )
+    }
 }
 
 mod queue;
@@ -121,6 +146,9 @@ const REBALANCE: Symbol = symbol_short!("REBAL");
 /// Emitted when a rebalance skips a source because its adapter failed.
 const SOURCE_SKIPPED: Symbol = symbol_short!("SRC_SKIP");
 const HARVEST: Symbol = symbol_short!("HARVEST");
+/// Time-vested yield report events (issue #803).
+const YIELD_STREAM_STARTED: Symbol = symbol_short!("YLD_STRT");
+const YIELD_RELEASED: Symbol = symbol_short!("YLD_RLSD");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
 const DEFAULT_REBALANCE_COOLDOWN: u64 = 3600;
 /// Default rebalance slippage tolerance: 50 bps (0.5%) — issue #638.
@@ -137,6 +165,15 @@ const DEFAULT_MAX_REBALANCE_VALUE_BPS: u32 = rebalance::DEFAULT_MAX_REBALANCE_VA
 const DEFAULT_MAX_LEG_SLIPPAGE_BPS: u32 = rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING;
 const PNLTY_CHG: Symbol = symbol_short!("PNLTY_CHG");
 const PNLTY_DST: Symbol = symbol_short!("PNLTY_DST");
+/// Emitted by `set_max_deposit`/`set_min_deposit`, issue #1354: cap changes
+/// were silent on-chain, which the off-chain indexer needs to reconstruct
+/// config state without extra RPC calls.
+const CAP_CHG: Symbol = symbol_short!("CAP_CHG");
+/// Time-locked savings vault events (issue #802).
+const LOCK_OPEN: Symbol = symbol_short!("LOCK_OPEN");
+const LOCK_UNLK: Symbol = symbol_short!("LOCK_UNLK");
+const LOCK_BRK: Symbol = symbol_short!("LOCK_BRK");
+const LOCK_BST: Symbol = symbol_short!("LOCK_BST");
 /// Default split: 70% of every penalty compensates remaining depositors,
 /// 30% is protocol revenue — within the compile-time treasury cap.
 const DEFAULT_DEPOSITOR_SHARE_BPS: u32 = 10_000 - nester_common::MAX_TREASURY_SHARE_BPS + 2_000;
@@ -157,6 +194,17 @@ pub struct FeeConfig {
 pub struct FeeConfigUpdatedEventData {
     pub old_config: FeeConfig,
     pub new_config: FeeConfig,
+}
+
+/// Shared by `set_max_deposit`/`set_min_deposit`: which cap changed, and its
+/// old/new value. One struct for both setters (DRY) rather than a
+/// near-identical struct per field.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CapChangedEventData {
+    pub field: Symbol,
+    pub old_value: i128,
+    pub new_value: i128,
 }
 
 #[contracttype]
@@ -204,6 +252,25 @@ pub struct WithdrawEventData {
 #[derive(Clone, Debug)]
 pub struct TimestampEventData {
     pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct YieldStreamStartedEventData {
+    /// Total amount now vesting over the stream's window (the new report's
+    /// amount plus any not-yet-vested remainder folded in from a prior
+    /// still-active stream — see `start_or_extend_yield_stream`).
+    pub total: i128,
+    pub started_at: u64,
+    pub ends_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct YieldReleasedEventData {
+    /// Amount moved from the vesting stream into `TotalAssets` this call.
+    pub released: i128,
+    pub remaining: i128,
 }
 
 #[contracttype]
@@ -396,6 +463,8 @@ enum DataKey {
     SharePriceBaseline,
     SharePriceBaselineAt,
     SourceFailureCount,
+    DepositAllowlistEnabled,
+    DepositAllowlisted(Address),
     BreakerConfigV2,
     // Multi-asset vault support (#804)
     BasketAssets,         // Vec<AssetConfig> for multi-asset vaults
@@ -405,6 +474,53 @@ enum DataKey {
     MaxPriceDeviationBps, // u32 maximum price deviation
     // --- Referral integration (issue #818) ---
     ReferralContract,
+    // --- Time-vested yield reports (issue #803) ---
+    /// The active (or most recently active) yield vesting stream. Absent
+    /// means no stream has ever started.
+    YieldVestingStream,
+    /// Vesting window duration in seconds, admin-configurable. Absent
+    /// defaults to [`DEFAULT_YIELD_VESTING_SECONDS`].
+    YieldVestingPeriodSeconds,
+    // --- Time-locked savings vault (issue #802) ---
+    /// Admin-configured lock tiers. Absent defaults to
+    /// `locks::default_tiers`.
+    LockTiers,
+    /// Full (day-one) early-break penalty rate, in bps. Absent defaults to
+    /// `locks::default_break_penalty_bps`.
+    LockBreakPenaltyBps,
+    /// Next lock id to assign for `user` (monotonically increasing per
+    /// user; never reused, even after a lock is fully closed, so a stale
+    /// off-chain reference can never collide with a new lock).
+    NextLockId(Address),
+    /// One user's open locked positions, in creation order. A lock is
+    /// removed from this list (not merely marked closed) once fully
+    /// unlocked or broken — the position's own historical record, if
+    /// needed, is reconstructable from its emitted events.
+    UserLocks(Address),
+    /// Vault-wide count of currently open locks, across every user —
+    /// incremented on `deposit_locked`, decremented on `unlock_position`/
+    /// `break_lock`. Checked against
+    /// [`nester_common::constants::MAX_TOTAL_OPEN_LOCKS`] without ever
+    /// having to enumerate every user's locks to compute it.
+    TotalOpenLocks,
+    /// Sum of `shares` across every currently open lock, vault-wide. The
+    /// `total_locked_shares` term `settle_boost_for_all_open_locks` and
+    /// `total_weight` need, kept as a running total for the same reason as
+    /// `TotalOpenLocks`.
+    TotalLockedShares,
+    /// Sum of `shares * boost_bps` across every currently open lock,
+    /// vault-wide — the `W` (minus the flexible pool's own contribution)
+    /// in the yield-boost derivation. Kept as a running total rather than
+    /// recomputed by iterating every lock on every `report_yield` call.
+    TotalLockedWeight,
+    /// Every distinct address that currently has at least one open lock —
+    /// Soroban has no native "enumerate every persistent key" primitive,
+    /// so this is what `settle_locked_boost` walks to find every open
+    /// lock, vault-wide, bounded by `MAX_TOTAL_OPEN_LOCKS`. An address is
+    /// added the first time its open-lock count goes from 0 to 1 and
+    /// removed when it goes back to 0 — see `add_open_lock_owner`/
+    /// `remove_open_lock_owner_if_empty`.
+    OpenLockOwners,
 }
 
 /// Why a penalty was charged (issue #805). `LockBreak` and `WeightDeviation`
@@ -445,6 +561,45 @@ pub struct PenaltyConfig {
     pub depositor_share_bps: u32,
     pub min_distribution_amount: i128,
     pub distribution_cooldown: u64,
+}
+
+// -----------------------------------------------------------------------
+// Time-locked savings vault events (issue #802)
+// -----------------------------------------------------------------------
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LockOpenedEventData {
+    pub lock_id: u64,
+    pub shares: i128,
+    pub principal: i128,
+    pub duration_secs: u64,
+    pub unlock_at: u64,
+    pub boost_bps: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LockUnlockedEventData {
+    pub lock_id: u64,
+    pub shares_moved_to_flexible: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LockBrokenEventData {
+    pub lock_id: u64,
+    pub shares_burned: i128,
+    pub assets_returned: i128,
+    pub penalty_amount: i128,
+    pub penalty_bps_applied: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LockBoostSettledEventData {
+    pub locks_settled: u32,
+    pub shares_minted: i128,
 }
 
 /// One (threshold, rate) breakpoint in an on-chain fee schedule (issue
@@ -884,12 +1039,9 @@ fn circuit_breaker_headroom(env: &Env) -> i128 {
         return 0;
     };
 
-    let threshold = nester_common::fees::mul_div(
-        get_total_assets(env),
-        config.threshold_bps as i128,
-        10_000,
-    )
-    .unwrap_or(0);
+    let threshold =
+        nester_common::fees::mul_div(get_total_assets(env), config.threshold_bps as i128, 10_000)
+            .unwrap_or(0);
     // A zero threshold disables the check in `check_circuit_breaker`.
     if threshold == 0 {
         return i128::MAX;
@@ -1264,6 +1416,537 @@ fn set_user_yield(env: &Env, user: &Address, amount: i128) {
         .set(&DataKey::UserYield(user.clone()), &amount);
 }
 
+// ---------------------------------------------------------------------------
+// Time-vested yield reports (issue #803)
+//
+// A reported yield amount is no longer applied to TotalAssets instantly.
+// Instead it vests linearly into TotalAssets over YieldVestingPeriodSeconds,
+// closing the sniping hole: a deposit made immediately before report_yield
+// only captures the sliver of the report that vests during however long the
+// attacker actually holds shares afterward, not the whole amount. A holder
+// who was already present before the report captures proportionally more,
+// simply by virtue of the report continuing to vest while they hold shares
+// and the attacker (if they withdraw quickly) does not.
+//
+// This intentionally keeps yield inside share price (this vault's existing,
+// deeply-entangled model — fee tiers, the emergency-withdrawal preview, and
+// the referral hook all read `redeemable = amount_for_shares(shares)` as the
+// yield signal); vesting is exactly the mechanism the issue itself names as
+// an acceptable alternative to a full accumulator migration when the two are
+// in tension, and is far smaller surgery on a 4000+ line vault contract.
+// ---------------------------------------------------------------------------
+
+/// Default vesting window: how long a single `report_yield` call's amount
+/// takes to fully land in `TotalAssets`. 1 day - long enough that a
+/// snipe-and-immediately-withdraw captures only a small fraction of a
+/// report, short enough that legitimate holders are not kept waiting an
+/// unreasonable time for genuinely-earned yield to become spendable.
+/// Admin-adjustable between 1 hour and 30 days via `set_yield_vesting_period`.
+pub const DEFAULT_YIELD_VESTING_SECONDS: u64 = 24 * 60 * 60;
+pub const MIN_YIELD_VESTING_SECONDS: u64 = 60 * 60;
+pub const MAX_YIELD_VESTING_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct YieldVestingStream {
+    /// Total amount this stream will release by `ends_at`.
+    pub total: i128,
+    /// Amount already released into `TotalAssets` so far.
+    pub released: i128,
+    pub started_at: u64,
+    pub ends_at: u64,
+}
+
+fn get_yield_vesting_period(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::YieldVestingPeriodSeconds)
+        .unwrap_or(DEFAULT_YIELD_VESTING_SECONDS)
+}
+
+fn get_yield_stream(env: &Env) -> Option<YieldVestingStream> {
+    env.storage().instance().get(&DataKey::YieldVestingStream)
+}
+
+fn set_yield_stream(env: &Env, stream: &YieldVestingStream) {
+    env.storage()
+        .instance()
+        .set(&DataKey::YieldVestingStream, stream);
+}
+
+/// Amount of `stream` that has vested by `now` but is not yet reflected in
+/// `stream.released`. Linear vesting: `total * elapsed / duration`, capped
+/// at `total - released` so a stale stream (nobody called anything for a
+/// long time) never over-releases. Rounds down — the vault-favouring
+/// direction — so a fraction of a base unit can be left stranded in the
+/// stream forever rather than ever over-crediting `TotalAssets`.
+fn vested_amount(stream: &YieldVestingStream, now: u64) -> i128 {
+    let remaining = stream.total.saturating_sub(stream.released);
+    if remaining <= 0 || now <= stream.started_at {
+        return 0;
+    }
+    if now >= stream.ends_at {
+        return remaining;
+    }
+    let duration = stream.ends_at.saturating_sub(stream.started_at);
+    if duration == 0 {
+        return remaining;
+    }
+    let elapsed = now - stream.started_at;
+    let total_vested_by_now =
+        nester_common::fees::mul_div(stream.total, elapsed as i128, duration as i128).unwrap_or(0);
+    total_vested_by_now
+        .saturating_sub(stream.released)
+        .clamp(0, remaining)
+}
+
+/// Releases whatever portion of the active yield stream has vested since it
+/// was last touched, adding it to `TotalAssets` exactly like `report_yield`
+/// already did before this stream existed. A no-op (cheap: one storage read)
+/// when there is no active stream or nothing has vested yet.
+///
+/// Must be called before any operation that reads `TotalAssets`/share price
+/// in a way that matters for fairness between holders — deposit, withdraw,
+/// harvest, and report_yield itself (so a new report correctly folds in any
+/// unreleased remainder of the previous one; see
+/// `start_or_extend_yield_stream`) — so no caller can ever observe a share
+/// price that omits yield which has already, in real time, finished vesting.
+fn release_vested_yield(env: &Env) {
+    let Some(mut stream) = get_yield_stream(env) else {
+        return;
+    };
+    let now = env.ledger().timestamp();
+    let to_release = vested_amount(&stream, now);
+    if to_release <= 0 {
+        return;
+    }
+
+    let total_assets = get_total_assets(env);
+    // Snapshot BEFORE this release, matching the module doc's TA/TS
+    // preconditions exactly — the boost settlement below must run against
+    // the same pre-increase totals `to_release` is about to be added on
+    // top of, not the post-increase ones.
+    let total_supply = vault_token_client(env).total_supply();
+
+    let new_total = total_assets
+        .checked_add(to_release)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+    set_total_assets(env, new_total);
+    sync_vault_token_total_assets(env);
+
+    stream.released = stream
+        .released
+        .checked_add(to_release)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+    set_yield_stream(env, &stream);
+
+    emit_event(
+        env,
+        VAULT,
+        YIELD_RELEASED,
+        env.current_contract_address(),
+        YieldReleasedEventData {
+            released: to_release,
+            remaining: stream.total.saturating_sub(stream.released),
+        },
+    );
+
+    settle_locked_boost(env, total_assets, total_supply, to_release);
+}
+
+/// Applies the locked-pool yield boost for exactly the `yield_amount` that
+/// just landed in `TotalAssets` (see `locks.rs`'s module doc for the full
+/// derivation). Called from every site that can move `TotalAssets` via
+/// vesting — `release_vested_yield` is itself called from `deposit`,
+/// `withdraw`, `report_yield`, `unlock_position`, and `break_lock`, so this
+/// one call site covers all of them rather than needing to be duplicated
+/// at each.
+///
+/// A no-op when there are no open locks (the common case for a vault with
+/// no locked depositors) or when the vault-wide open-lock count exceeds
+/// `MAX_TOTAL_OPEN_LOCKS` (defensive; `deposit_locked` itself enforces the
+/// cap, so this should be unreachable, but never panics a yield release
+/// over a lock-side invariant breaking).
+fn settle_locked_boost(env: &Env, total_assets: i128, total_supply: i128, yield_amount: i128) {
+    let total_locked_shares = get_total_locked_shares(env);
+    if total_locked_shares <= 0 || yield_amount <= 0 {
+        return;
+    }
+    let total_locked_weight = get_total_locked_weight(env);
+
+    // Every open lock, vault-wide — bounded by MAX_TOTAL_OPEN_LOCKS, and
+    // this whole function is only reached when a positive amount just
+    // vested, not on every single call that happens to touch the vault.
+    let all_open_locks = get_all_open_locks(env);
+    if all_open_locks.is_empty() {
+        return;
+    }
+
+    let settlement = match locks::settle_boost_for_all_open_locks(
+        &all_open_locks,
+        total_assets,
+        total_supply,
+        total_locked_shares,
+        total_locked_weight,
+        yield_amount,
+    ) {
+        Ok(s) => s,
+        Err(_) => return, // defensive: never panic a yield release over lock-side arithmetic
+    };
+
+    if settlement.minted_total <= 0 {
+        return;
+    }
+
+    // A locked position's shares live in its OWNER's own vault_token
+    // balance (deposit_locked mints to the user, same as an ordinary
+    // deposit — the lock is bookkeeping metadata on top, not custodial
+    // pooling), so the boost mint for each lock must go to that lock's own
+    // owner, not the vault contract. Grouped by owner (a user can hold
+    // several open locks) so each owner is minted once, not once per lock.
+    let mut new_total_locked_shares: i128 = 0;
+    let mut new_total_locked_weight: i128 = 0;
+    let mut by_owner: soroban_sdk::Map<Address, Vec<locks::LockedPosition>> =
+        soroban_sdk::Map::new(env);
+    let mut minted_by_owner: soroban_sdk::Map<Address, i128> = soroban_sdk::Map::new(env);
+    for (original, updated) in all_open_locks
+        .iter()
+        .zip(settlement.updated_positions.iter())
+    {
+        new_total_locked_shares = new_total_locked_shares.saturating_add(updated.shares);
+        new_total_locked_weight = new_total_locked_weight
+            .saturating_add(updated.shares.saturating_mul(updated.boost_bps as i128));
+
+        let mut owner_locks = by_owner
+            .get(updated.owner.clone())
+            .unwrap_or_else(|| Vec::new(env));
+        owner_locks.push_back(updated.clone());
+        by_owner.set(updated.owner.clone(), owner_locks);
+
+        let lock_minted = updated.shares.saturating_sub(original.shares);
+        if lock_minted > 0 {
+            let prior = minted_by_owner.get(updated.owner.clone()).unwrap_or(0);
+            minted_by_owner.set(updated.owner.clone(), prior.saturating_add(lock_minted));
+        }
+    }
+    for (owner, owner_locks) in by_owner.iter() {
+        set_user_locks(env, &owner, &owner_locks);
+    }
+
+    set_total_locked_shares(env, new_total_locked_shares);
+    set_total_locked_weight(env, new_total_locked_weight);
+
+    for (owner, minted) in minted_by_owner.iter() {
+        vault_token_client(env).mint_boost_shares(&owner, &minted);
+    }
+
+    emit_event(
+        env,
+        VAULT,
+        LOCK_BST,
+        env.current_contract_address(),
+        LockBoostSettledEventData {
+            locks_settled: all_open_locks.len(),
+            shares_minted: settlement.minted_total,
+        },
+    );
+}
+
+/// Starts a new vesting stream for `amount`, folding in whatever portion of
+/// a still-active previous stream has not yet vested (its `total -
+/// released`, after `release_vested_yield` has already moved the vested
+/// portion out). Folding the remainder in — rather than either discarding it
+/// or leaving two streams running — means a manager who reports yield
+/// frequently cannot reset an in-flight stream to grief holders who were
+/// about to receive it, and cannot accidentally double-pay by starting a
+/// second concurrent stream either.
+///
+/// `amount` may be negative (an impairment): it is applied to `TotalAssets`
+/// immediately rather than vested, mirroring the pre-vesting behaviour for
+/// losses — there is no sniping concern to guard against for a loss (nobody
+/// benefits from front-running a markdown), and vesting a loss would leave
+/// share price overstated for longer than necessary, working against
+/// depositors rather than protecting them.
+fn start_or_extend_yield_stream(env: &Env, amount: i128) {
+    if amount < 0 {
+        let total_assets = get_total_assets(env);
+        let new_total = total_assets
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+        set_total_assets(env, new_total);
+        sync_vault_token_total_assets(env);
+        return;
+    }
+    if amount == 0 {
+        return;
+    }
+
+    let now = env.ledger().timestamp();
+    let carry_over = get_yield_stream(env)
+        .map(|s| s.total.saturating_sub(s.released))
+        .unwrap_or(0);
+    let total = amount
+        .checked_add(carry_over)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+
+    let period = get_yield_vesting_period(env);
+    let ends_at = now
+        .checked_add(period)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+
+    let stream = YieldVestingStream {
+        total,
+        released: 0,
+        started_at: now,
+        ends_at,
+    };
+    set_yield_stream(env, &stream);
+
+    emit_event(
+        env,
+        VAULT,
+        YIELD_STREAM_STARTED,
+        env.current_contract_address(),
+        YieldStreamStartedEventData {
+            total,
+            started_at: now,
+            ends_at,
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Time-locked savings vault storage helpers (issue #802)
+// ---------------------------------------------------------------------------
+
+fn get_lock_tiers(env: &Env) -> Vec<locks::LockTier> {
+    env.storage()
+        .instance()
+        .get(&DataKey::LockTiers)
+        .unwrap_or_else(|| locks::default_tiers(env))
+}
+
+fn set_lock_tiers(env: &Env, tiers: &Vec<locks::LockTier>) {
+    env.storage().instance().set(&DataKey::LockTiers, tiers);
+}
+
+fn get_lock_break_penalty_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::LockBreakPenaltyBps)
+        .unwrap_or_else(locks::default_break_penalty_bps)
+}
+
+fn set_lock_break_penalty_bps(env: &Env, bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::LockBreakPenaltyBps, &bps);
+}
+
+/// Persistent storage: a user's locks live for as long as the user keeps
+/// touching the vault, TTL-bumped on every read and write (issue #802's
+/// explicit requirement) so an open lock is never archived mid-term.
+const LOCK_TTL_THRESHOLD: u32 = 1_000;
+const LOCK_TTL_EXTEND_TO: u32 = 10_000;
+
+fn get_user_locks(env: &Env, user: &Address) -> Vec<locks::LockedPosition> {
+    let key = DataKey::UserLocks(user.clone());
+    let value = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LOCK_TTL_THRESHOLD, LOCK_TTL_EXTEND_TO);
+    }
+    value
+}
+
+fn set_user_locks(env: &Env, user: &Address, locks: &Vec<locks::LockedPosition>) {
+    let key = DataKey::UserLocks(user.clone());
+    env.storage().persistent().set(&key, locks);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, LOCK_TTL_THRESHOLD, LOCK_TTL_EXTEND_TO);
+}
+
+fn get_next_lock_id(env: &Env, user: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::NextLockId(user.clone()))
+        .unwrap_or(0)
+}
+
+fn set_next_lock_id(env: &Env, user: &Address, next: u64) {
+    let key = DataKey::NextLockId(user.clone());
+    env.storage().persistent().set(&key, &next);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, LOCK_TTL_THRESHOLD, LOCK_TTL_EXTEND_TO);
+}
+
+fn get_total_open_locks(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalOpenLocks)
+        .unwrap_or(0)
+}
+
+fn set_total_open_locks(env: &Env, count: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalOpenLocks, &count);
+}
+
+fn get_total_locked_shares(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalLockedShares)
+        .unwrap_or(0)
+}
+
+fn set_total_locked_shares(env: &Env, amount: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalLockedShares, &amount);
+}
+
+/// Sum of `shares` across `user`'s own open locks. Bounded by
+/// `MAX_OPEN_LOCKS_PER_USER`, so — unlike a vault-wide iteration — this is
+/// always a small, safe loop over one user's own data.
+fn user_locked_shares_total(env: &Env, user: &Address) -> i128 {
+    let mut total: i128 = 0;
+    for lock in get_user_locks(env, user).iter() {
+        total = total
+            .checked_add(lock.shares)
+            .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+    }
+    total
+}
+
+/// Finds `lock_id` in `user_locks` (a small, per-user list bounded by
+/// `MAX_OPEN_LOCKS_PER_USER`), returning its index and a clone of the
+/// position.
+fn find_lock(
+    user_locks: &Vec<locks::LockedPosition>,
+    lock_id: u64,
+) -> Result<(u32, locks::LockedPosition), ContractError> {
+    for i in 0..user_locks.len() {
+        let position = user_locks.get(i).unwrap();
+        if position.lock_id == lock_id {
+            return Ok((i, position));
+        }
+    }
+    Err(ContractError::TimelockNotFound)
+}
+
+/// Removes the lock at `index` from `user_locks` (persisting the updated
+/// list) and decrements every vault-wide running total it contributed to.
+/// Shared by `unlock_position` (moves shares to flexible, no burn) and
+/// `break_lock` (shares already burned by the caller) — both need the same
+/// bookkeeping cleanup, just with a different reason for the lock closing.
+fn remove_lock_and_update_totals(
+    env: &Env,
+    user: &Address,
+    user_locks: &mut Vec<locks::LockedPosition>,
+    index: u32,
+    position: &locks::LockedPosition,
+) -> Result<(), ContractError> {
+    user_locks.remove(index);
+    set_user_locks(env, user, user_locks);
+    remove_open_lock_owner_if_empty(env, user);
+
+    let total_open = get_total_open_locks(env);
+    set_total_open_locks(env, total_open.saturating_sub(1));
+
+    let new_total_locked_shares = get_total_locked_shares(env)
+        .checked_sub(position.shares)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    set_total_locked_shares(env, new_total_locked_shares);
+
+    let weight_delta = position
+        .shares
+        .checked_mul(position.boost_bps as i128)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    let new_total_locked_weight = get_total_locked_weight(env)
+        .checked_sub(weight_delta)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    set_total_locked_weight(env, new_total_locked_weight);
+
+    Ok(())
+}
+
+fn get_total_locked_weight(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalLockedWeight)
+        .unwrap_or(0)
+}
+
+fn set_total_locked_weight(env: &Env, amount: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalLockedWeight, &amount);
+}
+
+fn get_open_lock_owners(env: &Env) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::OpenLockOwners)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn set_open_lock_owners(env: &Env, owners: &Vec<Address>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::OpenLockOwners, owners);
+}
+
+/// Adds `user` to the vault-wide open-lock-owners index if not already
+/// present. Called whenever a user's open-lock count goes from 0 to 1.
+fn add_open_lock_owner(env: &Env, user: &Address) {
+    let mut owners = get_open_lock_owners(env);
+    for owner in owners.iter() {
+        if owner == *user {
+            return;
+        }
+    }
+    owners.push_back(user.clone());
+    set_open_lock_owners(env, &owners);
+}
+
+/// Removes `user` from the vault-wide open-lock-owners index if their open
+/// lock list is now empty. Called after any lock closes.
+fn remove_open_lock_owner_if_empty(env: &Env, user: &Address) {
+    if !get_user_locks(env, user).is_empty() {
+        return;
+    }
+    let owners = get_open_lock_owners(env);
+    let mut updated = Vec::new(env);
+    for owner in owners.iter() {
+        if owner != *user {
+            updated.push_back(owner);
+        }
+    }
+    set_open_lock_owners(env, &updated);
+}
+
+/// Every currently open lock, vault-wide, across every owner — walks
+/// `OpenLockOwners` (bounded by `MAX_TOTAL_OPEN_LOCKS` since that many
+/// distinct owners is itself bounded by that many total locks) and reads
+/// each owner's own small, per-user list.
+fn get_all_open_locks(env: &Env) -> Vec<locks::LockedPosition> {
+    let mut all = Vec::new(env);
+    for owner in get_open_lock_owners(env).iter() {
+        for position in get_user_locks(env, &owner).iter() {
+            all.push_back(position);
+        }
+    }
+    all
+}
+
 fn get_total_reported_yield(env: &Env) -> i128 {
     env.storage()
         .instance()
@@ -1608,7 +2291,63 @@ impl VaultContract {
         if amount <= 0 {
             panic_with_error!(&env, ContractError::ConfigOutOfRange);
         }
+        let old_value: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxDeposit)
+            .unwrap_or(i128::MAX);
         env.storage().instance().set(&DataKey::MaxDeposit, &amount);
+        emit_event(
+            &env,
+            VAULT,
+            CAP_CHG,
+            caller,
+            CapChangedEventData {
+                field: symbol_short!("MAX_DEP"),
+                old_value,
+                new_value: amount,
+            },
+        );
+    }
+
+    /// Enable or disable the mainnet deposit allowlist gate.
+    ///
+    /// The gate is disabled by default for backwards compatibility. When it is
+    /// enabled, only addresses explicitly added with
+    /// [`Self::set_deposit_allowlisted`] may deposit.
+    pub fn set_deposit_allowlist_enabled(env: Env, caller: Address, enabled: bool) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::DepositAllowlistEnabled, &enabled);
+    }
+
+    /// Add or remove one depositor from the controlled-rollout allowlist.
+    pub fn set_deposit_allowlisted(env: Env, caller: Address, depositor: Address, allowed: bool) {
+        require_initialized(&env);
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DepositAllowlisted(depositor), &allowed);
+    }
+
+    /// Returns whether the controlled-rollout deposit gate is enabled.
+    pub fn deposit_allowlist_enabled(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::DepositAllowlistEnabled)
+            .unwrap_or(false)
+    }
+
+    /// Returns whether `depositor` is currently admitted by the allowlist.
+    pub fn is_deposit_allowlisted(env: Env, depositor: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DepositAllowlisted(depositor))
+            .unwrap_or(false)
     }
 
     pub fn set_min_deposit(env: Env, caller: Address, amount: i128) {
@@ -1618,7 +2357,23 @@ impl VaultContract {
         if amount < 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
+        let old_value: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDeposit)
+            .unwrap_or(0);
         env.storage().instance().set(&DataKey::MinDeposit, &amount);
+        emit_event(
+            &env,
+            VAULT,
+            CAP_CHG,
+            caller,
+            CapChangedEventData {
+                field: symbol_short!("MIN_DEP"),
+                old_value,
+                new_value: amount,
+            },
+        );
     }
 
     pub fn get_min_deposit(env: Env) -> i128 {
@@ -2099,6 +2854,13 @@ impl VaultContract {
             panic_with_error!(&env, ContractError::Unauthorized);
         }
 
+        // Release whatever has already vested from a prior report before
+        // touching TotalAssets again, so a still-active stream's progress is
+        // captured exactly once (via start_or_extend_yield_stream's
+        // carry-over calculation below) rather than either lost or
+        // double-counted against this new report.
+        release_vested_yield(&env);
+
         let total_assets = get_total_assets(&env);
 
         // Yield-sanity trip (#817): an implausible single report is not
@@ -2109,11 +2871,16 @@ impl VaultContract {
             return;
         }
 
-        let new_total = total_assets
-            .checked_add(amount)
-            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
-        set_total_assets(&env, new_total);
-        sync_vault_token_total_assets(&env);
+        // Time-vested yield reports (issue #803): a positive report is
+        // spread into TotalAssets linearly over a vesting window rather than
+        // landing all at once, so a deposit made immediately before this
+        // call can only ever capture the sliver that vests during however
+        // long the depositor actually goes on to hold shares afterward — not
+        // the whole report, which is what let a snipe-and-immediately-
+        // withdraw capture disproportionate value under instant application.
+        // A negative amount (an impairment) is still applied immediately;
+        // see start_or_extend_yield_stream's doc comment for why.
+        start_or_extend_yield_stream(&env, amount);
 
         // Track per-caller pending yield and aggregate reported yield for harvest.
         // Only accumulate positive yield; losses (negative amount) reduce
@@ -2164,6 +2931,7 @@ impl VaultContract {
         require_active(&env);
         breaker::require_not_full_halt(&env);
         user.require_auth();
+        release_vested_yield(&env);
 
         let shares = get_shares(&env, &user);
         let redeemable = vault_token_client(&env).amount_for_shares(&shares);
@@ -3033,7 +3801,13 @@ impl VaultContract {
         }
 
         user.require_auth();
+        if Self::deposit_allowlist_enabled(env.clone())
+            && !Self::is_deposit_allowlisted(env.clone(), user.clone())
+        {
+            panic_with_error!(&env, ContractError::Unauthorized);
+        }
         accrue_management_fee(&env);
+        release_vested_yield(&env);
 
         // Validate the exchange-rate state before moving funds. In particular,
         // a live share supply backed by zero assets is insolvent and must not
@@ -3195,9 +3969,20 @@ impl VaultContract {
 
         user.require_auth();
         accrue_management_fee(&env);
+        release_vested_yield(&env);
 
+        // withdraw operates on flexible shares only (issue #802): a
+        // locked position's shares are excluded from what's available
+        // here, and requesting more than the flexible balance is a
+        // distinct, typed error (InsufficientFlexibleShares, mapped to
+        // InsufficientBalance — see errors.rs's reuse table) rather than
+        // silently reaching into a lock.
         let current_shares = get_shares(&env, &user);
-        if shares > current_shares {
+        let locked_shares = user_locked_shares_total(&env, &user);
+        let flexible_shares = current_shares
+            .checked_sub(locked_shares)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        if shares > flexible_shares {
             panic_with_error!(&env, ContractError::InsufficientBalance);
         }
 
@@ -3324,6 +4109,311 @@ impl VaultContract {
         new_user_shares
     }
 
+    // -----------------------------------------------------------------------
+    // Time-locked savings vault (issue #802)
+    // -----------------------------------------------------------------------
+
+    /// Deposit `amount` for a fixed `lock_duration_secs`, in exchange for a
+    /// yield boost proportional to that term. `lock_duration_secs` must
+    /// match one of the admin-configured tiers exactly (`get_lock_tiers`).
+    ///
+    /// Reuses `deposit_internal`'s share-minting math (so share price stays
+    /// a single global quantity — no separate accounting fork for locked
+    /// vs. flexible deposits), then immediately records the minted shares
+    /// as a new locked position instead of leaving them in the user's
+    /// flexible balance.
+    pub fn deposit_locked(
+        env: Env,
+        user: Address,
+        amount: i128,
+        min_shares_out: i128,
+        lock_duration_secs: u64,
+    ) -> Result<u64, ContractError> {
+        with_reentrancy_guard(env, |env| {
+            Self::deposit_locked_internal(env, user, amount, min_shares_out, lock_duration_secs)
+        })
+    }
+
+    fn deposit_locked_internal(
+        env: Env,
+        user: Address,
+        amount: i128,
+        min_shares_out: i128,
+        lock_duration_secs: u64,
+    ) -> Result<u64, ContractError> {
+        let tiers = get_lock_tiers(&env);
+        let tier = locks::find_tier(&tiers, lock_duration_secs)?;
+
+        let total_open = get_total_open_locks(&env);
+        let user_locks_before = get_user_locks(&env, &user);
+        locks::check_lock_limits(user_locks_before.len(), total_open)?;
+
+        // Mint shares via the exact same path a flexible deposit uses —
+        // deliberately not duplicated here, so a change to deposit's
+        // validation/fee/event logic can never drift out of sync between
+        // the two entry points.
+        let shares_before = get_shares(&env, &user);
+        Self::deposit_internal(env.clone(), user.clone(), amount, min_shares_out);
+        let shares_after = get_shares(&env, &user);
+        let minted_shares = shares_after
+            .checked_sub(shares_before)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        let now = env.ledger().timestamp();
+        let unlock_at = now
+            .checked_add(lock_duration_secs)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        let lock_id = get_next_lock_id(&env, &user);
+        set_next_lock_id(&env, &user, lock_id + 1);
+
+        let position = locks::LockedPosition {
+            lock_id,
+            owner: user.clone(),
+            shares: minted_shares,
+            created_at: now,
+            unlock_at,
+            tier,
+            boost_bps: tier.boost_bps,
+        };
+
+        let is_users_first_open_lock = user_locks_before.is_empty();
+        let mut user_locks = user_locks_before;
+        user_locks.push_back(position);
+        set_user_locks(&env, &user, &user_locks);
+        if is_users_first_open_lock {
+            add_open_lock_owner(&env, &user);
+        }
+
+        set_total_open_locks(&env, total_open + 1);
+        let new_total_locked_shares = get_total_locked_shares(&env)
+            .checked_add(minted_shares)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+        set_total_locked_shares(&env, new_total_locked_shares);
+        let weight_delta = minted_shares
+            .checked_mul(tier.boost_bps as i128)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+        let new_total_locked_weight = get_total_locked_weight(&env)
+            .checked_add(weight_delta)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+        set_total_locked_weight(&env, new_total_locked_weight);
+
+        emit_event(
+            &env,
+            VAULT,
+            LOCK_OPEN,
+            user,
+            LockOpenedEventData {
+                lock_id,
+                shares: minted_shares,
+                principal: amount,
+                duration_secs: lock_duration_secs,
+                unlock_at,
+                boost_bps: tier.boost_bps,
+            },
+        );
+
+        Ok(lock_id)
+    }
+
+    /// Claims a matured lock: moves its shares into the caller's flexible
+    /// balance. Explicit rather than automatic on `unlock_at` passing —
+    /// `withdraw` never has to iterate a user's lock list to discover
+    /// newly-matured entries, keeping it cheap regardless of how many
+    /// locks a user has ever opened.
+    pub fn unlock_position(env: Env, user: Address, lock_id: u64) -> Result<i128, ContractError> {
+        with_reentrancy_guard(env, |env| {
+            Self::unlock_position_internal(env, user, lock_id)
+        })
+    }
+
+    fn unlock_position_internal(
+        env: Env,
+        user: Address,
+        lock_id: u64,
+    ) -> Result<i128, ContractError> {
+        require_initialized(&env);
+        user.require_auth();
+        release_vested_yield(&env);
+
+        let mut user_locks = get_user_locks(&env, &user);
+        let (index, position) = find_lock(&user_locks, lock_id)?;
+
+        let now = env.ledger().timestamp();
+        if now < position.unlock_at {
+            return Err(ContractError::TimelockNotReady);
+        }
+
+        remove_lock_and_update_totals(&env, &user, &mut user_locks, index, &position)?;
+
+        emit_event(
+            &env,
+            VAULT,
+            LOCK_UNLK,
+            user,
+            LockUnlockedEventData {
+                lock_id,
+                shares_moved_to_flexible: position.shares,
+            },
+        );
+
+        Ok(position.shares)
+    }
+
+    /// Breaks a lock before maturity: burns its shares and returns their
+    /// underlying value minus a penalty that decays linearly from the
+    /// configured full rate at creation to zero at maturity. The penalty
+    /// is routed through the same escrow/distribution mechanism as the
+    /// existing early-withdrawal penalty (`charge_penalty`,
+    /// `distribute_penalties` — issue #805), not burned outright: it stays
+    /// inside the vault, lifting share price for every remaining
+    /// depositor, with an admin-configured slice instead routable to the
+    /// treasury.
+    pub fn break_lock(env: Env, user: Address, lock_id: u64) -> Result<i128, ContractError> {
+        with_reentrancy_guard(env, |env| Self::break_lock_internal(env, user, lock_id))
+    }
+
+    fn break_lock_internal(env: Env, user: Address, lock_id: u64) -> Result<i128, ContractError> {
+        require_initialized(&env);
+        require_active(&env);
+        user.require_auth();
+        release_vested_yield(&env);
+
+        let mut user_locks = get_user_locks(&env, &user);
+        let (index, position) = find_lock(&user_locks, lock_id)?;
+
+        let now = env.ledger().timestamp();
+        let asset_value = vault_token_client(&env).amount_for_shares(&position.shares);
+        let full_penalty_bps = get_lock_break_penalty_bps(&env);
+        let penalty = locks::break_penalty_amount(
+            asset_value,
+            full_penalty_bps,
+            position.created_at,
+            position.unlock_at,
+            now,
+        )?;
+        let penalty_bps_applied = if asset_value > 0 {
+            nester_common::fees::mul_div(penalty, 10_000, asset_value).unwrap_or(0) as u32
+        } else {
+            0
+        };
+
+        let return_amount = asset_value
+            .checked_sub(penalty)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        // Burn the lock's shares (raw burn — no total_assets change here;
+        // this call's own bookkeeping below reduces total_assets by exactly
+        // return_amount, and charge_penalty separately escrows `penalty`
+        // without touching total_assets at all, matching how the existing
+        // early-withdrawal fee is excluded from the amount transferred back
+        // to the user).
+        vault_token_client(&env).burn_shares(&user, &position.shares);
+
+        let total_assets = get_total_assets(&env);
+        let new_total_assets = total_assets
+            .checked_sub(return_amount)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+        set_total_assets(&env, new_total_assets);
+        sync_vault_token_total_assets(&env);
+
+        let token_address = self::VaultContract::get_token(env.clone());
+        let contract_address = env.current_contract_address();
+        transfer_tokens(
+            &env,
+            &token_address,
+            &contract_address,
+            &user,
+            &return_amount,
+        );
+
+        let current_reserves = get_vault_liquid_reserves(&env);
+        set_vault_liquid_reserves(
+            &env,
+            current_reserves
+                .checked_sub(return_amount)
+                .ok_or(ContractError::ArithmeticOverflow)?,
+        );
+
+        charge_penalty(
+            &env,
+            &user,
+            penalty,
+            PenaltyReason::LockBreak,
+            position.shares,
+        );
+
+        remove_lock_and_update_totals(&env, &user, &mut user_locks, index, &position)?;
+
+        emit_event(
+            &env,
+            VAULT,
+            LOCK_BRK,
+            user,
+            LockBrokenEventData {
+                lock_id,
+                shares_burned: position.shares,
+                assets_returned: return_amount,
+                penalty_amount: penalty,
+                penalty_bps_applied,
+            },
+        );
+
+        Ok(return_amount)
+    }
+
+    /// Every open locked position for `user`, plus their total locked
+    /// share count. `get_shares` continues to return the total (flexible +
+    /// locked) so existing integrations do not break; this is the
+    /// breakdown.
+    pub fn get_locked_positions(env: Env, user: Address) -> locks::LockedPositionsView {
+        let positions = get_user_locks(&env, &user);
+        let mut total_locked_shares: i128 = 0;
+        for position in positions.iter() {
+            total_locked_shares = total_locked_shares.saturating_add(position.shares);
+        }
+        locks::LockedPositionsView {
+            positions,
+            total_locked_shares,
+        }
+    }
+
+    pub fn get_lock_tiers(env: Env) -> Vec<locks::LockTier> {
+        get_lock_tiers(&env)
+    }
+
+    pub fn set_lock_tiers(
+        env: Env,
+        caller: Address,
+        tiers: Vec<locks::LockTier>,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+        if !AccessControl::has_role(&env, &caller, Role::Admin) {
+            return Err(ContractError::Unauthorized);
+        }
+        locks::validate_tiers(&tiers)?;
+        set_lock_tiers(&env, &tiers);
+        Ok(())
+    }
+
+    pub fn get_lock_break_penalty_bps(env: Env) -> u32 {
+        get_lock_break_penalty_bps(&env)
+    }
+
+    pub fn set_lock_break_penalty_bps(
+        env: Env,
+        caller: Address,
+        bps: u32,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+        if !AccessControl::has_role(&env, &caller, Role::Admin) {
+            return Err(ContractError::Unauthorized);
+        }
+        locks::validate_break_penalty_bps(bps)?;
+        set_lock_break_penalty_bps(&env, bps);
+        Ok(())
+    }
+
     pub fn emergency_withdraw_preview(
         env: Env,
         user: Address,
@@ -3366,6 +4456,7 @@ impl VaultContract {
         }
 
         user.require_auth();
+        release_vested_yield(&env);
 
         let principal = get_user_principal(&env, &user);
         if principal <= 0 {
@@ -3604,6 +4695,7 @@ impl VaultContract {
 
     fn process_fair_queue_internal(env: Env, _caller: Address, max_entries: u32) -> u32 {
         require_initialized(&env);
+        release_vested_yield(&env);
 
         let available_liquidity = get_vault_liquid_reserves(&env);
         let plan = queue::plan_fills(&env, max_entries, available_liquidity, |shares| {
@@ -3915,6 +5007,41 @@ impl VaultContract {
         gross.saturating_sub(accrued_fees)
     }
 
+    /// Amount of a reported yield still vesting and not yet reflected in
+    /// share price (issue #803) — a pure read, does not release anything.
+    /// Distinct from [`Self::pending_yield`], which reports the vault's
+    /// distributable token-balance surplus, not the vesting stream's
+    /// remaining, not-yet-landed amount.
+    pub fn pending_vesting_yield(env: Env) -> i128 {
+        require_initialized(&env);
+        match get_yield_stream(&env) {
+            Some(stream) => stream.total.saturating_sub(stream.released),
+            None => 0,
+        }
+    }
+
+    /// Returns the vesting window new `report_yield` calls use to spread a
+    /// positive amount into `TotalAssets`. Does not affect a stream already
+    /// in progress.
+    pub fn get_yield_vesting_period(env: Env) -> u64 {
+        require_initialized(&env);
+        get_yield_vesting_period(&env)
+    }
+
+    /// Admin-only: reconfigure the vesting window future `report_yield`
+    /// calls use. Clamped to `[MIN_YIELD_VESTING_SECONDS,
+    /// MAX_YIELD_VESTING_SECONDS]` — a window that is too short reintroduces
+    /// the sniping hole this feature exists to close; one with no ceiling
+    /// could indefinitely delay legitimate yield from ever landing.
+    pub fn set_yield_vesting_period(env: Env, caller: Address, seconds: u64) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        let clamped = seconds.clamp(MIN_YIELD_VESTING_SECONDS, MAX_YIELD_VESTING_SECONDS);
+        env.storage()
+            .instance()
+            .set(&DataKey::YieldVestingPeriodSeconds, &clamped);
+    }
+
     pub fn withdrawal_fee_preview(env: Env, user: Address, shares: i128) -> WithdrawalFeePreview {
         require_initialized(&env);
         let current_shares = get_shares(&env, &user);
@@ -4083,7 +5210,6 @@ impl VaultContract {
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests

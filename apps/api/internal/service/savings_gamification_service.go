@@ -3,12 +3,15 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savingsstreak"
 	"github.com/suncrestlabs/nester/apps/api/internal/notifications"
+	"github.com/suncrestlabs/nester/apps/api/internal/stellar"
 )
 
 type SavingsGamificationRepository interface {
@@ -112,4 +115,40 @@ func (s *SavingsGamificationService) Progress(ctx context.Context, userID uuid.U
 		return savingsstreak.Progress{}, err
 	}
 	return s.engine.Progress(state, s.now())
+}
+
+// OnConfirmedDeposit implements stellar.DepositObserver, wiring general vault
+// deposits observed by the chain indexer into the same streak engine that
+// goal deposits already use. Previously only deposits that went through
+// SavingsGoalService's goal-contribution path reached the engine at all — a
+// deposit into a vault not tied to a specific goal never updated a streak.
+//
+// The event id is namespaced ("vault-deposit:") so it cannot collide with a
+// goal-deposit event id for the same underlying deposit, and RecordEvent's
+// dedup on event_id makes a redelivered indexer event a no-op.
+func (s *SavingsGamificationService) OnConfirmedDeposit(ctx context.Context, deposit stellar.ConfirmedDeposit) {
+	if deposit.VaultUserID == "" || deposit.EventID == "" {
+		return
+	}
+	userID, err := uuid.Parse(deposit.VaultUserID)
+	if err != nil {
+		slog.Default().Error("gamification: invalid vault owner id from indexer", "raw", deposit.VaultUserID, "error", err)
+		return
+	}
+	amount, err := decimal.NewFromString(deposit.AmountUnits)
+	if err != nil {
+		slog.Default().Error("gamification: invalid deposit amount from indexer", "raw", deposit.AmountUnits, "error", err)
+		return
+	}
+
+	if _, err := s.ProcessConfirmedDeposit(ctx, savingsstreak.SavingEvent{
+		EventID:    "vault-deposit:" + deposit.EventID,
+		UserID:     userID,
+		Type:       "deposit_confirmed",
+		Amount:     amount,
+		NetAmount:  amount,
+		OccurredAt: deposit.OccurredAt,
+	}); err != nil {
+		slog.Default().Error("gamification: failed to process indexed deposit", "event_id", deposit.EventID, "error", err)
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
@@ -39,6 +40,65 @@ func New(logger *slog.Logger, checker HealthChecker, allowedOrigins []string) (h
 		),
 	)
 	return handler, mux
+}
+
+// InFlightTracker tracks active money-path operations to ensure graceful draining
+// before shutdown completes (nester#786 / money-path launch criticality).
+type InFlightTracker struct {
+	mu     sync.Mutex
+	active map[string]struct{}
+	wg     sync.WaitGroup
+}
+
+// NewInFlightTracker creates a new tracker.
+func NewInFlightTracker() *InFlightTracker {
+	return &InFlightTracker{
+		active: make(map[string]struct{}),
+	}
+}
+
+// Track registers an operation start and returns a function to invoke on completion.
+func (t *InFlightTracker) Track(id string) func() {
+	t.mu.Lock()
+	t.active[id] = struct{}{}
+	t.wg.Add(1)
+	t.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			t.mu.Lock()
+			delete(t.active, id)
+			t.mu.Unlock()
+			t.wg.Done()
+		})
+	}
+}
+
+// Wait blocks until all tracked in-flight operations finish or the timeout expires.
+// If the timeout is reached, it logs loudly via the provided logger.
+func (t *InFlightTracker) Wait(timeout time.Duration, logger *slog.Logger) bool {
+	Done := make(chan struct{})
+	go func() {
+		t.wg.Wait()
+		close(Done)
+	}()
+
+	select {
+	case <-Done:
+		return true
+	case <-time.After(timeout):
+		t.mu.Lock()
+		count := len(t.active)
+		t.mu.Unlock()
+		if logger != nil {
+			logger.Error("SHUTDOWN TIMEOUT EXPIRED: forced shutdown with active in-flight money-path operations", slog.Int("active_operations", count), slog.Duration("timeout", timeout))
+		} else {
+			// Fallback loud stderr log if logger is nil
+			slog.Error("SHUTDOWN TIMEOUT EXPIRED: forced shutdown with active in-flight money-path operations", "active_operations", count, "timeout", timeout)
+		}
+		return false
+	}
 }
 
 // RunWithGracefulShutdown starts srv via ListenAndServe and blocks until ctx

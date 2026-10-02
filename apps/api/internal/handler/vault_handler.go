@@ -162,6 +162,7 @@ func (h *VaultHandler) getVault(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -238,6 +239,7 @@ func (h *VaultHandler) harvestVault(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	var req harvestVaultRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -289,6 +291,7 @@ func (h *VaultHandler) updateHarvestFrequency(w http.ResponseWriter, r *http.Req
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	var req updateHarvestFrequencyRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -316,6 +319,7 @@ func (h *VaultHandler) previewHarvest(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	userID, err := h.authenticatedUserID(w, r)
 	if err != nil {
@@ -343,6 +347,7 @@ func (h *VaultHandler) getAllocations(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -377,6 +382,7 @@ func (h *VaultHandler) getRebalanceSuggestion(w http.ResponseWriter, r *http.Req
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 	userID, err := h.authenticatedUserID(w, r)
 	if err != nil {
 		return
@@ -403,6 +409,7 @@ func (h *VaultHandler) rebalanceVault(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 	userID, err := h.authenticatedUserID(w, r)
 	if err != nil {
 		return
@@ -441,6 +448,7 @@ func (h *VaultHandler) emergencyWithdraw(w http.ResponseWriter, r *http.Request)
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	authUser, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -495,6 +503,7 @@ func (h *VaultHandler) rebalancePosition(w http.ResponseWriter, r *http.Request)
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault_id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String(), "from_protocol_id", req.FromProtocol, "to_protocol_id", req.ToProtocol)
 
 	amount, err := stringToDecimal(req.Amount)
 	if err != nil {
@@ -554,6 +563,7 @@ func (h *VaultHandler) getMyPosition(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -582,6 +592,7 @@ func (h *VaultHandler) depositToVault(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -646,6 +657,7 @@ func (h *VaultHandler) withdrawFromVault(w http.ResponseWriter, r *http.Request)
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	user, ok := auth.GetUserFromContext(r.Context())
 	if !ok {
@@ -710,6 +722,18 @@ func (h *VaultHandler) withdrawFromVault(w http.ResponseWriter, r *http.Request)
 	response.WriteJSON(w, http.StatusOK, response.OK(updatedVault))
 }
 
+// withMoneyPathFields binds the given key/value pairs onto the request's
+// logger (the same context.Context mechanism the Logging middleware uses to
+// attach request_id), so every log line for the rest of this request -
+// including writeDomainError's own failure log - carries them without each
+// call site having to pass them explicitly (#1342). Call it as early as
+// possible in a money-path handler, right after parsing the field(s) it
+// covers, and always use the *http.Request it returns from that point on.
+func withMoneyPathFields(r *http.Request, keyvals ...any) *http.Request {
+	logger := logpkg.FromContext(r.Context()).With(keyvals...)
+	return r.WithContext(logpkg.WithLogger(r.Context(), logger))
+}
+
 func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	// The global pause switch (#1120). 503 with the operator's own reason,
@@ -765,7 +789,18 @@ func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, 
 	case errors.Is(err, vault.ErrOperatorFundedDepositRefused):
 		response.WriteJSON(w, http.StatusForbidden,
 			response.Err(http.StatusForbidden, "OPERATOR_FUNDED_DEPOSIT_REFUSED", err.Error()))
+	// 403: the user is not in the current mainnet deposit allowlist cohort
+	// (nester#1389). The service is available; this specific user has not
+	// been granted access yet.
+	case errors.Is(err, vault.ErrDepositNotAllowlisted):
+		response.WriteJSON(w, http.StatusForbidden,
+			response.Err(http.StatusForbidden, "DEPOSIT_NOT_ALLOWLISTED", err.Error()))
 	case errors.Is(err, vault.ErrInsufficientBalance), errors.Is(err, vault.ErrVaultClosed), errors.Is(err, vault.ErrVaultNotActive):
+		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
+	// 400, not 500: the deposit is well-formed, it just would push this
+	// vault's mainnet TVL past the configured cap (nester#1376). The caller
+	// can act on this by depositing a smaller amount or waiting.
+	case errors.Is(err, caps.ErrTVLCapExceeded):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 
 	// The chain never gave us an answer: either the circuit breaker declined
@@ -862,6 +897,7 @@ func (h *VaultHandler) previewDeposit(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	amountStr := r.URL.Query().Get("amount")
 	if amountStr == "" {
@@ -898,6 +934,7 @@ func (h *VaultHandler) previewWithdraw(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	sharesStr := r.URL.Query().Get("shares")
 	if sharesStr == "" {
@@ -955,6 +992,7 @@ func (h *VaultHandler) getSharePrice(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	// The response carries total assets and total shares for this vault, so it
 	// is owner-only despite reading like a public quote.
@@ -977,6 +1015,7 @@ func (h *VaultHandler) convert(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault id must be a valid UUID"))
 		return
 	}
+	r = withMoneyPathFields(r, "vault_id", vaultID.String())
 
 	// Conversion is evaluated at this vault's own share price, so the result
 	// discloses the same balance data as the share-price endpoint.

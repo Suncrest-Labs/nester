@@ -127,4 +127,9 @@ type Repository interface {
 	Upsert(ctx context.Context, snap APYSnapshot) error
 	ListByProtocol(ctx context.Context, slug string, since time.Time) ([]APYSnapshot, error)
 	PruneOlderThan(ctx context.Context, age time.Duration) error
+	// DownsampleOlderThan collapses snapshots older than age from their
+	// native (hourly) granularity down to one representative row per
+	// protocol per UTC day, deleting the rest. Rows within age are left
+	// untouched (#1318).
+	DownsampleOlderThan(ctx context.Context, age time.Duration) error
 }

@@ -88,9 +88,18 @@ mod adapter_failure_isolation {
         // Equal targets across all three sources.
         let weights: Vec<AllocationWeight> = vec![
             &h.env,
-            AllocationWeight { source_id: good_a.clone(), weight_bps: 3_400 },
-            AllocationWeight { source_id: broken.clone(), weight_bps: 3_300 },
-            AllocationWeight { source_id: good_b.clone(), weight_bps: 3_300 },
+            AllocationWeight {
+                source_id: good_a.clone(),
+                weight_bps: 3_400,
+            },
+            AllocationWeight {
+                source_id: broken.clone(),
+                weight_bps: 3_300,
+            },
+            AllocationWeight {
+                source_id: good_b.clone(),
+                weight_bps: 3_300,
+            },
         ];
         h.strategy().set_weights(&h.admin, &weights);
 
@@ -114,7 +123,12 @@ mod adapter_failure_isolation {
             );
         }
 
-        FailureFixture { h, good_a, broken, good_b }
+        FailureFixture {
+            h,
+            good_a,
+            broken,
+            good_b,
+        }
     }
 
     /// The headline acceptance criterion: rebalance completes across the
@@ -176,9 +190,7 @@ mod adapter_failure_isolation {
         for _ in 0..=threshold {
             let _ = f.h.vault().try_rebalance(&f.h.admin);
             let cooldown = f.h.vault().get_rebalance_cooldown();
-            f.h.env
-                .ledger()
-                .with_mut(|l| l.timestamp += cooldown + 1);
+            f.h.env.ledger().with_mut(|l| l.timestamp += cooldown + 1);
         }
 
         assert_eq!(
@@ -207,7 +219,10 @@ mod adapter_failure_isolation {
             (0..1_000).contains(&lost),
             "vault assets must survive a source degrading (lost {lost} of 200_000_000)"
         );
-        assert!(!f.h.vault().is_paused(), "one bad source must not pause the vault");
+        assert!(
+            !f.h.vault().is_paused(),
+            "one bad source must not pause the vault"
+        );
     }
 
     /// A degraded source stays degraded until an admin says otherwise —
@@ -250,16 +265,14 @@ mod adapter_failure_isolation {
             f.h.registry().report_source_failure(&f.h.admin, &f.broken);
         }
 
-        let recorded = f
-            .h
-            .vault()
-            .record_source_allocation(&f.h.admin, &f.broken, &50_000_000);
+        let recorded =
+            f.h.vault()
+                .record_source_allocation(&f.h.admin, &f.broken, &50_000_000);
         assert!(!recorded, "degraded source must be skipped, not recorded");
 
-        let still_ok = f
-            .h
-            .vault()
-            .record_source_allocation(&f.h.admin, &f.good_a, &50_000_000);
+        let still_ok =
+            f.h.vault()
+                .record_source_allocation(&f.h.admin, &f.good_a, &50_000_000);
         assert!(still_ok, "healthy sources keep working");
         assert_eq!(f.h.vault().get_source_allocation(&f.good_a), 50_000_000);
     }

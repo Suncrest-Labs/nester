@@ -27,6 +27,12 @@ type VaultAnalytics struct {
 	SharpeRatio   float64   `json:"sharpe_ratio"`
 	SortinoRatio  float64   `json:"sortino_ratio"`
 	WinRate       float64   `json:"win_rate"`
+	// Drift is the vault's current APY-drift snapshot (#613), populated by
+	// the handler on a best-effort basis. Unlike the historical fields
+	// above, it is always computed live (never cached alongside the rest of
+	// this hour-cached response), and is omitted entirely if the drift
+	// detector isn't wired up or the live computation fails.
+	Drift *DriftState `json:"drift,omitempty"`
 }
 
 type analyticsCache struct {

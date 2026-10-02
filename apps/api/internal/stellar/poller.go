@@ -52,6 +52,11 @@ type EventPoller struct {
 
 	// ColdStartOffset overrides DefaultColdStartOffset when non-zero.
 	ColdStartOffset uint64
+
+	// DepositObserver, if set, is notified after a deposit event's
+	// transaction commits. Nil disables the notification with no other
+	// behaviour change.
+	DepositObserver DepositObserver
 }
 
 // PollEvents runs a single poll: resolve the cursor, fetch events, apply each
@@ -118,6 +123,11 @@ func (p *EventPoller) PollEvents(ctx context.Context) (int, error) {
 		}
 		if processed {
 			applied++
+			// Fired only after the mutation, processed_events row, and cursor
+			// have all committed together. Never inside applyIndexedEventWithCursor's
+			// transaction: a slow or failing observer must not be able to roll
+			// back a balance write.
+			notifyDepositObserver(ctx, p.DB, p.Logger, p.DepositObserver, event)
 		}
 	}
 

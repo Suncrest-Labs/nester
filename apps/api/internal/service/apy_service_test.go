@@ -14,8 +14,10 @@ import (
 // fakeAPYSnapshotRepo is an in-memory apysnapshot.Repository for testing the
 // anomaly-flagging guard (#941) without a database.
 type fakeAPYSnapshotRepo struct {
-	snapshots []apysnapshot.APYSnapshot
-	upserted  []apysnapshot.APYSnapshot
+	snapshots   []apysnapshot.APYSnapshot
+	upserted    []apysnapshot.APYSnapshot
+	pruned      []time.Duration
+	downsampled []time.Duration
 }
 
 func (f *fakeAPYSnapshotRepo) Upsert(_ context.Context, snap apysnapshot.APYSnapshot) error {
@@ -34,7 +36,15 @@ func (f *fakeAPYSnapshotRepo) ListByProtocol(_ context.Context, slug string, sin
 	return out, nil
 }
 
-func (f *fakeAPYSnapshotRepo) PruneOlderThan(context.Context, time.Duration) error { return nil }
+func (f *fakeAPYSnapshotRepo) PruneOlderThan(_ context.Context, age time.Duration) error {
+	f.pruned = append(f.pruned, age)
+	return nil
+}
+
+func (f *fakeAPYSnapshotRepo) DownsampleOlderThan(_ context.Context, age time.Duration) error {
+	f.downsampled = append(f.downsampled, age)
+	return nil
+}
 
 func TestAPYService_FlagIfAnomalous_NoHistoryNotFlagged(t *testing.T) {
 	repo := &fakeAPYSnapshotRepo{}

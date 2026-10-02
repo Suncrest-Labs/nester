@@ -486,6 +486,14 @@ jobs:
       - name: Build
         run: go build ./...
 
+      # Issue #1058: the committed spec is a build artifact, not a
+      # hand-maintained document — this is the check that gives that
+      # exercise teeth. Currently covers the vault lifecycle routes only
+      # (see internal/openapi/spec.go); full endpoint coverage is follow-up
+      # work.
+      - name: Check OpenAPI spec is up to date
+        run: go run ./cmd/openapi-gen -check openapi.yaml
+
       - name: Test (unit)
         run: go test -race -timeout 120s -count=1 -short ./...
 
@@ -509,6 +517,38 @@ jobs:
           RAPID_CHECKS: "32"
           RAPID_SEED: "29062026"
         run: go test -timeout 60s -run PropertyBased -v ./internal/domain/vault
+
+  go-vet-staticcheck:
+    name: Go vet + staticcheck (API)
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-go@5064d95ba18d4a9dda7c4cc67adeb03aea1a2a14 # v5.3.0
+        with:
+          go-version-file: apps/api/go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+
+      - name: staticcheck
+        # Non-blocking for now: this step was silently failing to even run
+        # (broken `staticcheck@latest` install) for long enough that ~50
+        # pre-existing findings accumulated across the codebase. Surfacing
+        # them is useful, but gating merges on a backlog nobody introduced
+        # in their own PR isn't. Flip back to blocking once that backlog is
+        # cleared.
+        continue-on-error: true
+        run: staticcheck ./...
 
   contracts:
     name: Contracts (Rust)
@@ -574,6 +614,17 @@ jobs:
             echo "ERROR: No vault-contract tests ran — possible missing WASM artifact"
             exit 1
           fi
+
+      # Compile-only: the fuzz crate targets vault-contract's public
+      # conversion module directly (see fuzz/fuzz_targets/conversion_math.rs)
+      # and isn't a member of this workspace (nester#1350), so nothing above
+      # would otherwise catch it silently bitrotting if that module's API
+      # changes. The actual randomized run happens in the nightly workflow,
+      # where minutes-long fuzzing time is acceptable; this just proves it
+      # still builds on every PR.
+      - name: Check vault-contract fuzz target compiles
+        working-directory: packages/contracts/contracts/vault/fuzz
+        run: cargo check --bin conversion_math
 
   sbom:
     name: SBOM Generation

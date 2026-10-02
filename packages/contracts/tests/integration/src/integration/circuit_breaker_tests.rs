@@ -84,7 +84,10 @@ fn test_deposits_succeed_after_a_reverted_circuit_breaker_trip() {
     h.vault().deposit(&user, &DEPOSIT, &0);
 
     let result = h.vault().try_withdraw(&user, &(DEPOSIT * 3 / 10), &0);
-    assert!(result.is_ok(), "30% withdrawal should complete and only escalate severity");
+    assert!(
+        result.is_ok(),
+        "30% withdrawal should complete and only escalate severity"
+    );
     assert_eq!(h.vault().get_breaker_status().severity, Severity::Throttled);
 
     assert!(!h.vault().is_paused());
@@ -312,9 +315,20 @@ fn share_price_move_condition_trips_when_enabled() {
     assert_eq!(h.vault().get_breaker_status().severity, Severity::Normal);
 
     // A huge yield report moves the share price by far more than 5% + margin.
+    // Positive reports vest linearly (issue #803): the vesting window is
+    // clamped to a minimum of 1h (MIN_YIELD_VESTING_SECONDS), which is also
+    // this breaker's own price-move window, so there is no way to have the
+    // report fully vest while a single baseline is still in force. Instead,
+    // advance in two shorter steps within that shared 1h window: enough for
+    // most of the report to vest (a move still far past the 5% threshold)
+    // without the baseline itself expiring and resetting to the new price.
     h.vault()
         .grant_role(&h.admin, &h.admin, &nester_access_control::Role::Manager);
+    h.vault().set_yield_vesting_period(&h.admin, &(60 * 60));
     h.vault().report_yield(&h.admin, &(STAGED_DEPOSIT * 2));
+    h.env
+        .ledger()
+        .set_timestamp(h.env.ledger().timestamp() + 55 * 60);
 
     // report_yield's own yield-sanity check is independent and disabled by
     // default; trigger the share-price check via a harvest/withdraw path

@@ -326,6 +326,52 @@ impl VaultTokenContract {
         env.events().publish((symbol_short!("ta_upd"),), new_total);
     }
 
+    /// Mint `shares` to `to` without changing `total_assets` (issue #802).
+    ///
+    /// Unlike [`Self::mint_for_deposit`], this does not correspond to new
+    /// assets entering the vault — it is the yield-boost mechanism for
+    /// locked positions, which mints a locked position extra shares out of
+    /// the SAME total_assets increase every other holder's shares already
+    /// benefit from (the vault computes the exact share count via
+    /// `nester_common::fees::boosted_shares_after_yield` before calling
+    /// this; see `contracts/vault/src/locks.rs`'s module doc for why this
+    /// conserves total value exactly rather than inflating the vault).
+    /// Vault only.
+    pub fn mint_boost_shares(env: Env, to: Address, shares: i128) {
+        require_vault(&env);
+        if shares <= 0 {
+            return;
+        }
+        let total_supply = get_total_supply(&env);
+        receive_balance(&env, &to, shares);
+        set_total_supply(&env, total_supply + shares);
+        env.events()
+            .publish((symbol_short!("bst_mint"), to), shares);
+    }
+
+    /// Burn `shares` from `from` without changing `total_assets` (issue
+    /// #802).
+    ///
+    /// Used by [`break_lock`](../vault/index.html) (see
+    /// `contracts/vault/src/locks.rs`): breaking a lock early transfers the
+    /// underlying assets out and reduces `total_assets` through the vault's
+    /// own penalty-escrow accounting (`charge_penalty`), a separate step
+    /// from this call — burning the shares here just retires the locked
+    /// position's claim on the pool without independently double-counting
+    /// an asset-side change this contract does not have visibility into.
+    /// Vault only.
+    pub fn burn_shares(env: Env, from: Address, shares: i128) {
+        require_vault(&env);
+        if shares <= 0 {
+            return;
+        }
+        let total_supply = get_total_supply(&env);
+        spend_balance(&env, &from, shares);
+        set_total_supply(&env, total_supply - shares);
+        env.events()
+            .publish((symbol_short!("lck_burn"), from), shares);
+    }
+
     /// Return the deposit timestamp for `user` as tracked by this token
     /// contract.  Returns 0 if no timestamp has been recorded (e.g. the user
     /// has never received shares via deposit or transfer).

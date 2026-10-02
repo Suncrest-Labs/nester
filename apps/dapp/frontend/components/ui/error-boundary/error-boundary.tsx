@@ -2,6 +2,7 @@
 
 import React from "react";
 import { AlertTriangle, RefreshCw, Home, LogIn } from "lucide-react";
+import { reportError } from "@/lib/observability/report-error";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -46,7 +47,20 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       errorInfo,
     });
 
-    // Call optional error handler
+    // Always report to the shared observability pipeline (console sink,
+    // optional beacon endpoint, and Sentry when configured — see
+    // lib/observability/report-error.ts) so a caught render error is visible
+    // without every call site having to wire its own onError. The `level`
+    // prop ("page" | "widget") doubles as the boundary name since this
+    // component, unlike the route-level boundaries, is not otherwise given
+    // one.
+    reportError({
+      error,
+      boundary: this.props.level ?? "widget",
+      context: { componentStack: errorInfo.componentStack ?? undefined },
+    });
+
+    // Call optional error handler in addition to the default reporting above.
     this.props.onError?.(error, errorInfo);
   }
 

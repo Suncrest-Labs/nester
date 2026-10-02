@@ -51,6 +51,34 @@ func (m *mockAPYRepo) PruneOlderThan(_ context.Context, age time.Duration) error
 	return nil
 }
 
+// DownsampleOlderThan mirrors the Postgres implementation: among snapshots
+// older than the cutoff, keep only the latest one per protocol/UTC-day.
+func (m *mockAPYRepo) DownsampleOlderThan(_ context.Context, age time.Duration) error {
+	cutoff := time.Now().UTC().Add(-age)
+	type key struct {
+		slug string
+		day  string
+	}
+	latest := make(map[key]apysnapshot.APYSnapshot)
+	var recent []apysnapshot.APYSnapshot
+	for _, s := range m.snapshots {
+		if s.CapturedAt.After(cutoff) || s.CapturedAt.Equal(cutoff) {
+			recent = append(recent, s)
+			continue
+		}
+		k := key{slug: s.ProtocolSlug, day: s.CapturedAt.Format("2006-01-02")}
+		if existing, ok := latest[k]; !ok || s.CapturedAt.After(existing.CapturedAt) {
+			latest[k] = s
+		}
+	}
+	out := recent
+	for _, s := range latest {
+		out = append(out, s)
+	}
+	m.snapshots = out
+	return nil
+}
+
 // newAPYTestServer wires a mock DeFiLlama server → APYService → APYHandler.
 func newAPYTestServer(t *testing.T, defiLlamaBody string) (*httptest.Server, *mockAPYRepo) {
 	t.Helper()
@@ -192,6 +220,80 @@ func TestAPYHandler_Pruning(t *testing.T) {
 	}
 	if repo.snapshots[0].CapturedAt.Equal(old) {
 		t.Error("old snapshot should have been pruned")
+	}
+}
+
+// TestAPYHandler_Downsampling verifies that among snapshots older than the
+// cutoff, only the latest one per protocol per UTC day survives, while
+// snapshots within the cutoff keep their native hourly granularity (#1318).
+func TestAPYHandler_Downsampling(t *testing.T) {
+	base := time.Now().UTC().Add(-10 * 24 * time.Hour).Truncate(24 * time.Hour)
+	recent := time.Now().UTC().Add(-1 * time.Hour)
+
+	repo := &mockAPYRepo{
+		snapshots: []apysnapshot.APYSnapshot{
+			// Three hourly readings for "blend" on the same old day.
+			{ID: uuid.New(), ProtocolSlug: "blend", APY: decimal.NewFromFloat(5.0), CapturedAt: base.Add(1 * time.Hour)},
+			{ID: uuid.New(), ProtocolSlug: "blend", APY: decimal.NewFromFloat(5.2), CapturedAt: base.Add(2 * time.Hour)},
+			{ID: uuid.New(), ProtocolSlug: "blend", APY: decimal.NewFromFloat(5.4), CapturedAt: base.Add(3 * time.Hour)},
+			// A different protocol on the same old day: kept independently.
+			{ID: uuid.New(), ProtocolSlug: "aqua", APY: decimal.NewFromFloat(8.0), CapturedAt: base.Add(2 * time.Hour)},
+			// Within the window: left at native granularity.
+			{ID: uuid.New(), ProtocolSlug: "blend", APY: decimal.NewFromFloat(6.0), CapturedAt: recent},
+		},
+	}
+
+	if err := repo.DownsampleOlderThan(context.Background(), 7*24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	var blendOld, aquaOld, blendRecent int
+	for _, s := range repo.snapshots {
+		switch {
+		case s.ProtocolSlug == "blend" && s.CapturedAt.Equal(recent):
+			blendRecent++
+		case s.ProtocolSlug == "blend":
+			blendOld++
+		case s.ProtocolSlug == "aqua":
+			aquaOld++
+		}
+	}
+
+	if blendOld != 1 {
+		t.Fatalf("expected old blend snapshots collapsed to 1, got %d", blendOld)
+	}
+	if aquaOld != 1 {
+		t.Fatalf("expected old aqua snapshot kept as 1, got %d", aquaOld)
+	}
+	if blendRecent != 1 {
+		t.Fatalf("expected the recent blend snapshot untouched, got %d", blendRecent)
+	}
+
+	for _, s := range repo.snapshots {
+		if s.ProtocolSlug == "blend" && s.CapturedAt.Before(recent) && !s.APY.Equal(decimal.NewFromFloat(5.4)) {
+			t.Fatalf("expected the surviving old blend snapshot to be the latest reading (5.4), got %s", s.APY)
+		}
+	}
+}
+
+// TestAPYPoller_DownsamplesBeforePruning verifies PollOnce invokes downsample
+// ahead of the hard-delete prune, so old data is collapsed rather than lost
+// outright (#1318).
+func TestAPYPoller_DownsamplesBeforePruning(t *testing.T) {
+	const body = `{"data":[{"project":"blend","chain":"Stellar","apy":5.23,"tvlUsd":1000000}]}`
+
+	repo := &mockAPYRepo{}
+	defiLlama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(defiLlama.Close)
+
+	svc := service.NewAPYServiceWithClient(repo, defiLlama.URL, defiLlama.Client())
+	svc.PollOnce(context.Background())
+
+	if len(repo.pruned) != 1 {
+		t.Fatalf("expected PruneOlderThan called once, got %d", len(repo.pruned))
 	}
 }
 

@@ -36,6 +36,48 @@ Emitted when a user withdraws funds.
     }
     ```
 
+### HARVEST
+Emitted when yield is harvested for a single user position via `harvest`.
+- **Topics**: `(VAULT, HARVEST, user: Address)`
+- **Data**:
+    ```rust
+    {
+        gross_yield: i128,
+        performance_fee: i128,
+        net_yield: i128,
+        compounded: bool,
+        new_share_balance: i128,
+        user: Address
+    }
+    ```
+
+### HARV_VLT
+Emitted once per `harvest_vault` admin call (aggregate across every position harvested in that call).
+- **Topics**: `(VAULT, HARV_VLT, admin: Address)`
+- **Data**:
+    ```rust
+    {
+        total_gross_yield: i128,
+        total_fee_collected: i128,
+        total_net_yield: i128,
+        positions_harvested: u32
+    }
+    ```
+
+### CAP_CHG
+Emitted by `set_max_deposit` and `set_min_deposit`, issue #1354. Cap changes
+were previously silent on-chain; this lets the off-chain indexer reconstruct
+config state without extra RPC calls.
+- **Topics**: `(VAULT, CAP_CHG, admin: Address)`
+- **Data**:
+    ```rust
+    {
+        field: Symbol,   // "MAX_DEP" or "MIN_DEP"
+        old_value: i128,
+        new_value: i128
+    }
+    ```
+
 ### EMRG_WD
 Emitted once per position when a user emergency-exits all active positions via `emergency_withdraw_all`.
 - **Topics**: `(VAULT, EMRG_WD, user: Address)`
@@ -57,6 +99,80 @@ Emitted when the vault is paused.
 Emitted when the vault is unpaused.
 - **Topics**: `(VAULT, UNPAUSE, admin: Address)`
 - **Data**: `{ timestamp: u64 }`
+
+### YLD_STRT (yield_stream_started) — issue #803
+Emitted by `report_yield` whenever a positive `amount` starts (or extends) a linear vesting stream. Not applied to `TotalAssets` all at once: instead it vests over `total` divided across `ends_at - started_at`, closing the sniping hole where a deposit made immediately before a report could capture a full instant share-price jump. If a prior stream was still active, its unreleased remainder is folded into `total` rather than discarded or double-counted. Not emitted for a negative `amount` (an impairment), which still applies to `TotalAssets` immediately — see `YLD_RLSD`'s note on why.
+- **Topics**: `(VAULT, YLD_STRT, contract_address: Address)`
+- **Data**:
+    ```rust
+    {
+        total: i128,      // total amount now vesting over this stream's window
+        started_at: u64,  // ledger timestamp the stream started at
+        ends_at: u64       // ledger timestamp the stream fully vests by
+    }
+    ```
+
+### YLD_RLSD (yield_released) — issue #803
+Emitted whenever `release_vested_yield` moves a newly-vested portion of the active stream into `TotalAssets`. Runs at the top of every operation that reads `TotalAssets`/share price in a way that matters for fairness between holders — `deposit`, `withdraw`, `harvest`, and `report_yield` itself — so no caller can ever observe a share price that omits yield which has already, in real time, finished vesting. A no-op (and no event) when there is no active stream or nothing has vested since the last release.
+- **Topics**: `(VAULT, YLD_RLSD, contract_address: Address)`
+- **Data**:
+    ```rust
+    {
+        released: i128,   // amount moved into TotalAssets this call
+        remaining: i128   // amount still left to vest in the active stream
+    }
+    ```
+
+### LOCK_OPEN (lock_opened) — issue #802
+Emitted by `deposit_locked` when a new time-locked position is created. Shares are minted through the exact same path an ordinary `deposit` uses (so share price accounting never forks between locked and flexible deposits), then recorded as a locked position instead of being left in the user's free flexible balance. `boost_bps` is copied from the matched tier at creation time, so a later admin change to the tier table never retroactively changes an already-open lock's economics.
+- **Topics**: `(VAULT, LOCK_OPEN, user: Address)`
+- **Data**:
+    ```rust
+    {
+        lock_id: u64,
+        shares: i128,        // shares minted and committed to this lock
+        principal: i128,     // deposited asset amount
+        duration_secs: u64,  // the matched tier's duration
+        unlock_at: u64,      // ledger timestamp this lock matures at
+        boost_bps: u32       // the tier's boost multiplier, frozen for this lock's lifetime
+    }
+    ```
+
+### LOCK_UNLK (lock_unlocked) — issue #802
+Emitted by `unlock_position` when a matured lock is claimed: its shares (including any boost shares minted into it since creation — see `LOCK_BST`) move into the caller's ordinary flexible balance. Explicit rather than automatic on `unlock_at` passing, so `withdraw` never has to iterate a user's lock list to discover newly-matured entries.
+- **Topics**: `(VAULT, LOCK_UNLK, user: Address)`
+- **Data**:
+    ```rust
+    {
+        lock_id: u64,
+        shares_moved_to_flexible: i128
+    }
+    ```
+
+### LOCK_BRK (lock_broken) — issue #802
+Emitted by `break_lock` when a position is exited before maturity. The penalty decays linearly from the configured full rate at creation to zero at maturity (whole-second integer division, so a lock broken with only a handful of seconds left can floor to an exactly-zero penalty) and is routed through the existing early-withdrawal penalty escrow/distribution mechanism (`PenaltyReason::LockBreak`, issue #805) rather than burned outright — it stays inside the vault, raising share price for every remaining depositor, with an admin-configured slice routable to the treasury.
+- **Topics**: `(VAULT, LOCK_BRK, user: Address)`
+- **Data**:
+    ```rust
+    {
+        lock_id: u64,
+        shares_burned: i128,
+        assets_returned: i128,     // paid out to the user, net of the penalty
+        penalty_amount: i128,      // asset value routed to the penalty escrow
+        penalty_bps_applied: u32   // the actual decayed rate applied, not the configured full rate
+    }
+    ```
+
+### LOCK_BST (lock_boost_settled) — issue #802
+Emitted by `settle_locked_boost` whenever a `report_yield`-driven vesting release (`release_vested_yield`) mints extra shares into every currently open locked position, in proportion to each lock's tier boost. Settled eagerly and vault-wide in the same call that applies the yield release — not lazily deferred — since a lazy accumulator across multiple rounds of mixed-tier locks was found to have no closed-form solution; this is instead bounded by `MAX_TOTAL_OPEN_LOCKS` (200). A no-op (and no event) when there are no open locks, so a vault that never uses this feature pays zero extra cost on every yield release.
+- **Topics**: `(VAULT, LOCK_BST, contract_address: Address)`
+- **Data**:
+    ```rust
+    {
+        locks_settled: u32,    // number of open locks this settlement touched
+        shares_minted: i128    // total boost shares minted across all of them
+    }
+    ```
 
 ## Yield Registry Events (Contract Symbol: `REGISTRY`)
 

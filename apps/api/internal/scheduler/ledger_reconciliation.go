@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,13 +14,36 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/ledger"
 )
 
+// defaultEscalationThresholdUSD is used when RECONCILIATION_ESCALATION_THRESHOLD_USD is unset.
+const defaultEscalationThresholdUSD = 100.0
+
+// LedgerReconciliationConfigFromEnv builds a ledger.ReconciliationConfig, reading the
+// mainnet dollar-threshold for immediate on-call paging from
+// RECONCILIATION_ESCALATION_THRESHOLD_USD (default defaultEscalationThresholdUSD), and
+// determining IsMainnet from the same environment variables isMainnetEnvironment checks.
+func LedgerReconciliationConfigFromEnv(enabled bool, interval time.Duration, toleranceStroops int64) ledger.ReconciliationConfig {
+	threshold := defaultEscalationThresholdUSD
+	if v := os.Getenv("RECONCILIATION_ESCALATION_THRESHOLD_USD"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil && parsed > 0 {
+			threshold = parsed
+		}
+	}
+	return ledger.ReconciliationConfig{
+		Enabled:                enabled,
+		Interval:               interval,
+		ToleranceStroops:       toleranceStroops,
+		MainnetDollarThreshold: threshold,
+		IsMainnet:              isMainnetEnvironment(),
+	}
+}
+
 // LedgerReconciliationDeps holds dependencies for the reconciliation job.
 type LedgerReconciliationDeps struct {
-	LedgerRepo   ledger.Repository
-	VaultLister  ReconciliationVaultLister // reuses existing vault lister
-	ChainReader  ledger.ChainReader
-	Logger       *slog.Logger
-	Config       ledger.ReconciliationConfig
+	LedgerRepo  ledger.Repository
+	VaultLister ReconciliationVaultLister // reuses existing vault lister
+	ChainReader ledger.ChainReader
+	Logger      *slog.Logger
+	Config      ledger.ReconciliationConfig
 }
 
 // ReconciliationVaultLister lists active vaults with contract addresses for reconciliation.
@@ -60,7 +85,7 @@ func NewLedgerReconciliationJob(deps LedgerReconciliationDeps) *LedgerReconcilia
 }
 
 func (j *LedgerReconciliationJob) SetLeaderChecker(l LeaderChecker) { j.leader = l }
-func (j *LedgerReconciliationJob) isLeader() bool                  { return j.leader == nil || j.leader.IsLeader() }
+func (j *LedgerReconciliationJob) isLeader() bool                   { return j.leader == nil || j.leader.IsLeader() }
 
 func (j *LedgerReconciliationJob) Run(ctx context.Context) {
 	if !j.cfg.Enabled {
@@ -193,14 +218,35 @@ func (j *LedgerReconciliationJob) reconcileVault(ctx context.Context, v Reconcil
 	}
 
 	if status == "drift" {
-		// Raise alert — for now log as error; in production would send to alerting system
-		j.logger.Error("ledger reconciliation drift beyond tolerance — alerting, not auto-correcting",
-			"vault_id", v.ID,
-			"ledger", ledgerPoolBal,
-			"on_chain", onChainBal,
-			"difference", absDiff,
-			"tolerance", tolerance,
-		)
+		// Check if drift exceeds mainnet dollar threshold and we are on mainnet
+		// 1 USDC = 10^7 stroops. Dollar threshold converted to stroops.
+		thresholdStroops := int64(0)
+		if j.cfg.MainnetDollarThreshold > 0 {
+			thresholdStroops = parseDecimalToStroops(decimal.NewFromFloat(j.cfg.MainnetDollarThreshold))
+		}
+		isMainnet := j.cfg.IsMainnet
+
+		if isMainnet && thresholdStroops > 0 && absDiff > thresholdStroops {
+			// Page on-call immediately with a critical alert log that triggers pagers
+			j.logger.Error("PAGER ALERT: ledger-vs-chain drift exceeded mainnet dollar threshold!",
+				"vault_id", v.ID,
+				"contract_address", v.ContractAddress,
+				"ledger", ledgerPoolBal,
+				"on_chain", onChainBal,
+				"difference", absDiff,
+				"dollar_threshold", j.cfg.MainnetDollarThreshold,
+				"environment", "mainnet",
+			)
+		} else {
+			// Raise alert — log as error
+			j.logger.Error("ledger reconciliation drift beyond tolerance — alerting, not auto-correcting",
+				"vault_id", v.ID,
+				"ledger", ledgerPoolBal,
+				"on_chain", onChainBal,
+				"difference", absDiff,
+				"tolerance", tolerance,
+			)
+		}
 	} else {
 		j.logger.Debug("ledger reconciliation ok", "vault_id", v.ID, "ledger", ledgerPoolBal, "on_chain", onChainBal)
 	}
@@ -209,4 +255,9 @@ func (j *LedgerReconciliationJob) reconcileVault(ctx context.Context, v Reconcil
 // Helper for decimal conversion used elsewhere
 func parseDecimalToStroops(d decimal.Decimal) int64 {
 	return d.Mul(decimal.NewFromInt(10_000_000)).Round(0).IntPart()
+}
+
+func isMainnetEnvironment() bool {
+	// Check standard environment variables to determine if running on mainnet
+	return os.Getenv("STELLAR_NETWORK") == "mainnet" || os.Getenv("NESTER_ENV") == "mainnet" || os.Getenv("ENVIRONMENT") == "mainnet"
 }

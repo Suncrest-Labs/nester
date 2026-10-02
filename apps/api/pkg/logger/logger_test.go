@@ -243,6 +243,46 @@ func TestWithRequestID_OverwritesPreviousID(t *testing.T) {
 	}
 }
 
+func TestWithCorrelationIDAndCorrelationIDFromContext_RoundTrip(t *testing.T) {
+	ctx := WithCorrelationID(context.Background(), "corr-abc-123")
+	got := CorrelationIDFromContext(ctx)
+	if got != "corr-abc-123" {
+		t.Errorf("CorrelationIDFromContext = %q, want %q", got, "corr-abc-123")
+	}
+}
+
+func TestCorrelationIDFromContext_EmptyStringWhenMissing(t *testing.T) {
+	got := CorrelationIDFromContext(context.Background())
+	if got != "" {
+		t.Errorf("CorrelationIDFromContext(empty context) = %q, want empty string", got)
+	}
+}
+
+func TestWithCorrelationID_OverwritesPreviousID(t *testing.T) {
+	ctx := WithCorrelationID(context.Background(), "first")
+	ctx = WithCorrelationID(ctx, "second")
+	got := CorrelationIDFromContext(ctx)
+	if got != "second" {
+		t.Errorf("expected overwritten correlation ID %q, got %q", "second", got)
+	}
+}
+
+// TestCorrelationIDAndRequestIDAreIndependent confirms the two context keys
+// don't collide - setting one must not clobber or be confused with the
+// other, since a job handler called from code that also sets a request id
+// (e.g. an admin-triggered manual run) needs both to coexist.
+func TestCorrelationIDAndRequestIDAreIndependent(t *testing.T) {
+	ctx := WithRequestID(context.Background(), "req-abc")
+	ctx = WithCorrelationID(ctx, "corr-xyz")
+
+	if got := RequestIDFromContext(ctx); got != "req-abc" {
+		t.Errorf("RequestIDFromContext = %q, want %q", got, "req-abc")
+	}
+	if got := CorrelationIDFromContext(ctx); got != "corr-xyz" {
+		t.Errorf("CorrelationIDFromContext = %q, want %q", got, "corr-xyz")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Sensitive field filtering
 // ---------------------------------------------------------------------------

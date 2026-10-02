@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -1245,16 +1246,32 @@ func (s *SavingsGoalService) recordGamificationDeposit(ctx context.Context, user
 	if len(deposits) > 1 {
 		eventID = "goal-deposit-split:" + deposits[0].ID.String()
 	}
-	_, _ = s.gamification.ProcessConfirmedDeposit(ctx, savingsstreak.SavingEvent{
+	// OccurredAt uses processing time, not left blank: a split deposit is an
+	// off-chain allocation recorded in this same request (RecordGoalDeposits
+	// runs just above), with no transaction hash or ledger to read a real
+	// confirmation time from, so "now" genuinely is the best available signal
+	// here (unlike an on-chain deposit observed by the indexer, which uses
+	// the real ledger close time; see SavingsGamificationService.OnConfirmedDeposit).
+	//
+	// UserTimezone is intentionally left unset: the engine's state, loaded by
+	// s.gamification via SavingsGamificationRepository.GetState, already
+	// carries the user's real profile timezone (users.timezone) and only
+	// falls back to this field when that is empty. Setting it here would
+	// silently mask a bad or empty stored timezone instead of surfacing it.
+	if _, err := s.gamification.ProcessConfirmedDeposit(ctx, savingsstreak.SavingEvent{
 		EventID:             eventID,
 		UserID:              userID,
 		Type:                "deposit_confirmed",
 		Amount:              amount,
 		NetAmount:           amount,
 		OccurredAt:          time.Now().UTC(),
-		UserTimezone:        "UTC",
 		GoalsCompletedDelta: goalsCompleted,
-	})
+	}); err != nil {
+		// Best-effort: a gamification failure must not fail the deposit that
+		// already succeeded. Logged so a bad stored timezone (savingsstreak.ErrInvalidTimezone)
+		// is visible instead of silently freezing that user's streak forever.
+		slog.Default().Error("gamification: failed to record goal deposit", "user_id", userID, "event_id", eventID, "error", err)
+	}
 }
 
 func completedGoals(goals []*savingsgoal.SavingsGoal, results []GoalDepositResult) int {

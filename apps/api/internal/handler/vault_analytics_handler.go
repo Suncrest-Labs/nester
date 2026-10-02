@@ -17,13 +17,23 @@ type VaultAnalyticsQuerier interface {
 	Compute(ctx context.Context, vaultID uuid.UUID, period string) (service.VaultAnalytics, error)
 }
 
-// VaultAnalyticsHandler serves GET /api/v1/vaults/{id}/analytics.
-type VaultAnalyticsHandler struct {
-	svc VaultAnalyticsQuerier
+// DriftStateQuerier is the APYDriftDetector surface the handler needs to
+// attach live drift state to the analytics response (#613).
+type DriftStateQuerier interface {
+	GetDriftState(ctx context.Context, vaultID uuid.UUID) (service.DriftState, error)
 }
 
-func NewVaultAnalyticsHandler(svc VaultAnalyticsQuerier) *VaultAnalyticsHandler {
-	return &VaultAnalyticsHandler{svc: svc}
+// VaultAnalyticsHandler serves GET /api/v1/vaults/{id}/analytics.
+type VaultAnalyticsHandler struct {
+	svc   VaultAnalyticsQuerier
+	drift DriftStateQuerier
+}
+
+// NewVaultAnalyticsHandler builds a VaultAnalyticsHandler. drift may be nil
+// (e.g. in tests, or if the drift detector isn't wired up), in which case
+// the response's "drift" field is simply omitted.
+func NewVaultAnalyticsHandler(svc VaultAnalyticsQuerier, drift DriftStateQuerier) *VaultAnalyticsHandler {
+	return &VaultAnalyticsHandler{svc: svc, drift: drift}
 }
 
 func (h *VaultAnalyticsHandler) Register(mux *http.ServeMux) {
@@ -62,6 +72,17 @@ func (h *VaultAnalyticsHandler) analytics(w http.ResponseWriter, r *http.Request
 	// Normalise period label in response back to the canonical form.
 	if period == "365d" {
 		analytics.Period = "1y"
+	}
+
+	// Attach live drift state on a best-effort basis (#613): a failure here
+	// (or no detector wired up at all) must not fail the whole analytics
+	// response, since the historical metrics above are still valid.
+	if h.drift != nil {
+		if driftState, err := h.drift.GetDriftState(r.Context(), vaultID); err != nil {
+			logpkg.FromContext(r.Context()).Warn("vault drift state unavailable", "vault_id", vaultID, "error", err.Error())
+		} else {
+			analytics.Drift = &driftState
+		}
 	}
 
 	response.WriteJSON(w, http.StatusOK, response.OK(analytics))

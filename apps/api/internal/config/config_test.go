@@ -806,6 +806,9 @@ func TestLoadSensitiveRateLimitRejectsNonPositiveValues(t *testing.T) {
 		{"zero auth limit", "RATELIMIT_AUTH_LIMIT", "0", "RATELIMIT_AUTH_LIMIT must be greater than 0"},
 		{"negative auth limit", "RATELIMIT_AUTH_LIMIT", "-1", "RATELIMIT_AUTH_LIMIT must be greater than 0"},
 		{"zero auth window", "RATELIMIT_AUTH_WINDOW", "0s", "RATELIMIT_AUTH_WINDOW must be greater than 0"},
+		{"zero api key limit", "RATELIMIT_APIKEY_LIMIT", "0", "RATELIMIT_APIKEY_LIMIT must be greater than 0"},
+		{"negative api key limit", "RATELIMIT_APIKEY_LIMIT", "-1", "RATELIMIT_APIKEY_LIMIT must be greater than 0"},
+		{"zero api key window", "RATELIMIT_APIKEY_WINDOW", "0s", "RATELIMIT_APIKEY_WINDOW must be greater than 0"},
 	}
 
 	for _, tc := range cases {
@@ -847,6 +850,29 @@ func TestLoadSensitiveRateLimitOverrides(t *testing.T) {
 	}
 	if got := cfg.RateLimit().AuthWindow(); got != 30*time.Second {
 		t.Errorf("AuthWindow() = %s, want 30s", got)
+	}
+}
+
+// TestLoadAPIKeyRateLimitOverrides verifies env overrides for the per-API-key
+// rate limit (nester#1343).
+func TestLoadAPIKeyRateLimitOverrides(t *testing.T) {
+	baseEnv(t)
+	requiredEnv(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("RATELIMIT_APIKEY_LIMIT", "500")
+	t.Setenv("RATELIMIT_APIKEY_WINDOW", "2m")
+
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.RateLimit().APIKeyLimit(); got != 500 {
+		t.Errorf("APIKeyLimit() = %d, want 500", got)
+	}
+	if got := cfg.RateLimit().APIKeyWindow(); got != 2*time.Minute {
+		t.Errorf("APIKeyWindow() = %s, want 2m", got)
 	}
 }
 

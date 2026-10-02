@@ -47,7 +47,6 @@ pub struct UpgradeExecutedEventData {
     pub execution_timestamp: u64,
 }
 
-
 /// Data payload for the `value_attested` event emitted on every accepted
 /// attested APY or TVL update.
 ///

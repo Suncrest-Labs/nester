@@ -153,7 +153,11 @@ pub fn build_payload_bytes(env: &Env, payload: &AttestationPayload, nonce: u64) 
 
     // 32 bytes: contract address. The strkey form is 56 ASCII characters; take
     // its last 32 so the field is fixed-width and stable for a given address.
-    let addr_start = if addr_str_len >= 32 { addr_str_len - 32 } else { 0 };
+    let addr_start = if addr_str_len >= 32 {
+        addr_str_len - 32
+    } else {
+        0
+    };
     for i in addr_start..addr_str_len {
         buf.push_back(addr_buf[i]);
     }
@@ -266,8 +270,11 @@ pub fn verify_attestation(
 
     // Build canonical bytes and verify the ed25519 signature.
     let payload_bytes = build_payload_bytes(env, payload, attestation.nonce);
-    env.crypto()
-        .ed25519_verify(&attestation.public_key, &payload_bytes, &attestation.signature);
+    env.crypto().ed25519_verify(
+        &attestation.public_key,
+        &payload_bytes,
+        &attestation.signature,
+    );
     // ed25519_verify panics with a host-level error on failure; if we reach
     // here the signature is valid.  We map that panic to SignatureInvalid at
     // the call-site via a try_ pattern — see note in yield_registry/src/lib.rs.

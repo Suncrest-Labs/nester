@@ -8,7 +8,9 @@ use soroban_sdk::{
 
 use vault_factory_contract::{VaultFactoryContract, VaultFactoryContractClient};
 
-use crate::{GoalStatus, SavingsGoalContract, SavingsGoalContractClient, MAX_CONTRIBUTORS_PER_GOAL};
+use crate::{
+    GoalStatus, SavingsGoalContract, SavingsGoalContractClient, MAX_CONTRIBUTORS_PER_GOAL,
+};
 
 mod dummy_vault {
     soroban_sdk::contractimport!(file = "../vault_factory/fixtures/dummy_vault.wasm");
@@ -18,12 +20,7 @@ fn goal_id(env: &Env, seed: u8) -> BytesN<32> {
     BytesN::from_array(env, &[seed; 32])
 }
 
-fn setup() -> (
-    Env,
-    Address,
-    Address,
-    SavingsGoalContractClient<'static>,
-) {
+fn setup() -> (Env, Address, Address, SavingsGoalContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);

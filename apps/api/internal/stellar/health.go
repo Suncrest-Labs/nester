@@ -115,7 +115,7 @@ func PingSorobanRPC(ctx context.Context, client *http.Client, rpcURL string) Hea
 	if rpcResp.Error != nil {
 		return HealthResult{Endpoint: rpcURL, Error: rpcResp.Error.Message}
 	}
-	if rpcResp.Result.Status != "" && !strings.EqualFold(rpcResp.Result.Status, "healthy") {
+	if !strings.EqualFold(rpcResp.Result.Status, "healthy") {
 		return HealthResult{Endpoint: rpcURL, Error: fmt.Sprintf("rpc status %q", rpcResp.Result.Status)}
 	}
 	return HealthResult{OK: true, Endpoint: rpcURL, LatestLedger: rpcResp.Result.LatestLedger}

@@ -16,38 +16,28 @@ type AppHandler func(w http.ResponseWriter, r *http.Request) error
 // translating them into the standardized JSON envelope responses.
 // The correlation request ID (set by the Logging middleware) is included in
 // every error envelope so clients can correlate failures back to server logs.
+//
+// A returned error is translated by its apperror.Kind (issue #1048), which
+// covers all eight taxonomy kinds — validation, unauthenticated, forbidden,
+// not_found, conflict, quota_exceeded, upstream_unavailable, internal — via
+// one dispatch instead of a growing type-switch. Any error that is not an
+// *apperror.AppError (a bare `errors.New(...)`, a driver error escaping a
+// handler, etc.) is treated as KindInternal: its message is deliberately
+// never surfaced to the client, since it may contain SQL or driver detail —
+// see TestErrorHandler_NeverLeaksDriverOrSQLText.
 func ErrorHandler(h AppHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		err := h(w, r)
 		if err != nil {
 			requestID := logpkg.RequestIDFromContext(r.Context())
 
-			var notFound *apperror.NotFoundError
-			var validation *apperror.ValidationError
-			var conflict *apperror.ConflictError
-			var unauth *apperror.UnauthorizedError
-
-			var resp response.Response
-			var status int
-
-			switch {
-			case errors.As(err, &notFound):
-				status = http.StatusNotFound
-				resp = response.ErrWithRequestID(status, notFound.Code, notFound.Message, requestID)
-			case errors.As(err, &validation):
-				status = http.StatusBadRequest
-				resp = response.ErrWithRequestID(status, validation.Code, validation.Message, requestID)
-			case errors.As(err, &conflict):
-				status = http.StatusConflict
-				resp = response.ErrWithRequestID(status, conflict.Code, conflict.Message, requestID)
-			case errors.As(err, &unauth):
-				status = http.StatusUnauthorized
-				resp = response.ErrWithRequestID(status, unauth.Code, unauth.Message, requestID)
-			default:
-				status = http.StatusInternalServerError
-				resp = response.ErrWithRequestID(status, "INTERNAL_SERVER_ERROR", "internal server error", requestID)
+			var appErr *apperror.AppError
+			if !errors.As(err, &appErr) {
+				appErr = apperror.NewInternal("INTERNAL_SERVER_ERROR", "internal server error")
 			}
 
+			status := appErr.Kind.HTTPStatus()
+			resp := response.FromAppError(appErr, requestID)
 			response.WriteJSON(w, status, resp)
 		}
 	}

@@ -219,16 +219,23 @@ fn performance_fee_at_harvest_uses_tenure_tiered_rate() {
     h.mint_deposit_tokens(&user, DEPOSIT * 2);
     h.vault().deposit(&user, &DEPOSIT, &0);
 
-    // Cross to exactly the 180-day boundary before any yield is reported,
-    // so the entire pending yield is harvested at a clean 1000 bps rate
-    // (past that point the curve interpolates on toward the 365-day tier).
-    h.env.ledger().with_mut(|l| l.timestamp = 180 * DAY);
+    // Report the yield a little BEFORE the 180-day boundary (rather than
+    // exactly at it) so its 24h vesting window (issue #803's default) has
+    // fully elapsed by the time harvest below runs exactly at the
+    // boundary — landing the fee rate cleanly at the flat 1000 bps tier
+    // rather than drifting into the day-180-to-365 interpolation zone a
+    // later harvest timestamp would cause.
+    h.env
+        .ledger()
+        .with_mut(|l| l.timestamp = 180 * DAY - h.vault().get_yield_vesting_period() - 1);
 
     h.vault()
         .grant_role(&h.admin, &user, &nester_access_control::Role::Manager);
     let yield_amount = 1_000_000_i128;
     h.mint_deposit_tokens(&h.vault_id, yield_amount);
     h.vault().report_yield(&user, &yield_amount);
+
+    h.env.ledger().with_mut(|l| l.timestamp = 180 * DAY);
 
     let result = h.vault().harvest(&user);
     let expected_fee = yield_amount * 1_000 / 10_000; // 10% at day 200 tier

@@ -78,8 +78,13 @@ fn test_full_lifecycle_deposit_to_withdraw() {
     disable_circuit_breaker(&h);
 
     // 1. Register yield source, configure strategy weights, wire to vault
-    h.registry()
-        .register_source(&h.admin, &aave, &h.create_user(), &None, &ProtocolType::Lending);
+    h.registry().register_source(
+        &h.admin,
+        &aave,
+        &h.create_user(),
+        &None,
+        &ProtocolType::Lending,
+    );
     h.strategy().set_weights(
         &h.admin,
         &vec![
@@ -119,10 +124,15 @@ fn test_full_lifecycle_deposit_to_withdraw() {
     h.vault()
         .record_source_allocation(&h.admin, &aave, &(DEPOSIT + YIELD_AMOUNT));
 
-    assert_eq!(h.token().total_assets(), DEPOSIT + YIELD_AMOUNT);
-
-    // 6. Advance ledger past min_lock_period (86 400 s) → no early-withdrawal fee
+    // 6. Advance ledger past min_lock_period (86 400 s) → no early-withdrawal
+    // fee. This report vests linearly over the same 24h window (issue
+    // #803's default); a zero-amount report is a side-effect-free way to
+    // force the vested portion to actually release into TotalAssets before
+    // reading it below (a pure view like total_assets() does not release
+    // anything itself).
     h.env.ledger().with_mut(|l| l.timestamp = 86_401);
+    h.vault().report_yield(&h.admin, &0);
+    assert_eq!(h.token().total_assets(), DEPOSIT + YIELD_AMOUNT);
 
     // 7. User withdraws all shares
     // Performance fee = 10 % of YIELD_AMOUNT = 100_000
@@ -215,6 +225,85 @@ fn test_no_performance_fee_on_loss() {
 }
 
 // ---------------------------------------------------------------------------
+// Time-locked savings vault (issue #802)
+// ---------------------------------------------------------------------------
+
+/// Full lock lifecycle across the real multi-contract harness: deposit_locked
+/// → yield report → mature → unlock_position → withdraw. Confirms the boost
+/// mechanism (unit-tested against the bare VaultContract in
+/// contracts/vault/src/test.rs) also holds end-to-end through the same
+/// vault ↔ vault_token cross-contract path every other lifecycle test here
+/// exercises, and that a matured lock's shares really do become ordinary,
+/// withdrawable flexible shares afterward.
+#[test]
+fn test_locked_deposit_yield_mature_unlock_withdraw() {
+    let h = NesterHarness::setup();
+    let locked_user = h.create_user();
+    let flexible_user = h.create_user();
+    configure_fees(&h);
+    disable_circuit_breaker(&h);
+
+    const LOCK_DURATION_SECS: u64 = 90 * 86_400;
+
+    h.mint_deposit_tokens(&locked_user, DEPOSIT);
+    h.mint_deposit_tokens(&flexible_user, DEPOSIT);
+
+    let lock_id = h
+        .vault()
+        .deposit_locked(&locked_user, &DEPOSIT, &0, &LOCK_DURATION_SECS);
+    h.vault().deposit(&flexible_user, &DEPOSIT, &0);
+
+    // Locked shares count toward the balance but cannot be withdrawn as
+    // flexible shares while the lock is open.
+    assert_eq!(h.vault().get_balance(&locked_user), DEPOSIT);
+    let blocked = h.vault().try_withdraw(&locked_user, &1, &0);
+    assert!(
+        blocked.is_err(),
+        "withdraw must reject shares still committed to an open lock"
+    );
+
+    // Report yield and let it fully vest (issue #803's 24h default window).
+    h.mint_deposit_tokens(&h.vault_id, YIELD_AMOUNT);
+    h.vault().grant_role(&h.admin, &h.admin, &Role::Manager);
+    h.vault().report_yield(&h.admin, &YIELD_AMOUNT);
+    h.env.ledger().with_mut(|l| l.timestamp = 86_401);
+    h.vault().report_yield(&h.admin, &0);
+
+    let view = h.vault().get_locked_positions(&locked_user);
+    assert_eq!(view.positions.len(), 1);
+    let position = view.positions.get(0).unwrap();
+    assert!(
+        position.shares > DEPOSIT,
+        "the locked position must have been minted extra boost shares from the yield report"
+    );
+
+    // Mature the lock, then unlock — shares move into the flexible balance.
+    h.env
+        .ledger()
+        .with_mut(|l| l.timestamp += LOCK_DURATION_SECS + 1);
+    let unlocked_shares = h.vault().unlock_position(&locked_user, &lock_id);
+    assert_eq!(unlocked_shares, position.shares);
+    assert_eq!(
+        h.vault().get_locked_positions(&locked_user).positions.len(),
+        0
+    );
+
+    // Now an ordinary flexible withdrawal works for the full (boosted) balance.
+    let remaining = h.vault().withdraw(&locked_user, &unlocked_shares, &0);
+    assert_eq!(
+        remaining, 0,
+        "all shares should be burned after full withdrawal"
+    );
+
+    let user_usdc = token::Client::new(&h.env, &h.deposit_token_id).balance(&locked_user);
+    assert!(
+        user_usdc > DEPOSIT,
+        "the locked depositor must come out ahead of their own principal after the boost: got {}",
+        user_usdc
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Upgrade Framework Integration Tests
 // ---------------------------------------------------------------------------
 
@@ -241,7 +330,10 @@ fn test_upgrade_lifecycle_full_flow() {
     // 2. Grant Upgrader role
     h.vault().grant_role(&h.admin, &upgrader, &Role::Upgrader);
 
-    let valid_hash = h.env.deployer().upload_contract_wasm(soroban_sdk::Bytes::new(&h.env));
+    let valid_hash = h
+        .env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::new(&h.env));
     let now = h.env.ledger().timestamp();
     let eta = now + MIN_UPGRADE_DELAY_VAULT;
 
@@ -270,7 +362,12 @@ fn test_upgrade_lifecycle_full_flow() {
     assert_eq!(v1, v2);
     assert_eq!(v1, 1);
 
-    // 8. Verify balances, shares, and accrued yield preserved
+    // 8. Verify balances, shares, and accrued yield preserved. The report
+    // vests linearly over 24h (issue #803's default), well inside the 48h
+    // ETA delay already elapsed above, but a pure view like total_assets()
+    // does not itself release anything — force it with a zero-amount
+    // report first.
+    h.vault().report_yield(&h.admin, &0);
     assert_eq!(h.token().balance(&user), shares);
     assert_eq!(h.token().total_assets(), DEPOSIT + YIELD_AMOUNT);
 }
@@ -288,7 +385,10 @@ fn test_upgrade_cancellation_and_access_control() {
     let eta = now + MIN_UPGRADE_DELAY_VAULT;
 
     // Outsider cannot propose
-    assert!(h.vault().try_propose_upgrade(&outsider, &dummy_hash, &eta).is_err());
+    assert!(h
+        .vault()
+        .try_propose_upgrade(&outsider, &dummy_hash, &eta)
+        .is_err());
 
     // Upgrader proposes
     h.vault().propose_upgrade(&upgrader, &dummy_hash, &eta);
@@ -304,7 +404,10 @@ fn test_upgrade_cancellation_and_access_control() {
     h.env.ledger().with_mut(|l| l.timestamp = eta);
 
     // Cancelled proposal cannot be executed
-    assert!(h.vault().try_execute_upgrade(&outsider, &dummy_hash).is_err());
+    assert!(h
+        .vault()
+        .try_execute_upgrade(&outsider, &dummy_hash)
+        .is_err());
 }
 
 #[test]
@@ -345,7 +448,9 @@ fn test_treasury_upgrade_delay_requirement() {
 
     // Delay less than 7 days (e.g. 48 hours) fails for Treasury
     let short_eta = now + MIN_UPGRADE_DELAY_VAULT;
-    assert!(treasury_client.try_propose_upgrade(&upgrader, &dummy_hash, &short_eta).is_err());
+    assert!(treasury_client
+        .try_propose_upgrade(&upgrader, &dummy_hash, &short_eta)
+        .is_err());
 
     // Delay of 7 days succeeds for Treasury
     let valid_eta = now + MIN_UPGRADE_DELAY_TREASURY;
@@ -384,6 +489,3 @@ fn test_storage_ttl_persistence_after_long_ledger_advance() {
     assert_eq!(remaining, 0);
     assert_eq!(h.token().balance(&user), 0);
 }
-
-
-

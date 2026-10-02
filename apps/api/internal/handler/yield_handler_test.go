@@ -111,3 +111,95 @@ func TestYieldCompare_TooManyReturns400(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+func fetchCompareAll(t *testing.T, server *httptest.Server, query string) (*http.Response, []service.YieldComparisonEntry) {
+	t.Helper()
+	url := server.URL + "/api/v1/yield-opportunities/compare-all"
+	if query != "" {
+		url += "?" + query
+	}
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return resp, nil
+	}
+	var body struct {
+		Data struct {
+			Data []service.YieldComparisonEntry `json:"data"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp, body.Data.Data
+}
+
+func findComparisonEntry(entries []service.YieldComparisonEntry, protocol string) (service.YieldComparisonEntry, bool) {
+	for _, e := range entries {
+		if e.Protocol == protocol {
+			return e, true
+		}
+	}
+	return service.YieldComparisonEntry{}, false
+}
+
+// TestYieldCompareAll_ReturnsEveryActiveProtocolUnselected pins the
+// requirement compare (above) does not satisfy: a caller gets every active
+// protocol back without naming any of them (nester#950). The fixture has two
+// projects across three pools — blend (2 pools) and aqua (1 pool) — so this
+// also exercises the TVL-weighted aggregation across blend's pools.
+func TestYieldCompareAll_ReturnsEveryActiveProtocolUnselected(t *testing.T) {
+	server := newYieldServerWithRealSvc(t)
+
+	resp, entries := fetchCompareAll(t, server, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2 (blend, aqua): %+v", len(entries), entries)
+	}
+
+	blend, ok := findComparisonEntry(entries, "blend")
+	if !ok {
+		t.Fatalf("blend missing: %+v", entries)
+	}
+	wantBlendTVL := 2_000_000.0 + 2_200_000.0
+	if blend.TVLUSD != wantBlendTVL {
+		t.Errorf("blend tvl_usd = %v, want %v (summed across both pools)", blend.TVLUSD, wantBlendTVL)
+	}
+	wantBlendAPY := (6.0*2_000_000.0 + 8.23*2_200_000.0) / wantBlendTVL
+	if diff := blend.CurrentAPY - wantBlendAPY; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("blend current_apy = %v, want %v (TVL-weighted)", blend.CurrentAPY, wantBlendAPY)
+	}
+
+	aqua, ok := findComparisonEntry(entries, "aqua")
+	if !ok || aqua.TVLUSD != 890_000 || aqua.CurrentAPY != 11.0 {
+		t.Fatalf("aqua entry wrong: %+v", aqua)
+	}
+}
+
+func TestYieldCompareAll_InvalidLimitReturns400(t *testing.T) {
+	server := newYieldServerWithRealSvc(t)
+
+	for _, limit := range []string{"0", "-1", "101", "not-a-number"} {
+		resp, _ := fetchCompareAll(t, server, "limit="+limit)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("limit=%s: status = %d, want 400", limit, resp.StatusCode)
+		}
+	}
+}
+
+func TestYieldCompareAll_LimitCapsResultCount(t *testing.T) {
+	server := newYieldServerWithRealSvc(t)
+
+	resp, entries := fetchCompareAll(t, server, "limit=1")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1 (limit=1): %+v", len(entries), entries)
+	}
+}

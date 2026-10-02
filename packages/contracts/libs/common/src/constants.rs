@@ -63,3 +63,38 @@ pub const MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY: u64 = 172_800;
 /// Mandatory timelock delay for Treasury upgrades (7 days).
 pub const MIN_UPGRADE_DELAY_TREASURY: u64 = 604_800;
 
+// ---------------------------------------------------------------------------
+// Time-locked savings vault (issue #802)
+// ---------------------------------------------------------------------------
+/// Default admin-configured lock tiers, in seconds: 30, 90, 180, 365 days.
+/// `deposit_locked` rejects any `lock_duration_secs` not exactly matching a
+/// configured tier — arbitrary durations would make the boost curve
+/// impossible to reason about and bloat storage with one-off entries.
+pub const DEFAULT_LOCK_TIERS_SECONDS: [u64; 4] =
+    [30 * 86_400, 90 * 86_400, 180 * 86_400, 365 * 86_400];
+/// Default boost multiplier for each tier above, in basis points
+/// (10_000 = 1x, i.e. no boost). Longer commitments earn a larger multiplier.
+pub const DEFAULT_LOCK_TIER_BOOST_BPS: [u32; 4] = [11_000, 12_500, 15_000, 20_000];
+/// Hard ceiling on any single tier's boost multiplier — an admin key
+/// compromise (or fat-fingered config) cannot promise an economically
+/// unsustainable multiplier, same reasoning as `MAX_TREASURY_SHARE_BPS`.
+pub const MAX_LOCK_BOOST_BPS: u32 = 50_000; // 5x
+/// Default full (day-one) early-break penalty rate, decaying linearly to
+/// zero at maturity (see `nester_common::fees::lock_break_penalty_bps`).
+pub const DEFAULT_LOCK_BREAK_PENALTY_BPS: u32 = 1_000; // 10%
+/// Hard ceiling on the configured full early-break penalty rate.
+pub const MAX_LOCK_BREAK_PENALTY_BPS: u32 = 3_000; // 30%
+/// Maximum simultaneously open locks per user. `get_locked_positions`
+/// iterates one user's open locks; without a per-user cap a single user
+/// could grief that read into a denial-of-service by opening an unbounded
+/// number of dust-sized locks.
+pub const MAX_OPEN_LOCKS_PER_USER: u32 = 20;
+/// Maximum simultaneously open locks vault-wide, across every user.
+/// `report_yield`'s boost split settles every open lock in the same
+/// transaction that applies the yield report (see
+/// `contracts/vault/src/locks.rs`'s module doc for why this must be eager
+/// rather than lazily deferred), so this bounds that iteration's cost
+/// regardless of how many distinct users hold a lock. Deliberately larger
+/// than `MAX_OPEN_LOCKS_PER_USER` alone would suggest, since it is a
+/// vault-wide total across all depositors, not one user's share of it.
+pub const MAX_TOTAL_OPEN_LOCKS: u32 = 200;
