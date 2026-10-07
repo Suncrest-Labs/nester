@@ -1,69 +1,12 @@
 {
-  "timestamp": "2026-08-26T23:27:54.372Z",
-  "totalEntries": 46,
+  "timestamp": "2026-10-07T11:49:38.014Z",
+  "totalEntries": 45,
   "summary": {
-    "resolved": 25,
-    "open": 21,
+    "resolved": 43,
+    "open": 2,
     "needsMoreInfo": 0
   },
-  "issues": [
-    {
-      "id": "SC-09",
-      "title": "common lib",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: File not found: packages/contracts/contracts/common/src/lib.rs"
-      ]
-    },
-    {
-      "id": "SC-10",
-      "title": "test_utils lib",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: File not found: packages/contracts/contracts/test_utils/src/lib.rs"
-      ]
-    },
-    {
-      "id": "API-21",
-      "title": "Event indexer cursor persistence",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: Migration file not found: apps/api/migrations/025_add_system_state_table.sql"
-      ]
-    },
-    {
-      "id": "API-23",
-      "title": "Event indexer idempotency",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: Test name not found in apps/api/internal/stellar/poller_test.go: TestIntegrationReplay_DuplicateDelivery"
-      ]
-    },
-    {
-      "id": "DB-01",
-      "title": "Migrations 001-003",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: Migration file not found: apps/api/migrations/001_create_users_table.sql"
-      ]
-    },
-    {
-      "id": "DB-02",
-      "title": "Migrations 005-006",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: Migration file not found: apps/api/migrations/005_create_allocations_table.sql"
-      ]
-    },
-    {
-      "id": "DAPP-01",
-      "title": "Stellar Freighter",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: File not found: apps/dapp/frontend/lib/stellar.ts"
-      ]
-    }
-  ],
+  "issues": [],
   "resolvedWithEvidence": [
     {
       "id": "SC-01",
@@ -108,12 +51,27 @@
     {
       "id": "SC-09",
       "title": "common lib",
-      "evidence": "file: packages/contracts/contracts/common/src/lib.rs"
+      "evidence": "file: packages/contracts/libs/common/src/lib.rs"
     },
     {
       "id": "SC-10",
       "title": "test_utils lib",
-      "evidence": "file: packages/contracts/contracts/test_utils/src/lib.rs"
+      "evidence": "file: packages/contracts/libs/test_utils/src/lib.rs"
+    },
+    {
+      "id": "SC-11",
+      "title": "Impairment regression test",
+      "evidence": "test: packages/contracts/contracts/vault/src/test.rs::impairment_charges_zero_performance_fee, test: packages/contracts/contracts/vault/src/test.rs::withdrawal_charges_no_perf_fee_on_impairment"
+    },
+    {
+      "id": "SC-12",
+      "title": "preview_withdraw function",
+      "evidence": "file: packages/contracts/contracts/vault/src/lib.rs#L4861-L4960, test: packages/contracts/contracts/vault/src/test.rs::preview_withdraw_net_le_preview_withdraw"
+    },
+    {
+      "id": "SC-13",
+      "title": "Cargo test WASM dependency",
+      "evidence": "ci: ci::contracts, file: .github/workflows/ci.yml#L584-L610"
     },
     {
       "id": "API-01",
@@ -143,7 +101,7 @@
     {
       "id": "API-21",
       "title": "Event indexer cursor persistence",
-      "evidence": "test: apps/api/internal/stellar/poller_test.go::TestIntegrationCursorAndBalanceCommitAtomically, migration: apps/api/migrations/025_add_system_state_table.sql"
+      "evidence": "test: apps/api/internal/stellar/poller_test.go::TestIntegrationCursorAndBalanceCommitAtomically, migration: apps/api/migrations/025_create_system_state_table.up.sql"
     },
     {
       "id": "API-22",
@@ -153,27 +111,102 @@
     {
       "id": "API-23",
       "title": "Event indexer idempotency",
-      "evidence": "test: apps/api/internal/stellar/poller_test.go::TestIntegrationReplay_DuplicateDelivery, test: apps/api/internal/stellar/poller_test.go::TestIntegrationReplay_RepeatedFullReplay, migration: apps/api/migrations/022_create_processed_events_table.sql"
+      "evidence": "test: apps/api/internal/stellar/replay_harness_test.go::TestIntegrationReplay_DuplicateDelivery, test: apps/api/internal/stellar/replay_harness_test.go::TestIntegrationReplay_RepeatedFullReplay, migration: apps/api/migrations/028_create_processed_events_table.up.sql"
+    },
+    {
+      "id": "API-29",
+      "title": "GetRoles uuid type",
+      "evidence": "file: apps/api/internal/repository/postgres/user_repository.go#L179-L183"
+    },
+    {
+      "id": "API-30",
+      "title": "bootstrap-admin db.Ping()",
+      "evidence": "file: apps/api/cmd/bootstrap-admin/main.go#L55"
+    },
+    {
+      "id": "API-31",
+      "title": "bootstrap-admin address validation",
+      "evidence": "file: apps/api/cmd/bootstrap-admin/main.go#L39-L41"
+    },
+    {
+      "id": "API-32",
+      "title": "Migration runner",
+      "evidence": "file: apps/api/cmd/api/main.go#L220-L245, test: apps/api/internal/config/config_test.go::TestLoadRunMigrationsFlag"
+    },
+    {
+      "id": "API-33",
+      "title": "Reauth after migration 009",
+      "evidence": "file: apps/api/migrations/README.md#L38-L45"
     },
     {
       "id": "DB-01",
       "title": "Migrations 001-003",
-      "evidence": "migration: apps/api/migrations/001_create_users_table.sql, migration: apps/api/migrations/002_create_vaults_table.sql, migration: apps/api/migrations/003_create_transactions_table.sql"
+      "evidence": "migration: apps/api/migrations/001_create_users_table.up.sql, migration: apps/api/migrations/002_create_vaults_table.up.sql, migration: apps/api/migrations/003_create_transactions_table.up.sql"
     },
     {
       "id": "DB-02",
       "title": "Migrations 005-006",
-      "evidence": "migration: apps/api/migrations/005_create_allocations_table.sql"
+      "evidence": "migration: apps/api/migrations/005_create_allocations_table.up.sql"
+    },
+    {
+      "id": "DB-03",
+      "title": "Migration number collisions",
+      "evidence": "file: apps/api/migrations/README.md#L47-L51"
+    },
+    {
+      "id": "DB-10",
+      "title": "seed.sql schema mismatch",
+      "evidence": "file: scripts/seed.sql#L57-L59"
+    },
+    {
+      "id": "DB-11",
+      "title": "user_roles seed row",
+      "evidence": "file: scripts/seed.sql#L61-L63"
     },
     {
       "id": "DAPP-01",
       "title": "Stellar Freighter",
-      "evidence": "file: apps/dapp/frontend/lib/stellar.ts, file: apps/dapp/frontend/components/WalletConnector.tsx"
+      "evidence": "file: apps/dapp/frontend/lib/stellar/wallet-network.ts, file: apps/dapp/frontend/components/connect-wallet.tsx"
     },
     {
       "id": "DAPP-12",
       "title": "Stocks page",
       "evidence": "file: apps/dapp/frontend/app/stocks/page.tsx"
+    },
+    {
+      "id": "DAPP-19",
+      "title": "Error boundaries",
+      "evidence": "file: apps/dapp/frontend/tests/error-boundaries.spec.ts"
+    },
+    {
+      "id": "DAPP-20",
+      "title": "Offline handling",
+      "evidence": "file: apps/dapp/frontend/hooks/useOfflineStatus.ts, file: apps/dapp/frontend/components/offline-banner.tsx"
+    },
+    {
+      "id": "DAPP-21",
+      "title": "Skeleton loaders",
+      "evidence": "file: apps/dapp/frontend/tests/loading-states.spec.ts"
+    },
+    {
+      "id": "DAPP-22",
+      "title": "E2E tests",
+      "evidence": "file: apps/dapp/frontend/tests/smoke.spec.ts, file: apps/dapp/frontend/e2e/vault-creation.spec.ts"
+    },
+    {
+      "id": "DAPP-23",
+      "title": "Accessibility audit",
+      "evidence": "file: apps/dapp/frontend/tests/accessibility.spec.ts"
+    },
+    {
+      "id": "DAPP-24",
+      "title": "WebSocket heartbeat",
+      "evidence": "file: apps/dapp/frontend/tests/websocket-reconnect.spec.ts"
+    },
+    {
+      "id": "SEC-01",
+      "title": "BOLA / Authorization matrix",
+      "evidence": "test: apps/api/internal/middleware/authz_matrix_test.go::TestAuthorizationMatrix, file: apps/api/internal/middleware/authz_matrix_test.go"
     },
     {
       "id": "CI-01",

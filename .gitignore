@@ -48,7 +48,6 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Env files
-.env*
 !.env.example
 !apps/api/.env.example
 !apps/intelligence/.env.example
@@ -84,3 +83,4 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+config.bat

@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node init && next dev -p 3001",
+    "build": "node init && next build",
+    "start": "node init && next start",
     "lint": "eslint",
     "lint:security": "eslint --no-config-lookup --config eslint.security.mjs .",
     "test:a11y": "playwright test tests/accessibility.spec.ts",
