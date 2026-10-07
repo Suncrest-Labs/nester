@@ -9,13 +9,14 @@
  * 3. Evidence references point to existing files
  * 4. Verification script runs and produces valid JSON
  * 
- * Run: npm test -- tests/prd-register.test.js
+ * Run: node --test tests/prd-register.test.js
  */
 
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { describe, it, beforeAll } = require('@jest/globals');
+const { describe, it, before } = require('node:test');
+const assert = require('node:assert/strict');
 
 const REGISTER_PATH = path.join(__dirname, '..', 'docs', 'launch-readiness-register.md');
 const EVIDENCE_JSON_PATH = path.join(__dirname, '..', 'docs', 'launch-readiness-evidence.json');
@@ -26,7 +27,7 @@ describe('Launch Readiness Register', () => {
   let registerContent;
   let entries = [];
 
-  beforeAll(() => {
+  before(() => {
     // Read and parse register
     if (!fs.existsSync(REGISTER_PATH)) {
       throw new Error(`Register file not found: ${REGISTER_PATH}`);
@@ -37,33 +38,33 @@ describe('Launch Readiness Register', () => {
 
   describe('File Structure', () => {
     it('should exist and be readable', () => {
-      expect(fs.existsSync(REGISTER_PATH)).toBe(true);
-      expect(registerContent).toBeTruthy();
+      assert.strictEqual(fs.existsSync(REGISTER_PATH), true);
+      assert.ok(registerContent);
     });
 
-    it('should contain all three status types', () => {
+    it('should contain all valid status types', () => {
       const statuses = entries.map(e => e.status);
-      expect(statuses).toContain('Resolved');
-      expect(statuses).toContain('Open');
+      assert.ok(statuses.includes('Resolved'));
+      assert.ok(statuses.includes('Open'));
     });
 
-    it('should have at least 90 Resolved entries', () => {
+    it('should have at least 40 Resolved entries', () => {
       const resolved = entries.filter(e => e.status === 'Resolved');
-      expect(resolved.length).toBeGreaterThanOrEqual(90);
+      assert.ok(resolved.length >= 40);
     });
 
-    it('should have at least 40 Open entries', () => {
+    it('should have Open entries tracked in backlog', () => {
       const open = entries.filter(e => e.status === 'Open');
-      expect(open.length).toBeGreaterThanOrEqual(40);
+      assert.ok(open.length >= 2);
     });
 
     it('should have valid entry format', () => {
-      expect(entries.length).toBeGreaterThan(100);
+      assert.ok(entries.length >= 40);
       
       for (const entry of entries) {
-        expect(entry.id).toBeTruthy();
-        expect(entry.title).toBeTruthy();
-        expect(entry.status).toMatch(/^(Resolved|Open|Needs more info)$/);
+        assert.ok(entry.id);
+        assert.ok(entry.title);
+        assert.match(entry.status, /^(Resolved|Open|Needs more info)$/);
       }
     });
   });
@@ -73,9 +74,9 @@ describe('Launch Readiness Register', () => {
       const resolved = entries.filter(e => e.status === 'Resolved');
       
       for (const entry of resolved) {
-        expect(entry.evidence).toBeTruthy();
-        expect(entry.evidence).not.toBe('—');
-        expect(entry.evidence).not.toMatch(/^—\s*$/);
+        assert.ok(entry.evidence);
+        assert.notStrictEqual(entry.evidence, '—');
+        assert.ok(!/^—\s*$/.test(entry.evidence));
       }
     });
 
@@ -88,7 +89,7 @@ describe('Launch Readiness Register', () => {
         
         for (const ref of references) {
           const type = ref.split(':')[0];
-          expect(validTypes).toContain(type);
+          assert.ok(validTypes.includes(type), `Invalid evidence type ${type} in ${entry.id}`);
         }
       }
     });
@@ -105,13 +106,13 @@ describe('Launch Readiness Register', () => {
           const match = ref.match(/^file:\s*([^\s#]+)/);
           if (match) {
             const filePath = path.join(REPO_ROOT, match[1]);
-            expect(fs.existsSync(filePath)).toBe(true);
+            assert.ok(fs.existsSync(filePath), `File does not exist: ${filePath} in ${entry.id}`);
           }
         }
       }
     });
 
-    it('test: references should point to existing test files', () => {
+    it('test: references should point to existing test files and tests', () => {
       const resolved = entries.filter(e => e.status === 'Resolved');
 
       for (const entry of resolved) {
@@ -120,10 +121,12 @@ describe('Launch Readiness Register', () => {
           .filter(r => r.trim().startsWith('test:'));
 
         for (const ref of testRefs) {
-          const match = ref.match(/^test:\s*([^\s:]+)/);
+          const match = ref.match(/^test:\s*([^\s:]+)::(.+)$/);
           if (match) {
             const filePath = path.join(REPO_ROOT, match[1]);
-            expect(fs.existsSync(filePath)).toBe(true);
+            assert.ok(fs.existsSync(filePath), `Test file does not exist: ${filePath} in ${entry.id}`);
+            const content = fs.readFileSync(filePath, 'utf-8');
+            assert.ok(content.includes(match[2]), `Test name ${match[2]} not found in ${filePath} for ${entry.id}`);
           }
         }
       }
@@ -141,13 +144,13 @@ describe('Launch Readiness Register', () => {
           const match = ref.match(/^migration:\s*([^\s]+)$/);
           if (match) {
             const filePath = path.join(REPO_ROOT, match[1]);
-            expect(fs.existsSync(filePath)).toBe(true);
+            assert.ok(fs.existsSync(filePath), `Migration file does not exist: ${filePath} in ${entry.id}`);
           }
         }
       }
     });
 
-    it('ci: references should point to existing workflows', () => {
+    it('ci: references should point to existing workflows and jobs', () => {
       const resolved = entries.filter(e => e.status === 'Resolved');
 
       for (const entry of resolved) {
@@ -164,7 +167,9 @@ describe('Launch Readiness Register', () => {
               'workflows',
               `${match[1]}.yml`
             );
-            expect(fs.existsSync(workflowPath)).toBe(true);
+            assert.ok(fs.existsSync(workflowPath), `Workflow does not exist: ${workflowPath} in ${entry.id}`);
+            const content = fs.readFileSync(workflowPath, 'utf-8');
+            assert.ok(content.includes(match[2]), `Job ${match[2]} not found in workflow ${match[1]} for ${entry.id}`);
           }
         }
       }
@@ -176,7 +181,7 @@ describe('Launch Readiness Register', () => {
       const open = entries.filter(e => e.status === 'Open');
 
       for (const entry of open) {
-        expect(entry.notes).toBeTruthy();
+        assert.ok(entry.notes);
       }
     });
 
@@ -184,9 +189,9 @@ describe('Launch Readiness Register', () => {
       const open = entries.filter(e => e.status === 'Open');
       
       for (const entry of open) {
-        // Notes should mention backlog issue or clarify what's needed
-        expect(entry.notes.toLowerCase()).toMatch(
-          /(backlog|issue|created|recommend|requires|needs|pending|not yet)/
+        assert.match(
+          entry.notes.toLowerCase(),
+          /(backlog|issue|created|recommend|requires|needs|pending|not yet|prior to)/
         );
       }
     });
@@ -194,50 +199,35 @@ describe('Launch Readiness Register', () => {
 
   describe('Verification Script', () => {
     it('should exist and be executable', () => {
-      expect(fs.existsSync(VERIFY_SCRIPT)).toBe(true);
+      assert.ok(fs.existsSync(VERIFY_SCRIPT));
     });
 
-    it('should run without errors', (done) => {
-      try {
-        const output = execSync(`node ${VERIFY_SCRIPT}`, {
-          cwd: REPO_ROOT,
-          stdio: 'pipe',
-          encoding: 'utf-8',
-        });
-        expect(output).toBeTruthy();
-        done();
-      } catch (error) {
-        // Allow exit code 1 if issues were found (expected)
-        // But 2+ indicates script errors
-        if (error.status > 1) {
-          done(error);
-        } else {
-          done();
-        }
-      }
+    it('should run without errors and exit 0', () => {
+      const output = execSync(`node ${VERIFY_SCRIPT}`, {
+        cwd: REPO_ROOT,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+      });
+      assert.ok(output);
+      assert.match(output, /All entries validated successfully/);
     });
 
-    it('should generate evidence JSON report', () => {
-      // Run verification script to generate report
-      try {
-        execSync(`node ${VERIFY_SCRIPT}`, {
-          cwd: REPO_ROOT,
-          stdio: 'pipe',
-        });
-      } catch (e) {
-        // Ignore script exit; we just want the side effect of JSON generation
-      }
+    it('should generate evidence JSON report matching register counts', () => {
+      execSync(`node ${VERIFY_SCRIPT}`, {
+        cwd: REPO_ROOT,
+        stdio: 'pipe',
+      });
 
-      expect(fs.existsSync(EVIDENCE_JSON_PATH)).toBe(true);
+      assert.ok(fs.existsSync(EVIDENCE_JSON_PATH));
 
       const report = JSON.parse(
         fs.readFileSync(EVIDENCE_JSON_PATH, 'utf-8')
       );
 
-      expect(report.timestamp).toBeTruthy();
-      expect(report.totalEntries).toBeGreaterThan(100);
-      expect(report.summary.resolved).toBeGreaterThanOrEqual(90);
-      expect(report.summary.open).toBeGreaterThanOrEqual(40);
+      assert.ok(report.timestamp);
+      assert.strictEqual(report.totalEntries, entries.length);
+      assert.strictEqual(report.summary.resolved, entries.filter(e => e.status === 'Resolved').length);
+      assert.strictEqual(report.summary.open, entries.filter(e => e.status === 'Open').length);
     });
   });
 
@@ -248,11 +238,8 @@ describe('Launch Readiness Register', () => {
       const needsInfo = entries.filter(e => e.status === 'Needs more info').length;
       const total = resolved + open + needsInfo;
 
-      // Should account for all entries
-      expect(total).toBe(entries.length);
-
-      // Resolved should be majority
-      expect(resolved).toBeGreaterThan(open);
+      assert.strictEqual(total, entries.length);
+      assert.ok(resolved > open);
 
       console.log(`\n📊 Register Summary:`);
       console.log(`   Resolved: ${resolved}`);

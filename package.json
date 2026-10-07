@@ -7,7 +7,9 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "website": "turbo run dev --filter=@nester/website",
-    "dapp": "turbo run dev --filter=@nester/dapp"
+    "dapp": "turbo run dev --filter=@nester/dapp",
+    "verify:register": "node scripts/verify-prd-refs.js",
+    "test:register": "node --test tests/prd-register.test.js"
   },
   "devDependencies": {
     "turbo": "^2.3.3"
