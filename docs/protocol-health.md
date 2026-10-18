@@ -93,3 +93,15 @@ of an exploit or a bug rather than gradual outflow.
   reading can be a bad data point, so moving funds stays with the scored,
   multi-indicator severe path or an operator decision.
 
+## Vault Pause & Circuit-Breaker Operation Matrix
+
+The vault supports three distinct restriction modes so operators and automated circuit breakers can halt new capital inflows without trapping existing depositors (`packages/contracts/tests/integration/src/integration/circuit_breaker_tests.rs`):
+
+| Mode | Trigger / State | `deposit` / `deposit_locked` | `withdraw` | `emergency_withdraw` | `harvest` | `unlock_position` (matured) |
+|---|---|---|---|---|---|---|
+| **Normal / Throttled** | `VaultStatus::Active`, `Severity::Normal` or `Severity::Throttled` | Allowed | Allowed | Blocked (`InvalidOperation`) | Allowed | Allowed |
+| **Deposit-Only Breaker** | `VaultStatus::Active`, `Severity::DepositsHalted` (`guardian_halt_deposits` or automated share-price / yield-sanity / source-failure trip) | Blocked (`CircuitBreakerTriggered`) | Allowed | Blocked (`InvalidOperation` — normal `withdraw` is open) | Allowed | Allowed |
+| **Per-Vault Pause** | `VaultStatus::Paused` (`pause`) | Blocked (`InvalidOperation`) | Blocked (`InvalidOperation`) | Allowed | Blocked (`InvalidOperation`) | Allowed |
+| **Global Breaker Halt** | `Severity::FullHalt` (`guardian_trip_breaker`) | Blocked (`CircuitBreakerTriggered`) | Blocked (`CircuitBreakerTriggered`) | Allowed | Blocked (`CircuitBreakerTriggered`) | Allowed |
+
+

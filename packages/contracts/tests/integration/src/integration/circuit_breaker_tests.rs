@@ -555,3 +555,179 @@ fn guardian_can_halt_deposits_but_not_unpause_upgrade_or_withdraw_as_admin() {
         .is_err());
     assert!(h.vault().try_recover_next_stage(&guardian).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Pause Mode Matrix (#1543): Deposit-only breaker vs Per-vault pause vs Global FullHalt
+// ---------------------------------------------------------------------------
+
+const MATRIX_LOCK_DURATION_SECS: u64 = 30 * 86_400;
+
+#[test]
+fn pause_mode_matrix_deposit_only_breaker_keeps_withdraw_harvest_and_unlock_open() {
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+    h.mint_deposit_tokens(&user, STAGED_DEPOSIT * 3);
+    h.vault().deposit(&user, &STAGED_DEPOSIT, &0);
+    let lock_id = h.vault().deposit_locked(
+        &user,
+        &STAGED_DEPOSIT,
+        &0,
+        &MATRIX_LOCK_DURATION_SECS,
+    );
+
+    h.env
+        .ledger()
+        .with_mut(|l| l.timestamp += MATRIX_LOCK_DURATION_SECS + 1);
+
+    // Activate Deposit-only breaker (Severity::DepositsHalted)
+    h.vault().guardian_halt_deposits(&h.admin);
+    assert_eq!(
+        h.vault().get_breaker_status().severity,
+        Severity::DepositsHalted
+    );
+
+    // 1. deposit & deposit_locked: BLOCKED
+    assert!(h.vault().try_deposit(&user, &DEPOSIT, &0).is_err());
+    assert!(h
+        .vault()
+        .try_deposit_locked(&user, &DEPOSIT, &0, &MATRIX_LOCK_DURATION_SECS)
+        .is_err());
+
+    // 2. withdraw: ALLOWED
+    let withdrawn = h.vault().withdraw(&user, &(STAGED_DEPOSIT / 4), &0);
+    assert!(withdrawn > 0);
+
+    // 3. emergency_withdraw: BLOCKED (normal withdraw is open)
+    assert!(h.vault().try_emergency_withdraw(&user).is_err());
+
+    // 4. harvest: ALLOWED
+    let harvest_res = h.vault().try_harvest(&user);
+    assert!(harvest_res.is_ok());
+
+    // 5. unlock_position: ALLOWED, and unlocked shares can immediately be withdrawn
+    let unlocked = h.vault().unlock_position(&user, &lock_id);
+    assert_eq!(unlocked, STAGED_DEPOSIT);
+    let withdrawn_unlocked = h.vault().withdraw(&user, &unlocked, &0);
+    assert!(withdrawn_unlocked > 0);
+}
+
+#[test]
+fn pause_mode_matrix_per_vault_pause_allows_only_emergency_withdraw_and_unlock() {
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+    let locked_user = h.create_user();
+    h.mint_deposit_tokens(&user, STAGED_DEPOSIT * 2);
+    h.mint_deposit_tokens(&locked_user, STAGED_DEPOSIT);
+    h.vault().deposit(&user, &STAGED_DEPOSIT, &0);
+    let lock_id = h.vault().deposit_locked(
+        &locked_user,
+        &STAGED_DEPOSIT,
+        &0,
+        &MATRIX_LOCK_DURATION_SECS,
+    );
+
+    h.env
+        .ledger()
+        .with_mut(|l| l.timestamp += MATRIX_LOCK_DURATION_SECS + 1);
+
+    // Activate per-vault pause
+    h.vault().pause(&h.admin);
+    assert!(h.vault().is_paused());
+
+    // 1. deposit: BLOCKED
+    assert!(h.vault().try_deposit(&user, &DEPOSIT, &0).is_err());
+
+    // 2. withdraw: BLOCKED
+    assert!(h.vault().try_withdraw(&user, &(DEPOSIT / 2), &0).is_err());
+
+    // 3. harvest: BLOCKED
+    assert!(h.vault().try_harvest(&user).is_err());
+
+    // 4. unlock_position: ALLOWED (bookkeeping release of matured lock)
+    let unlocked = h.vault().unlock_position(&locked_user, &lock_id);
+    assert_eq!(unlocked, STAGED_DEPOSIT);
+
+    // 5. emergency_withdraw: ALLOWED
+    let returned = h.vault().emergency_withdraw(&user);
+    assert!(returned > 0);
+}
+
+#[test]
+fn pause_mode_matrix_global_full_halt_allows_only_emergency_withdraw_and_unlock() {
+    let h = NesterHarness::setup();
+    let user = h.create_user();
+    let locked_user = h.create_user();
+    h.mint_deposit_tokens(&user, STAGED_DEPOSIT * 2);
+    h.mint_deposit_tokens(&locked_user, STAGED_DEPOSIT);
+    h.vault().deposit(&user, &STAGED_DEPOSIT, &0);
+    let lock_id = h.vault().deposit_locked(
+        &locked_user,
+        &STAGED_DEPOSIT,
+        &0,
+        &MATRIX_LOCK_DURATION_SECS,
+    );
+
+    h.env
+        .ledger()
+        .with_mut(|l| l.timestamp += MATRIX_LOCK_DURATION_SECS + 1);
+
+    // Activate global breaker halt (Severity::FullHalt)
+    h.vault().guardian_trip_breaker(&h.admin);
+    assert_eq!(h.vault().get_breaker_status().severity, Severity::FullHalt);
+
+    // 1. deposit: BLOCKED
+    assert!(h.vault().try_deposit(&user, &DEPOSIT, &0).is_err());
+
+    // 2. withdraw: BLOCKED
+    assert!(h.vault().try_withdraw(&user, &(DEPOSIT / 2), &0).is_err());
+
+    // 3. harvest: BLOCKED
+    assert!(h.vault().try_harvest(&user).is_err());
+
+    // 4. unlock_position: ALLOWED
+    let unlocked = h.vault().unlock_position(&locked_user, &lock_id);
+    assert_eq!(unlocked, STAGED_DEPOSIT);
+
+    // 5. emergency_withdraw: ALLOWED
+    let returned = h.vault().emergency_withdraw(&user);
+    assert!(returned > 0);
+}
+
+#[test]
+fn property_withdrawals_always_succeed_across_arbitrary_slices_when_deposits_halted() {
+    let h = NesterHarness::setup();
+    let mut cfg = h.vault().get_breaker_config_v2();
+    cfg.withdraw_velocity_enabled = false;
+    h.vault().set_breaker_config(&h.admin, &cfg);
+
+    let user = h.create_user();
+    let total_deposit = STAGED_DEPOSIT * 5;
+    h.mint_deposit_tokens(&user, total_deposit * 2);
+    h.vault().deposit(&user, &total_deposit, &0);
+
+    h.vault().guardian_halt_deposits(&h.admin);
+    assert_eq!(
+        h.vault().get_breaker_status().severity,
+        Severity::DepositsHalted
+    );
+
+    // Deterministic pseudo-random sequence of withdrawal fractions must all succeed
+    // while every interleaved deposit attempt is rejected.
+    let slices = [
+        10_000_000i128,
+        35_000_000,
+        75_000_000,
+        120_000_000,
+        260_000_000,
+    ];
+    for slice in slices {
+        assert!(
+            h.vault().try_deposit(&user, &slice, &0).is_err(),
+            "deposit must fail while DepositsHalted"
+        );
+        let out = h.vault().withdraw(&user, &slice, &0);
+        assert_eq!(out, slice);
+    }
+    assert_eq!(h.token().balance(&user), 0);
+}
+
