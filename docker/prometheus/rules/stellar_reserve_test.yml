@@ -1,0 +1,38 @@
+# promtool unit tests for Stellar operational account reserve alerts (#1392 / #1525).
+
+rule_files:
+  - stellar_reserve.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: healthy reserve balance above threshold does not alert
+    input_series:
+      - series: 'nester_stellar_account_balance_xlm{account="operator"}'
+        values: '150x10'
+      - series: 'nester_stellar_account_safe_reserve_xlm{account="operator"}'
+        values: '50x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: StellarOperationalAccountLowReserve
+        exp_alerts: []
+
+  - interval: 1m
+    name: balance below safe reserve threshold for 5m fires critical alert
+    input_series:
+      - series: 'nester_stellar_account_balance_xlm{account="operator"}'
+        values: '25x10'
+      - series: 'nester_stellar_account_safe_reserve_xlm{account="operator"}'
+        values: '50x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StellarOperationalAccountLowReserve
+        exp_alerts:
+          - exp_labels:
+              account: operator
+              severity: critical
+              network: mainnet
+            exp_annotations:
+              summary: "Stellar operational account balance is below the safe reserve threshold"
+              description: "The mainnet operational account XLM balance is 25, which is below the required safe reserve threshold. Trustlines and sponsorships may fail."

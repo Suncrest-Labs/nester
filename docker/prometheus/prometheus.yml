@@ -30,6 +30,7 @@ rule_files:
   - rules/slo_recording.yml
   - rules/slo_alerts.yml
   - rules/slo_probe_alerts.yml
+  - rules/stellar_reserve.yml
 
 alerting:
   alertmanagers:
