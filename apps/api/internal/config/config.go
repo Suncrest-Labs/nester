@@ -244,9 +244,10 @@ type ReconciliationConfig struct {
 // StartupConfig governs one-shot work performed before the server begins
 // accepting traffic (migrations, dependency reachability checks).
 type StartupConfig struct {
-	enableAutoMigrate bool
-	migrationsDir     string
-	dependencyTimeout time.Duration
+	enableAutoMigrate       bool
+	allowMainnetAutoMigrate bool
+	migrationsDir           string
+	dependencyTimeout       time.Duration
 }
 
 type PerformanceConfig struct {
@@ -564,9 +565,10 @@ func Load() (*Config, error) {
 			broadcastThresholdBPS: loader.intDefault("APY_BROADCAST_THRESHOLD", 50),
 		},
 		startup: StartupConfig{
-			enableAutoMigrate: loader.boolDefault("RUN_MIGRATIONS", false),
-			migrationsDir:     loader.stringDefault("MIGRATIONS_DIR", "./migrations"),
-			dependencyTimeout: loader.durationDefault("STARTUP_DEPENDENCY_TIMEOUT", 5*time.Second),
+			enableAutoMigrate:       loader.boolDefault("RUN_MIGRATIONS", false),
+			allowMainnetAutoMigrate: loader.boolDefault("ALLOW_MAINNET_AUTO_MIGRATE", false),
+			migrationsDir:           loader.stringDefault("MIGRATIONS_DIR", "./migrations"),
+			dependencyTimeout:       loader.durationDefault("STARTUP_DEPENDENCY_TIMEOUT", 5*time.Second),
 		},
 		bankAccountCipherKey: loader.stringDefault("BANK_ACCOUNT_ENCRYPTION_KEY", ""),
 		transactionPoller: TransactionPollerConfig{
@@ -1463,6 +1465,14 @@ func (c *Config) validate(loader *envLoader) {
 	}
 
 	validateStellarNetworkConsistency(c.stellar, loader)
+
+	if strings.TrimSpace(c.stellar.networkPassphrase) == StellarMainnetPassphrase &&
+		c.startup.enableAutoMigrate && !c.startup.allowMainnetAutoMigrate {
+		loader.addError(
+			"RUN_MIGRATIONS must be false when STELLAR_NETWORK_PASSPHRASE is the mainnet passphrase; " +
+				"run migrations as a separate pipeline step after taking a database backup, or set ALLOW_MAINNET_AUTO_MIGRATE=true to override",
+		)
+	}
 
 	if c.allocation.minWeightPercent < 1 || c.allocation.minWeightPercent > 100 {
 		loader.addError("MIN_ALLOCATION_WEIGHT must be between 1 and 100")

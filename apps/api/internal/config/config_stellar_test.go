@@ -167,3 +167,68 @@ func TestStellarNetworkConsistency_CustomPassphraseSkipsCheck(t *testing.T) {
 		t.Fatalf("custom passphrase should not trigger network consistency check, got: %v", err)
 	}
 }
+
+// TestStellarMainnetAutoMigrateGuard verifies that RUN_MIGRATIONS=true is
+// refused on mainnet unless ALLOW_MAINNET_AUTO_MIGRATE=true is explicitly set,
+// while remaining allowed on testnet (nester#1521).
+func TestStellarMainnetAutoMigrateGuard(t *testing.T) {
+	cases := []struct {
+		name                    string
+		passphrase              string
+		runMigrations           string
+		allowMainnetAutoMigrate string
+		wantErr                 bool
+	}{
+		{
+			name:                    "mainnet with auto-migrate enabled and no override fails",
+			passphrase:              StellarMainnetPassphrase,
+			runMigrations:           "true",
+			allowMainnetAutoMigrate: "",
+			wantErr:                 true,
+		},
+		{
+			name:                    "mainnet with auto-migrate enabled and explicit override succeeds",
+			passphrase:              StellarMainnetPassphrase,
+			runMigrations:           "true",
+			allowMainnetAutoMigrate: "true",
+			wantErr:                 false,
+		},
+		{
+			name:                    "testnet with auto-migrate enabled succeeds",
+			passphrase:              StellarTestnetPassphrase,
+			runMigrations:           "true",
+			allowMainnetAutoMigrate: "",
+			wantErr:                 false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("STELLAR_NETWORK_PASSPHRASE", tc.passphrase)
+			t.Setenv("STELLAR_RPC_URL", "https://soroban.example.com")
+			t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
+			t.Setenv("YIELD_REGISTRY_CONTRACT", "CAAAA")
+			t.Setenv("STELLAR_ALLOCATION_STRATEGY_ADDRESS", "CBBBB")
+			t.Setenv("RUN_MIGRATIONS", tc.runMigrations)
+			t.Setenv("ALLOW_MAINNET_AUTO_MIGRATE", tc.allowMainnetAutoMigrate)
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected Load() to fail for mainnet with RUN_MIGRATIONS=true and no override")
+				}
+				if !strings.Contains(err.Error(), "RUN_MIGRATIONS") || !strings.Contains(err.Error(), "ALLOW_MAINNET_AUTO_MIGRATE") {
+					t.Errorf("expected error to mention RUN_MIGRATIONS and ALLOW_MAINNET_AUTO_MIGRATE, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected Load() to succeed, got: %v", err)
+			}
+		})
+	}
+}
+
