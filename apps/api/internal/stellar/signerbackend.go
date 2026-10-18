@@ -25,16 +25,17 @@ import (
 // therefore only obtain signatures over transactions this code built from an
 // intent the policy approved.
 type SigningBackend struct {
-	kp                *keypair.Full
+	operatorAddress   string
+	keyID             string
 	networkPassphrase string
 	invoker           *ContractInvoker
 }
 
-// NewSigningBackend builds the signer-side backend.
+// NewSigningBackend builds the signer-side backend using an in-process secret seed.
 //
 // It constructs its own ContractInvoker for simulation and sequence lookups,
-// wired to a LocalSigner holding the same key. That is correct here and only
-// here: this IS the process trusted with the key.
+// wired to a LocalSigner holding the same key. For Mainnet, prefer
+// NewKMSSigningBackend so the private key stays inside KMS/HSM hardware.
 func NewSigningBackend(rpcURL, horizonURL, networkPassphrase, operatorSecret string) (*SigningBackend, error) {
 	kp, err := keypair.ParseFull(operatorSecret)
 	if err != nil {
@@ -42,24 +43,51 @@ func NewSigningBackend(rpcURL, horizonURL, networkPassphrase, operatorSecret str
 		return nil, errors.New("invalid operator secret")
 	}
 	local := &LocalSigner{kp: kp, networkPassphrase: networkPassphrase}
-	invoker, err := NewContractInvokerWithSigner(rpcURL, horizonURL, networkPassphrase, local)
+	return NewSigningBackendWithSigner(rpcURL, horizonURL, networkPassphrase, local, kp.Address())
+}
+
+// NewKMSSigningBackend builds a SigningBackend backed by a KMS or HSM key
+// provider so that the raw Ed25519 private key never enters process memory.
+func NewKMSSigningBackend(rpcURL, horizonURL, networkPassphrase string, provider KMSKeyProvider) (*SigningBackend, error) {
+	kmsSigner, err := NewKMSTransactionSigner(provider, networkPassphrase)
+	if err != nil {
+		return nil, err
+	}
+	return NewSigningBackendWithSigner(rpcURL, horizonURL, networkPassphrase, kmsSigner, kmsSigner.OperatorAddress())
+}
+
+// NewSigningBackendWithSigner wires a SigningBackend to any TransactionSigner
+// (LocalSigner or KMSTransactionSigner).
+func NewSigningBackendWithSigner(rpcURL, horizonURL, networkPassphrase string, signer TransactionSigner, keyID string) (*SigningBackend, error) {
+	if signer == nil {
+		return nil, errors.New("transaction signer is required")
+	}
+	addr := strings.TrimSpace(signer.OperatorAddress())
+	if addr == "" {
+		return nil, errors.New("signer operator address is required")
+	}
+	if strings.TrimSpace(keyID) == "" {
+		keyID = addr
+	}
+	invoker, err := NewContractInvokerWithSigner(rpcURL, horizonURL, networkPassphrase, signer)
 	if err != nil {
 		return nil, fmt.Errorf("build signer invoker: %w", err)
 	}
 	return &SigningBackend{
-		kp:                kp,
+		operatorAddress:   addr,
+		keyID:             keyID,
 		networkPassphrase: networkPassphrase,
 		invoker:           invoker,
 	}, nil
 }
 
-// KeyID returns the operator public address.
+// KeyID returns the operator public address (or KMS key identifier).
 //
 // The public address is the correct key identifier for audit records: it names
 // which key signed without revealing anything secret, and an investigator can
 // correlate it directly with on-chain activity.
 func (b *SigningBackend) KeyID() string {
-	return b.kp.Address()
+	return b.keyID
 }
 
 // BuildAndSign constructs the transaction described by the intent and signs it.
@@ -95,7 +123,7 @@ func (b *SigningBackend) hostFunctionFor(i *signing.Intent) (xdr.HostFunction, e
 	if err != nil {
 		return xdr.HostFunction{}, fmt.Errorf("intent contract address: %w", err)
 	}
-	callerScAddr, err := accountAddressToXDR(b.kp.Address())
+	callerScAddr, err := accountAddressToXDR(b.operatorAddress)
 	if err != nil {
 		return xdr.HostFunction{}, fmt.Errorf("operator address: %w", err)
 	}

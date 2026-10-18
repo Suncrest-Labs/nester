@@ -48,7 +48,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	backend, err := stellar.NewSigningBackend(cfg.rpcURL, cfg.horizonURL, cfg.networkPassphrase, cfg.operatorSecret)
+	backend, err := buildSigningBackend(cfg)
 	if err != nil {
 		return fmt.Errorf("build signing backend: %w", err)
 	}
@@ -87,6 +87,7 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("signer starting",
 		"key_id", backend.KeyID(),
+		"kms_backed", cfg.kmsKeyID != "",
 		"network", signing.NetworkLabel(cfg.networkPassphrase),
 		"allowed_contracts", len(cfg.allowedContracts),
 		"allowed_operations", len(cfg.allowedOperations),
@@ -136,6 +137,22 @@ func run(logger *slog.Logger) error {
 	return nil
 }
 
+func buildSigningBackend(cfg *config) (*stellar.SigningBackend, error) {
+	if cfg.kmsKeyID != "" {
+		provider, err := stellar.NewHTTPKMSProvider(stellar.HTTPKMSConfig{
+			KeyID:         cfg.kmsKeyID,
+			PublicAddress: cfg.kmsPublicAddress,
+			EndpointURL:   cfg.kmsEndpointURL,
+			AuthToken:     cfg.kmsAuthToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return stellar.NewKMSSigningBackend(cfg.rpcURL, cfg.horizonURL, cfg.networkPassphrase, provider)
+	}
+	return stellar.NewSigningBackend(cfg.rpcURL, cfg.horizonURL, cfg.networkPassphrase, cfg.operatorSecret)
+}
+
 func buildListener(cfg *config, logger *slog.Logger) (net.Listener, func(*http.Request) (string, error), error) {
 	// A Unix socket is preferred: authorization is enforced by the operating
 	// system before any application code runs.
@@ -168,6 +185,12 @@ type config struct {
 	networkPassphrase string
 	operatorSecret    string
 
+	kmsKeyID         string
+	kmsPublicAddress string
+	kmsEndpointURL   string
+	kmsAuthToken     string
+	requireKMS       bool
+
 	socketPath string
 	socketMode os.FileMode
 	peerName   string
@@ -191,6 +214,11 @@ func loadConfig() (*config, error) {
 		horizonURL:        os.Getenv("STELLAR_HORIZON_URL"),
 		networkPassphrase: os.Getenv("STELLAR_NETWORK_PASSPHRASE"),
 		operatorSecret:    os.Getenv("STELLAR_OPERATOR_SECRET"),
+		kmsKeyID:          strings.TrimSpace(os.Getenv("SIGNER_KMS_KEY_ID")),
+		kmsPublicAddress:  strings.TrimSpace(os.Getenv("SIGNER_KMS_PUBLIC_ADDRESS")),
+		kmsEndpointURL:    strings.TrimSpace(os.Getenv("SIGNER_KMS_ENDPOINT_URL")),
+		kmsAuthToken:      strings.TrimSpace(os.Getenv("SIGNER_KMS_AUTH_TOKEN")),
+		requireKMS:        strings.EqualFold(strings.TrimSpace(os.Getenv("SIGNER_REQUIRE_KMS")), "true"),
 		socketPath:        strings.TrimSpace(os.Getenv("SIGNER_SOCKET_PATH")),
 		peerName:          strings.TrimSpace(os.Getenv("SIGNER_PEER_NAME")),
 		listenAddr:        strings.TrimSpace(os.Getenv("SIGNER_LISTEN_ADDR")),
@@ -207,13 +235,32 @@ func loadConfig() (*config, error) {
 		{"STELLAR_RPC_URL", cfg.rpcURL},
 		{"STELLAR_HORIZON_URL", cfg.horizonURL},
 		{"STELLAR_NETWORK_PASSPHRASE", cfg.networkPassphrase},
-		{"STELLAR_OPERATOR_SECRET", cfg.operatorSecret},
 		{"SIGNER_KILL_SWITCH_PATH", cfg.killSwitchPath},
 	} {
 		if strings.TrimSpace(required.value) == "" {
 			// The value is never echoed — only the variable name.
 			return nil, fmt.Errorf("%s is required", required.name)
 		}
+	}
+
+	if cfg.requireKMS {
+		if strings.TrimSpace(cfg.operatorSecret) != "" {
+			return nil, errors.New("STELLAR_OPERATOR_SECRET must not be set in process environment when SIGNER_REQUIRE_KMS=true")
+		}
+		if cfg.kmsKeyID == "" {
+			return nil, errors.New("SIGNER_KMS_KEY_ID is required when SIGNER_REQUIRE_KMS=true")
+		}
+	}
+
+	if cfg.kmsKeyID != "" {
+		if cfg.kmsPublicAddress == "" {
+			return nil, errors.New("SIGNER_KMS_PUBLIC_ADDRESS is required when SIGNER_KMS_KEY_ID is set")
+		}
+		if cfg.kmsEndpointURL == "" {
+			return nil, errors.New("SIGNER_KMS_ENDPOINT_URL is required when SIGNER_KMS_KEY_ID is set")
+		}
+	} else if strings.TrimSpace(cfg.operatorSecret) == "" {
+		return nil, errors.New("either SIGNER_KMS_KEY_ID or STELLAR_OPERATOR_SECRET is required")
 	}
 
 	if cfg.socketPath == "" && cfg.listenAddr == "" {
