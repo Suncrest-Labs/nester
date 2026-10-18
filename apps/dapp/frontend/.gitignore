@@ -45,3 +45,7 @@ next-env.d.ts
 /playwright-report/
 /test-results/
 /blob-report/
+test-results/
+playwright-report/
+_shot*.mjs
+
