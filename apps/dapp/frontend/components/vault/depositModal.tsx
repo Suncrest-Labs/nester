@@ -24,8 +24,10 @@ import { vaultsApi } from "@/lib/api/vaults";
 import {
   executeVaultDeposit,
   UserRejectedError,
+  TransactionExpiredError,
   TransactionFailedError,
   TransactionTimeoutError,
+  isTransactionTooLateError,
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
@@ -53,6 +55,9 @@ function formatCurrency(amount: number) {
 function humanizeError(err: unknown): string {
   if (err instanceof UserRejectedError) {
     return "You cancelled the transaction in your wallet. No funds were moved.";
+  }
+  if (err instanceof TransactionExpiredError || isTransactionTooLateError(err)) {
+    return "Signing took too long, try again.";
   }
   if (err instanceof TransactionFailedError) {
     return `Transaction failed on-chain: ${err.reason}`;

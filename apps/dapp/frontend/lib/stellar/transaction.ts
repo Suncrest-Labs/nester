@@ -62,11 +62,15 @@ export interface WithdrawParams {
   minAssetsOut?: bigint | number;
 }
 
+export const DEFAULT_TRANSACTION_TIMEOUT_SECONDS = 180;
+
 export interface BuiltTransaction {
   /** Base64-encoded unsigned transaction XDR ready for signing. */
   xdr: string;
   /** The assembled transaction object (used for submission after signing). */
   transaction: Transaction;
+  /** Epoch timestamp (ms) when the transaction timeBounds expire. */
+  expiresAtMs?: number;
 }
 
 export interface NetworkFeeEstimate {
@@ -109,6 +113,25 @@ export class TransactionFailedError extends Error {
     super(`Transaction failed on-chain: ${reason}`);
     this.name = "TransactionFailedError";
   }
+}
+
+/**
+ * Thrown when signing took longer than the transaction timeBounds (`txTOO_LATE`).
+ */
+export class TransactionExpiredError extends TransactionFailedError {
+  constructor() {
+    super("txTOO_LATE");
+    this.message = "Signing took too long, try again.";
+    this.name = "TransactionExpiredError";
+  }
+}
+
+export function isTransactionTooLateError(reasonOrError: unknown): boolean {
+  const text =
+    reasonOrError instanceof Error
+      ? `${reasonOrError.name} ${reasonOrError.message} ${(reasonOrError as { reason?: string }).reason ?? ""}`
+      : String(reasonOrError ?? "");
+  return /tx_?too_?late/i.test(text);
 }
 
 /**
@@ -210,7 +233,7 @@ export async function previewDeposit(params: DepositParams): Promise<{
       .addOperation(
         contract.call("preview_deposit", nativeToScVal(amountStroops, { type: "i128" }))
       )
-      .setTimeout(30)
+      .setTimeout(DEFAULT_TRANSACTION_TIMEOUT_SECONDS)
       .build();
 
     const sim = await server.simulateTransaction(tx);
@@ -275,6 +298,7 @@ export async function buildDepositTransaction(
     : BigInt(Math.round(rawAmount * 10_000_000));
 
   const contract = new Contract(assertValidContractId(contractId, "vault contract"));
+  const expiresAtMs = Date.now() + DEFAULT_TRANSACTION_TIMEOUT_SECONDS * 1000;
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -287,7 +311,7 @@ export async function buildDepositTransaction(
         nativeToScVal(amountStroops, { type: "i128" })
       )
     )
-    .setTimeout(30)
+    .setTimeout(DEFAULT_TRANSACTION_TIMEOUT_SECONDS)
     .build();
 
   // Simulate to populate the transaction's footprint (Soroban requirement)
@@ -301,7 +325,7 @@ export async function buildDepositTransaction(
 
   const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
 
-  return { xdr: assembled.toXDR(), transaction: assembled };
+  return { xdr: assembled.toXDR(), transaction: assembled, expiresAtMs };
 }
 
 /**
@@ -329,6 +353,7 @@ export async function buildWithdrawTransaction(
     : BigInt(Math.round(Number(rawMinAssets) * 10_000_000));
 
   const contract = new Contract(assertValidContractId(contractId, "vault contract"));
+  const expiresAtMs = Date.now() + DEFAULT_TRANSACTION_TIMEOUT_SECONDS * 1000;
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -342,7 +367,7 @@ export async function buildWithdrawTransaction(
         nativeToScVal(minAssetsStroops, { type: "i128" })
       )
     )
-    .setTimeout(30)
+    .setTimeout(DEFAULT_TRANSACTION_TIMEOUT_SECONDS)
     .build();
 
   const sim = await server.simulateTransaction(tx);
@@ -355,7 +380,7 @@ export async function buildWithdrawTransaction(
 
   const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
 
-  return { xdr: assembled.toXDR(), transaction: assembled };
+  return { xdr: assembled.toXDR(), transaction: assembled, expiresAtMs };
 }
 
 // ── Wallet signing ────────────────────────────────────────────────────────────
@@ -439,15 +464,73 @@ export async function signTransaction(txXdr: string): Promise<string> {
   return result.signedTxXdr;
 }
 
+export function isBuiltTransactionExpired(
+  built: BuiltTransaction,
+  nowMs: number = Date.now()
+): boolean {
+  if (built.expiresAtMs !== undefined && nowMs >= built.expiresAtMs) {
+    return true;
+  }
+  const maxTimeSec = Number(built.transaction?.timeBounds?.maxTime ?? 0);
+  if (maxTimeSec > 0 && Math.floor(nowMs / 1000) >= maxTimeSec) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Build and sign a transaction, automatically rebuilding and re-simulating
+ * once if a delayed hardware/mobile wallet signature arrives after the
+ * transaction's timeBounds have expired (#1510).
+ */
+export async function signWithRebuildOnExpiry(
+  buildFn: () => Promise<BuiltTransaction>,
+  signFn: (xdr: string) => Promise<string> = signTransaction,
+  nowFn: () => number = Date.now
+): Promise<string> {
+  const initialBuilt = await buildFn();
+  const initialSignedXdr = await signFn(initialBuilt.xdr);
+
+  if (!isBuiltTransactionExpired(initialBuilt, nowFn())) {
+    return initialSignedXdr;
+  }
+
+  const rebuilt = await buildFn();
+  const reSignedXdr = await signFn(rebuilt.xdr);
+
+  if (isBuiltTransactionExpired(rebuilt, nowFn())) {
+    throw new TransactionExpiredError();
+  }
+
+  return reSignedXdr;
+}
+
 // ── Submission + polling ──────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 2_000;
 const MAX_POLL_ATTEMPTS = 15; // 30 seconds total
 
+function extractRpcFailureReason(errorResult: unknown): string {
+  if (!errorResult) return "";
+  if (typeof errorResult === "string") return errorResult;
+  if (typeof errorResult === "object") {
+    const maybeResult = errorResult as {
+      result?: () => { switch?: () => { name?: string } };
+      toXDR?: (encoding?: string) => string;
+    };
+    const codeName = maybeResult.result?.()?.switch?.()?.name;
+    const xdrStr =
+      typeof maybeResult.toXDR === "function" ? maybeResult.toXDR("base64") : "";
+    return [codeName, xdrStr].filter(Boolean).join(" ");
+  }
+  return String(errorResult);
+}
+
 /**
  * Submit a signed transaction to the Soroban RPC and poll until it is
  * confirmed or fails.
  *
+ * @throws {TransactionExpiredError} if the transaction fails with `txTOO_LATE`.
  * @throws {TransactionFailedError}  if the transaction fails on-chain.
  * @throws {TransactionTimeoutError} if confirmation is not received in time.
  */
@@ -462,8 +545,13 @@ export async function submitTransaction(
   const sendResult = await server.sendTransaction(tx);
 
   if (sendResult.status === "ERROR") {
+    const reason =
+      extractRpcFailureReason(sendResult.errorResult) || "unknown error";
+    if (isTransactionTooLateError(reason)) {
+      throw new TransactionExpiredError();
+    }
     throw new TransactionFailedError(
-      sendResult.errorResult?.toXDR("base64") ?? "unknown error"
+      sendResult.errorResult?.toXDR?.("base64") ?? reason
     );
   }
 
@@ -484,8 +572,17 @@ export async function submitTransaction(
     }
 
     if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+      const resultReason =
+        extractRpcFailureReason(
+          (getResult as { resultXdr?: unknown }).resultXdr
+        ) ||
+        getResult.resultMetaXdr?.toXDR?.("base64") ||
+        "on-chain execution failed";
+      if (isTransactionTooLateError(resultReason)) {
+        throw new TransactionExpiredError();
+      }
       throw new TransactionFailedError(
-        getResult.resultMetaXdr?.toXDR("base64") ?? "on-chain execution failed"
+        getResult.resultMetaXdr?.toXDR?.("base64") ?? resultReason
       );
     }
 
@@ -514,8 +611,9 @@ export async function executeVaultDeposit(params: {
     throw new Error("Vault is not yet live. Deposits are currently disabled.");
   }
 
-  const { xdr } = await buildDepositTransaction({ walletAddress, contractId, amount });
-  const signedXdr = await signTransaction(xdr);
+  const signedXdr = await signWithRebuildOnExpiry(() =>
+    buildDepositTransaction({ walletAddress, contractId, amount })
+  );
   return submitTransaction(signedXdr);
 }
 
@@ -533,8 +631,9 @@ export async function executeVaultWithdraw(params: {
     throw new Error("Vault is not yet live. Withdrawals are currently disabled.");
   }
 
-  const { xdr } = await buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut });
-  const signedXdr = await signTransaction(xdr);
+  const signedXdr = await signWithRebuildOnExpiry(() =>
+    buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut })
+  );
   return submitTransaction(signedXdr);
 }
 
