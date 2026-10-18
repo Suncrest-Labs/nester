@@ -44,6 +44,10 @@ export interface Vault {
   currentBalance?: number;
   yieldEarned?: number;
   feesPaid?: number;
+  /** Maximum total assets allowed under the active deposit cap (issue #1558). */
+  depositCap?: number;
+  /** Current on-chain total_assets backing vault shares (issue #1558). */
+  totalAssets?: number;
 }
 
 // Keep RiskTier as alias for backward compat during transition

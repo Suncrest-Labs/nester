@@ -44,6 +44,7 @@ import { type VaultContract as VaultDefinition, type SupportedAsset, vaultContra
 import { requireContractId } from "@/lib/contracts";
 import { useWallet } from "@/components/wallet-provider";
 import { useNetwork } from "@/hooks/useNetwork";
+import { computeVaultCapacityState } from "@/lib/stellar/vault-capacity";
 
 type ActionState = "input" | "confirming" | "submitting" | "success" | "error";
 
@@ -143,15 +144,28 @@ export function DepositModal({
     const assets = vault?.supportedAssets ?? ["USDC"];
     const balance = getAvailableBalance(selectedAsset);
 
+    const capacityState = useMemo(
+        () =>
+            computeVaultCapacityState({
+                totalAssets: vault?.totalAssets ?? 0,
+                depositCap: vault?.depositCap,
+                userBalance: balance,
+                asset: selectedAsset,
+            }),
+        [vault?.totalAssets, vault?.depositCap, balance, selectedAsset]
+    );
+
     const formSchema = useMemo(() => z.object({
         amount: validateAmount({
             min: 0.000001,
-            balance: balance,
+            balance: capacityState.maxDepositable,
             maxDecimals: 6,
             minMessage: "Amount must be greater than 0",
-            balanceMessage: `Amount exceeds your balance of ${formatCurrency(balance)} USDC`
+            balanceMessage: capacityState.hasCap && capacityState.remainingRoom < balance
+                ? `Amount exceeds remaining vault capacity (${formatCurrency(capacityState.remainingRoom)} ${selectedAsset} available)`
+                : `Amount exceeds your balance of ${formatCurrency(balance)} USDC`
         })
-    }), [balance]);
+    }), [balance, capacityState, selectedAsset]);
 
     type FormValues = z.infer<typeof formSchema>;
 
@@ -334,6 +348,35 @@ export function DepositModal({
                                 </div>
                             </div>
 
+                            {capacityState.hasCap && (
+                                <div
+                                    data-testid="vault-capacity-section"
+                                    className="mt-5 rounded-2xl border border-border bg-secondary/20 p-4"
+                                >
+                                    <div className="flex items-center justify-between text-xs">
+                                        <span className="font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                                            Vault Capacity
+                                        </span>
+                                        <span className="font-medium text-foreground">
+                                            {capacityState.filledLabel}
+                                        </span>
+                                    </div>
+                                    {capacityState.status === "nearly_full" && (
+                                        <p className="mt-2 text-xs text-amber-700">
+                                            Nearly full — only {formatCurrency(capacityState.remainingRoom)} {selectedAsset} remaining under the current deposit cap.
+                                        </p>
+                                    )}
+                                    {capacityState.status === "full" && (
+                                        <div role="alert" className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                                            <p className="font-semibold">Vault is at capacity</p>
+                                            <p className="mt-1">
+                                                This vault has reached its current Stage deposit cap. Capacity increases are scheduled through the governance timelock.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             <div className="mt-6">
                                 <label className="mb-2 block text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
                                     Deposit Amount
@@ -363,6 +406,7 @@ export function DepositModal({
                                                     onBlur={onBlur}
                                                     onPaste={() => setTimeout(() => trigger("amount"), 0)}
                                                     placeholder="0.00"
+                                                    disabled={capacityState.status === "full"}
                                                     className={cn(
                                                         "min-w-0 flex-1 bg-transparent font-heading text-3xl font-light outline-none placeholder:text-muted-foreground/40",
                                                         errors.amount && "text-red-500"
@@ -398,12 +442,13 @@ export function DepositModal({
                                                     )}
                                                     <button
                                                         type="button"
+                                                        disabled={capacityState.status === "full"}
                                                         onClick={() => {
-                                                            onChange(balance.toFixed(2));
+                                                            onChange(capacityState.maxDepositable.toFixed(2));
                                                             trigger("amount");
                                                             setShowLargeWarning(false);
                                                         }}
-                                                        className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15"
+                                                        className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
                                                     >
                                                         Max
                                                     </button>

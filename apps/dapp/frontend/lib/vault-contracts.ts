@@ -36,6 +36,8 @@ export interface VaultContract {
    */
   contractAddress: string | null;
   contractXlmAddress?: string | null;
+  depositCap?: number;
+  totalAssets?: number;
 }
 
 const VAULT_USDC_CONTRACT = getContractId("vault");
