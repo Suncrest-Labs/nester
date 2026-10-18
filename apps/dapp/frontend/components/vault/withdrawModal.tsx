@@ -49,6 +49,9 @@ function humanizeError(err: unknown): string {
     return "You cancelled the transaction in your wallet. No funds were moved.";
   }
   if (err instanceof TransactionFailedError) {
+    if (err.reason === "txTOO_LATE" || err.name === "TransactionExpiredError") {
+      return "Signing took too long, try again";
+    }
     return `Transaction failed on-chain: ${err.reason}`;
   }
   if (err instanceof TransactionTimeoutError) {

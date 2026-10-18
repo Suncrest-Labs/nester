@@ -32,8 +32,10 @@ import {
     buildDepositTransaction,
     buildWithdrawTransaction,
     signTransaction,
+    signTransactionWithRebuild,
     submitTransaction,
     UserRejectedError,
+    TransactionExpiredError,
     TransactionFailedError,
     TransactionTimeoutError,
     NetworkMismatchError,
@@ -241,16 +243,19 @@ export function DepositModal({
                     : vault.contractAddress) ??
                 requireContractId(selectedAsset === "XLM" ? "vaultXlm" : "vault");
 
-            const { xdr } = await buildDepositTransaction({
-                walletAddress: address,
-                contractId,
-                // Pass the exact stroop value. Routing through the display
-                // float and letting the builder do Math.round(x * 1e7)
-                // reintroduces the precision loss this parsing work exists
-                // to remove.
-                amount: amountStroops ?? BigInt(0),
-            });
-            const signedXdr = await signTransaction(xdr);
+            const { signedXdr } = await signTransactionWithRebuild(
+                () =>
+                    buildDepositTransaction({
+                        walletAddress: address,
+                        contractId,
+                        // Pass the exact stroop value. Routing through the display
+                        // float and letting the builder do Math.round(x * 1e7)
+                        // reintroduces the precision loss this parsing work exists
+                        // to remove.
+                        amount: amountStroops ?? BigInt(0),
+                    }),
+                signTransaction
+            );
 
             setState("submitting");
             const txReceipt = await submitTransaction(signedXdr);
@@ -274,6 +279,8 @@ export function DepositModal({
             } else if (err instanceof NetworkMismatchError) {
                 setError(err.message);
             } else if (err instanceof WalletDisconnectedError) {
+                setError(err.message);
+            } else if (err instanceof TransactionExpiredError) {
                 setError(err.message);
             } else if (err instanceof TransactionFailedError) {
                 setError(`Transaction failed on-chain: ${err.reason}`);
@@ -740,13 +747,16 @@ export function WithdrawModal({
                 ? (vaultDef?.contractXlmAddress || vaultDef?.contractAddress || "")
                 : (vaultDef?.contractAddress || "");
 
-            const { xdr } = await buildWithdrawTransaction({
-                walletAddress: address,
-                contractId,
-                shares: quote.sharesBurned,
-                minAssetsOut: quote.netAmount,
-            });
-            const signedXdr = await signTransaction(xdr);
+            const { signedXdr } = await signTransactionWithRebuild(
+                () =>
+                    buildWithdrawTransaction({
+                        walletAddress: address,
+                        contractId,
+                        shares: quote.sharesBurned,
+                        minAssetsOut: quote.netAmount,
+                    }),
+                signTransaction
+            );
 
             setState("submitting");
             const txReceipt = await submitTransaction(signedXdr);
@@ -776,6 +786,8 @@ export function WithdrawModal({
             } else if (err instanceof NetworkMismatchError) {
                 setError(err.message);
             } else if (err instanceof WalletDisconnectedError) {
+                setError(err.message);
+            } else if (err instanceof TransactionExpiredError) {
                 setError(err.message);
             } else if (err instanceof TransactionFailedError) {
                 setError(`Transaction failed on-chain: ${err.reason}`);
@@ -1117,12 +1129,15 @@ export function TransferModal({
                 ? (srcVaultDef?.contractXlmAddress || srcVaultDef?.contractAddress || "")
                 : (srcVaultDef?.contractAddress || "");
 
-            const { xdr } = await buildWithdrawTransaction({
-                walletAddress: address ?? "",
-                contractId,
-                shares: amt,
-            });
-            const signedXdr = await signTransaction(xdr);
+            const { signedXdr } = await signTransactionWithRebuild(
+                () =>
+                    buildWithdrawTransaction({
+                        walletAddress: address ?? "",
+                        contractId,
+                        shares: amt,
+                    }),
+                signTransaction
+            );
 
             setState("submitting");
             const txReceipt = await submitTransaction(signedXdr);
@@ -1152,6 +1167,8 @@ export function TransferModal({
             setState("error");
             if (err instanceof UserRejectedError) {
                 setError("You cancelled the transaction. No funds were moved.");
+            } else if (err instanceof TransactionExpiredError) {
+                setError(err.message);
             } else if (err instanceof TransactionFailedError) {
                 setError(`Transaction failed on-chain: ${err.reason}`);
             } else if (err instanceof TransactionTimeoutError) {

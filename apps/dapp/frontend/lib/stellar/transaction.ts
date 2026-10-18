@@ -39,6 +39,13 @@ export const VAULT_XLM_CONTRACT_ID = getContractId("vaultXlm");
 
 export const USDC_CONTRACT_ID = getContractId("usdc");
 
+/**
+ * Default transaction validity window in seconds (#1510).
+ * Hardware wallets (Ledger), WalletConnect, and mobile signing often take
+ * longer than 30 seconds, so 180 seconds prevents premature expiry.
+ */
+export const TRANSACTION_TIMEOUT_SECONDS = 180;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface DepositParams {
@@ -48,6 +55,8 @@ export interface DepositParams {
   contractId: string;
   /** Amount in stroops (bigint, 7 decimals = 1 XLM, 6 decimals = 1 USDC). */
   amount: bigint | number;
+  /** Optional custom validity timeout in seconds (defaults to 180s). */
+  timeoutSeconds?: number;
 }
 
 export interface WithdrawParams {
@@ -60,6 +69,8 @@ export interface WithdrawParams {
    * Pass a non-zero value to reject withdrawals where the exchange rate slips too far.
    */
   minAssetsOut?: bigint | number;
+  /** Optional custom validity timeout in seconds (defaults to 180s). */
+  timeoutSeconds?: number;
 }
 
 export interface BuiltTransaction {
@@ -67,6 +78,8 @@ export interface BuiltTransaction {
   xdr: string;
   /** The assembled transaction object (used for submission after signing). */
   transaction: Transaction;
+  /** Epoch timestamp (ms) when the transaction timebounds expire. */
+  expiresAtMs?: number;
 }
 
 export interface NetworkFeeEstimate {
@@ -105,9 +118,20 @@ export class UserRejectedError extends Error {
  * `reason` contains the Soroban result code string for display.
  */
 export class TransactionFailedError extends Error {
-  constructor(public readonly reason: string) {
-    super(`Transaction failed on-chain: ${reason}`);
+  constructor(public readonly reason: string, message?: string) {
+    super(message ?? `Transaction failed on-chain: ${reason}`);
     this.name = "TransactionFailedError";
+  }
+}
+
+/**
+ * Thrown when signing took longer than the transaction's validity window
+ * or submission fails with `txTOO_LATE` (#1510).
+ */
+export class TransactionExpiredError extends TransactionFailedError {
+  constructor() {
+    super("txTOO_LATE", "Signing took too long, try again");
+    this.name = "TransactionExpiredError";
   }
 }
 
@@ -193,7 +217,7 @@ export async function previewDeposit(params: DepositParams): Promise<{
   error?: string;
 }> {
   try {
-    const { walletAddress, contractId, amount: rawAmount } = params;
+    const { walletAddress, contractId, amount: rawAmount, timeoutSeconds = TRANSACTION_TIMEOUT_SECONDS } = params;
     const network = getCurrentNetwork();
     const server = getServer(network.rpcUrl);
     const account = await server.getAccount(walletAddress);
@@ -210,7 +234,7 @@ export async function previewDeposit(params: DepositParams): Promise<{
       .addOperation(
         contract.call("preview_deposit", nativeToScVal(amountStroops, { type: "i128" }))
       )
-      .setTimeout(30)
+      .setTimeout(timeoutSeconds)
       .build();
 
     const sim = await server.simulateTransaction(tx);
@@ -263,7 +287,12 @@ export async function estimateWithdrawFee(
 export async function buildDepositTransaction(
   params: DepositParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, amount: rawAmount } = params;
+  const {
+    walletAddress,
+    contractId,
+    amount: rawAmount,
+    timeoutSeconds = TRANSACTION_TIMEOUT_SECONDS,
+  } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
@@ -275,6 +304,7 @@ export async function buildDepositTransaction(
     : BigInt(Math.round(rawAmount * 10_000_000));
 
   const contract = new Contract(assertValidContractId(contractId, "vault contract"));
+  const builtAtMs = Date.now();
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -287,7 +317,7 @@ export async function buildDepositTransaction(
         nativeToScVal(amountStroops, { type: "i128" })
       )
     )
-    .setTimeout(30)
+    .setTimeout(timeoutSeconds)
     .build();
 
   // Simulate to populate the transaction's footprint (Soroban requirement)
@@ -300,8 +330,10 @@ export async function buildDepositTransaction(
   }
 
   const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
+  const maxTimeSec = Number(assembled.timeBounds?.maxTime ?? 0);
+  const expiresAtMs = maxTimeSec > 0 ? maxTimeSec * 1000 : builtAtMs + timeoutSeconds * 1000;
 
-  return { xdr: assembled.toXDR(), transaction: assembled };
+  return { xdr: assembled.toXDR(), transaction: assembled, expiresAtMs };
 }
 
 /**
@@ -313,7 +345,13 @@ export async function buildDepositTransaction(
 export async function buildWithdrawTransaction(
   params: WithdrawParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, shares: rawShares, minAssetsOut: rawMinAssets = 0 } = params;
+  const {
+    walletAddress,
+    contractId,
+    shares: rawShares,
+    minAssetsOut: rawMinAssets = 0,
+    timeoutSeconds = TRANSACTION_TIMEOUT_SECONDS,
+  } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
@@ -329,6 +367,7 @@ export async function buildWithdrawTransaction(
     : BigInt(Math.round(Number(rawMinAssets) * 10_000_000));
 
   const contract = new Contract(assertValidContractId(contractId, "vault contract"));
+  const builtAtMs = Date.now();
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -342,7 +381,7 @@ export async function buildWithdrawTransaction(
         nativeToScVal(minAssetsStroops, { type: "i128" })
       )
     )
-    .setTimeout(30)
+    .setTimeout(timeoutSeconds)
     .build();
 
   const sim = await server.simulateTransaction(tx);
@@ -354,8 +393,52 @@ export async function buildWithdrawTransaction(
   }
 
   const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
+  const maxTimeSec = Number(assembled.timeBounds?.maxTime ?? 0);
+  const expiresAtMs = maxTimeSec > 0 ? maxTimeSec * 1000 : builtAtMs + timeoutSeconds * 1000;
 
-  return { xdr: assembled.toXDR(), transaction: assembled };
+  return { xdr: assembled.toXDR(), transaction: assembled, expiresAtMs };
+}
+
+/**
+ * Check whether a built transaction's timebounds have expired (#1510).
+ */
+export function isTransactionExpired(
+  built: BuiltTransaction,
+  nowMs: number = Date.now()
+): boolean {
+  if (typeof built.expiresAtMs === "number" && built.expiresAtMs > 0) {
+    return nowMs >= built.expiresAtMs;
+  }
+  const maxTimeSec = Number(built.transaction?.timeBounds?.maxTime ?? 0);
+  if (maxTimeSec > 0) {
+    return Math.floor(nowMs / 1000) >= maxTimeSec;
+  }
+  return false;
+}
+
+/**
+ * Build and sign a transaction, automatically rebuilding and re-simulating
+ * once if the user finishes signing after the first transaction's timebounds
+ * have expired (#1510).
+ */
+export async function signTransactionWithRebuild(
+  buildTx: () => Promise<BuiltTransaction>,
+  signer: (xdr: string) => Promise<string> = signTransaction,
+  now: () => number = Date.now
+): Promise<{ signedXdr: string; rebuilt: boolean }> {
+  let built = await buildTx();
+  let signedXdr = await signer(built.xdr);
+
+  if (isTransactionExpired(built, now())) {
+    built = await buildTx();
+    signedXdr = await signer(built.xdr);
+    if (isTransactionExpired(built, now())) {
+      throw new TransactionExpiredError();
+    }
+    return { signedXdr, rebuilt: true };
+  }
+
+  return { signedXdr, rebuilt: false };
 }
 
 // ── Wallet signing ────────────────────────────────────────────────────────────
@@ -444,10 +527,20 @@ export async function signTransaction(txXdr: string): Promise<string> {
 const POLL_INTERVAL_MS = 2_000;
 const MAX_POLL_ATTEMPTS = 15; // 30 seconds total
 
+function isTxTooLateReason(reason: string): boolean {
+  const normalized = reason.toLowerCase();
+  return (
+    normalized.includes("txtoo_late") ||
+    normalized.includes("tx_too_late") ||
+    normalized.includes("txtoolate")
+  );
+}
+
 /**
  * Submit a signed transaction to the Soroban RPC and poll until it is
  * confirmed or fails.
  *
+ * @throws {TransactionExpiredError} if the transaction failed with `txTOO_LATE`.
  * @throws {TransactionFailedError}  if the transaction fails on-chain.
  * @throws {TransactionTimeoutError} if confirmation is not received in time.
  */
@@ -462,9 +555,15 @@ export async function submitTransaction(
   const sendResult = await server.sendTransaction(tx);
 
   if (sendResult.status === "ERROR") {
-    throw new TransactionFailedError(
-      sendResult.errorResult?.toXDR("base64") ?? "unknown error"
-    );
+    const errorCode =
+      (sendResult.errorResult as { result?: () => { switch?: () => { name?: string } } } | undefined)
+        ?.result?.()
+        ?.switch?.()?.name ?? "";
+    const reason = sendResult.errorResult?.toXDR("base64") ?? "unknown error";
+    if (isTxTooLateReason(errorCode) || isTxTooLateReason(reason)) {
+      throw new TransactionExpiredError();
+    }
+    throw new TransactionFailedError(reason);
   }
 
   const txHash = sendResult.hash;
@@ -484,9 +583,14 @@ export async function submitTransaction(
     }
 
     if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-      throw new TransactionFailedError(
-        getResult.resultMetaXdr?.toXDR("base64") ?? "on-chain execution failed"
-      );
+      const resultCode =
+        (getResult as { resultXdr?: { result?: () => { switch?: () => { name?: string } } } })
+          .resultXdr?.result?.()?.switch?.()?.name ?? "";
+      const reason = getResult.resultMetaXdr?.toXDR("base64") ?? "on-chain execution failed";
+      if (isTxTooLateReason(resultCode) || isTxTooLateReason(reason)) {
+        throw new TransactionExpiredError();
+      }
+      throw new TransactionFailedError(reason);
     }
 
     // NOT_FOUND means still pending — keep polling
@@ -514,8 +618,9 @@ export async function executeVaultDeposit(params: {
     throw new Error("Vault is not yet live. Deposits are currently disabled.");
   }
 
-  const { xdr } = await buildDepositTransaction({ walletAddress, contractId, amount });
-  const signedXdr = await signTransaction(xdr);
+  const { signedXdr } = await signTransactionWithRebuild(() =>
+    buildDepositTransaction({ walletAddress, contractId, amount })
+  );
   return submitTransaction(signedXdr);
 }
 
@@ -533,8 +638,9 @@ export async function executeVaultWithdraw(params: {
     throw new Error("Vault is not yet live. Withdrawals are currently disabled.");
   }
 
-  const { xdr } = await buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut });
-  const signedXdr = await signTransaction(xdr);
+  const { signedXdr } = await signTransactionWithRebuild(() =>
+    buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut })
+  );
   return submitTransaction(signedXdr);
 }
 
