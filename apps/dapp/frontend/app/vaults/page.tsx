@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import type { Vault as VaultType, MarketType } from "@/lib/types/vault";
 import { useVaultFilters, type FilterType } from "@/hooks/use-vault-filters";
+import { DeployedContractsSection } from "@/components/network/DeployedContractsSection";
 
 export function formatTvl(value: number): string {
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`;
@@ -510,6 +511,8 @@ export default function VaultsPage() {
                         <PositionCards positions={marketPositions} showHarvestAction />
                     </motion.div>
                 )}
+
+                <DeployedContractsSection />
 
             <DepositModal
                 key={selectedVault?.id ?? "none"}
