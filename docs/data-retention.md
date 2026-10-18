@@ -162,3 +162,25 @@ does not block the other's, and does not stop the job from retrying on its
 next daily tick.
 
 Wired in `cmd/api/main.go` alongside the other leader-elected sweep jobs.
+
+## Production application & request logs (#1566)
+
+### Retention & access control
+
+| Stream | Retention Window | Storage / Sink | Access Policy |
+|---|---|---|---|
+| Structured API / Signer / Indexer JSON logs (`stdout`) | **30 days** hot searchable, **90 days** cold archive, hard-deleted at day 90 | Centralised log aggregator (`LOG_FORMAT=json`) | Restricted to on-call engineering & security responders via SSO + RBAC; raw log export disabled for non-admin roles |
+| Ingress / load-balancer access logs | **30 days** | Edge ingress bucket | Query paths stripped of query parameters (`?token=...`) before persistence |
+
+### Mandatory PII & secret redaction (`pkg/logger/redact.go`)
+
+Every structured `slog` handler created by `pkg/logger.New` attaches `RedactReplaceAttr`, which enforces both key-based and regex-based scrubbing before any log record leaves the process:
+
+- **Sensitive keys redacted to `[REDACTED]`:** `password`, `secret`, `authorization`, `jwt`, `token`, `access_token`, `refresh_token`, `ws_token`, `seed`, `email`, `phone`, `ssn`, `tax_id`, `date_of_birth`, `dob`, `full_name`, `account_number`, `routing_number`, `iban`, `bank_account`.
+- **Value patterns scrubbed across all strings and `error` values:**
+  - Stellar secret seeds (`S[A-Z2-7]{55}`)
+  - JSON Web Tokens (`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`)
+  - WebSocket and URL token query parameters (`[?&](token|access_token|jwt|secret)=...`)
+  - Email addresses, IBANs, SSNs, and labeled bank account/routing numbers
+- **CI enforcement:** `internal/middleware/log_pii_scanner_test.go` (`TestHTTPRequestLogScanner_RedactsSecretsAndPII`) runs in CI on every API change.
+

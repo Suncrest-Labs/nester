@@ -33,11 +33,22 @@ func New(cfg config.LogConfig, version string) (*slog.Logger, error) {
 }
 
 func newHandler(format string, destination io.Writer, options *slog.HandlerOptions) (slog.Handler, error) {
+	opts := &slog.HandlerOptions{
+		ReplaceAttr: RedactReplaceAttr,
+	}
+	if options != nil {
+		cp := *options
+		if cp.ReplaceAttr == nil {
+			cp.ReplaceAttr = RedactReplaceAttr
+		}
+		opts = &cp
+	}
+
 	switch strings.ToLower(format) {
 	case "json":
-		return slog.NewJSONHandler(destination, options), nil
+		return slog.NewJSONHandler(destination, opts), nil
 	case "text":
-		return slog.NewTextHandler(destination, options), nil
+		return slog.NewTextHandler(destination, opts), nil
 	default:
 		return nil, fmt.Errorf("unsupported log format %q", format)
 	}
