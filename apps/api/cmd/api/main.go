@@ -304,10 +304,31 @@ func run() error {
 	// per-call-site policy is how behaviour drifted between call sites in the
 	// first place. Only idempotent reads are retried — the stellar package
 	// decides that per RPC method, and sendTransaction is never among them.
+	sorobanProviderBudget := stellarpkg.NewProviderBudgetLimiter(
+		stellarpkg.DefaultProviderBudgetConfig(string(metrics.UpstreamSorobanRPC)),
+	)
+	if err := appMetrics.RegisterRPCProviderBudgets(func() []metrics.RPCProviderBudgetSample {
+		snap := sorobanProviderBudget.Snapshot()
+		shed := make(map[string]uint64, len(snap.ShedByPriority))
+		for pri, count := range snap.ShedByPriority {
+			shed[pri.String()] = count
+		}
+		return []metrics.RPCProviderBudgetSample{{
+			Provider:         snap.Provider,
+			UtilizationRatio: snap.UtilizationRatio,
+			AvailableTokens:  snap.AvailableTokens,
+			AllowedTotal:     snap.AllowedTotal,
+			ShedByPriority:   shed,
+		}}
+	}); err != nil {
+		baseLogger.Error("failed to register rpc provider budget collector", "error", err)
+	}
+
 	sorobanRPCOptions := stellarpkg.RPCOptions{
 		Runner:   retry.New(),
 		Policy:   cfg.RPCRetry().Policy(),
 		Observer: appMetrics.RPCRecorderFor(metrics.UpstreamSorobanRPC),
+		Budget:   sorobanProviderBudget,
 	}
 	baseLogger.Info("soroban rpc retry policy",
 		"max_attempts", sorobanRPCOptions.Policy.MaxAttempts,
@@ -2050,10 +2071,12 @@ func run() error {
 	// its own position against the network tip on every tick and publishes it
 	// to the freshness tracker, which the metrics collector and the API
 	// freshness headers both read.
+	indexerRPCOptions := sorobanRPCOptions
+	indexerRPCOptions.DefaultPriority = stellarpkg.PriorityIndexer
 	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, stellarpkg.IndexerOptions{
 		RPCURL:          cfg.Stellar().RPCURL(),
 		HTTPClient:      chainBreakers.client(appMetrics, stellarpkg.IndexerRequestTimeout, metrics.UpstreamSorobanRPC),
-		RPCOptions:      sorobanRPCOptions,
+		RPCOptions:      indexerRPCOptions,
 		Recorder:        indexerFreshness,
 		DepositObserver: savingsGamificationSvc,
 	}, &workers)

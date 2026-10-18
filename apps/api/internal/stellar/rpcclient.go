@@ -54,6 +54,11 @@ type rpcClient struct {
 	// and means "no metrics", so tests and tooling need no wiring.
 	observer RPCObserver
 
+	// budget enforces per-provider rate-limiting and priority shedding (#1560).
+	// Nil means unlimited.
+	budget          *ProviderBudgetLimiter
+	defaultPriority RPCPriority
+
 	// traced controls whether each call opens a span. The invoker's calls
 	// carry transaction context worth separating in a waterfall; the
 	// indexer's poll every few seconds does not, and tracing it would swamp
@@ -65,9 +70,11 @@ type rpcClient struct {
 // caller in this package. The zero value is usable: it means the package
 // defaults and no metrics, which is what a test or the backfill CLI gets.
 type RPCOptions struct {
-	Runner   *retry.Runner
-	Policy   retry.Policy
-	Observer RPCObserver
+	Runner          *retry.Runner
+	Policy          retry.Policy
+	Observer        RPCObserver
+	Budget          *ProviderBudgetLimiter
+	DefaultPriority RPCPriority
 }
 
 // RPCObserver receives one report per logical RPC call, after any retries.
@@ -93,12 +100,14 @@ func newRPCClient(rpcURL string, client *http.Client, opts RPCOptions, traced bo
 		opts.Runner = retry.New()
 	}
 	return &rpcClient{
-		url:      rpcURL,
-		client:   client,
-		runner:   opts.Runner,
-		policy:   opts.Policy,
-		observer: opts.Observer,
-		traced:   traced,
+		url:             rpcURL,
+		client:          client,
+		runner:          opts.Runner,
+		policy:          opts.Policy,
+		observer:        opts.Observer,
+		budget:          opts.Budget,
+		defaultPriority: opts.DefaultPriority,
+		traced:          traced,
 	}
 }
 
@@ -180,9 +189,9 @@ func retryableRPCError(err error) bool {
 		return false
 	}
 
-	// Checked first: an open breaker is the one failure that must never be
+	// Checked first: an open breaker or provider budget shed must never be
 	// retried, and it can be wrapped inside a *url.Error by http.Client.
-	if errors.Is(err, breaker.ErrOpen) {
+	if errors.Is(err, breaker.ErrOpen) || errors.Is(err, ErrRPCBudgetExceeded) {
 		return false
 	}
 	if errors.Is(err, context.Canceled) {
@@ -219,6 +228,16 @@ func retryableRPCError(err error) bool {
 	return true
 }
 
+func (c *rpcClient) resolvePriority(ctx context.Context, method string) RPCPriority {
+	if p := RPCPriorityFromContext(ctx); p != PriorityUnspecified {
+		return p
+	}
+	if c.defaultPriority != PriorityUnspecified {
+		return c.defaultPriority
+	}
+	return classifyRPCMethodPriority(method)
+}
+
 // call performs one logical JSON-RPC call, retrying it when the method is
 // idempotent and the failure looks transient.
 //
@@ -232,6 +251,14 @@ func (c *rpcClient) call(ctx context.Context, method string, params, result any)
 	if c.traced {
 		ctx, span = startRPCSpan(ctx, method)
 		defer span.End()
+	}
+
+	if c.budget != nil {
+		if err := c.budget.Allow(c.resolvePriority(ctx, method)); err != nil {
+			wrapped := fmt.Errorf("rpc %s: %w", method, err)
+			recordRPCError(span, wrapped)
+			return wrapped
+		}
 	}
 
 	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: 1, Method: method, Params: params})
