@@ -42,6 +42,11 @@ This document defines the strict, mandatory checklist required for the Nester ma
   - Terms of Service, Privacy Policy, and disclaimer documentation finalized and published on the website.
   - Compliance, regulatory, and token-structure reviews completed by legal counsel for target jurisdictions.
 
+- [ ] **7. Funded Bug Bounty Live**
+  - The self-hosted bounty program ([`docs/security/bug-bounty.md`](security/bug-bounty.md)) is published at `/security#bug-bounty` with scope, severity tiers, and the TVL payout cap.
+  - The bounty pool account is funded at its target, published on `/security`, and its balance proof is recorded — before mainnet deposits open.
+  - The triage owner (Security Lead, with engineering on-call as backup) and the response SLA are staffed.
+
 ---
 
 ## Go / No-Go Decision Sign-off
@@ -52,4 +57,5 @@ This document defines the strict, mandatory checklist required for the Nester ma
 | Infrastructure & Monitoring | DevOps Lead | — | — |
 | Operations & Runbooks | SRE Lead | — | — |
 | Legal & Compliance | Legal Counsel | — | — |
+| Bug Bounty Program | Security Lead | — | — |
 | Final Go / No-Go Verdict | Core Maintainer Multisig | — | — |

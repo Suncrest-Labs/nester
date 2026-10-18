@@ -38,10 +38,11 @@ Instead, use one of the following:
 
 | Stage | Target |
 |-------|--------|
-| Acknowledgment | Within 48 hours |
-| Initial assessment | Within 1 week |
-| Fix or mitigation | Depends on severity (Critical: ASAP, High: 2 weeks, Medium/Low: next release) |
-| Public disclosure | Coordinated with reporter after fix is deployed |
+| Acknowledgment | Within 24 hours (Critical: within 4 hours) |
+| Initial assessment | Within 3 business days |
+| Fix or mitigation | Critical: 72 hours, High: 14 days, Medium: 30 days, Low: 90 days |
+| Reward paid (in-scope bounty reports) | Within 10 business days of the verified fix |
+| Public disclosure | 90 days after the report, or after the fix is deployed, whichever is earlier |
 
 ## Severity Classification
 
@@ -298,12 +299,30 @@ Nester commits to not pursuing legal action against security researchers who:
 - Do not disrupt production services or degrade user experience during testing
 - Give us reasonable time to resolve the issue before public disclosure
 
+## Bug Bounty
+
+Nester runs a **funded, self-hosted bug bounty** covering the launch contract
+set and the API money path. Rewards scale with the funds at risk, are capped at
+**10% of TVL** per report, and are paid in USDC on Stellar from a pool
+ring-fenced in the treasury multisig.
+
+| Severity | Reward |
+|----------|--------|
+| Critical | 10% of funds at risk, floor $25,000, max 10% of TVL (hard cap $150,000) |
+| High | 5% of funds at risk, floor $10,000, max 10% of TVL (hard cap $75,000) |
+| Medium | greater of $2,000 or 2% of funds at risk, max 10% of TVL |
+| Low | $500 flat |
+
+Full scope, the funds-at-risk definition, the earmarked pool, and the payout
+process are in [`docs/security/bug-bounty.md`](docs/security/bug-bounty.md). The
+public program page is at
+[nester.finance/security#bug-bounty](https://nester.finance/security#bug-bounty).
+Triage is owned by the Security Lead, with the engineering on-call engineer as
+backup.
+
 ## Recognition
 
 We maintain a Hall of Fame for researchers who responsibly disclose valid security issues. Credit will be given in the relevant release notes and security advisory unless you prefer to remain anonymous.
-
-
-We do not currently operate a paid bug bounty program, but we appreciate and publicly recognize all valid reports.
 
 ---
 
