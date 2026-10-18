@@ -147,6 +147,7 @@ func run() error {
 	// Stamp the build into the first log line so what is deployed can be read
 	// straight off the logs, not only from /health/detailed (issue #1117).
 	baseLogger.Info("starting nester api", "version", version, "commit", buildCommit())
+	baseLogger.Info("startup configuration loaded", "config", cfg)
 
 	// Created early (rather than just before ListenAndServe, as before) so
 	// components that need to release resources as soon as shutdown begins —
