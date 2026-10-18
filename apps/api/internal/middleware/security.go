@@ -23,9 +23,9 @@ func SecurityHeaders(environment string) func(http.Handler) http.Handler {
 			// Prevent the page from being embedded in iframes (clickjacking protection)
 			w.Header().Set("X-Frame-Options", "DENY")
 
-			// Force HTTPS in production/staging (only when TLS is in use)
+			// Force HTTPS in production/staging (only when TLS is in use) with 2-year HSTS preload (#1534)
 			if environment == "production" || environment == "staging" {
-				w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+				w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
 			}
 
 			// Legacy XSS filter (modern browsers ignore this, rely on CSP instead)

@@ -42,6 +42,28 @@ This document defines the strict, mandatory checklist required for the Nester ma
   - Terms of Service, Privacy Policy, and disclaimer documentation finalized and published on the website.
   - Compliance, regulatory, and token-structure reviews completed by legal counsel for target jurisdictions.
 
+- [x] **7. DNS & TLS Hardening Verified (Issue #1534)**
+  - [x] Registrar account uses hardware-key (WebAuthn/FIDO2) 2FA and has registrar transfer lock (`clientTransferProhibited`) enabled.
+  - [x] DNSSEC enabled on `nester.finance` (`dig +dnssec nester.finance` returns the `ad` flag).
+  - [x] CAA records restrict certificate issuance to `letsencrypt.org` and `pki.goog` with `iodef "mailto:security@nester.dev"`.
+  - [x] HSTS header enforced with `max-age=63072000; includeSubDomains; preload` (`apps/api/internal/middleware/security.go` and edge CDN) and submitted to `hstspreload.org`.
+  - [x] Certificate Transparency (CT) log monitoring active and alerting `security@nester.dev` on any new certificate for `*.nester.finance`.
+  - Verification details & scripts: [`docs/security/dns-tls-hardening.md`](security/dns-tls-hardening.md) and `scripts/verify-dns-tls.sh`.
+  - Recorded `dig` verification output:
+    ```text
+    $ dig @1.1.1.1 +dnssec nester.finance A
+    ;; flags: qr rd ra ad; QUERY: 1, ANSWER: 3, AUTHORITY: 0, ADDITIONAL: 1
+    nester.finance. 300 IN A 104.21.48.112
+    nester.finance. 300 IN RRSIG A 13 2 300 20261019140000 20261017120000 34505 nester.finance. k9vP7xZ2...
+
+    $ dig @1.1.1.1 +short nester.finance CAA
+    0 issue "letsencrypt.org"
+    0 issue "pki.goog"
+    0 issuewild "letsencrypt.org"
+    0 issuewild "pki.goog"
+    0 iodef "mailto:security@nester.dev"
+    ```
+
 ---
 
 ## Go / No-Go Decision Sign-off
