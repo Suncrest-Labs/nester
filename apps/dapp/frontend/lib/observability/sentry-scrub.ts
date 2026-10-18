@@ -38,7 +38,14 @@ interface ScrubbableSentryEvent {
     data?: Record<string, unknown>;
   }>;
   extra?: Record<string, unknown>;
+  tags?: Record<string, string>;
+  user?: Record<string, unknown>;
   transaction?: string;
+}
+
+interface ScrubbableBreadcrumb {
+  message?: string;
+  data?: Record<string, unknown>;
 }
 
 /** Header names that must never reach Sentry, regardless of value shape. */
@@ -60,6 +67,30 @@ function scrubHeaders(
       : sanitizeText(value);
   }
   return out;
+}
+
+/**
+ * Scrub a single Sentry breadcrumb before it is added to the breadcrumb buffer
+ * (`beforeBreadcrumb`). Never throws; returns `null` if scrubbing fails.
+ */
+export function scrubSentryBreadcrumb<T extends object>(breadcrumb: T): T | null {
+  try {
+    const crumb = breadcrumb as ScrubbableBreadcrumb;
+    if (crumb.message) {
+      crumb.message = sanitizeText(crumb.message);
+    }
+    if (crumb.data) {
+      const rawUrl = typeof crumb.data.url === "string" ? crumb.data.url : undefined;
+      const sanitized = sanitizeContext(crumb.data);
+      if (rawUrl !== undefined) {
+        sanitized.url = sanitizeRoute(rawUrl);
+      }
+      crumb.data = sanitized;
+    }
+    return breadcrumb;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -106,13 +137,24 @@ export function scrubSentryEvent<T extends object>(event: T): T | null {
 
     if (scrubbable.breadcrumbs) {
       for (const crumb of scrubbable.breadcrumbs) {
-        if (crumb.message) crumb.message = sanitizeText(crumb.message);
-        if (crumb.data) crumb.data = sanitizeContext(crumb.data);
+        scrubSentryBreadcrumb(crumb);
       }
     }
 
     if (scrubbable.extra) {
       scrubbable.extra = sanitizeContext(scrubbable.extra);
+    }
+
+    if (scrubbable.tags) {
+      const cleanTags: Record<string, string> = {};
+      for (const [k, v] of Object.entries(scrubbable.tags)) {
+        cleanTags[k] = typeof v === "string" ? sanitizeText(v) : v;
+      }
+      scrubbable.tags = cleanTags;
+    }
+
+    if (scrubbable.user) {
+      scrubbable.user = sanitizeContext(scrubbable.user);
     }
 
     return event;
@@ -121,3 +163,4 @@ export function scrubSentryEvent<T extends object>(event: T): T | null {
     return null;
   }
 }
+

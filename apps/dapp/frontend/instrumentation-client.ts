@@ -12,7 +12,10 @@ import {
   getEnvironment,
   getTracesSampleRate,
 } from "@/lib/observability/sentry-config";
-import { scrubSentryEvent } from "@/lib/observability/sentry-scrub";
+import {
+  scrubSentryBreadcrumb,
+  scrubSentryEvent,
+} from "@/lib/observability/sentry-scrub";
 
 const dsn = getClientDsn();
 
@@ -21,12 +24,16 @@ if (dsn) {
     dsn,
     environment: getEnvironment(),
     tracesSampleRate: getTracesSampleRate(),
-    // Wallet addresses, balances and tokens must never leave the browser —
+    sendDefaultPii: false,
+    replaysSessionSampleRate: 0,
+    replaysOnErrorSampleRate: 0,
+    // Wallet addresses, balances, XDRs and tokens must never leave the browser —
     // the same bar lib/observability/sanitize.ts enforces for the console/
-    // beacon sink. beforeSend is the last gate before a Sentry event is
-    // transmitted.
+    // beacon sink. beforeSend and beforeBreadcrumb are the last gates before a
+    // Sentry event is transmitted (#1517).
     beforeSend: scrubSentryEvent,
     beforeSendTransaction: scrubSentryEvent,
+    beforeBreadcrumb: scrubSentryBreadcrumb,
   });
 }
 

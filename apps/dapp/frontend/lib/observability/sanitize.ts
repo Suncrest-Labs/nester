@@ -16,6 +16,11 @@ const STELLAR_SECRET = /\b[S][A-Z2-7]{55}\b/g;
 const STELLAR_MUXED = /\b[M][A-Z2-7]{68}\b/g;
 /** Hex transaction hashes / raw XDR-ish blobs. Bounded to avoid backtracking. */
 const HEX_BLOB = /\b[0-9a-fA-F]{40,128}\b/g;
+/**
+ * Base64-encoded Stellar XDR envelopes/results/footprint blobs (typically
+ * starting with "AAAA" or containing base64 padding/operators over 40 chars).
+ */
+const BASE64_XDR = /\bAAAA[A-Za-z0-9+/]{16,}={0,2}\b|[A-Za-z0-9+/]{40,}={1,2}/g;
 /** `Bearer eyJ...` and bare JWTs. */
 const BEARER = /\bBearer\s+[\w-]+\.[\w-]+\.[\w-]+/gi;
 const JWT = /\b[\w-]{8,256}\.[\w-]{8,1024}\.[\w-]{8,256}\b/g;
@@ -82,6 +87,7 @@ export function sanitizeText(input: string): string {
     .replace(STELLAR_MUXED, REDACTED)
     .replace(STELLAR_ADDRESS, REDACTED)
     .replace(JWT, REDACTED)
+    .replace(BASE64_XDR, REDACTED)
     .replace(HEX_BLOB, REDACTED)
     .replace(AMOUNT, REDACTED);
 }

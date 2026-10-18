@@ -9,7 +9,10 @@ import {
   getServerDsn,
   getTracesSampleRate,
 } from "@/lib/observability/sentry-config";
-import { scrubSentryEvent } from "@/lib/observability/sentry-scrub";
+import {
+  scrubSentryBreadcrumb,
+  scrubSentryEvent,
+} from "@/lib/observability/sentry-scrub";
 
 const dsn = getServerDsn();
 
@@ -18,7 +21,10 @@ if (dsn) {
     dsn,
     environment: getEnvironment(),
     tracesSampleRate: getTracesSampleRate(),
+    sendDefaultPii: false,
     beforeSend: scrubSentryEvent,
     beforeSendTransaction: scrubSentryEvent,
+    beforeBreadcrumb: scrubSentryBreadcrumb,
   });
 }
+

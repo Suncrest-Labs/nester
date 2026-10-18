@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { scrubSentryEvent } from "@/lib/observability/sentry-scrub";
+import {
+  scrubSentryBreadcrumb,
+  scrubSentryEvent,
+} from "@/lib/observability/sentry-scrub";
 
 /**
  * scrubSentryEvent is intentionally generic over `object` (see sentry-scrub.ts
@@ -18,9 +21,14 @@ interface TestSentryEvent {
   };
   breadcrumbs?: Array<{ message?: string; data?: Record<string, unknown> }>;
   extra?: Record<string, unknown>;
+  tags?: Record<string, string>;
+  user?: Record<string, unknown>;
 }
 
 const WALLET = "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+const CONTRACT = "CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+const SAMPLE_XDR =
+  "AAAAAgAAAABi1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345==";
 const JWT = [
   Buffer.from(JSON.stringify({ alg: "HS256" })).toString("base64url"),
   Buffer.from(JSON.stringify({ sub: "1234567890" })).toString("base64url"),
@@ -32,6 +40,38 @@ describe("scrubSentryEvent", () => {
     const event: TestSentryEvent = { message: `Deposit failed for ${WALLET}` };
     const out = scrubSentryEvent(event);
     expect(out?.message).not.toContain(WALLET);
+  });
+
+  it("scrubs Stellar contract addresses (C...), base64 XDR blobs, and amounts", () => {
+    const event: TestSentryEvent = {
+      message: `Contract ${CONTRACT} simulation failed with XDR ${SAMPLE_XDR} for $1,250.50`,
+      exception: {
+        values: [
+          {
+            value: `Envelope ${SAMPLE_XDR} on contract ${CONTRACT} amount 500.2500000`,
+          },
+        ],
+      },
+      extra: {
+        amount: "500.2500000",
+        xdr: SAMPLE_XDR,
+        contract: CONTRACT,
+      },
+      tags: {
+        vault: CONTRACT,
+      },
+    };
+    const out = scrubSentryEvent(event);
+    expect(out?.message).not.toContain(CONTRACT);
+    expect(out?.message).not.toContain(SAMPLE_XDR);
+    expect(out?.message).not.toContain("1,250.50");
+    expect(out?.exception?.values?.[0].value).not.toContain(SAMPLE_XDR);
+    expect(out?.exception?.values?.[0].value).not.toContain(CONTRACT);
+    expect(out?.exception?.values?.[0].value).not.toContain("500.2500000");
+    expect(out?.extra?.amount).toBe("[redacted]");
+    expect(out?.extra?.xdr).toBe("[redacted]");
+    expect(out?.extra?.contract).toBe("[redacted]");
+    expect(out?.tags?.vault).toBe("[redacted]");
   });
 
   it("scrubs exception values", () => {
@@ -78,16 +118,26 @@ describe("scrubSentryEvent", () => {
     expect(out?.request?.headers?.["X-Custom"]).toBe("safe-value");
   });
 
-  it("scrubs breadcrumb messages and data", () => {
-    const event: TestSentryEvent = {
-      breadcrumbs: [
-        { message: `fetch failed for ${WALLET}`, data: { address: WALLET, ok: true } },
-      ],
+  it("scrubs breadcrumb messages and data via scrubSentryBreadcrumb and scrubSentryEvent", () => {
+    const crumb = {
+      message: `submit XDR ${SAMPLE_XDR} from ${WALLET} to ${CONTRACT}`,
+      data: {
+        address: WALLET,
+        amount: "99.95",
+        xdr: SAMPLE_XDR,
+        url: `/api/v1/vaults/${CONTRACT}/deposit?token=${JWT}`,
+        ok: true,
+      },
     };
-    const out = scrubSentryEvent(event);
-    expect(out?.breadcrumbs?.[0].message).not.toContain(WALLET);
-    expect(out?.breadcrumbs?.[0].data?.address).toBe("[redacted]");
-    expect(out?.breadcrumbs?.[0].data?.ok).toBe(true);
+    const scrubbedCrumb = scrubSentryBreadcrumb(crumb);
+    expect(scrubbedCrumb?.message).not.toContain(SAMPLE_XDR);
+    expect(scrubbedCrumb?.message).not.toContain(WALLET);
+    expect(scrubbedCrumb?.message).not.toContain(CONTRACT);
+    expect(scrubbedCrumb?.data?.address).toBe("[redacted]");
+    expect(scrubbedCrumb?.data?.amount).toBe("[redacted]");
+    expect(scrubbedCrumb?.data?.xdr).toBe("[redacted]");
+    expect(scrubbedCrumb?.data?.url).toBe("/api/v1/vaults/[id]/deposit");
+    expect(scrubbedCrumb?.data?.ok).toBe(true);
   });
 
   it("sanitizes the extra context bag", () => {
@@ -115,3 +165,4 @@ describe("scrubSentryEvent", () => {
     expect(scrubSentryEvent(hostile)).toBeNull();
   });
 });
+
