@@ -29,6 +29,13 @@ import {
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
+import {
+  DEFAULT_SLIPPAGE_PCT,
+  SLIPPAGE_PRESETS_PCT,
+  clampSlippagePct,
+  applySlippageToAmount,
+  ensureFreshQuote,
+} from "@/lib/stellar/slippage";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -222,6 +229,8 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const [selectedStrategy, setSelectedStrategy] = useState<MarketStrategy | null>(
     vault?.strategies?.[0] ?? null
   );
+  const [slippagePct, setSlippagePct] = useState<number>(DEFAULT_SLIPPAGE_PCT);
+  const [quoteTimestampMs, setQuoteTimestampMs] = useState<number>(() => Date.now());
   const submittingRef = useRef(false);
 
   const supportedAssets = (vault?.supportedAssets ?? ["USDC"]) as ("USDC" | "XLM")[];
@@ -262,6 +271,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
 
   const effectiveApy = selectedStrategy ? selectedStrategy.apy / 100 : (meta ? meta.apy : 0);
   const estimatedYield = amount * effectiveApy;
+  const minimumSharesReceived = applySlippageToAmount(amount, slippagePct);
 
   const reset = () => {
     setAmountInput("");
@@ -285,6 +295,16 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
     }
 
     submittingRef.current = true;
+
+    // Re-quote if the deposit preview is older than QUOTE_EXPIRY_MS (#1503).
+    const freshQuote = await ensureFreshQuote(
+      { value: amount, quotedAtMs: quoteTimestampMs },
+      async () => {
+        setQuoteTimestampMs(Date.now());
+        return amount;
+      }
+    );
+    const minSharesOut = applySlippageToAmount(freshQuote.value, slippagePct);
 
     // Record the pending row and enter the pending state BEFORE awaiting.
     // Setting them after the await batches them with setState("success") in a
@@ -311,7 +331,8 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         contractId: vault.contractAddress,
         asset: selectedAsset,
         amount,
-      });
+        minSharesOut,
+      } as Parameters<typeof executeVaultDeposit>[0]);
 
       setReceipt(txReceipt);
 
@@ -503,6 +524,38 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                 )}
               </div>
 
+              {/* Slippage tolerance (#1503) */}
+              <div className="mt-4 flex items-center justify-between rounded-2xl border border-border bg-secondary/20 px-4 py-2.5 text-xs">
+                <span className="text-muted-foreground">Slippage tolerance</span>
+                <div className="flex items-center gap-1.5">
+                  {SLIPPAGE_PRESETS_PCT.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setSlippagePct(preset)}
+                      className={cn(
+                        "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                        slippagePct === preset
+                          ? "bg-foreground text-background"
+                          : "border border-border bg-white text-foreground/70 dark:bg-[#100F0F]"
+                      )}
+                    >
+                      {preset}%
+                    </button>
+                  ))}
+                  <input
+                    type="number"
+                    aria-label="Custom slippage tolerance"
+                    min={0}
+                    max={3}
+                    step={0.1}
+                    value={slippagePct}
+                    onChange={(e) => setSlippagePct(clampSlippagePct(Number(e.target.value)))}
+                    className="w-14 rounded-lg border border-border bg-white px-2 py-1 text-right text-xs dark:bg-[#100F0F]"
+                  />
+                </div>
+              </div>
+
               {/* Preview */}
               <div className="mt-5 space-y-3 rounded-2xl border border-border bg-secondary/30 p-4">
                 {[
@@ -519,6 +572,11 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                     value: formatCurrency(amount),
                   },
                   {
+                    label: "Minimum received",
+                    value: `${formatCurrency(minimumSharesReceived)} nVault shares`,
+                    testId: "deposit-minimum-received",
+                  },
+                  {
                     label: "Lock period",
                     value: selectedStrategy?.lockDays
                       ? `${selectedStrategy.lockDays} days`
@@ -527,13 +585,13 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   ...(selectedStrategy?.penaltyPct ? [
                     { label: "Early exit penalty", value: `${selectedStrategy.penaltyPct}%` },
                   ] : []),
-                ].map(({ label, value }) => (
+                ].map(({ label, value, testId }) => (
                   <div
                     key={label}
                     className="flex items-center justify-between text-sm"
                   >
                     <span className="text-muted-foreground">{label}</span>
-                    <span className="font-medium text-foreground">{value}</span>
+                    <span data-testid={testId} className="font-medium text-foreground">{value}</span>
                   </div>
                 ))}
               </div>

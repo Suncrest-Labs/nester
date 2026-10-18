@@ -39,6 +39,14 @@ import {
     NetworkMismatchError,
     WalletDisconnectedError,
 } from "@/lib/stellar/transaction";
+import {
+    DEFAULT_SLIPPAGE_PCT,
+    SLIPPAGE_PRESETS_PCT,
+    applySlippageToAmount,
+    applySlippageToStroops,
+    clampSlippagePct,
+    ensureFreshQuote,
+} from "@/lib/stellar/slippage";
 import { cn } from "@/lib/utils";
 import { type VaultContract as VaultDefinition, type SupportedAsset, vaultContracts as vaultDefinitions, getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 import { requireContractId } from "@/lib/contracts";
@@ -137,6 +145,8 @@ export function DepositModal({
     const [selectedAsset, setSelectedAsset] = useState<SupportedAsset>(
         vault?.supportedAssets?.[0] ?? "USDC"
     );
+    const [slippagePct, setSlippagePct] = useState<number>(DEFAULT_SLIPPAGE_PCT);
+    const [quoteTimestampMs, setQuoteTimestampMs] = useState<number>(() => Date.now());
     const submittingRef = useRef(false);
 
     // Reset selected asset when vault changes
@@ -208,10 +218,15 @@ export function DepositModal({
 
     const canSubmit = !!vault && !!address && isValid && amount > 0;
     const estimatedYield = vault ? amount * vault.apy : 0;
+    const expectedSharesStroops =
+        depositPreview?.available && depositPreview.sharesExpected > BigInt(0)
+            ? depositPreview.sharesExpected
+            : (amountStroops ?? BigInt(0));
     const sharesReceived =
         depositPreview?.available && depositPreview.sharesExpected > BigInt(0)
             ? Number(formatStroopsToDisplay(depositPreview.sharesExpected, 6))
             : amount;
+    const minimumSharesReceived = applySlippageToAmount(sharesReceived, slippagePct);
 
     const reset = () => {
         resetForm();
@@ -241,6 +256,15 @@ export function DepositModal({
                     : vault.contractAddress) ??
                 requireContractId(selectedAsset === "XLM" ? "vaultXlm" : "vault");
 
+            const { value: activeExpectedShares } = await ensureFreshQuote(
+                { value: expectedSharesStroops, quotedAtMs: quoteTimestampMs },
+                async () => {
+                    setQuoteTimestampMs(Date.now());
+                    return expectedSharesStroops;
+                }
+            );
+            const activeMinSharesOut = applySlippageToStroops(activeExpectedShares, slippagePct);
+
             const { xdr } = await buildDepositTransaction({
                 walletAddress: address,
                 contractId,
@@ -249,6 +273,7 @@ export function DepositModal({
                 // reintroduces the precision loss this parsing work exists
                 // to remove.
                 amount: amountStroops ?? BigInt(0),
+                minSharesOut: activeMinSharesOut,
             });
             const signedXdr = await signTransaction(xdr);
 
@@ -424,6 +449,39 @@ export function DepositModal({
                                 />
                             </div>
 
+                            {/* Slippage tolerance (#1503) */}
+                            <div className="mt-4 flex items-center justify-between rounded-2xl border border-border bg-secondary/20 px-4 py-2.5 text-xs">
+                                <span className="text-muted-foreground">Slippage tolerance</span>
+                                <div className="flex items-center gap-1.5">
+                                    {SLIPPAGE_PRESETS_PCT.map((preset) => (
+                                        <button
+                                            key={preset}
+                                            type="button"
+                                            onClick={() => setSlippagePct(preset)}
+                                            className={cn(
+                                                "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                                                slippagePct === preset
+                                                    ? "bg-foreground text-background"
+                                                    : "border border-border bg-white text-foreground/70 dark:bg-[#100F0F]"
+                                            )}
+                                        >
+                                            {preset}%
+                                        </button>
+                                    ))}
+                                    <input
+                                        type="number"
+                                        aria-label="Custom slippage tolerance"
+                                        min={0}
+                                        max={3}
+                                        step={0.1}
+                                        value={slippagePct}
+                                        onChange={(e) => setSlippagePct(clampSlippagePct(e.target.value))}
+                                        className="w-16 rounded-full border border-border bg-white px-2.5 py-1 text-right text-xs font-medium text-foreground outline-none dark:bg-[#100F0F]"
+                                    />
+                                    <span className="text-muted-foreground">%</span>
+                                </div>
+                            </div>
+
                             <NetworkFeeDisplay
                                 estimate={depositFee}
                                 loading={depositFeeLoading}
@@ -442,6 +500,12 @@ export function DepositModal({
                                     <span className="text-muted-foreground">nVault shares to receive</span>
                                     <span className="font-medium text-foreground">
                                         {formatCurrency(sharesReceived)}
+                                    </span>
+                                </div>
+                                <div className="flex items-center justify-between text-sm">
+                                    <span className="text-muted-foreground">Minimum received ({slippagePct}% slippage)</span>
+                                    <span className="font-medium text-foreground" data-testid="deposit-minimum-received">
+                                        {formatCurrency(minimumSharesReceived)} nVault
                                     </span>
                                 </div>
                                 <div className="flex items-center justify-between text-sm">
@@ -678,11 +742,14 @@ export function WithdrawModal({
         penaltyAmount: number;
         netAmount: number;
     } | null>(null);
+    const [slippagePct, setSlippagePct] = useState<number>(DEFAULT_SLIPPAGE_PCT);
+    const [quoteTimestampMs, setQuoteTimestampMs] = useState<number>(() => Date.now());
 
     const quote = useMemo(
         () => (position ? getWithdrawalQuote(position.id, amount) : null),
         [amount, getWithdrawalQuote, position]
     );
+    const minimumReceived = quote ? applySlippageToAmount(quote.netAmount, slippagePct) : 0;
 
     const withdrawFeeParams = useMemo(() => {
         if (!position || !address || amount <= 0 || !quote) return null;
@@ -740,11 +807,20 @@ export function WithdrawModal({
                 ? (vaultDef?.contractXlmAddress || vaultDef?.contractAddress || "")
                 : (vaultDef?.contractAddress || "");
 
+            const { value: activeQuote } = await ensureFreshQuote(
+                { value: quote, quotedAtMs: quoteTimestampMs },
+                async () => {
+                    setQuoteTimestampMs(Date.now());
+                    return getWithdrawalQuote(position.id, amount) ?? quote;
+                }
+            );
+            const minAssetsOut = applySlippageToAmount(activeQuote.netAmount, slippagePct);
+
             const { xdr } = await buildWithdrawTransaction({
                 walletAddress: address,
                 contractId,
-                shares: quote.sharesBurned,
-                minAssetsOut: quote.netAmount,
+                shares: activeQuote.sharesBurned,
+                minAssetsOut,
             });
             const signedXdr = await signTransaction(xdr);
 
@@ -753,7 +829,7 @@ export function WithdrawModal({
 
             const result = recordWithdrawal({
                 positionId: position.id,
-                grossAmount: quote.grossAmount,
+                grossAmount: activeQuote.grossAmount,
                 txHash: txReceipt.txHash,
                 isOnChain: true,
             });
@@ -906,6 +982,39 @@ export function WithdrawModal({
                         />
                     </div>
 
+                    {/* Slippage tolerance (#1503) */}
+                    <div className="flex items-center justify-between rounded-2xl border border-border bg-secondary/20 px-4 py-2.5 text-xs">
+                        <span className="text-muted-foreground">Slippage tolerance</span>
+                        <div className="flex items-center gap-1.5">
+                            {SLIPPAGE_PRESETS_PCT.map((preset) => (
+                                <button
+                                    key={preset}
+                                    type="button"
+                                    onClick={() => setSlippagePct(preset)}
+                                    className={cn(
+                                        "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                                        slippagePct === preset
+                                            ? "bg-foreground text-background"
+                                            : "border border-border bg-white text-foreground/70 dark:bg-[#100F0F]"
+                                    )}
+                                >
+                                    {preset}%
+                                </button>
+                            ))}
+                            <input
+                                type="number"
+                                aria-label="Custom slippage tolerance"
+                                min={0}
+                                max={3}
+                                step={0.1}
+                                value={slippagePct}
+                                onChange={(e) => setSlippagePct(clampSlippagePct(e.target.value))}
+                                className="w-16 rounded-full border border-border bg-white px-2.5 py-1 text-right text-xs font-medium text-foreground outline-none dark:bg-[#100F0F]"
+                            />
+                            <span className="text-muted-foreground">%</span>
+                        </div>
+                    </div>
+
                     <NetworkFeeDisplay
                         estimate={withdrawFee}
                         loading={withdrawFeeLoading}
@@ -919,11 +1028,15 @@ export function WithdrawModal({
                             { label: "Gross proceeds", value: `${formatCurrency(quote?.grossAmount ?? 0)} ${position.asset ?? "USDC"}` },
                             { label: "Early exit penalty", value: `${formatCurrency(quote ? quote.grossAmount - quote.netAmount : 0)} ${position.asset ?? "USDC"}` },
                             { label: "Net to wallet", value: `${formatCurrency(quote?.netAmount ?? 0)} ${position.asset ?? "USDC"}`, highlight: true },
+                            { label: `Minimum received (${slippagePct}% slippage)`, value: `${formatCurrency(minimumReceived)} ${position.asset ?? "USDC"}`, testId: "withdraw-minimum-received" },
                             { label: "Shares burned", value: formatCurrency(quote?.sharesBurned ?? 0) },
-                        ].map(({ label, value, highlight }) => (
+                        ].map(({ label, value, highlight, testId }) => (
                             <div key={label} className="flex items-center justify-between">
                                 <span className="text-muted-foreground">{label}</span>
-                                <span className={cn("font-medium", highlight ? "text-emerald-600" : "text-foreground")}>
+                                <span
+                                    data-testid={testId}
+                                    className={cn("font-medium", highlight ? "text-emerald-600" : "text-foreground")}
+                                >
                                     {value}
                                 </span>
                             </div>
