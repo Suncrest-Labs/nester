@@ -22,9 +22,11 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, String,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env,
+    String,
 };
 
+use nester_access_control::{AccessControl, Role};
 use nester_common::ContractError;
 
 // ---------------------------------------------------------------------------
@@ -81,8 +83,9 @@ impl VaultTokenContract {
         if env.storage().instance().has(&DataKey::Vault) {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
-        // No vault.require_auth() here — vault isn't initialized yet when this is called.
-        // Auth for vault-only operations is enforced in mint_for_deposit, burn_for_withdrawal, etc.
+        // AccessControl uses vault as initial admin so role governance can be managed.
+        AccessControl::initialize(&env, &vault);
+        nester_common::Upgrade::init_schema_version(&env, 1);
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage().instance().set(&DataKey::Name, &name);
         env.storage().instance().set(&DataKey::Symbol, &symbol);
@@ -380,6 +383,85 @@ impl VaultTokenContract {
             .persistent()
             .get(&DataKey::DepositTimestamp(user))
             .unwrap_or(0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Role management passthroughs
+    // -----------------------------------------------------------------------
+
+    pub fn grant_role(env: Env, grantor: Address, grantee: Address, role: Role) {
+        AccessControl::grant_role(&env, &grantor, &grantee, role);
+    }
+
+    pub fn revoke_role(env: Env, revoker: Address, target: Address, role: Role) {
+        AccessControl::revoke_role(&env, &revoker, &target, role);
+    }
+
+    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
+        AccessControl::transfer_admin(&env, &current_admin, &new_admin);
+    }
+
+    pub fn accept_admin(env: Env, new_admin: Address) {
+        AccessControl::accept_admin(&env, &new_admin);
+    }
+
+    pub fn has_role(env: Env, account: Address, role: Role) -> bool {
+        AccessControl::has_role(&env, &account, role)
+    }
+
+    // -----------------------------------------------------------------------
+    // Upgradeability & Schema Migration
+    // -----------------------------------------------------------------------
+
+    /// Proposes a new WASM upgrade for the vault token.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_VAULT_TOKEN (48 hours).
+    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &admin,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_VAULT_TOKEN,
+            eta,
+        );
+    }
+
+    /// Cancels a pending WASM upgrade for the vault token.
+    ///
+    /// Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, admin: Address) {
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &admin);
+    }
+
+    /// Executes a matured WASM upgrade for the vault token.
+    ///
+    /// Execution is permissionless after maturity.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
+
+    /// Retrieves pending upgrade details if present.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
+    }
+
+    /// Returns current contract schema version.
+    pub fn get_schema_version(env: Env) -> u32 {
+        nester_common::Upgrade::get_schema_version(&env)
+    }
+
+    /// Bumps schema version if needed (idempotent).
+    pub fn migrate(env: Env) -> u32 {
+        let current = nester_common::Upgrade::get_schema_version(&env);
+        let target = 1u32;
+        if current < target {
+            nester_common::Upgrade::set_schema_version(&env, target);
+            target
+        } else {
+            current
+        }
     }
 }
 
