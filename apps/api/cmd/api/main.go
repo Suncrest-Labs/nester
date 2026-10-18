@@ -1025,6 +1025,10 @@ func run() error {
 	protocolComparisonHandler := handler.NewProtocolComparisonHandler(protocolComparisonService)
 	protocolComparisonHandler.Register(mux)
 
+	// Timelocked protocol upgrade watcher endpoint (#1549).
+	protocolUpgradeHandler := handler.NewProtocolUpgradeHandler(&handler.SQLProtocolUpgradeStore{DB: db})
+	protocolUpgradeHandler.Register(mux)
+
 	// System-wide maintenance mode (#1328): halt or read-only, gated to admins.
 	maintenanceHandler := handler.NewMaintenanceHandler(systemStateRepository)
 	maintenanceHandler.Register(mux)

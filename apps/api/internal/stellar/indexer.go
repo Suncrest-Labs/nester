@@ -74,6 +74,10 @@ type IndexerOptions struct {
 	// DepositObserver, if set, is notified after a deposit event's
 	// transaction commits. See EventPoller.DepositObserver.
 	DepositObserver DepositObserver
+
+	// UpgradeObserver, if set, is notified after a PROP_UPG, CAN_UPG, or
+	// EXEC_UPG event commits (#1549).
+	UpgradeObserver UpgradeObserver
 }
 
 // StartEventIndexer launches the long-running event indexer.
@@ -105,6 +109,7 @@ func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sys
 		Fetcher:         NewRPCEventFetcherWithOptions(httpClient, opts.RPCURL, opts.RPCOptions),
 		Logger:          logger,
 		DepositObserver: opts.DepositObserver,
+		UpgradeObserver: opts.UpgradeObserver,
 	}
 
 	if wg != nil {
@@ -406,6 +411,20 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 		}
 	case "rebal_cmp":
 		if err := applyRebalanceCompleted(ctx, tx, event); err != nil {
+			return err
+		}
+
+	// Timelocked contract upgrades (issue #1549).
+	case "prop_upg":
+		if err := applyUpgradeProposed(ctx, tx, event); err != nil {
+			return err
+		}
+	case "can_upg":
+		if err := applyUpgradeCancelled(ctx, tx, event); err != nil {
+			return err
+		}
+	case "exec_upg":
+		if err := applyUpgradeExecuted(ctx, tx, event); err != nil {
 			return err
 		}
 
@@ -794,12 +813,7 @@ func fetchSorobanEvents(
 
 	events := make([]indexedEvent, 0, len(rpcResp.Result.Events))
 	for _, raw := range rpcResp.Result.Events {
-		eventType := ""
-		if len(raw.Topic) > 0 {
-			if topic, ok := raw.Topic[0].(string); ok {
-				eventType = topic
-			}
-		}
+		eventType := resolveTopicEventType(raw.Topic)
 		if eventType == "" {
 			continue
 		}
@@ -887,6 +901,10 @@ type EventSyncer struct {
 	// DepositObserver, if set, is notified after a deposit event's
 	// transaction commits. See EventPoller.DepositObserver.
 	DepositObserver DepositObserver
+
+	// UpgradeObserver, if set, is notified after a PROP_UPG, CAN_UPG, or
+	// EXEC_UPG event commits (#1549).
+	UpgradeObserver UpgradeObserver
 }
 
 func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
@@ -919,6 +937,7 @@ func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
 		if ok {
 			processed++
 			notifyDepositObserver(ctx, s.DB, s.Logger, s.DepositObserver, event)
+			notifyUpgradeObserver(ctx, s.Logger, s.UpgradeObserver, event)
 		}
 	}
 

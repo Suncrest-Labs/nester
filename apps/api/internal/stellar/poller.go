@@ -57,6 +57,10 @@ type EventPoller struct {
 	// transaction commits. Nil disables the notification with no other
 	// behaviour change.
 	DepositObserver DepositObserver
+
+	// UpgradeObserver, if set, is notified after a PROP_UPG, CAN_UPG, or
+	// EXEC_UPG event commits (#1549).
+	UpgradeObserver UpgradeObserver
 }
 
 // PollEvents runs a single poll: resolve the cursor, fetch events, apply each
@@ -128,6 +132,7 @@ func (p *EventPoller) PollEvents(ctx context.Context) (int, error) {
 			// transaction: a slow or failing observer must not be able to roll
 			// back a balance write.
 			notifyDepositObserver(ctx, p.DB, p.Logger, p.DepositObserver, event)
+			notifyUpgradeObserver(ctx, p.Logger, p.UpgradeObserver, event)
 		}
 	}
 

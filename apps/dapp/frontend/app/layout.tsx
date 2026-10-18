@@ -13,6 +13,7 @@ import { SettingsProvider } from "@/context/settings-context";
 import { LocaleProvider } from "@/context/locale-context";
 import { NetworkProvider } from "@/context/NetworkProvider";
 import { NetworkBanner } from "@/components/network/NetworkSelector";
+import { PendingUpgradeBanner } from "@/components/pending-upgrade-banner";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
 import {
     E2E_HARNESS_CHANNELS,
@@ -90,6 +91,7 @@ export default function RootLayout({
                                                     <ServiceWorkerRegister />
                                                     <OfflineBanner />
                                                     <NetworkBanner />
+                                                    <PendingUpgradeBanner />
                                                     <PortfolioProvider>
                                                         <WebSocketProvider
                                                             channelsOverride={
