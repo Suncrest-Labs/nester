@@ -17,7 +17,8 @@ import {
   setAccessToken,
   setUserId as writeUserId,
   clearTokens,
-  ACCESS_TOKEN_STORAGE_KEY,
+  cleanupLegacyAccessToken,
+  subscribeAccessToken,
   USER_ID_STORAGE_KEY,
 } from "@/lib/auth/token-store";
 
@@ -58,7 +59,10 @@ function decodeExpiry(token: string): number | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { address } = useWallet();
 
-  const [token, setToken] = useState<string | null>(() => getAccessToken() || null);
+  const [token, setToken] = useState<string | null>(() => {
+    cleanupLegacyAccessToken();
+    return getAccessToken() || null;
+  });
   const [userId, setUserId] = useState<string | null>(() => readUserId());
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -117,27 +121,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [address, clearSession]);
 
-  // Pick up an already-active session (e.g. page reload) with proactive refresh.
+  // Subscribe to in-memory token store updates and purge any legacy localStorage token.
   useEffect(() => {
-    if (token) scheduleProactiveRefresh(token);
+    cleanupLegacyAccessToken();
+    const unsubscribe = subscribeAccessToken((nextToken) => {
+      setToken(nextToken);
+      if (nextToken) {
+        scheduleProactiveRefresh(nextToken);
+      }
+    });
     return () => {
+      unsubscribe();
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [scheduleProactiveRefresh]);
 
-  // Sync across browser tabs
+  // Restore session on reload via the httpOnly refresh cookie (#1506).
+  useEffect(() => {
+    if (!address || getAccessToken()) {
+      const existing = getAccessToken();
+      if (existing) scheduleProactiveRefresh(existing);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const refreshed = await api.auth.refresh?.();
+        if (!cancelled && refreshed?.access_token) {
+          setAccessToken(refreshed.access_token);
+          setToken(refreshed.access_token);
+          scheduleProactiveRefresh(refreshed.access_token);
+        }
+      } catch (err) {
+        const isAuthRejection =
+          err instanceof ApiError && (err.status === 401 || err.status === 403);
+        if (!cancelled && isAuthRejection) {
+          clearSession();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [address, scheduleProactiveRefresh, clearSession]);
+
+  // Sync userId across browser tabs
   useEffect(() => {
     const handler = (e: StorageEvent) => {
-      if (e.key === ACCESS_TOKEN_STORAGE_KEY) {
-        setToken(e.newValue);
-        if (e.newValue) scheduleProactiveRefresh(e.newValue);
-      }
       if (e.key === USER_ID_STORAGE_KEY) setUserId(e.newValue);
     };
     window.addEventListener("storage", handler);
     return () => window.removeEventListener("storage", handler);
-  }, [scheduleProactiveRefresh]);
+  }, []);
 
   const signIn = useCallback(async () => {
     if (!address || token) return; // already signed in or no wallet
