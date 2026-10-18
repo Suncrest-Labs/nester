@@ -15,33 +15,99 @@ import { NETWORKS } from "@/lib/networks";
  *               `getNetwork`. Callers must treat this as unproven rather than
  *               assuming testnet; see lib/onboarding/testnet-steps.ts.
  */
-export async function readWalletIsTestnet(): Promise<boolean | null> {
+export function resolveNetworkDisplayName(passphraseOrName: string): string {
+  const normalized = passphraseOrName.trim();
+  if (
+    normalized === NETWORKS.mainnet.networkPassphrase ||
+    normalized.toLowerCase() === "mainnet" ||
+    normalized.toUpperCase() === "PUBLIC"
+  ) {
+    return "Mainnet";
+  }
+  if (
+    normalized === NETWORKS.testnet.networkPassphrase ||
+    normalized.toLowerCase() === "testnet"
+  ) {
+    return "Testnet";
+  }
+  return normalized;
+}
+
+interface WalletNetworkModuleLike {
+  getNetworkDetails?: () => Promise<{
+    networkPassphrase?: string;
+    network?: string;
+  }>;
+  getNetwork?: () => Promise<{
+    networkPassphrase?: string;
+    network?: string;
+  }>;
+  networkPassphrase?: string;
+}
+
+/**
+ * Reads the active network passphrase reported by the connected wallet
+ * (`getNetworkDetails` or `getNetwork` on the wallet kit module, Freighter API,
+ * or injected E2E mock wallet).
+ */
+export async function readWalletNetworkPassphrase(): Promise<string | null> {
   if (typeof window === "undefined") return null;
 
   try {
-    const { StellarWalletsKit } = await import("@creit.tech/stellar-wallets-kit");
-    const walletModule = StellarWalletsKit.selectedModule;
-    if (!walletModule) return null;
+    const win = window as unknown as {
+      __NESTER_MOCK_WALLET__?: WalletNetworkModuleLike;
+      freighterApi?: WalletNetworkModuleLike;
+    };
 
-    // getNetwork is optional on the module interface — not every wallet
-    // implements it, which is why "unknown" is a distinct answer from
-    // "not testnet" rather than being folded into false.
-    const getNetwork = (
-      walletModule as unknown as {
-        getNetwork?: () => Promise<{ networkPassphrase?: string; network?: string }>;
+    if (win.__NESTER_MOCK_WALLET__) {
+      const mock = win.__NESTER_MOCK_WALLET__;
+      if (typeof mock.getNetworkDetails === "function") {
+        const details = await mock.getNetworkDetails();
+        if (details?.networkPassphrase) return details.networkPassphrase;
       }
-    ).getNetwork;
+      if (typeof mock.getNetwork === "function") {
+        const net = await mock.getNetwork();
+        if (net?.networkPassphrase) return net.networkPassphrase;
+      }
+      if (typeof mock.networkPassphrase === "string" && mock.networkPassphrase) {
+        return mock.networkPassphrase;
+      }
+    }
 
-    if (typeof getNetwork !== "function") return null;
+    try {
+      const { StellarWalletsKit } = await import("@creit.tech/stellar-wallets-kit");
+      const walletModule = StellarWalletsKit.selectedModule as unknown as
+        | WalletNetworkModuleLike
+        | undefined;
 
-    const net = await getNetwork.call(walletModule);
-    const passphrase = net?.networkPassphrase;
-    if (!passphrase) return null;
+      if (walletModule) {
+        if (typeof walletModule.getNetworkDetails === "function") {
+          const details = await walletModule.getNetworkDetails.call(walletModule);
+          if (details?.networkPassphrase) return details.networkPassphrase;
+        }
+        if (typeof walletModule.getNetwork === "function") {
+          const net = await walletModule.getNetwork.call(walletModule);
+          if (net?.networkPassphrase) return net.networkPassphrase;
+        }
+      }
+    } catch {
+      // StellarWalletsKit may not be initialized yet; fall through to freighterApi
+    }
 
-    return passphrase === NETWORKS.testnet.networkPassphrase;
+    if (win.freighterApi && typeof win.freighterApi.getNetworkDetails === "function") {
+      const details = await win.freighterApi.getNetworkDetails();
+      if (details?.networkPassphrase) return details.networkPassphrase;
+    }
+
+    return null;
   } catch {
-    // An unreadable network is unknown, not mainnet. Reporting false here
-    // would strand a testnet user on the "switch to testnet" step forever.
     return null;
   }
 }
+
+export async function readWalletIsTestnet(): Promise<boolean | null> {
+  const passphrase = await readWalletNetworkPassphrase();
+  if (!passphrase) return null;
+  return passphrase === NETWORKS.testnet.networkPassphrase;
+}
+

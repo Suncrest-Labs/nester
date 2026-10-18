@@ -9,9 +9,13 @@ import {
   Address,
 } from "@stellar/stellar-sdk";
 
-import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
+import { NETWORKS, DEFAULT_NETWORK, type NetworkConfig } from "@/lib/networks";
 import { readNetworkId } from "@/lib/storageKeys";
 import { assertValidContractId, getContractId } from "@/lib/contracts";
+import {
+  readWalletNetworkPassphrase,
+  resolveNetworkDisplayName,
+} from "@/lib/stellar/wallet-network";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -115,9 +119,34 @@ export class TransactionFailedError extends Error {
  * Thrown when the wallet's network does not match the app's configured network.
  */
 export class NetworkMismatchError extends Error {
+  public readonly walletNetwork: string;
+  public readonly appNetwork: string;
+
   constructor(walletNetwork: string, appNetwork: string) {
-    super(`Wallet is on ${walletNetwork} but the app is on ${appNetwork}. Please switch your wallet network.`);
+    const walletLabel = resolveNetworkDisplayName(walletNetwork);
+    const appLabel = resolveNetworkDisplayName(appNetwork);
+    super(
+      `Wallet is on ${walletLabel} (${walletNetwork}) but the app is on ${appLabel} (${appNetwork}). Switch your wallet to ${appLabel} to continue.`
+    );
     this.name = "NetworkMismatchError";
+    this.walletNetwork = walletLabel;
+    this.appNetwork = appLabel;
+  }
+}
+
+/**
+ * Verify that the connected wallet's network passphrase matches the dApp's
+ * selected network before building or signing a transaction (#1511).
+ */
+export async function assertWalletMatchesAppNetwork(
+  expectedNetwork: NetworkConfig = getCurrentNetwork()
+): Promise<void> {
+  const walletPassphrase = await readWalletNetworkPassphrase();
+  if (walletPassphrase && walletPassphrase !== expectedNetwork.networkPassphrase) {
+    throw new NetworkMismatchError(
+      walletPassphrase,
+      expectedNetwork.networkPassphrase
+    );
   }
 }
 
@@ -266,6 +295,8 @@ export async function buildDepositTransaction(
   const { walletAddress, contractId, amount: rawAmount } = params;
   const network = getCurrentNetwork();
 
+  await assertWalletMatchesAppNetwork(network);
+
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
 
@@ -315,6 +346,8 @@ export async function buildWithdrawTransaction(
 ): Promise<BuiltTransaction> {
   const { walletAddress, contractId, shares: rawShares, minAssetsOut: rawMinAssets = 0 } = params;
   const network = getCurrentNetwork();
+
+  await assertWalletMatchesAppNetwork(network);
 
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
@@ -389,34 +422,11 @@ export async function signTransaction(txXdr: string): Promise<string> {
     throw new WalletDisconnectedError();
   }
 
-  // Network mismatch check (#1095). Compare the wallet's actual network
+  // Network mismatch check (#1095 / #1511). Compare the wallet's actual network
   // against the one the transaction was built for. Signing a testnet
   // transaction while the wallet is on mainnet (or the reverse) means the
   // user approves something other than what they were shown.
-  //
-  // getNetwork() is not implemented by every wallet module; when it is
-  // absent we cannot verify and deliberately proceed rather than blocking
-  // signing on wallets that simply do not expose it.
-  const getNetwork = (
-    walletModule as unknown as {
-      getNetwork?: () => Promise<{ networkPassphrase?: string; network?: string }>;
-    }
-  ).getNetwork;
-
-  if (typeof getNetwork === "function") {
-    let walletPassphrase: string | undefined;
-    try {
-      const net = await getNetwork.call(walletModule);
-      walletPassphrase = net?.networkPassphrase;
-    } catch {
-      // Treat an unreadable network as unverifiable rather than mismatched.
-      walletPassphrase = undefined;
-    }
-
-    if (walletPassphrase && walletPassphrase !== network.networkPassphrase) {
-      throw new NetworkMismatchError(walletPassphrase, network.networkPassphrase);
-    }
-  }
+  await assertWalletMatchesAppNetwork(network);
 
   let result: { signedTxXdr: string };
   try {
