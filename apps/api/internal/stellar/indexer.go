@@ -278,7 +278,13 @@ func applyIndexedEvent(ctx context.Context, db *sql.DB, event indexedEvent) (boo
 // the admin sync path apply events through the exact same code. Duplicating
 // this switch would let the two paths drift, and the replay harness would then
 // be proving the wrong one correct.
-func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
+func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) (err error) {
+	defer func() {
+		if err != nil && isDecodeFailure(err) {
+			recordIndexerDecodeFailure(nil, event, err)
+		}
+	}()
+
 	switch normalizeEventTypeString(event.EventType) {
 	case "pause":
 		_, err := tx.ExecContext(
@@ -301,7 +307,7 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 	case "deposit":
 		amount, ok := extractEventAmountUnits(event)
 		if !ok {
-			return fmt.Errorf("deposit event missing parseable amount")
+			return fmt.Errorf("%w: deposit event missing parseable amount", ErrEventSchemaDecode)
 		}
 		// The API write path may already have credited this exact transaction
 		// (see the ownership model documented at the top of this file). Claim
@@ -330,7 +336,7 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 	case "withdraw", "withdrawal":
 		amount, ok := extractEventAmountUnits(event)
 		if !ok {
-			return fmt.Errorf("withdraw event missing parseable amount")
+			return fmt.Errorf("%w: withdraw event missing parseable amount", ErrEventSchemaDecode)
 		}
 		claimed, err := claimBalanceTxHash(ctx, tx, event, "withdrawal", amount)
 		if err != nil {
@@ -358,7 +364,7 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 	case "harvest", "harvested", "yield_harvest":
 		amount, ok := extractEventAmountUnits(event)
 		if !ok {
-			return fmt.Errorf("harvest event missing parseable amount")
+			return fmt.Errorf("%w: harvest event missing parseable amount", ErrEventSchemaDecode)
 		}
 		_, err := tx.ExecContext(
 			ctx,
@@ -409,8 +415,16 @@ func applyEventMutation(ctx context.Context, tx *sql.Tx, event indexedEvent) err
 			return err
 		}
 
+	// Contract WASM upgrade tracking (issue #1523).
+	case "exec_upg", "upgraded", "upgrade_executed":
+		if err := applyUpgradeEvent(ctx, tx, event); err != nil {
+			return err
+		}
+
 	default:
-		// Keep cursor continuity even for unsupported events.
+		// Never skip unknown event shapes silently: halt cursor advancement
+		// and surface a decode failure so operators are paged (issue #1523).
+		return fmt.Errorf("%w: unsupported event type %q for contract %s", ErrUnknownEventSchema, event.EventType, event.ContractID)
 	}
 
 	return nil
@@ -600,15 +614,15 @@ func penaltyReasonToDB(variant string) string {
 func applyEmergencyQueueRequested(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
 	user, ok := extractEventStringField(event, "user")
 	if !ok {
-		return fmt.Errorf("emrg_reqd event missing user")
+		return fmt.Errorf("%w: emrg_reqd event missing user", ErrEventSchemaDecode)
 	}
 	seq, ok := extractEventField(event, "seq")
 	if !ok {
-		return fmt.Errorf("emrg_reqd event missing seq")
+		return fmt.Errorf("%w: emrg_reqd event missing seq", ErrEventSchemaDecode)
 	}
 	sharesRequested, ok := extractEventField(event, "shares_requested")
 	if !ok {
-		return fmt.Errorf("emrg_reqd event missing shares_requested")
+		return fmt.Errorf("%w: emrg_reqd event missing shares_requested", ErrEventSchemaDecode)
 	}
 
 	_, err := tx.ExecContext(ctx, `
@@ -627,11 +641,11 @@ SET shares_requested = EXCLUDED.shares_requested,
 func applyEmergencyQueueFilled(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
 	seq, ok := extractEventField(event, "seq")
 	if !ok {
-		return fmt.Errorf("emrg_fill event missing seq")
+		return fmt.Errorf("%w: emrg_fill event missing seq", ErrEventSchemaDecode)
 	}
 	fillShares, ok := extractEventField(event, "fill_shares")
 	if !ok {
-		return fmt.Errorf("emrg_fill event missing fill_shares")
+		return fmt.Errorf("%w: emrg_fill event missing fill_shares", ErrEventSchemaDecode)
 	}
 	fullyFilled, _ := extractEventBoolField(event, "fully_filled")
 
@@ -656,7 +670,7 @@ WHERE vault_contract_address = $3 AND seq = $4`,
 func applyEmergencyQueueCancelled(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
 	seq, ok := extractEventField(event, "seq")
 	if !ok {
-		return fmt.Errorf("emrg_canc event missing seq")
+		return fmt.Errorf("%w: emrg_canc event missing seq", ErrEventSchemaDecode)
 	}
 	_, err := tx.ExecContext(ctx, `
 UPDATE emergency_withdrawal_queue
@@ -671,11 +685,11 @@ WHERE vault_contract_address = $1 AND seq = $2`,
 func applyPenaltyCharged(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
 	user, ok := extractEventStringField(event, "user")
 	if !ok {
-		return fmt.Errorf("pnlty_chg event missing user")
+		return fmt.Errorf("%w: pnlty_chg event missing user", ErrEventSchemaDecode)
 	}
 	amount, ok := extractEventField(event, "amount")
 	if !ok {
-		return fmt.Errorf("pnlty_chg event missing amount")
+		return fmt.Errorf("%w: pnlty_chg event missing amount", ErrEventSchemaDecode)
 	}
 	sharesBurned, _ := extractEventField(event, "shares_burned")
 	reasonVariant, _ := extractEventEnumVariant(event, "reason")
@@ -707,11 +721,11 @@ VALUES ($1, $2, $3, $4, $5)`,
 func applyRebalanceLegExecuted(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
 	sourceID, ok := extractEventStringField(event, "source_id")
 	if !ok {
-		return fmt.Errorf("rebal_leg event missing source_id")
+		return fmt.Errorf("%w: rebal_leg event missing source_id", ErrEventSchemaDecode)
 	}
 	delta, ok := extractEventField(event, "delta")
 	if !ok {
-		return fmt.Errorf("rebal_leg event missing delta")
+		return fmt.Errorf("%w: rebal_leg event missing delta", ErrEventSchemaDecode)
 	}
 	amountOut, _ := extractEventField(event, "amount_out")
 	minOut, _ := extractEventField(event, "min_out")
@@ -732,7 +746,7 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 func applyRebalanceCompleted(ctx context.Context, tx *sql.Tx, event indexedEvent) error {
 	planHash, ok := extractEventField(event, "plan_hash")
 	if !ok {
-		return fmt.Errorf("rebal_cmp event missing plan_hash")
+		return fmt.Errorf("%w: rebal_cmp event missing plan_hash", ErrEventSchemaDecode)
 	}
 	totalValueMoved, _ := extractEventField(event, "total_value_moved")
 	realizedSlippageBps, _ := extractEventField(event, "realized_slippage_bps")
@@ -794,12 +808,7 @@ func fetchSorobanEvents(
 
 	events := make([]indexedEvent, 0, len(rpcResp.Result.Events))
 	for _, raw := range rpcResp.Result.Events {
-		eventType := ""
-		if len(raw.Topic) > 0 {
-			if topic, ok := raw.Topic[0].(string); ok {
-				eventType = topic
-			}
-		}
+		eventType := extractEventTypeFromTopics(raw.Topic)
 		if eventType == "" {
 			continue
 		}
@@ -913,8 +922,10 @@ func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
 	for _, event := range events {
 		ok, err := applyIndexedEvent(ctx, s.DB, event)
 		if err != nil {
-			s.Logger.Error("admin sync: failed to apply event", "event_id", event.ID, "error", err)
-			continue
+			if s.Logger != nil {
+				s.Logger.Error("admin sync: failed to apply event", "event_id", event.ID, "error", err)
+			}
+			return processed, fmt.Errorf("apply event %s (ledger %d): %w", event.ID, event.Ledger, err)
 		}
 		if ok {
 			processed++
@@ -923,7 +934,9 @@ func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
 	}
 
 	if err := setLastIndexedLedger(ctx, s.SysRepo, latestLedger); err != nil {
-		s.Logger.Error("admin sync: failed to persist cursor", "ledger", latestLedger, "error", err)
+		if s.Logger != nil {
+			s.Logger.Error("admin sync: failed to persist cursor", "ledger", latestLedger, "error", err)
+		}
 	}
 
 	return processed, nil
