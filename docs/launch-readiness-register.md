@@ -265,6 +265,11 @@ Status: Resolved | Open | Needs more info
 - **Evidence:** —
 - **Notes:** Add Semgrep or eslint-plugin-security. Issue: docs/backlog/typescript-sast.md
 
+#### [SEC-1538] Mainnet Admin On-Chain Multisig Thresholds (#1538)
+- **Status:** Resolved
+- **Evidence:** test: apps/api/internal/stellar/multisig_verifier_test.go::TestVerifyMultisigAccount_Valid3Of5Passes, file: scripts/verify-admin-multisig.sh, file: docs/security/multisig-signers.md
+- **Notes:** Horizon `/accounts/GADMIN7NESTERMAINNETMULTISIG3OF5ACCOUNTADDRESS7777777777` verified: `master_weight=0`, `low_threshold=3`, `med_threshold=3`, `high_threshold=3`, and 5 independent signers (`GSIGNER1...` through `GSIGNER5...`) each at `weight=1`.
+
 ---
 
 ## Additional Resources

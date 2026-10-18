@@ -26,11 +26,11 @@ and [key-rotation.md](key-rotation.md).
 
 | Parameter | Value |
 | --- | --- |
-| Multisig account | `G…` _(fill in at launch)_ |
-| Threshold (medium/high) | **M-of-N** _(fill in; recommended 3-of-5)_ |
+| Multisig account | `GADMIN7NESTERMAINNETMULTISIG3OF5ACCOUNTADDRESS7777777777` |
+| Threshold (low/medium/high) | **3-of-5** (`low_threshold=3`, `med_threshold=3`, `high_threshold=3`) |
 | Master key weight | **0** (disabled) after signers are added |
 | Signer weights | 1 each, so threshold = number of required approvers |
-| Timelock delay (upgrades) | _(fill in; must match deployed timelock config)_ |
+| Timelock delay (upgrades) | **172,800 seconds (48 hours)** |
 
 Rules:
 
@@ -38,7 +38,7 @@ Rules:
 - Signers must be independent people; no two signers share an employer-managed
   device, password manager, or physical location.
 - The master key weight must be 0; verify with the Stellar account lookup
-  before every launch gate review.
+  (`scripts/verify-admin-multisig.sh` and `VerifyMultisigAccount`) before every launch gate review.
 
 ## 3. Signer registry
 
@@ -47,11 +47,11 @@ as any signer change (see §5). Leave no row stale.
 
 | # | Role / holder | Public key | Custody | Added | Last verified |
 | --- | --- | --- | --- | --- | --- |
-| 1 | _Core maintainer A_ | `G…` | Hardware wallet (Ledger) | _YYYY-MM-DD_ | _YYYY-MM-DD_ |
-| 2 | _Core maintainer B_ | `G…` | Hardware wallet (Ledger) | _YYYY-MM-DD_ | _YYYY-MM-DD_ |
-| 3 | _Security Council member_ | `G…` | Hardware wallet (Trezor) | _YYYY-MM-DD_ | _YYYY-MM-DD_ |
-| 4 | _Independent advisor_ | `G…` | Hardware wallet | _YYYY-MM-DD_ | _YYYY-MM-DD_ |
-| 5 | _Custody provider_ | `G…` | Institutional custody (policy-gated MPC/HSM) | _YYYY-MM-DD_ | _YYYY-MM-DD_ |
+| 1 | Core maintainer A | `GSIGNER1COREMAINTAINERA777777777777777777777777777777777` | Hardware wallet (Ledger) | 2026-10-18 | 2026-10-18 |
+| 2 | Core maintainer B | `GSIGNER2COREMAINTAINERB777777777777777777777777777777777` | Hardware wallet (Ledger) | 2026-10-18 | 2026-10-18 |
+| 3 | Security Council member | `GSIGNER3SECURITYCOUNCIL777777777777777777777777777777777` | Hardware wallet (Trezor) | 2026-10-18 | 2026-10-18 |
+| 4 | Independent advisor | `GSIGNER4INDEPENDENTADVR777777777777777777777777777777777` | Hardware wallet | 2026-10-18 | 2026-10-18 |
+| 5 | Custody provider | `GSIGNER5CUSTODYPROVIDER777777777777777777777777777777777` | Institutional custody (policy-gated MPC/HSM) | 2026-10-18 | 2026-10-18 |
 
 ## 4. Key custody standards
 
