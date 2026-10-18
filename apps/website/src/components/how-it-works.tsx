@@ -13,7 +13,7 @@ const STEPS = [
     step: "01",
     label: "Deposit & Earn",
     headline: "Choose a vault.\nYour money goes\nto work instantly.",
-    body: "Select from four yield strategies. Deposit stablecoins and your funds are automatically split across Aave, Blend & Kamino for optimal, risk-adjusted returns.",
+    body: "Select from four yield strategies. Deposit stablecoins and your funds are automatically split across Blend, Aquarius & Soroswap for optimal, risk-adjusted returns.",
     tab: "Deposit stablecoins and start earning in minutes.",
   },
   {
@@ -193,16 +193,16 @@ function DepositScene({ playing }: { playing: boolean }) {
    PANEL 2 — OPTIMIZE  (node graph: Nester hub → protocol nodes)
    Layout (SVG coords, container 390×310):
      Hub:   cx=195, cy=62  (w=72, so left=159 top=26)
-     Aave:  cx=68,  cy=228 (w=80, so left=28  top=198)
+     Aquarius: cx=68, cy=228 (w=80, so left=28  top=198)
      Blend: cx=195, cy=248 (w=80, so left=155 top=218)
      Nester(right)→reuse as a third protocol: cx=322, cy=228 (left=282 top=198)
 ───────────────────────────────────────────────────────────────── */
 
-// Aave ghost logo inline SVG
-const AaveLogo = () => (
+// Aquarius inline SVG
+const AquariusLogo = () => (
   <svg width="20" height="20" viewBox="0 0 201 305" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M100.5 0L0 305h37.3L100.5 120l63.2 185H201L100.5 0z" fill="#B6509E"/>
-    <path d="M69 215l-18 53h18l9-26 9 26h18l-18-53H69z" fill="#B6509E"/>
+    <path d="M100.5 0L0 305h37.3L100.5 120l63.2 185H201L100.5 0z" fill="#0EA5E9"/>
+    <path d="M69 215l-18 53h18l9-26 9 26h18l-18-53H69z" fill="#0EA5E9"/>
   </svg>
 );
 
@@ -211,11 +211,11 @@ const AaveLogo = () => (
 const HUB = { cx: 195, cy: 52, r: 36 };  // bottom of hub = 88
 const NODES = [
   {
-    id: "aave",  label: "Aave",  apy: "9.4%",
+    id: "aquarius",  label: "Aquarius",  apy: "9.4%",
     cx: 68,  cy: 192,    // center of node card
     left: 18, top: 158,  // card top-left (card ~68px tall, center at +34)
-    logo: <AaveLogo />,
-    bg: "#B6509E18",
+    logo: <AquariusLogo />,
+    bg: "#0EA5E918",
   },
   {
     id: "blend", label: "Blend", apy: "11.2%",
@@ -538,7 +538,7 @@ function AutoInvestScene({ playing }: { playing: boolean }) {
 ───────────────────────────────────────────────────────────────── */
 const ACTIVITY_FEED = [
   { role: "ai", text: "Auto-invest executed: $200 USDC deposited into Balanced Vault." },
-  { role: "ai", text: "Yield accrued: +$4.12 across Aave and Blend positions." },
+  { role: "ai", text: "Yield accrued: +$4.12 across Blend and Aquarius positions." },
   { role: "ai", text: "Balanced Vault APY updated: 9.2% → 9.5%." },
   { role: "ai", text: "Monthly P&L: +$38.40 (+0.6%) across all positions." },
 ];
@@ -693,7 +693,7 @@ const ARCH_LAYERS = [
   },
   {
     label: "YIELD LAYER",
-    desc: "Auto-diversified across Aave, Blend & Kamino",
+    desc: "Auto-diversified across Blend, Aquarius & Soroswap",
     detail: "9.8% APY",
     color: "#ff5555",
     icon: (

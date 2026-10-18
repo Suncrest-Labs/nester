@@ -165,7 +165,7 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
         category: "transactional",
         priority: "transactional",
         title: "Vault Rebalanced",
-        message: "Your Balanced Vault was rebalanced - new allocation: 45% Blend, 30% Aave, 25% Kamino",
+        message: "Your Balanced Vault was rebalanced - new allocation: 45% Blend, 30% Aquarius, 25% Soroswap",
         timestamp: isoMinutesAgo(145),
         read: true,
         mergedIds: ["seed-4"],

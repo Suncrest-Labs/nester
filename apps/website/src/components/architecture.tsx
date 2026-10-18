@@ -30,7 +30,7 @@ const LAYERS = [
     borderColor: "border-black/[0.08]",
     description: "The underlying smart contract architecture that actually puts your money to work. It aggregates fragmented liquidity and distributes it into institutional-grade lending protocols to secure the highest safe APY.",
     features: [
-      { icon: <Landmark size={16} />, text: "Aave & Blend integrations" },
+      { icon: <Landmark size={16} />, text: "Blend, Aquarius & Soroswap integrations" },
       { icon: <ShieldCheck size={16} />, text: "Auto-compounding smart vaults" },
       { icon: <Zap size={16} />, text: "Zero collateral lockup strategies" }
     ]

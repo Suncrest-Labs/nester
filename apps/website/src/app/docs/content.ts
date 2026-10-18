@@ -167,7 +167,7 @@ Nester follows a layered architecture separating concerns across clients, backen
 │  │  vault instances       nVault share token mint/burn    │  │
 │  │                        maturity & penalty logic        │  │
 │  │  Auto-Invest Mandates  Yield Source Adapters           │  │
-│  │  recurring deposit     Blend / Kamino / Aave           │  │
+│  │  recurring deposit     Blend / Aquarius / Soroswap     │  │
 │  │  authorization         deposit / withdraw / balanceOf  │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
@@ -394,7 +394,7 @@ User deposits 1,000 USDC
 │                                               │
 │  Allocation strategy:                         │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐      │
-│  │ Blend   │  │ Kamino  │  │ Aave    │      │
+│  │ Blend   │  │Aquarius │  │Soroswap │      │
 │  │ 40%     │  │ 35%     │  │ 25%     │      │
 │  │ 400 USDC│  │ 350 USDC│  │ 250 USDC│      │
 │  │ 8.5% APY│  │ 10% APY │  │ 9% APY  │      │
@@ -551,7 +551,7 @@ Nester's on-chain logic runs on **Stellar's Soroban** platform using Rust smart 
          ┌──────────────┼──────────────┐
          ▼              ▼              ▼
 ┌──────────────┐ ┌────────────┐ ┌────────────┐
-│ Blend        │ │ Kamino     │ │ Aave       │
+│ Blend        │ │ Aquarius   │ │ Soroswap   │
 │ Adapter      │ │ Adapter    │ │ Adapter    │
 │              │ │            │ │            │
 │ deposit()    │ │ deposit()  │ │ deposit()  │
@@ -806,7 +806,7 @@ nDEFI token value tracks:
         title: "Yield Source Adapters",
         content: `# Yield Source Adapters
 
-Each yield source (Blend, Kamino, Aave) has a standardized adapter contract that the vault uses to deposit, withdraw, and check balances.
+Each yield source (Blend, Aquarius, Soroswap) has a standardized adapter contract that the vault uses to deposit, withdraw, and check balances.
 
 ## Adapter Interface
 
@@ -991,7 +991,7 @@ curl https://api.nester.finance/api/v1/vaults
             "status": "active",
             "allocations": [
                 { "source": "Blend", "percentage": 60, "apy": 7.0 },
-                { "source": "Aave", "percentage": 40, "apy": 7.5 }
+                { "source": "Aquarius", "percentage": 40, "apy": 7.5 }
             ]
         },
         {
@@ -1004,8 +1004,8 @@ curl https://api.nester.finance/api/v1/vaults
             "status": "active",
             "allocations": [
                 { "source": "Blend", "percentage": 40, "apy": 8.5 },
-                { "source": "Kamino", "percentage": 35, "apy": 10.0 },
-                { "source": "Aave", "percentage": 25, "apy": 9.0 }
+                { "source": "Aquarius", "percentage": 35, "apy": 10.0 },
+                { "source": "Soroswap", "percentage": 25, "apy": 9.0 }
             ]
         }
     ]

@@ -9,7 +9,7 @@ const FAQ_ITEMS = [
     classification: "GENERAL",
     question: "What is Nester?",
     answer:
-      "Nester is a DeFi savings and yield platform that lets you deposit stablecoins into non-custodial smart vaults and automatically earn optimized returns across audited protocols like Aave and Blend — all on Stellar.",
+      "Nester is a DeFi savings and yield platform that lets you deposit stablecoins into non-custodial smart vaults and automatically earn optimized returns across audited protocols like Blend, Aquarius, and Soroswap — all on Stellar.",
   },
   {
     id: "how-yield",
@@ -58,7 +58,7 @@ const FAQ_ITEMS = [
     classification: "VAULTS",
     question: "Which assets and chains are supported?",
     answer:
-      "Nester currently supports USDC and USDT deposits on the Stellar network, with active integrations into Aave, Blend, and Kamino protocols. Multi-chain expansion is on the roadmap — starting with Solana and Base.",
+      "Nester currently supports USDC and XLM deposits on the Stellar network, with active integrations into Blend, Aquarius, and Soroswap protocols. Multi-chain expansion is on the roadmap — starting with Solana and Base.",
   },
 ];
 

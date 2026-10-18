@@ -65,7 +65,7 @@ export const vaultContracts: VaultContract[] = [
     apy: 0.07,
     apyLabel: "6-8%",
     description:
-      "Focus on safety and stability using battle-tested lending protocols like Blend and Aave.",
+      "Focus on safety and stability using battle-tested Stellar lending protocols like Blend and Aquarius.",
     risk: "Low",
     lockDays: 30,
     earlyWithdrawalPenaltyPct: 0.1,
