@@ -1,4 +1,4 @@
-.PHONY: build build-adapters test integration-test fmt clippy clean help deploy-testnet
+.PHONY: build build-reproducible build-adapters test integration-test fmt clippy clean help deploy-testnet
 
 # Yield source adapters (#812). Each external protocol gets one small adapter
 # implementing nester_common::adapters::YieldAdapter. Adding a third protocol
@@ -8,14 +8,18 @@ ADAPTER_PKGS := adapter-lending-contract adapter-pool-contract
 help:
 	@echo "Nester Soroban Workspace Commands"
 	@echo "=================================="
-	@echo "make build            - Build all contracts to WASM"
-	@echo "make build-adapters   - Build only the yield source adapters"
-	@echo "make test             - Run all unit tests"
-	@echo "make integration-test - Run multi-contract integration tests only"
-	@echo "make fmt              - Format code with cargo fmt"
-	@echo "make clippy           - Run clippy linter (must pass clean)"
-	@echo "make clean            - Remove build artifacts"
-	@echo "make deploy-testnet   - Deploy contracts to Stellar testnet"
+	@echo "make build              - Build all contracts to WASM"
+	@echo "make build-reproducible - Build all contracts reproducibly inside digest-pinned container"
+	@echo "make build-adapters     - Build only the yield source adapters"
+	@echo "make test               - Run all unit tests"
+	@echo "make integration-test   - Run multi-contract integration tests only"
+	@echo "make fmt                - Format code with cargo fmt"
+	@echo "make clippy             - Run clippy linter (must pass clean)"
+	@echo "make clean              - Remove build artifacts"
+	@echo "make deploy-testnet     - Deploy contracts to Stellar testnet"
+
+build-reproducible:
+	@bash scripts/build-reproducible.sh
 
 build:
 	@echo "Building all Soroban contracts to WASM..."
