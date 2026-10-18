@@ -14,7 +14,8 @@ This document defines the strict, mandatory checklist required for the Nester ma
 
 - [ ] **1. Audit Complete**
   - All smart contracts (Vault, Vault Factory, Adapters, Timelock, Treasury, Access Control, etc.) have undergone independent third-party security audits.
-  - All critical and high findings have been fully resolved, verified, and re-tested.
+  - Every finding is tracked via a GitHub issue (`security`, `severity:*`), linked fix PR, regression test, and auditor verification in [`docs/security/contract_audits.md`](security/contract_audits.md).
+  - All critical and high findings have been fully resolved, verified by the auditor, and re-tested; any accepted Medium/Low risk has dual sign-off recorded in [`docs/security/contract_audits.md`](security/contract_audits.md).
   - Formal audit reports are published in `docs/security/` and linked publicly.
 
 - [ ] **2. Multisig Live**
