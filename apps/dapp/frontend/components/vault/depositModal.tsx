@@ -310,7 +310,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         vaultId: vault.id,
         contractId: vault.contractAddress,
         asset: selectedAsset,
-        amount,
+        amount: amountInput.trim(),
       });
 
       setReceipt(txReceipt);

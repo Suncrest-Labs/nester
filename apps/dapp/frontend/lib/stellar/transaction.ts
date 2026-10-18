@@ -46,8 +46,54 @@ export interface DepositParams {
   walletAddress: string;
   /** Vault contract ID on Soroban. */
   contractId: string;
-  /** Amount in stroops (bigint, 7 decimals = 1 XLM, 6 decimals = 1 USDC). */
-  amount: bigint | number;
+  /** Amount in stroops (bigint) or exact decimal string (up to 7 decimals). */
+  amount: bigint | string;
+}
+
+const STROOPS_DECIMALS = 7;
+const STROOPS_PER_UNIT = BigInt(10_000_000);
+
+/**
+ * Parse a deposit amount (`bigint` stroops or decimal string with at most 7
+ * fractional digits) into exact stroops without floating-point rounding (#1508).
+ */
+export function parseDepositAmountToStroops(rawAmount: bigint | string): bigint {
+  if (typeof rawAmount === "bigint") {
+    if (rawAmount <= BigInt(0)) {
+      throw new Error("Deposit amount must be greater than zero.");
+    }
+    return rawAmount;
+  }
+
+  if (typeof rawAmount !== "string") {
+    throw new Error(
+      "Deposit amount must be a bigint or decimal string; floating-point numbers are not accepted."
+    );
+  }
+
+  const trimmed = rawAmount.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    throw new Error(
+      `Invalid deposit amount "${rawAmount}": expected a positive decimal string.`
+    );
+  }
+
+  const [wholePart, fracPart = ""] = trimmed.split(".");
+  if (fracPart.length > STROOPS_DECIMALS) {
+    throw new Error(
+      `Deposit amount "${rawAmount}" exceeds the maximum of ${STROOPS_DECIMALS} decimal places.`
+    );
+  }
+
+  const paddedFrac = fracPart.padEnd(STROOPS_DECIMALS, "0");
+  const stroops =
+    BigInt(wholePart) * STROOPS_PER_UNIT + BigInt(paddedFrac || "0");
+
+  if (stroops <= BigInt(0)) {
+    throw new Error("Deposit amount must be greater than zero.");
+  }
+
+  return stroops;
 }
 
 export interface WithdrawParams {
@@ -194,13 +240,10 @@ export async function previewDeposit(params: DepositParams): Promise<{
 }> {
   try {
     const { walletAddress, contractId, amount: rawAmount } = params;
+    const amountStroops = parseDepositAmountToStroops(rawAmount);
     const network = getCurrentNetwork();
     const server = getServer(network.rpcUrl);
     const account = await server.getAccount(walletAddress);
-
-    const amountStroops = typeof rawAmount === "bigint"
-      ? rawAmount
-      : BigInt(Math.round(rawAmount * 10_000_000));
 
     const contract = new Contract(assertValidContractId(contractId, "vault contract"));
     const tx = new TransactionBuilder(account, {
@@ -257,22 +300,17 @@ export async function estimateWithdrawFee(
  * Build a Soroban `deposit` contract invocation transaction.
  *
  * The vault contract's `deposit(user, amount)` function is called.
- * Amount can be provided as bigint stroops (recommended) or as a human-readable number
- * (for backwards compatibility; will be converted to stroops using Math.round).
+ * Amount must be provided as bigint stroops or a decimal string (up to 7 decimals).
  */
 export async function buildDepositTransaction(
   params: DepositParams
 ): Promise<BuiltTransaction> {
   const { walletAddress, contractId, amount: rawAmount } = params;
+  const amountStroops = parseDepositAmountToStroops(rawAmount);
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
-
-  // Convert amount to stroops if it's a number
-  const amountStroops = typeof rawAmount === "bigint"
-    ? rawAmount
-    : BigInt(Math.round(rawAmount * 10_000_000));
 
   const contract = new Contract(assertValidContractId(contractId, "vault contract"));
 
@@ -506,7 +544,7 @@ export async function executeVaultDeposit(params: {
   vaultId: string;
   contractId: string;
   asset: "USDC" | "XLM";
-  amount: number;
+  amount: bigint | string;
 }): Promise<TransactionReceipt> {
   const { walletAddress, contractId, amount } = params;
 
