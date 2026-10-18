@@ -1,0 +1,73 @@
+name: Mainnet Protocol Local Integration Suite
+
+# Issue #1569: Run the full integration suite against the mainnet protocol
+# version on a local Stellar quickstart network with mainnet resource limits,
+# TTL bounds, size limits, and fee settings applied.
+
+on:
+  workflow_dispatch:
+    inputs:
+      protocol_version:
+        description: "Stellar mainnet protocol version to pin on the local quickstart network"
+        required: false
+        default: "22"
+        type: string
+      run_e2e_smoke:
+        description: "Run the Playwright E2E smoke suite against the deployed local manifest"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+
+jobs:
+  mainnet-protocol-suite:
+    name: Integration & E2E Smoke (Mainnet Protocol ${{ inputs.protocol_version || '22' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MAINNET_PROTOCOL_VERSION: ${{ inputs.protocol_version || '22' }}
+      RUN_E2E_SMOKE: ${{ inputs.run_e2e_smoke || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --features opt
+
+      - name: Start local network pinned to mainnet protocol version and run suite
+        run: |
+          chmod +x scripts/run-mainnet-protocol-suite.sh
+          ./scripts/run-mainnet-protocol-suite.sh
+
+      - name: Upload run report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainnet-protocol-integration-report-${{ github.run_id }}
+          path: |
+            docs/security/mainnet-protocol-integration-report.md
+            artifacts/mainnet-protocol-run-report.json
+          retention-days: 30

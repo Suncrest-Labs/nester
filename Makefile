@@ -95,3 +95,7 @@ db-restore-drill:
 	@mkdir -p backups
 	@DATABASE_DSN="postgres://nester:nester_dev_password@localhost:5432/nester_dev?sslmode=disable" scripts/db-backup.sh
 	@scripts/db-restore-drill.sh
+
+mainnet-protocol-suite: ## Run full integration and smoke suite against local network pinned to mainnet protocol
+	@bash scripts/run-mainnet-protocol-suite.sh
+
