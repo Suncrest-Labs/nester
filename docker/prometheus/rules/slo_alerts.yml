@@ -701,3 +701,31 @@ groups:
             scrape config points somewhere wrong. Availability, latency and
             every derived budget are unmeasurable until this is fixed.
           runbook: docs/observability/runbooks/monitoring-down.md
+
+      - alert: KeeperRunwayBelow30Days
+        # Fires when the mainnet keeper/operator account XLM balance has fewer
+        # than 30 days of runway at the current burn rate (or drops below the
+        # 30 XLM Stage-1 floor). See docs/launch/state-rent-and-keeper-cost-model.md.
+        expr: |
+          (
+            nester_keeper_xlm_balance
+            /
+            clamp_min(nester_keeper_xlm_daily_burn_rate, 1)
+          ) < 30
+          or
+          nester_keeper_xlm_balance < 30
+        for: 15m
+        labels:
+          severity: ticket
+          service: api
+        annotations:
+          summary: >-
+            Keeper XLM balance has fewer than 30 days of state-rent and fee runway
+          description: >-
+            The keeper account balance is below 30 days of projected Soroban
+            state-rent and transaction fee consumption ({{ $value | printf "%.1f" }}
+            days remaining). Top up the keeper account per
+            docs/launch/state-rent-and-keeper-cost-model.md before contract or
+            user persistent entries approach TTL archival.
+          runbook: docs/launch/state-rent-and-keeper-cost-model.md
+
