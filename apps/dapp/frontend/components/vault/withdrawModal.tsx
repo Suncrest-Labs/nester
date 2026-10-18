@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
@@ -31,6 +31,11 @@ import {
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
+import {
+  buildWithdrawalFeePreview,
+  fetchOnChainWithdrawalFeePreview,
+  type WithdrawalFeePreviewResult,
+} from "@/lib/stellar/fee-preview";
 import type { Vault as VaultDefinition } from "@/lib/types/vault";
 import { getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 
@@ -169,6 +174,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const [state, setState] = useState<ActionState>("input");
   const [errorMsg, setErrorMsg] = useState("");
   const [receipt, setReceipt] = useState<(TransactionReceipt & { penaltyAmount: number; netAmount: number }) | null>(null);
+  const [onChainFeePreview, setOnChainFeePreview] = useState<WithdrawalFeePreviewResult | null>(null);
   const submittingRef = useRef(false);
 
   const amount = Number(amountInput) || 0;
@@ -177,6 +183,61 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     () => (position ? getWithdrawalQuote(position.id, amount) : null),
     [amount, getWithdrawalQuote, position]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!open || !position || !address) {
+      setOnChainFeePreview(null);
+      return;
+    }
+
+    const sharesToPreview = quote ? quote.sharesBurned : position.shares;
+    const grossFallback = quote ? quote.grossAmount : position.currentValue;
+    const vaultDef = getVaultById(position.vaultId);
+
+    void fetchOnChainWithdrawalFeePreview({
+      walletAddress: address,
+      contractId: vaultDef?.contractAddress || "",
+      shares: sharesToPreview,
+      daysRemaining: position.daysRemaining,
+      fallbackGross: grossFallback,
+      fallbackPenaltyPct: position.earlyWithdrawalPenaltyPct,
+    }).then((res) => {
+      if (!cancelled) {
+        setOnChainFeePreview(res);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, position, address, quote]);
+
+  const effectiveFeePreview = useMemo<WithdrawalFeePreviewResult>(() => {
+    if (onChainFeePreview && amount > 0) {
+      return onChainFeePreview;
+    }
+    const grossVal = quote?.grossAmount ?? 0;
+    const netVal = quote?.netAmount ?? 0;
+    const feeVal = Math.max(0, grossVal - netVal);
+    const activeBps =
+      position && !position.isMatured
+        ? Math.round(position.earlyWithdrawalPenaltyPct * 100)
+        : 0;
+
+    return buildWithdrawalFeePreview({
+      rawPreview: {
+        gross_asset_value: BigInt(Math.round(grossVal * 10_000_000)),
+        early_withdrawal_fee_deducted: BigInt(Math.round(feeVal * 10_000_000)),
+        performance_fee_deducted: BigInt(0),
+        management_fee_deducted: BigInt(0),
+        net_amount_received: BigInt(Math.round(netVal * 10_000_000)),
+      },
+      daysRemaining: position?.daysRemaining ?? 0,
+      fallbackExitFeeBps: onChainFeePreview?.currentTierBps ?? activeBps,
+      source: onChainFeePreview?.source ?? "fallback",
+    });
+  }, [onChainFeePreview, amount, quote, position]);
 
   const validationError = useMemo(() => {
     if (!amount) return null;
@@ -201,6 +262,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     setState("input");
     setErrorMsg("");
     setReceipt(null);
+    setOnChainFeePreview(null);
     onClose();
   };
 
@@ -222,7 +284,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
         contractId: vaultDef?.contractAddress || "",
         asset: position.asset?.toUpperCase() === "XLM" ? "XLM" : "USDC",
         shares: quote.sharesBurned,
-        minAssetsOut: quote.netAmount,
+        minAssetsOut: effectiveFeePreview.netReceived || quote.netAmount,
       });
 
       const result = recordWithdrawal({
@@ -370,17 +432,50 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                 )}
               </div>
 
-              {/* Quote preview */}
-              <div className="mt-4 space-y-2.5 rounded-2xl border border-border bg-secondary/20 p-4 text-sm">
+              {/* Quote & withdrawal_fee_preview (#1556) */}
+              <div
+                data-testid="withdraw-fee-preview"
+                className="mt-4 space-y-2.5 rounded-2xl border border-border bg-secondary/20 p-4 text-sm"
+              >
                 {[
-                  { label: "Gross proceeds", value: `${formatCurrency(quote?.grossAmount ?? 0)} ${position.asset ?? "USDC"}` },
-                  { label: "Early exit penalty", value: `${formatCurrency(quote ? quote.grossAmount - quote.netAmount : 0)} ${position.asset ?? "USDC"}` },
-                  { label: "Net to wallet", value: `${formatCurrency(quote?.netAmount ?? 0)} ${position.asset ?? "USDC"}`, highlight: true },
-                  { label: "Shares burned", value: formatCurrency(quote?.sharesBurned ?? 0) },
-                ].map(({ label, value, highlight }) => (
+                  {
+                    label: "Gross proceeds",
+                    value: `${formatCurrency(effectiveFeePreview.grossAssetValue)} ${position.asset ?? "USDC"}`,
+                    testId: "withdraw-gross-proceeds",
+                  },
+                  {
+                    label: "Withdrawal fee amount",
+                    value: `${formatCurrency(effectiveFeePreview.feeAmount)} ${position.asset ?? "USDC"}`,
+                    testId: "withdraw-fee-amount",
+                  },
+                  {
+                    label: "Current fee tier",
+                    value: effectiveFeePreview.currentTierLabel,
+                    testId: "withdraw-current-tier",
+                  },
+                  {
+                    label: "Next lower tier date",
+                    value: effectiveFeePreview.nextLowerTierDate ?? "Lowest tier active",
+                    testId: "withdraw-next-tier-date",
+                  },
+                  {
+                    label: "Net received",
+                    value: `${formatCurrency(effectiveFeePreview.netReceived)} ${position.asset ?? "USDC"}`,
+                    highlight: true,
+                    testId: "withdraw-net-received",
+                  },
+                  {
+                    label: "Shares burned",
+                    value: formatCurrency(quote?.sharesBurned ?? 0),
+                    testId: "withdraw-shares-burned",
+                  },
+                ].map(({ label, value, highlight, testId }) => (
                   <div key={label} className="flex items-center justify-between">
                     <span className="text-muted-foreground">{label}</span>
-                    <span className={cn("font-medium", highlight ? "text-emerald-600" : "text-foreground")}>
+                    <span
+                      data-testid={testId}
+                      className={cn("font-medium", highlight ? "text-emerald-600" : "text-foreground")}
+                    >
                       {value}
                     </span>
                   </div>

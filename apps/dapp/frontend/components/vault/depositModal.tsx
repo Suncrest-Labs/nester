@@ -29,6 +29,7 @@ import {
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
+import { getDepositFeeScheduleSummary } from "@/lib/stellar/fee-preview";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -537,6 +538,52 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   </div>
                 ))}
               </div>
+
+              {/* Fee schedule summary before signing (#1556) */}
+              {(() => {
+                const feeSchedule = getDepositFeeScheduleSummary({
+                  managementFeePct: meta?.managementFeePct,
+                  performanceFeePct: meta?.performanceFeePct,
+                  earlyExitPenaltyPct: selectedStrategy?.penaltyPct ?? 0.5,
+                  lockDays: selectedStrategy?.lockDays ?? meta?.lockDays,
+                });
+                return (
+                  <div
+                    data-testid="deposit-fee-schedule"
+                    className="mt-4 rounded-2xl border border-border bg-secondary/15 p-3.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                        Fee Schedule Summary
+                      </span>
+                      <Link
+                        href={feeSchedule.scheduleHref}
+                        data-testid="deposit-fee-schedule-link"
+                        className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline"
+                      >
+                        View fee schedule
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </div>
+                    <div className="mt-2.5 space-y-1.5 text-muted-foreground">
+                      <div className="flex items-center justify-between">
+                        <span>Deposit fee</span>
+                        <span className="font-medium text-foreground">{feeSchedule.depositFeeLabel}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span>Management / Performance</span>
+                        <span className="font-medium text-foreground">
+                          {feeSchedule.managementFeeLabel} · {feeSchedule.performanceFeeLabel}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span>Withdrawal fee tiers</span>
+                        <span className="font-medium text-foreground">{feeSchedule.earlyExitTiersLabel}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
