@@ -24,6 +24,7 @@ to be recorded against.
 | `/v1/` API contract is frozen with a stated versioning policy | #458 (Trident) | | `docs/API_STABILITY.md` (Trident repo) reviewed and published | |
 | Full pre-launch verification checklist executed | #459 (Trident) | | `docs/LAUNCH_CHECKLIST.md` (Trident repo), all rows Pass | |
 | Rollback rehearsed end-to-end with wall-clock time recorded | #460 (Trident) | | `docs/ROLLBACK_RUNBOOK.md` (Trident repo) rehearsal section completed | |
+| 24h indexer soak against mainnet RPC with duplicate and gap checks | #1550 (nester) | `@0xDeon` | 24.5h read-only soak on `mainnet.sorobanrpc.com` (`p50=4.8s`, `p99=14.2s`, `0` duplicates in `processed_events`, `0` gap alerts, `0.42 req/s` avg); see [`docs/observability/indexer-mainnet-soak-report.md`](observability/indexer-mainnet-soak-report.md) | PASS |
 
 ## No-go criteria
 
