@@ -1,0 +1,379 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nester-prod
+  labels:
+    name: nester-prod
+    env: production
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nester-api
+  namespace: nester-prod
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nester-signer
+  namespace: nester-prod
+  annotations:
+    iam.gke.io/gcp-service-account: nester-signer@nester-mainnet.iam.gserviceaccount.com
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nester-api
+  namespace: nester-prod
+  labels:
+    app: nester-api
+    env: production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nester-api
+      env: production
+  template:
+    metadata:
+      labels:
+        app: nester-api
+        env: production
+    spec:
+      serviceAccountName: nester-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: ghcr.io/suncrest-labs/nester/api@sha256:4a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: STELLAR_NETWORK
+              value: "mainnet"
+            - name: STELLAR_NETWORK_PASSPHRASE
+              value: "Public Global Stellar Network ; September 2015"
+            - name: SIGNER_REMOTE_URL
+              value: "https://nester-signer.nester-prod.svc.cluster.local:8443"
+            - name: SIGNER_TLS_CERT_FILE
+              value: "/etc/nester/mtls/tls.crt"
+            - name: SIGNER_TLS_KEY_FILE
+              value: "/etc/nester/mtls/tls.key"
+            - name: SIGNER_TLS_CA_FILE
+              value: "/etc/nester/mtls/ca.crt"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: api-mtls-certs
+              mountPath: /etc/nester/mtls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: api-mtls-certs
+          secret:
+            secretName: nester-api-mtls-client
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nester-api
+  namespace: nester-prod
+spec:
+  selector:
+    app: nester-api
+    env: production
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nester-signer
+  namespace: nester-prod
+  labels:
+    app: nester-signer
+    env: production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nester-signer
+      env: production
+  template:
+    metadata:
+      labels:
+        app: nester-signer
+        env: production
+    spec:
+      serviceAccountName: nester-signer
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: signer
+          image: ghcr.io/suncrest-labs/nester/signer@sha256:9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: mtls
+              containerPort: 8443
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          env:
+            - name: STELLAR_NETWORK_PASSPHRASE
+              value: "Public Global Stellar Network ; September 2015"
+            - name: STELLAR_RPC_URL
+              value: "https://mainnet.sorobanrpc.com"
+            - name: STELLAR_HORIZON_URL
+              value: "https://horizon.stellar.org"
+            - name: SIGNER_REQUIRE_KMS
+              value: "true"
+            - name: SIGNER_KMS_KEY_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-mainnet-signer-config
+                  key: kms-key-id
+            - name: SIGNER_KMS_PUBLIC_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-mainnet-signer-config
+                  key: kms-public-address
+            - name: SIGNER_KMS_ENDPOINT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-mainnet-signer-config
+                  key: kms-endpoint-url
+            - name: SIGNER_LISTEN_ADDR
+              value: "0.0.0.0:8443"
+            - name: SIGNER_TLS_CERT_FILE
+              value: "/etc/nester/mtls/tls.crt"
+            - name: SIGNER_TLS_KEY_FILE
+              value: "/etc/nester/mtls/tls.key"
+            - name: SIGNER_TLS_CLIENT_CA_FILE
+              value: "/etc/nester/mtls/ca.crt"
+            - name: SIGNER_KILL_SWITCH_PATH
+              value: "/run/nester/killswitch/state"
+            - name: SIGNER_ALLOWED_CONTRACTS
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-mainnet-signer-config
+                  key: allowed-contracts
+          volumeMounts:
+            - name: signer-mtls-certs
+              mountPath: /etc/nester/mtls
+              readOnly: true
+            - name: signer-killswitch
+              mountPath: /run/nester/killswitch
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 8443
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8443
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: signer-mtls-certs
+          secret:
+            secretName: nester-signer-mtls-server
+            defaultMode: 0400
+        - name: signer-killswitch
+          configMap:
+            name: nester-signer-killswitch
+            defaultMode: 0444
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nester-signer
+  namespace: nester-prod
+spec:
+  selector:
+    app: nester-signer
+    env: production
+  ports:
+    - name: mtls
+      protocol: TCP
+      port: 8443
+      targetPort: 8443
+  type: ClusterIP
+---
+# 1. Default Deny All Ingress and Egress in nester-prod
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: nester-prod
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# 2. Strict Signer Isolation Policy:
+#    - Ingress: ONLY from nester-api pods in nester-prod on TCP 8443 (mTLS)
+#    - Egress:  ONLY DNS (53) to kube-system and HTTPS (443) to Stellar RPC / KMS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nester-signer-isolation
+  namespace: nester-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: nester-signer
+      env: production
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nester-api
+              env: production
+      ports:
+        - protocol: TCP
+          port: 8443
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 3. API Network Policy:
+#    - Ingress: from ingress controller on TCP 8080
+#    - Egress:  to nester-signer on TCP 8443, DNS (53), Postgres (5432), Redis (6379), HTTPS (443)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nester-api-network-policy
+  namespace: nester-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: nester-api
+      env: production
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nester-signer
+              env: production
+      ports:
+        - protocol: TCP
+          port: 8443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 443
