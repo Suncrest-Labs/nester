@@ -128,13 +128,72 @@ export default function SecurityPage() {
           id="bug-bounty"
           className="mt-6 rounded-3xl border border-emerald-400/20 bg-emerald-400/10 p-6 md:p-8"
         >
-          <h2 className="text-lg font-medium text-white">Bug Bounty &amp; Responsible Disclosure</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-medium text-white">
+              Funded Bug Bounty &amp; Responsible Disclosure
+            </h2>
+            <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/40 bg-emerald-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" aria-hidden="true" />
+              Active — $50,000 USDC Pool Earmarked
+            </span>
+          </div>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-200">
-            We welcome good-faith security research. Please report vulnerabilities privately and
-            give us reasonable time to fix them before any public disclosure — do{" "}
-            <strong className="font-semibold text-white">not</strong> open a public GitHub issue
-            for a security report.
+            We run a funded bug bounty covering all launch Soroban smart contracts and the API
+            money-movement path (`apps/api/internal/signing`, `apps/api/cmd/signer`, and deposit/withdrawal handlers).
+            Payouts scale with funds at risk (capped at 10% of affected TVL up to the tier ceiling)
+            and are paid in USDC from an earmarked reserve held in the Nester Treasury Multisig.
+            Please report vulnerabilities privately — do{" "}
+            <strong className="font-semibold text-white">not</strong> open a public GitHub issue.
           </p>
+
+          <div className="mt-6 overflow-x-auto rounded-2xl border border-white/10 bg-black/30">
+            <table className="w-full text-left text-sm text-slate-200">
+              <thead className="border-b border-white/10 text-xs uppercase tracking-wider text-slate-400">
+                <tr>
+                  <th className="px-4 py-3">Severity</th>
+                  <th className="px-4 py-3">Scope &amp; Impact</th>
+                  <th className="px-4 py-3">Reward (USDC)</th>
+                  <th className="px-4 py-3">Ack / Triage SLA</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                <tr>
+                  <td className="px-4 py-3 font-semibold text-rose-300">Critical</td>
+                  <td className="px-4 py-3">
+                    Direct loss of user funds, permanent freezing of funds, or unauthorized signing key extraction
+                  </td>
+                  <td className="px-4 py-3 font-mono text-emerald-300">
+                    Up to $25,000 (10% of funds at risk, min $5,000)
+                  </td>
+                  <td className="px-4 py-3 font-mono">&lt; 4h ack / 24h triage</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-semibold text-amber-300">High</td>
+                  <td className="px-4 py-3">
+                    Theft of unclaimed yield, share-price manipulation, or circuit-breaker / policy bypass
+                  </td>
+                  <td className="px-4 py-3 font-mono text-emerald-300">$2,000 – $10,000</td>
+                  <td className="px-4 py-3 font-mono">&lt; 12h ack / 48h triage</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-semibold text-sky-300">Medium</td>
+                  <td className="px-4 py-3">
+                    Griefing / temporary DoS of vault operations, bounded fee-calculation drift, or API auth weakness
+                  </td>
+                  <td className="px-4 py-3 font-mono text-emerald-300">$500 – $2,000</td>
+                  <td className="px-4 py-3 font-mono">&lt; 24h ack / 3d triage</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-semibold text-slate-300">Low</td>
+                  <td className="px-4 py-3">
+                    Minor contract/API edge cases with no fund loss or availability impact
+                  </td>
+                  <td className="px-4 py-3 font-mono text-emerald-300">$100 – $500</td>
+                  <td className="px-4 py-3 font-mono">&lt; 48h ack / 5d triage</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <a
@@ -169,12 +228,13 @@ export default function SecurityPage() {
           </div>
 
           <ul className="mt-6 space-y-2 text-sm leading-6 text-slate-300">
-            <li>• We acknowledge reports within 48 hours and keep you updated through triage.</li>
-            <li>• Safe harbor: we won&apos;t pursue legal action against good-faith research.</li>
             <li>
-              • Recognition: valid reports are credited in our Hall of Fame. We do not currently
-              run a paid bounty, but we publicly recognize every valid report.
+              • <strong>Triage Owner:</strong> Security Council Lead (<span className="font-mono">{SECURITY_EMAIL}</span>).
             </li>
+            <li>
+              • <strong>Earmarked Bounty Reserve:</strong> $50,000 USDC held in the Nester Treasury Multisig, settled on Stellar Mainnet within 7 days of fix verification.
+            </li>
+            <li>• Safe harbor: we won&apos;t pursue legal action against good-faith research that respects user funds and privacy.</li>
           </ul>
 
           <a
@@ -191,3 +251,4 @@ export default function SecurityPage() {
     </main>
   );
 }
+

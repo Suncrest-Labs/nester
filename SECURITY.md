@@ -34,23 +34,22 @@ Instead, use one of the following:
 - Any proof-of-concept code or screenshots (if safe to share)
 - Your severity assessment (Critical / High / Medium / Low)
 
-## Response Timeline
+## Funded Bug Bounty Program & Triage SLA (#1536)
 
-| Stage | Target |
-|-------|--------|
-| Acknowledgment | Within 48 hours |
-| Initial assessment | Within 1 week |
-| Fix or mitigation | Depends on severity (Critical: ASAP, High: 2 weeks, Medium/Low: next release) |
-| Public disclosure | Coordinated with reporter after fix is deployed |
+- **Triage Owner:** Security Council Lead (`@0xDeon`, `security@nester.dev`)
+- **Earmarked Bounty Pool:** **$50,000 USDC** held in the Nester Treasury Multisig (`NEXT_PUBLIC_MAINNET_TREASURY_CONTRACT`), payable in USDC on Stellar Mainnet within 7 days of fix verification.
+- **TVL Cap Rule:** Critical payouts scale at **10% of funds directly at risk**, with a minimum floor of **$5,000 USDC** and a hard ceiling of **$25,000 USDC** during Stage 1 launch.
+- **In-Scope Assets:**
+  - Soroban contracts: `vault`, `vault_token`, `allocation_strategy`, `yield_registry`, `nester`, `treasury`, `timelock`, `access_control`
+  - API & Signer money path: `apps/api/cmd/signer`, `apps/api/internal/signing`, and deposit/withdrawal settlement flows
 
-## Severity Classification
+| Severity | Examples | Reward (USDC) | Acknowledgment SLA | Triage & Decision SLA |
+|----------|----------|---------------|--------------------|-----------------------|
+| **Critical** | Direct theft of user funds, permanent freezing of vault/locked positions, private/signer key extraction | **$5,000 – $25,000** (capped at 10% of funds at risk) | **< 4 hours** | **< 24 hours** |
+| **High** | Theft of unclaimed yield, share-price/boost accounting manipulation, circuit-breaker bypass | **$2,000 – $10,000** | **< 12 hours** | **< 48 hours** |
+| **Medium** | Griefing / temporary DoS of critical vault paths, bounded fee drift, partial API auth bypass | **$500 – $2,000** | **< 24 hours** | **< 3 business days** |
+| **Low** | Minor information disclosure or best-practice violation with minimal impact | **$100 – $500** | **< 48 hours** | **< 5 business days** |
 
-| Severity | Examples |
-|----------|---------|
-| **Critical** | Smart contract funds at risk, private key exposure, complete auth bypass |
-| **High** | Privilege escalation, significant PII data breach, DoS of critical services |
-| **Medium** | Limited data exposure, partial auth weakness, DoS of non-critical services |
-| **Low** | Information disclosure, best-practice violations with minimal impact |
 
 ## On-Chain Access Control Model (issue #820)
 
