@@ -29,6 +29,11 @@ import {
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
+import {
+  buildAddUsdcTrustlineTransaction,
+  fetchDepositPreflight,
+  type DepositPreflightResult,
+} from "@/lib/stellar/preflight";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -248,6 +253,45 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const amount = Number(amountInput) || 0;
   const meta = vault ? getVaultMeta(vault) : null;
   const balance = getAvailableBalance(selectedAsset);
+  const [preflightResult, setPreflightResult] = useState<DepositPreflightResult | null>(null);
+  const [trustlineSuccess, setTrustlineSuccess] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    if (!open || !address) {
+      setPreflightResult(null);
+      return;
+    }
+    void fetchDepositPreflight({
+      walletAddress: address,
+      asset: selectedAsset,
+      amount,
+    }).then((res) => {
+      if (active) {
+        setPreflightResult(res);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [open, address, selectedAsset, amount, trustlineSuccess]);
+
+  const handleAddUsdcTrustline = () => {
+    if (!address || !preflightResult?.accountSequence) return;
+    try {
+      const xdr = buildAddUsdcTrustlineTransaction({
+        walletAddress: address,
+        accountSequence: preflightResult.accountSequence,
+        usdcIssuer: preflightResult.usdcIssuer,
+      });
+      if (xdr) {
+        setTrustlineSuccess(true);
+        setPreflightResult(null);
+      }
+    } catch (err) {
+      setErrorMsg(humanizeError(err));
+    }
+  };
 
   const validationError = useMemo(() => {
     if (!amount) return null;
@@ -257,8 +301,16 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
     return null;
   }, [amount, balance, selectedAsset]);
 
+  const preflightBlocked = preflightResult !== null && !preflightResult.ok;
+
   const canSubmit =
-    !!vault && !!address && amount > 0 && !validationError && state === "input" && !isOffline;
+    !!vault &&
+    !!address &&
+    amount > 0 &&
+    !validationError &&
+    !preflightBlocked &&
+    state === "input" &&
+    !isOffline;
 
   const effectiveApy = selectedStrategy ? selectedStrategy.apy / 100 : (meta ? meta.apy : 0);
   const estimatedYield = amount * effectiveApy;
@@ -638,6 +690,31 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
               <div className="flex items-start gap-2 text-sm text-amber-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>You need an internet connection to complete this transaction.</span>
+              </div>
+            </div>
+          )}
+
+          {preflightResult && !preflightResult.ok && state === "input" && (
+            <div
+              data-testid="deposit-preflight-alert"
+              data-preflight-status={preflightResult.status}
+              className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-2 text-sm text-amber-800">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{preflightResult.message}</span>
+                </div>
+                {preflightResult.canAddTrustline && (
+                  <button
+                    type="button"
+                    data-testid="add-usdc-trustline-btn"
+                    onClick={handleAddUsdcTrustline}
+                    className="shrink-0 rounded-full bg-amber-900 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
+                  >
+                    Add USDC trustline
+                  </button>
+                )}
               </div>
             </div>
           )}
