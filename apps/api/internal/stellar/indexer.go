@@ -74,6 +74,10 @@ type IndexerOptions struct {
 	// DepositObserver, if set, is notified after a deposit event's
 	// transaction commits. See EventPoller.DepositObserver.
 	DepositObserver DepositObserver
+
+	// AdminEventClassifier, if set, classifies admin-role and config-change
+	// events and immediately dispatches a high-priority alert (#1548).
+	AdminEventClassifier *AdminEventClassifier
 }
 
 // StartEventIndexer launches the long-running event indexer.
@@ -100,11 +104,12 @@ func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sys
 	// the atomic cursor/balance commit — lives in EventPoller, which is the
 	// unit the deterministic replay harness exercises (issue #1051).
 	poller := &EventPoller{
-		DB:              db,
-		SysRepo:         sysRepo,
-		Fetcher:         NewRPCEventFetcherWithOptions(httpClient, opts.RPCURL, opts.RPCOptions),
-		Logger:          logger,
-		DepositObserver: opts.DepositObserver,
+		DB:                   db,
+		SysRepo:              sysRepo,
+		Fetcher:              NewRPCEventFetcherWithOptions(httpClient, opts.RPCURL, opts.RPCOptions),
+		Logger:               logger,
+		DepositObserver:      opts.DepositObserver,
+		AdminEventClassifier: opts.AdminEventClassifier,
 	}
 
 	if wg != nil {
@@ -887,6 +892,10 @@ type EventSyncer struct {
 	// DepositObserver, if set, is notified after a deposit event's
 	// transaction commits. See EventPoller.DepositObserver.
 	DepositObserver DepositObserver
+
+	// AdminEventClassifier, if set, classifies admin-role and config-change
+	// events and immediately dispatches a high-priority alert (#1548).
+	AdminEventClassifier *AdminEventClassifier
 }
 
 func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
@@ -919,6 +928,7 @@ func (s *EventSyncer) SyncEvents(ctx context.Context) (int, error) {
 		if ok {
 			processed++
 			notifyDepositObserver(ctx, s.DB, s.Logger, s.DepositObserver, event)
+			notifyAdminEventClassifier(ctx, s.Logger, s.AdminEventClassifier, event)
 		}
 	}
 

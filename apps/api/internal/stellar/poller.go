@@ -57,6 +57,10 @@ type EventPoller struct {
 	// transaction commits. Nil disables the notification with no other
 	// behaviour change.
 	DepositObserver DepositObserver
+
+	// AdminEventClassifier, if set, classifies admin-role and config-change
+	// events and immediately dispatches a high-priority alert (#1548).
+	AdminEventClassifier *AdminEventClassifier
 }
 
 // PollEvents runs a single poll: resolve the cursor, fetch events, apply each
@@ -128,6 +132,7 @@ func (p *EventPoller) PollEvents(ctx context.Context) (int, error) {
 			// transaction: a slow or failing observer must not be able to roll
 			// back a balance write.
 			notifyDepositObserver(ctx, p.DB, p.Logger, p.DepositObserver, event)
+			notifyAdminEventClassifier(ctx, p.Logger, p.AdminEventClassifier, event)
 		}
 	}
 
