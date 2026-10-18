@@ -193,13 +193,52 @@ export function normalizeServerEvent(frame: unknown): WSEvent | null {
     };
 }
 
+export const WS_PROTOCOL_V1 = "nester.v1";
+export const WS_AUTH_PROTOCOL_PREFIX = "nester.auth.";
+
 /**
- * Build the upgrade URL. The hub reads credentials from the query string
- * because the browser WebSocket API cannot set request headers.
+ * Build the WebSocket upgrade URL without embedding bearer JWTs in the query
+ * string (#1519). If an optional short-lived single-use `ticket` is supplied,
+ * it is attached as `?ticket=`.
  */
-export function buildSocketUrl(url: string, token: string): string {
+export function buildSocketUrl(url: string, ticket?: string): string {
     if (!url) return url;
-    if (!token) return url;
+    if (!ticket) return url;
     const separator = url.includes("?") ? "&" : "?";
-    return `${url}${separator}token=${encodeURIComponent(token)}`;
+    return `${url}${separator}ticket=${encodeURIComponent(ticket)}`;
 }
+
+/**
+ * Build the Sec-WebSocket-Protocol list carrying the authentication credential
+ * out of the URL (#1519).
+ */
+export function buildSocketProtocols(credential: string): string[] {
+    const trimmed = credential.trim();
+    if (!trimmed) return [];
+    return [WS_PROTOCOL_V1, `${WS_AUTH_PROTOCOL_PREFIX}${trimmed}`];
+}
+
+/**
+ * Request a short-lived (<=30s), single-use WebSocket ticket from
+ * POST /api/v1/ws/ticket using the caller's Bearer token.
+ */
+export async function fetchWsTicket(apiBaseUrl: string, bearerToken: string): Promise<string> {
+    const base = apiBaseUrl.replace(/\/+$/, "");
+    const res = await fetch(`${base}/api/v1/ws/ticket`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${bearerToken}`,
+            "Content-Type": "application/json",
+        },
+    });
+    if (!res.ok) {
+        throw new Error(`Failed to obtain WebSocket ticket: HTTP ${res.status}`);
+    }
+    const body = (await res.json()) as { data?: { ticket?: string } };
+    const ticket = body?.data?.ticket;
+    if (!ticket) {
+        throw new Error("WebSocket ticket response missing ticket");
+    }
+    return ticket;
+}
+

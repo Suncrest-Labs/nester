@@ -107,6 +107,7 @@ type Hub struct {
 	redisTopics   map[string]int // eventChannel -> local subscriber count, so we know when to (un)subscribe in Redis
 	maxConnsPerIP int
 	connsByIP     map[string]int
+	ticketStore   *TicketStore
 
 	connectedClients atomic.Int64
 	droppedSlow      atomic.Int64
@@ -133,6 +134,7 @@ func NewHub(logger *slog.Logger, authFunc func(string) (userID, sessionID string
 		redisTopics:    make(map[string]int),
 		maxConnsPerIP:  maxConnsPerIP,
 		connsByIP:      make(map[string]int),
+		ticketStore:    NewTicketStore(rc, DefaultTicketTTL),
 	}
 	h.upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -146,6 +148,27 @@ func NewHub(logger *slog.Logger, authFunc func(string) (userID, sessionID string
 		h.redisPubSub = rc.Subscribe(context.Background())
 	}
 	return h
+}
+
+// TicketStore returns the hub's single-use ticket store, initializing one if needed.
+func (h *Hub) TicketStore() *TicketStore {
+	return h.ensureTicketStore()
+}
+
+// SetTicketStore overrides the hub's TicketStore (used in tests for custom TTL/clock).
+func (h *Hub) SetTicketStore(store *TicketStore) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ticketStore = store
+}
+
+func (h *Hub) ensureTicketStore() *TicketStore {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ticketStore == nil {
+		h.ticketStore = NewTicketStore(h.redis, DefaultTicketTTL)
+	}
+	return h.ticketStore
 }
 
 // Stats returns a snapshot of cumulative hub activity counters.
@@ -621,18 +644,50 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	var userID, sessionID string
-	var err error
+func (h *Hub) authenticateUpgrade(r *http.Request) (userID, sessionID, selectedProto string, err error) {
+	if cred, proto := extractSubprotocolCredential(r); cred != "" {
+		if uid, sid, ticketErr := h.ensureTicketStore().Consume(r.Context(), cred); ticketErr == nil {
+			return uid, sid, proto, nil
+		}
+		if h.authenticator != nil {
+			uid, sid, authErr := h.authenticator(cred)
+			return uid, sid, proto, authErr
+		}
+		return "", "", proto, nil
+	}
+
+	if ticket := strings.TrimSpace(r.URL.Query().Get("ticket")); ticket != "" {
+		uid, sid, ticketErr := h.ensureTicketStore().Consume(r.Context(), ticket)
+		if ticketErr != nil {
+			return "", "", "", ticketErr
+		}
+		return uid, sid, "", nil
+	}
+
+	queryToken := strings.TrimSpace(r.URL.Query().Get("token"))
+	if isJWTString(queryToken) || strings.HasPrefix(strings.ToLower(queryToken), "bearer ") {
+		return "", "", "", ErrQueryTokenJWTForbidden
+	}
+
+	if queryToken != "" {
+		if uid, sid, ticketErr := h.ensureTicketStore().Consume(r.Context(), queryToken); ticketErr == nil {
+			return uid, sid, "", nil
+		}
+	}
 
 	if h.authenticator != nil {
-		userID, sessionID, err = h.authenticator(token)
-		if err != nil {
-			h.logger.Warn("websocket unauthorized", "error", err)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+		uid, sid, authErr := h.authenticator(queryToken)
+		return uid, sid, "", authErr
+	}
+	return "", "", "", nil
+}
+
+func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
+	userID, sessionID, selectedProto, err := h.authenticateUpgrade(r)
+	if err != nil {
+		h.logger.Warn("websocket unauthorized", "error", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	ip := clientIP(r)
@@ -646,7 +701,14 @@ func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.upgrader.Upgrade(w, r, nil)
+	var responseHeader http.Header
+	if selectedProto != "" {
+		responseHeader = http.Header{
+			"Sec-WebSocket-Protocol": []string{selectedProto},
+		}
+	}
+
+	conn, err := h.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
 		h.mu.Lock()
 		h.decrementIPLocked(ip)
@@ -671,3 +733,4 @@ func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
 	go client.writePump()
 	go client.readPump()
 }
+

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  buildSocketProtocols,
   buildSocketUrl,
   isPongFrame,
   normalizeServerEvent,
@@ -351,9 +352,9 @@ export function useWebSocket({
 
     let ws: WebSocket;
     try {
-      // The hub authenticates from the query string during the upgrade
-      // handshake — the browser WebSocket API cannot set headers.
-      ws = new WebSocket(buildSocketUrl(url, socketToken));
+      // Authenticate via Sec-WebSocket-Protocol ("nester.auth.<credential>")
+      // rather than placing bearer JWTs in the query string (#1519).
+      ws = new WebSocket(buildSocketUrl(url), buildSocketProtocols(socketToken));
     } catch {
       // URL may be invalid in dev; fall back to polling.
       setStatus("offline");

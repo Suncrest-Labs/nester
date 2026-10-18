@@ -1684,6 +1684,7 @@ func run() error {
 	performanceSnapshotsHandler.Register(mux)
 
 	mux.HandleFunc("GET /ws", wsHub.ServeWs)
+	mux.HandleFunc("POST /api/v1/ws/ticket", wsHub.HandleIssueTicket)
 
 	// APY snapshot scheduler and history endpoint (apySnapshotRepo is
 	// constructed earlier, alongside the deterioration engine wiring above).

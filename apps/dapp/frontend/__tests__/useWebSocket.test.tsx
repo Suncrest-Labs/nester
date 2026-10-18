@@ -27,8 +27,10 @@ class MockWebSocket {
     onmessage: Handler = null;
     readyState = MockWebSocket.OPEN;
     sent: string[] = [];
+    protocols: string | string[] | undefined;
 
-    constructor(public url: string) {
+    constructor(public url: string, protocols?: string | string[]) {
+        this.protocols = protocols;
         MockWebSocket.instances.push(this);
     }
 
@@ -184,9 +186,11 @@ describe("useWebSocket wire protocol", () => {
         onEvent: () => {},
     };
 
-    it("authenticates via the upgrade URL query string using the token getter", () => {
+    it("authenticates via Sec-WebSocket-Protocol without placing the JWT in the URL query string", () => {
         renderHook(() => useWebSocket(baseOpts));
-        expect(MockWebSocket.last().url).toBe(`${WS_URL}?token=jwt-123`);
+        expect(MockWebSocket.last().url).toBe(WS_URL);
+        expect(MockWebSocket.last().url).not.toContain("token=");
+        expect(MockWebSocket.last().protocols).toEqual(["nester.v1", "nester.auth.jwt-123"]);
     });
 
     it("calls the token getter before each connection attempt", () => {
@@ -211,9 +215,10 @@ describe("useWebSocket wire protocol", () => {
         currentToken = "jwt-refreshed";
         rerender();
 
-        // Should reconnect with the new token
+        // Should reconnect with the new token via Sec-WebSocket-Protocol
         expect(MockWebSocket.instances.length).toBeGreaterThan(before);
-        expect(MockWebSocket.last().url).toBe(`${WS_URL}?token=jwt-refreshed`);
+        expect(MockWebSocket.last().url).toBe(WS_URL);
+        expect(MockWebSocket.last().protocols).toEqual(["nester.v1", "nester.auth.jwt-refreshed"]);
     });
 
     it("uses stale token on offline without socket", () => {
