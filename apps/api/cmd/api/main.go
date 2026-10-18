@@ -1011,6 +1011,7 @@ func run() error {
 	notificationHandler.Register(mux)
 	adminHandler.Register(mux)
 	handler.NewMoneyPathSwitchHandler(moneyPathSwitchService).Register(mux)
+	handler.NewStatusHandler(moneyPathSwitchService, indexerFreshness, healthDependencies.pingRPC).Register(mux)
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
 	performanceHandler.Register(mux)

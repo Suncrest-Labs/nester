@@ -121,6 +121,7 @@ var authzMatrix = []AuthzRoute{
 	{Method: "GET", Path: "/api/v1/admin/money-path/switches", RequireRole: "admin"},
 	{Method: "PUT", Path: "/api/v1/admin/money-path/switches/deposit", RequireRole: "admin"},
 	{Method: "GET", Path: "/api/v1/money-path/status", Public: true},
+	{Method: "GET", Path: "/api/v1/status", Public: true},
 
 	// ── Routes recovered from the handler registrations ────────────────
 	// Added when the coverage guard showed the original matrix exercised

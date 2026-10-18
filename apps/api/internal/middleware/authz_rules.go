@@ -42,6 +42,7 @@ func ProductionAuthRules() []RouteRule {
 		// and the UI is required to explain it rather than fail generically
 		// (#1120). It exposes nothing the paused response does not already.
 		{Method: http.MethodGet, PathPrefix: "/api/v1/money-path/status", Public: true},
+		{Method: http.MethodGet, PathPrefix: "/api/v1/status", Public: true},
 		{PathPrefix: "/api/v1/admin/", Public: false, Role: "admin"},
 		{PathPrefix: "/api/v1/internal/", Role: "service"},
 		{PathPrefix: "/api/v1/", Public: false},
