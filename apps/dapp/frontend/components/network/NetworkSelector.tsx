@@ -95,17 +95,111 @@ export function NetworkSelector() {
   );
 }
 
+import Link from "next/link";
+import {
+  NETWORK_BANNER_COPY,
+  acknowledgeMainnetRisk,
+  hasAcknowledgedMainnetRisk,
+} from "@/lib/mainnet-acknowledgement";
+
 export function NetworkBanner() {
   const { currentNetwork } = useNetwork();
-
-  if (currentNetwork.id !== 'testnet') return null;
+  const copy = NETWORK_BANNER_COPY[currentNetwork.id] ?? NETWORK_BANNER_COPY.testnet;
+  const isMainnet = currentNetwork.id === "mainnet";
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-60 flex h-10 items-center justify-center border-b border-yellow-200 bg-black px-4">
-      <p className="flex items-center gap-2 text-xs font-medium text-white">
-        <AlertTriangle className="h-3.5 w-3.5" />
-        You are on Testnet — tokens have no real value
-      </p>
+    <div
+      data-testid={`network-banner-${currentNetwork.id}`}
+      className={`fixed top-0 left-0 right-0 z-60 flex min-h-10 items-center justify-center border-b px-4 py-1.5 ${
+        isMainnet
+          ? "border-amber-400/50 bg-amber-950 text-amber-50"
+          : "border-yellow-200 bg-black text-white"
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs font-medium">
+        <span className="flex items-center gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>{copy.message}</span>
+        </span>
+        {copy.links.length > 0 && (
+          <span className="flex items-center gap-2">
+            {copy.links.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="underline underline-offset-2 hover: opacity-90"
+              >
+                {link.label}
+              </Link>
+            ))}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
+
+export function MainnetDepositAcknowledgement({
+  walletAddress,
+  onAcknowledged,
+}: {
+  walletAddress: string | null | undefined;
+  onAcknowledged?: () => void;
+}) {
+  const { currentNetwork } = useNetwork();
+  const [acknowledged, setAcknowledged] = useState(() =>
+    hasAcknowledgedMainnetRisk(walletAddress)
+  );
+
+  React.useEffect(() => {
+    setAcknowledged(hasAcknowledgedMainnetRisk(walletAddress));
+  }, [walletAddress]);
+
+  if (currentNetwork.id !== "mainnet" || !walletAddress || acknowledged) {
+    return null;
+  }
+
+  const handleAcknowledge = () => {
+    acknowledgeMainnetRisk(walletAddress);
+    setAcknowledged(true);
+    onAcknowledged?.();
+  };
+
+  return (
+    <div
+      data-testid="mainnet-deposit-acknowledgement"
+      role="region"
+      aria-label="Mainnet Risk Acknowledgement"
+      className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-xs text-foreground"
+    >
+      <p className="font-semibold text-amber-900 dark:text-amber-200">
+        Mainnet Real-Funds Acknowledgement Required
+      </p>
+      <p className="mt-1 text-muted-foreground">
+        You are depositing real funds on Stellar Mainnet. Smart contract risk applies,
+        vault caps limit maximum deposits, and all on-chain transactions are irreversible.
+        Review our{" "}
+        <Link href="/security" className="underline">
+          Security & Audits
+        </Link>
+        ,{" "}
+        <Link href="/docs/security/mainnet-risk-disclosures.md" className="underline">
+          Risk Disclosures (docs/security/mainnet-risk-disclosures.md)
+        </Link>
+        , and{" "}
+        <Link href="/terms" className="underline">
+          Terms of Service
+        </Link>{" "}
+        before continuing.
+      </p>
+      <button
+        type="button"
+        onClick={handleAcknowledge}
+        className="mt-3 rounded-lg bg-amber-600 px-3 py-1.5 font-medium text-white transition-colors hover:bg-amber-500"
+      >
+        I understand and acknowledge Mainnet risks
+      </button>
+    </div>
+  );
+}
+
