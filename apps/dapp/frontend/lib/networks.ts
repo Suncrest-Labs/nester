@@ -52,4 +52,24 @@ export const NETWORKS: Record<string, NetworkConfig> = {
   },
 };
 
-export const DEFAULT_NETWORK = NETWORKS.testnet;
+export function resolveDefaultNetwork(
+  envNetwork: string | undefined = process.env.NEXT_PUBLIC_STELLAR_NETWORK,
+): NetworkConfig {
+  if (envNetwork?.trim().toLowerCase() === 'mainnet') {
+    return NETWORKS.mainnet;
+  }
+  return NETWORKS.testnet;
+}
+
+export function hasPlaceholderContracts(config: NetworkConfig): boolean {
+  return Object.values(config.contracts).some(
+    (addr) =>
+      !addr ||
+      addr.includes('PLACEHOLDER') ||
+      !addr.startsWith('C') ||
+      addr.length !== 56,
+  );
+}
+
+export const DEFAULT_NETWORK = resolveDefaultNetwork();
+

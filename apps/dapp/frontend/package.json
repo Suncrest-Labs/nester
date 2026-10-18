@@ -13,6 +13,7 @@
     "test:e2e": "playwright test",
     "test:ws": "playwright test tests/websocket-reconnect.spec.ts",
     "test:smoke": "SMOKE_TEST=1 playwright test tests/smoke.spec.ts --run",
+    "test:smoke:mainnet": "NEXT_PUBLIC_NETWORK=mainnet SMOKE_TEST=1 playwright test tests/mainnet-smoke.spec.ts --run",
     "test:smoke:watch": "SMOKE_TEST=1 playwright test tests/smoke.spec.ts",
     "test:smoke:debug": "SMOKE_TEST=1 PWDEBUG=1 playwright test tests/smoke.spec.ts --headed",
     "test:e2e:testnet": "playwright test tests/deposit-withdraw.spec.ts",

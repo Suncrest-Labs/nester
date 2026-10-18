@@ -98,10 +98,27 @@ export function NetworkSelector() {
 export function NetworkBanner() {
   const { currentNetwork } = useNetwork();
 
+  if (currentNetwork.id === 'mainnet') {
+    return (
+      <div
+        data-testid="mainnet-banner"
+        className="fixed top-0 left-0 right-0 z-60 flex h-8 items-center justify-center border-b border-emerald-500/30 bg-emerald-950/90 px-4"
+      >
+        <p className="flex items-center gap-2 text-xs font-medium text-emerald-100">
+          <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+          Stellar Mainnet — live network
+        </p>
+      </div>
+    );
+  }
+
   if (currentNetwork.id !== 'testnet') return null;
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-60 flex h-10 items-center justify-center border-b border-yellow-200 bg-black px-4">
+    <div
+      data-testid="testnet-banner"
+      className="fixed top-0 left-0 right-0 z-60 flex h-10 items-center justify-center border-b border-yellow-200 bg-black px-4"
+    >
       <p className="flex items-center gap-2 text-xs font-medium text-white">
         <AlertTriangle className="h-3.5 w-3.5" />
         You are on Testnet — tokens have no real value
@@ -109,3 +126,4 @@ export function NetworkBanner() {
     </div>
   );
 }
+
