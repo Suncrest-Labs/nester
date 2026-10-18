@@ -530,11 +530,13 @@ func run() error {
 	// live-indexed events are processed identically.
 	backfillRepo := postgres.NewBackfillRepository(db)
 	backfillRunner := &stellarpkg.Runner{
-		DB:         db,
-		Repo:       backfillRepo,
-		RPCURL:     cfg.Stellar().RPCURL(),
-		Logger:     baseLogger.WithGroup("backfill"),
-		RPCOptions: sorobanRPCOptions,
+		DB:              db,
+		Repo:            backfillRepo,
+		RPCURL:          cfg.Stellar().RPCURL(),
+		FallbackRPCURLs: cfg.Stellar().RPCFallbackURLs(),
+		ArchiveRPCURL:   cfg.Stellar().RPCArchiveURL(),
+		Logger:          baseLogger.WithGroup("backfill"),
+		RPCOptions:      sorobanRPCOptions,
 	}
 	adminHandler.SetBackfillRunner(backfillRunner, backfillRepo)
 
@@ -2052,6 +2054,8 @@ func run() error {
 	// freshness headers both read.
 	stellarpkg.StartEventIndexer(shutdownCtx, baseLogger, db, systemStateRepository, stellarpkg.IndexerOptions{
 		RPCURL:          cfg.Stellar().RPCURL(),
+		FallbackRPCURLs: cfg.Stellar().RPCFallbackURLs(),
+		ArchiveRPCURL:   cfg.Stellar().RPCArchiveURL(),
 		HTTPClient:      chainBreakers.client(appMetrics, stellarpkg.IndexerRequestTimeout, metrics.UpstreamSorobanRPC),
 		RPCOptions:      sorobanRPCOptions,
 		Recorder:        indexerFreshness,

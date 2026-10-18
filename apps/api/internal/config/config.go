@@ -319,8 +319,21 @@ type DatabaseConfig struct {
 type StellarConfig struct {
 	networkPassphrase string
 	rpcURL            string
-	horizonURL        string
-	operatorSecret    string
+	// rpcFallbackURLs defines the ordered failover chain for Soroban JSON-RPC
+	// reads when the primary STELLAR_RPC_URL degrades or returns errors
+	// (nester#1559). Evaluated strictly in order:
+	//   1. STELLAR_RPC_URL (Primary: managed SLA tier or self-hosted stellar-rpc)
+	//   2. STELLAR_RPC_FALLBACK_URLS[0..N] (Secondary failover providers)
+	//   3. STELLAR_RPC_ARCHIVE_URL (Long-retention 30d+ archive node for backfill)
+	rpcFallbackURLs []string
+	// rpcArchiveURL is the long-retention Soroban RPC endpoint (e.g. self-hosted
+	// stellar-rpc with HISTORY_RETENTION_WINDOW=518400 ledgers / 30 days) used
+	// automatically when the event indexer backfills a gap older than the
+	// primary provider's 7-day retention window (~120,960 ledgers) or as the
+	// final failover tier (nester#1559).
+	rpcArchiveURL  string
+	horizonURL     string
+	operatorSecret string
 	// operatorAddress is the operator's PUBLIC address. It is required when
 	// signing is delegated to the isolated signer, because the API still builds
 	// transactions against the operator's source account but holds no key.
@@ -459,6 +472,8 @@ func Load() (*Config, error) {
 		stellar: StellarConfig{
 			networkPassphrase:                 loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
 			rpcURL:                            loader.requiredURL("STELLAR_RPC_URL"),
+			rpcFallbackURLs:                   loader.stringSliceDefault("STELLAR_RPC_FALLBACK_URLS", nil),
+			rpcArchiveURL:                     loader.stringDefault("STELLAR_RPC_ARCHIVE_URL", ""),
 			horizonURL:                        loader.requiredURL("STELLAR_HORIZON_URL"),
 			operatorSecret:                    loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
 			operatorFundedDepositsEnabled:     loader.boolDefault("STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED", false),
@@ -1538,6 +1553,19 @@ func validateStellarNetworkConsistency(s StellarConfig, loader *envLoader) {
 					"set both to the same network to prevent cross-environment routing",
 			)
 		}
+		for _, fb := range s.rpcFallbackURLs {
+			fbLower := strings.ToLower(fb)
+			if strings.Contains(fbLower, "testnet") || strings.Contains(fbLower, "futurenet") {
+				loader.addError(
+					"STELLAR_RPC_FALLBACK_URLS contains a testnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to mainnet",
+				)
+			}
+		}
+		if archLower := strings.ToLower(s.rpcArchiveURL); strings.Contains(archLower, "testnet") || strings.Contains(archLower, "futurenet") {
+			loader.addError(
+				"STELLAR_RPC_ARCHIVE_URL appears to be a testnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to mainnet",
+			)
+		}
 		// Contract addresses must be present on mainnet: a blank address would
 		// silently call address "" on-chain or skip the contract entirely, which
 		// is wrong in every mainnet scenario.
@@ -1630,6 +1658,47 @@ func (s StellarConfig) NetworkPassphrase() string {
 
 func (s StellarConfig) RPCURL() string {
 	return s.rpcURL
+}
+
+// RPCFallbackURLs returns the ordered secondary Soroban RPC endpoints
+// configured via STELLAR_RPC_FALLBACK_URLS (nester#1559).
+func (s StellarConfig) RPCFallbackURLs() []string {
+	out := make([]string, len(s.rpcFallbackURLs))
+	copy(out, s.rpcFallbackURLs)
+	return out
+}
+
+// RPCArchiveURL returns the dedicated long-retention Soroban RPC endpoint
+// configured via STELLAR_RPC_ARCHIVE_URL (nester#1559).
+func (s StellarConfig) RPCArchiveURL() string {
+	return s.rpcArchiveURL
+}
+
+// OrderedRPCURLs returns the deduplicated failover priority list:
+//
+//  1. STELLAR_RPC_URL (primary hot endpoint)
+//  2. STELLAR_RPC_FALLBACK_URLS (secondary failover endpoints in order)
+//  3. STELLAR_RPC_ARCHIVE_URL (long-retention 30d+ archive node)
+func (s StellarConfig) OrderedRPCURLs() []string {
+	seen := make(map[string]struct{}, 2+len(s.rpcFallbackURLs))
+	out := make([]string, 0, 2+len(s.rpcFallbackURLs))
+	add := func(raw string) {
+		u := strings.TrimSpace(raw)
+		if u == "" {
+			return
+		}
+		if _, ok := seen[u]; ok {
+			return
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	add(s.rpcURL)
+	for _, fb := range s.rpcFallbackURLs {
+		add(fb)
+	}
+	add(s.rpcArchiveURL)
+	return out
 }
 
 func (s StellarConfig) HorizonURL() string {

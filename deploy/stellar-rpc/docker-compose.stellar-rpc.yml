@@ -1,0 +1,39 @@
+# Self-hosted stellar-rpc (Captive Core) with 30-day event retention (518,400 ledgers)
+# Referenced by docs/SOROBAN_RPC_RETENTION_ADR.md (issue #1559)
+version: "3.9"
+
+services:
+  stellar-rpc-archive:
+    image: stellar/stellar-rpc:22.1.0
+    container_name: nester-stellar-rpc-archive
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8003:8000"
+      - "127.0.0.1:8004:8001"
+    environment:
+      STELLAR_RPC_ENDPOINT: "0.0.0.0:8000"
+      STELLAR_RPC_ADMIN_ENDPOINT: "0.0.0.0:8001"
+      STELLAR_RPC_NETWORK_PASSPHRASE: "${STELLAR_NETWORK_PASSPHRASE:-Public Global Stellar Network ; September 2015}"
+      # 30 days of retention at ~5s/ledger (30 * 86,400 / 5 = 518,400 ledgers).
+      # Covers >2x the 14-day backfill requirement (241,920 ledgers).
+      STELLAR_RPC_HISTORY_RETENTION_WINDOW: "518400"
+      STELLAR_RPC_CLASSIC_EVENTS: "false"
+      STELLAR_RPC_DB_PATH: "/var/lib/stellar-rpc/stellar-rpc.sqlite"
+      STELLAR_RPC_CAPTIVE_CORE_STORAGE_PATH: "/var/lib/stellar-rpc/captive-core"
+      STELLAR_RPC_MAX_EVENTS_EXECUTION_DURATION: "15s"
+      STELLAR_RPC_DEFAULT_EVENTS_LIMIT: "200"
+      STELLAR_RPC_MAX_EVENTS_LIMIT: "10000"
+    volumes:
+      - stellar_rpc_data:/var/lib/stellar-rpc
+    deploy:
+      resources:
+        limits:
+          cpus: "8.0"
+          memory: 32G
+        reservations:
+          cpus: "4.0"
+          memory: 16G
+
+volumes:
+  stellar_rpc_data:
+    driver: local

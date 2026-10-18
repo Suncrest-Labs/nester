@@ -52,8 +52,18 @@ type FreshnessRecorder interface {
 // seven-argument call at the wiring site is unreadable and easy to transpose.
 // Every field is optional except RPCURL.
 type IndexerOptions struct {
-	// RPCURL is the Soroban endpoint. Empty disables the indexer.
+	// RPCURL is the primary Soroban endpoint. Empty disables the indexer.
 	RPCURL string
+
+	// FallbackRPCURLs are ordered secondary Soroban RPC endpoints tried when
+	// RPCURL fails or rejects a request (nester#1559).
+	FallbackRPCURLs []string
+
+	// ArchiveRPCURL is a long-retention Soroban RPC endpoint (e.g. 30-day
+	// self-hosted stellar-rpc) used when startLedger lags behind the network
+	// tip by more than 7 days (~120,960 ledgers) or as the final failover tier
+	// (nester#1559).
+	ArchiveRPCURL string
 
 	// HTTPClient carries the metrics and circuit-breaker transports. Nil
 	// falls back to a plain client with IndexerRequestTimeout. Startup passes
@@ -100,9 +110,16 @@ func StartEventIndexer(ctx context.Context, logger *slog.Logger, db *sql.DB, sys
 	// the atomic cursor/balance commit — lives in EventPoller, which is the
 	// unit the deterministic replay harness exercises (issue #1051).
 	poller := &EventPoller{
-		DB:              db,
-		SysRepo:         sysRepo,
-		Fetcher:         NewRPCEventFetcherWithOptions(httpClient, opts.RPCURL, opts.RPCOptions),
+		DB:      db,
+		SysRepo: sysRepo,
+		Fetcher: NewFailoverEventFetcherWithOptions(
+			httpClient,
+			opts.RPCURL,
+			opts.FallbackRPCURLs,
+			opts.ArchiveRPCURL,
+			opts.RPCOptions,
+			logger,
+		),
 		Logger:          logger,
 		DepositObserver: opts.DepositObserver,
 	}

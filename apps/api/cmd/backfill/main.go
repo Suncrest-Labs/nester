@@ -75,11 +75,13 @@ func run() error {
 
 	repo := postgres.NewBackfillRepository(db)
 	runner := &stellar.Runner{
-		DB:       db,
-		Repo:     repo,
-		RPCURL:   cfg.Stellar().RPCURL(),
-		Logger:   logger,
-		Throttle: *throttle,
+		DB:              db,
+		Repo:            repo,
+		RPCURL:          cfg.Stellar().RPCURL(),
+		FallbackRPCURLs: cfg.Stellar().RPCFallbackURLs(),
+		ArchiveRPCURL:   cfg.Stellar().RPCArchiveURL(),
+		Logger:          logger,
+		Throttle:        *throttle,
 	}
 
 	ctx := context.Background()

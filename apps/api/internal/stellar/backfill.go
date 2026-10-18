@@ -116,7 +116,20 @@ type Runner struct {
 	Repo   backfill.Repository
 	Client *http.Client
 	RPCURL string
-	Logger *slog.Logger
+	// FallbackRPCURLs are ordered secondary Soroban RPC endpoints tried when
+	// RPCURL fails or rejects a historical ledger range (nester#1559).
+	FallbackRPCURLs []string
+	// ArchiveRPCURL is the long-retention Soroban RPC endpoint (30d+ retention)
+	// preferred automatically when backfilling ranges older than the 7-day hot
+	// retention window (~120,960 ledgers) or as the final failover tier
+	// (nester#1559).
+	ArchiveRPCURL string
+	// BatchLedgers overrides the default 50-ledger batch window when positive.
+	// When zero and the requested range exceeds DefaultHotRetentionLedgers
+	// (120,960 ledgers / 7 days), it automatically scales to 17,280 ledgers
+	// (1 day per batch) so a 14-day gap completes in 14 checkpointed batches.
+	BatchLedgers uint64
+	Logger       *slog.Logger
 
 	// RPCOptions carries the shared retry policy (nester#1086). Every call a
 	// backfill makes is getEvents, so all of it is retryable.
@@ -166,7 +179,11 @@ func (r *Runner) Start(ctx context.Context, in StartInput) (*backfill.Run, error
 	}
 
 	if in.Mode == backfill.ModeRebuild {
-		bad, err := NonResettableEventTypesInRange(ctx, r.httpClient(), r.RPCURL, contractIDs, in.FromLedger, in.ToLedger)
+		scanURL := r.RPCURL
+		if strings.TrimSpace(r.ArchiveRPCURL) != "" {
+			scanURL = r.ArchiveRPCURL
+		}
+		bad, err := NonResettableEventTypesInRange(ctx, r.httpClient(), scanURL, contractIDs, in.FromLedger, in.ToLedger)
 		if err != nil {
 			return nil, fmt.Errorf("pre-flight scan for rebuild safety: %w", err)
 		}
@@ -223,8 +240,6 @@ func (r *Runner) Resume(ctx context.Context, runID uuid.UUID) (*backfill.Run, er
 // execute drives one run (fresh or resumed) from run.ResumeFrom() through
 // run.ToLedger, checkpointing after every batch.
 func (r *Runner) execute(ctx context.Context, run *backfill.Run) error {
-	rpc := r.rpcClient()
-
 	if run.Mode == backfill.ModeRebuild && run.ResumeFrom() == run.FromLedger {
 		// Reset scope is applied once, at the very start of a fresh run —
 		// never on resume (which would re-delete rows the earlier part of
@@ -239,18 +254,19 @@ func (r *Runner) execute(ctx context.Context, run *backfill.Run) error {
 	cursor := run.ResumeFrom()
 	processed := run.EventsProcessed
 	skipped := run.EventsSkippedDuplicate
+	batchSpan := r.effectiveBatchLedgers(run.FromLedger, run.ToLedger)
 
 	for cursor <= run.ToLedger {
-		headroomLedger, err := r.headLedgerMinusMargin(ctx, rpc, run.ContractIDs)
+		headroomLedger, err := r.headLedgerMinusMarginWithFailover(ctx, run.ContractIDs)
 		if err != nil {
 			return fmt.Errorf("check chain head: %w", err)
 		}
-		batchEnd := min(cursor+backfillBatchLedgers-1, run.ToLedger, headroomLedger)
+		batchEnd := min(cursor+batchSpan-1, run.ToLedger, headroomLedger)
 		if batchEnd < cursor {
 			return fmt.Errorf("%w (requested up to ledger %d, safety margin currently allows up to %d)", ErrTooCloseToHead, run.ToLedger, headroomLedger)
 		}
 
-		page, err := fetchSorobanEventsRange(ctx, rpc, run.ContractIDs, cursor, batchEnd)
+		page, err := r.fetchEventsRangeWithFailover(ctx, run.ContractIDs, cursor, batchEnd, headroomLedger+backfillSafetyMargin)
 		if err != nil {
 			return fmt.Errorf("fetch events [%d,%d]: %w", cursor, batchEnd, err)
 		}
@@ -334,6 +350,90 @@ func (r *Runner) resetScope(ctx context.Context, run *backfill.Run) error {
 	}
 
 	return tx.Commit()
+}
+
+func (r *Runner) effectiveBatchLedgers(fromLedger, toLedger uint64) uint64 {
+	if r.BatchLedgers > 0 {
+		return r.BatchLedgers
+	}
+	if toLedger > fromLedger && (toLedger-fromLedger) > DefaultHotRetentionLedgers {
+		// 17,280 ledgers = 1 day at 5s/ledger, allowing a 14-day gap (241,920
+		// ledgers) to complete in 14 checkpointed passes.
+		return 17_280
+	}
+	return backfillBatchLedgers
+}
+
+func (r *Runner) orderedRPCClients(preferArchive bool) []*rpcClient {
+	seen := make(map[string]struct{}, 2+len(r.FallbackRPCURLs))
+	urls := make([]string, 0, 2+len(r.FallbackRPCURLs))
+	add := func(raw string) {
+		u := strings.TrimSpace(raw)
+		if u == "" {
+			return
+		}
+		if _, ok := seen[u]; ok {
+			return
+		}
+		seen[u] = struct{}{}
+		urls = append(urls, u)
+	}
+
+	if preferArchive {
+		add(r.ArchiveRPCURL)
+	}
+	add(r.RPCURL)
+	for _, fb := range r.FallbackRPCURLs {
+		add(fb)
+	}
+	if !preferArchive {
+		add(r.ArchiveRPCURL)
+	}
+
+	clients := make([]*rpcClient, 0, len(urls))
+	for _, u := range urls {
+		clients = append(clients, newRPCClient(u, r.httpClient(), r.RPCOptions, false))
+	}
+	return clients
+}
+
+func (r *Runner) headLedgerMinusMarginWithFailover(ctx context.Context, contractIDs []string) (uint64, error) {
+	clients := r.orderedRPCClients(false)
+	if len(clients) == 0 {
+		return 0, fmt.Errorf("no soroban rpc url configured")
+	}
+
+	var errs []string
+	for _, rpc := range clients {
+		headroom, err := r.headLedgerMinusMargin(ctx, rpc, contractIDs)
+		if err == nil {
+			return headroom, nil
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v", rpc.url, err))
+	}
+	return 0, fmt.Errorf("all rpc providers failed head probe (%s)", strings.Join(errs, "; "))
+}
+
+func (r *Runner) fetchEventsRangeWithFailover(
+	ctx context.Context,
+	contractIDs []string,
+	fromLedger, toLedger, latestLedger uint64,
+) (eventsPage, error) {
+	needsArchive := latestLedger > fromLedger && (latestLedger-fromLedger) > DefaultHotRetentionLedgers
+	clients := r.orderedRPCClients(needsArchive)
+	if len(clients) == 0 {
+		return eventsPage{}, fmt.Errorf("no soroban rpc url configured")
+	}
+
+	var errs []string
+	for _, rpc := range clients {
+		page, err := fetchSorobanEventsRange(ctx, rpc, contractIDs, fromLedger, toLedger)
+		if err == nil {
+			return page, nil
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v", rpc.url, err))
+	}
+	return eventsPage{}, fmt.Errorf("all rpc providers failed range [%d,%d] (%s)", fromLedger, toLedger, strings.Join(errs, "; "))
 }
 
 func (r *Runner) headLedgerMinusMargin(ctx context.Context, rpc *rpcClient, contractIDs []string) (uint64, error) {
