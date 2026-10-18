@@ -40,7 +40,7 @@ Instead, use one of the following:
 |-------|--------|
 | Acknowledgment | Within 24 hours (Critical: within 4 hours) |
 | Initial assessment | Within 3 business days |
-| Fix or mitigation | Critical: 72 hours, High: 14 days, Medium: 30 days, Low: 90 days |
+| Fix deployed (a mitigation does not stop the bounty clock) | Critical: 72 hours, High: 14 days, Medium: 30 days, Low: 90 days |
 | Reward paid (in-scope bounty reports) | Within 10 business days of the verified fix |
 | Public disclosure | 90 days after the report, or after the fix is deployed, whichever is earlier |
 

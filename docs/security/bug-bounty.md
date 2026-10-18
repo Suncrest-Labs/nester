@@ -5,9 +5,9 @@ minute: what is in scope, what will I be paid, and when. This document is the
 program of record for all three. The public summary is at
 [`/security#bug-bounty`](https://nester.finance/security#bug-bounty).
 
-**Status: self-hosted and published.** Nester is not listed on Immunefi — a
-listing requires an approved program and a funded escrow account, neither of
-which exists today. The program below is self-hosted, pays in USDC on Stellar,
+**Status: self-hosted and published.** Nester does not operate an Immunefi
+listing at the time of writing — a listing requires an approved program and a
+funded escrow account, neither of which exists today. The program below is self-hosted, pays in USDC on Stellar,
 and is binding from the date this document merged. See [§7](#7-launch-gate) for
 the two items that must be true before mainnet deposits open.
 
@@ -60,8 +60,11 @@ physical access; volumetric DoS; header nits with no demonstrated impact.
 
 Rewards scale with **funds at risk (FAR)**: the maximum USD value an attacker
 could move, redirect, or permanently freeze, measured at the report timestamp.
-If a proof of concept only demonstrates part of the impact, FAR is the
-demonstrated amount, not the theoretical maximum.
+A proof of concept has to demonstrate that the path is *reachable*; it does not
+have to move the full amount, and §5 forbids testing with real user funds. So FAR
+is assessed from the reachable path plus on-chain balances at the report
+timestamp — a PoC that reaches the vault's full balance is scored on that
+balance, not on the test amount it moved.
 
 | Severity | Qualifying impact | Reward | Ceiling |
 | --- | --- | --- | --- |
@@ -70,6 +73,11 @@ demonstrated amount, not the theoretical maximum.
 | **Medium** | FAR $5,000–$49,999 — limited data exposure, partial auth weakness, non-critical DoS | greater of **$2,000** or 2% of FAR | 10% of TVL, hard max **$15,000** |
 | **Low** | FAR < $5,000 — information disclosure, best practice with no fund path | **$500** flat | $500 |
 
+- **Impacts with no direct fund movement** are scored on what they expose or
+  freeze: a data exposure is valued at the aggregate balance of the accounts
+  whose data is reachable, an auth weakness at the funds its bypass reaches, and
+  a DoS at the funds locked while withdrawals are unavailable. The triage note
+  states the conversion.
 - **The cap is 10% of TVL.** No single payout exceeds 10% of total value locked
   at the report timestamp, whatever the tier formula produces.
 - **TVL** is the attested on-chain TVL across Nester vaults at the report
@@ -88,7 +96,7 @@ demonstrated amount, not the theoretical maximum.
 | Item | Value |
 | --- | --- |
 | Pool target | **$150,000 USDC** — equal to the Critical hard cap, so the worst-case single report is payable in full |
-| Custody | Dedicated Stellar account controlled by the treasury multisig (3-of-5, see [`multisig-signers.md`](./multisig-signers.md)) |
+| Custody | Dedicated Stellar account controlled by the treasury multisig; signer set and threshold per [`multisig-signers.md`](./multisig-signers.md) (recommended 3-of-5, not finalised) |
 | Segregation | Ring-fenced from operating funds; pays bounty rewards and nothing else |
 | Accounting | Report id in the transaction memo; payout ledger reconciled monthly |
 | Replenishment | Back to target within 10 business days of any payout |
@@ -99,7 +107,8 @@ mainnet deposits open, so the earmark is verifiable without trusting this page:
 
 ```bash
 curl -s "https://horizon.stellar.org/accounts/<POOL_ACCOUNT>" \
-  | jq -r '.balances[] | select(.asset_code=="USDC") | .balance'
+  | jq -r --arg issuer "<USDC_ISSUER>" \
+      '.balances[] | select(.asset_code=="USDC" and .asset_issuer==$issuer) | .balance'
 ```
 
 ## 4. Triage owner and SLA
@@ -119,7 +128,9 @@ curl -s "https://horizon.stellar.org/accounts/<POOL_ACCOUNT>" \
 | Public disclosure | 90 days after the report, or once the fix is deployed, whichever is earlier |
 
 Accepted Critical and High reports are paid **50% at triage acceptance** and 50%
-on verified fix. If we miss the fix target, the remaining half is paid at the
+on verified fix, once the pool in §3 is funded. A report accepted before the pool
+is funded is still assessed and fixed on the same SLA, and is paid in full within
+10 business days of funding — the delay is ours, so the reward is not reduced. If we miss the fix target, the remaining half is paid at the
 target date regardless — a missed SLA costs us, not the reporter.
 
 ## 5. Reporting and payment

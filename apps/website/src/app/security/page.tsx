@@ -167,9 +167,9 @@ export default function SecurityPage() {
         >
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-lg font-medium text-white">Funded Bug Bounty</h2>
-            <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/40 bg-emerald-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-200">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" aria-hidden="true" />
-              Live
+            <span className="inline-flex items-center gap-2 rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-300" aria-hidden="true" />
+              Published · pool funding at launch gate
             </span>
           </div>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-200">
@@ -181,7 +181,7 @@ export default function SecurityPage() {
           <dl className="mt-6 grid gap-4 sm:grid-cols-3">
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Earmarked pool
+                Earmarked pool (target)
               </dt>
               <dd className="mt-1 text-xl font-semibold text-white">{BOUNTY_POOL} USDC</dd>
             </div>
@@ -200,9 +200,19 @@ export default function SecurityPage() {
             </div>
           </dl>
 
-          <h3 className="mt-8 text-sm font-semibold text-white">Reward tiers</h3>
+          <p className="mt-3 max-w-3xl text-xs leading-5 text-amber-200/90">
+            The pool account is <strong>not funded yet</strong>. Its address and an on-chain
+            balance proof are published here before mainnet deposits open, so the earmark is
+            verifiable rather than promised.
+          </p>
+
+          <h3 id="reward-tiers-heading" className="mt-8 text-sm font-semibold text-white">Reward tiers</h3>
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[40rem] border-collapse text-left text-sm">
+            <table
+              className="w-full min-w-[40rem] border-collapse text-left text-sm"
+              aria-labelledby="reward-tiers-heading"
+            >
+              <caption className="sr-only">Reward tiers by severity, qualifying impact, reward formula and ceiling</caption>
               <thead>
                 <tr className="text-xs uppercase tracking-wide text-slate-400">
                   <th className="border-b border-white/10 py-2 pr-4 font-semibold">Severity</th>
