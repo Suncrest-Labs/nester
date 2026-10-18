@@ -6,6 +6,27 @@ set -euo pipefail
 # ownership transfer to multisig, and verification against a local Stellar network
 # mirroring the mainnet ledger version and protocol settings.
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../packages/contracts/scripts/check-launch-manifest.sh
+source "$REPO_ROOT/packages/contracts/scripts/check-launch-manifest.sh"
+
+if [ "${1:-}" = "--check-contract" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Usage: $0 --check-contract <contract-name-or-wasm>" >&2
+    exit 1
+  fi
+  assert_contract_allowed "$2"
+  exit 0
+fi
+
+# Validate any caller-requested contracts against launch-manifest.toml before building
+if [ -n "${DEPLOY_CONTRACTS:-}" ]; then
+  for req_contract in $DEPLOY_CONTRACTS; do
+    assert_contract_allowed "$req_contract"
+  done
+fi
+
 echo "============================================================"
 echo "Nester Mainnet Contract Deploy Dry-Run"
 echo "============================================================"
@@ -14,9 +35,14 @@ NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 RPC_URL="http://localhost:8000/soroban/rpc"
 HORIZON_URL="http://localhost:8000"
 
-echo "[*] Step 1: Building contracts for WASM release..."
-cd packages/contracts
-cargo build --release --target wasm32-unknown-unknown
+echo "[*] Step 1: Building launch-manifest contracts for WASM release..."
+cd "$REPO_ROOT/packages/contracts"
+for pkg in $(list_packages); do
+  assert_contract_allowed "$pkg"
+  echo "    Building $pkg..."
+  cargo build --release --target wasm32-unknown-unknown -p "$pkg"
+done
+check_wasm_sizes "target/wasm32-unknown-unknown/release"
 
 echo "[*] Step 2: Setting up local test identities & funding deployer..."
 # In a true dry-run against local node, we use stellar CLI configured for local network
@@ -54,7 +80,8 @@ echo "[*] Deployer address: $DEPLOYER_PUBKEY"
 echo "[*] Multisig admin address: $MULTISIG_PUBKEY"
 
 echo "[*] Step 3: Deploying Nester core vault contract..."
-VAULT_WASM="target/wasm32-unknown-unknown/release/nester_vault.wasm"
+VAULT_WASM="target/wasm32-unknown-unknown/release/vault_contract.wasm"
+assert_contract_allowed "$VAULT_WASM"
 if [ ! -f "$VAULT_WASM" ]; then
   echo "Error: Vault WASM not found at $VAULT_WASM"
   exit 1

@@ -11,11 +11,23 @@
 #
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../packages/contracts/scripts/check-launch-manifest.sh
+source "$SCRIPT_DIR/../packages/contracts/scripts/check-launch-manifest.sh"
+
 API_URL="${CONTRACT_AUDIT_API_URL:-https://money-machine-x402-ssyopros.zocomputer.io/api/smart-contract-audit}"
 ADDRESSES="${CONTRACT_AUDIT_ADDRESSES:-}"
+PACKAGES="${CONTRACT_AUDIT_PACKAGES:-$(list_packages | tr '\n' ',')}"
+
+IFS=',' read -ra PKG_LIST <<< "$PACKAGES"
+for pkg in "${PKG_LIST[@]}"; do
+  pkg="$(echo "$pkg" | xargs)"
+  [[ -z "$pkg" ]] && continue
+  assert_contract_allowed "$pkg"
+done
 
 if [[ -z "${X402_PAYMENT_PROOF:-}" ]]; then
-  echo "X402_PAYMENT_PROOF not set — skipping contract audit (configure secret in CI to enable)."
+  echo "X402_PAYMENT_PROOF not set — skipping remote contract audit (manifest scope verified)."
   exit 0
 fi
 

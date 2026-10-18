@@ -18,6 +18,26 @@
 # =============================================================================
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./check-launch-manifest.sh
+source "$SCRIPT_DIR/check-launch-manifest.sh"
+
+if [ "${1:-}" = "--check-contract" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Usage: $0 --check-contract <contract-name-or-wasm>" >&2
+    exit 1
+  fi
+  assert_contract_allowed "$2"
+  exit 0
+fi
+
+# Validate any caller-requested contracts against launch-manifest.toml before deploying
+if [ -n "${DEPLOY_CONTRACTS:-}" ]; then
+  for req_contract in $DEPLOY_CONTRACTS; do
+    assert_contract_allowed "$req_contract"
+  done
+fi
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 NETWORK="testnet"
@@ -105,11 +125,13 @@ cargo build --release --target wasm32-unknown-unknown -p nester-contract 2>&1 | 
 
 # Optimize WASMs (strips reference-types and other unsupported features)
 echo "⏳  Optimizing WASMs..."
-for wasm in vault_token vault_contract treasury_contract yield_registry_contract allocation_strategy_contract nester_contract; do
+for wasm in vault_token vault_contract treasury_contract yield_registry allocation_strategy_contract nester_contract; do
+  assert_contract_allowed "$wasm"
   stellar contract optimize \
     --wasm "$WASM_DIR/${wasm}.wasm" \
     --wasm-out "$WASM_DIR/${wasm}_opt.wasm" 2>/dev/null
 done
+check_wasm_sizes "$WASM_DIR"
 echo "✓  Build complete"
 
 # ── Helper: deploy a contract ─────────────────────────────────────────────────
@@ -117,6 +139,7 @@ echo "✓  Build complete"
 deploy_contract() {
   local name="$1"
   local wasm="$2"
+  assert_contract_allowed "$wasm"
   echo "" >&2
   echo "⏳  Deploying $name..." >&2
   local id

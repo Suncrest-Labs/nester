@@ -1,36 +1,36 @@
-.PHONY: build build-adapters test integration-test fmt clippy clean help deploy-testnet
+.PHONY: build build-launch check-launch-size build-adapters test integration-test fmt clippy clean help deploy-testnet
 
-# Yield source adapters (#812). Each external protocol gets one small adapter
-# implementing nester_common::adapters::YieldAdapter. Adding a third protocol
-# means adding its package here — no vault changes.
-ADAPTER_PKGS := adapter-lending-contract adapter-pool-contract
+# Yield source adapters (#812) that ship on mainnet per launch-manifest.toml (#1501).
+ADAPTER_PKGS := adapter-blend-contract adapter-soroswap-contract
 
 help:
 	@echo "Nester Soroban Workspace Commands"
 	@echo "=================================="
-	@echo "make build            - Build all contracts to WASM"
-	@echo "make build-adapters   - Build only the yield source adapters"
-	@echo "make test             - Run all unit tests"
-	@echo "make integration-test - Run multi-contract integration tests only"
-	@echo "make fmt              - Format code with cargo fmt"
-	@echo "make clippy           - Run clippy linter (must pass clean)"
-	@echo "make clean            - Remove build artifacts"
-	@echo "make deploy-testnet   - Deploy contracts to Stellar testnet"
+	@echo "make build             - Build launch-manifest contracts to WASM"
+	@echo "make build-launch      - Build only contracts & adapters in launch-manifest.toml"
+	@echo "make check-launch-size - Verify launch WASMs fit within manifest size budgets"
+	@echo "make build-adapters    - Build only the yield source adapters"
+	@echo "make test              - Run all unit tests"
+	@echo "make integration-test  - Run multi-contract integration tests only"
+	@echo "make fmt               - Format code with cargo fmt"
+	@echo "make clippy            - Run clippy linter (must pass clean)"
+	@echo "make clean             - Remove build artifacts"
+	@echo "make deploy-testnet    - Deploy contracts to Stellar testnet"
 
-build:
-	@echo "Building all Soroban contracts to WASM..."
-	@echo "  Building vault_token (required by vault)..."
-	@cargo build --release --target wasm32-unknown-unknown -p vault-token || exit 1
-	@for contract in contracts/*/; do \
-		if [ -f "$$contract/Cargo.toml" ]; then \
-			pkg_name=$$(grep '^name = ' "$$contract/Cargo.toml" | sed 's/name = "\(.*\)"/\1/'); \
-			if [ "$$pkg_name" != "vault-token" ]; then \
-				echo "  Building $$pkg_name..."; \
-				cargo build --release --target wasm32-unknown-unknown -p "$$pkg_name" || exit 1; \
-			fi \
-		fi \
+build: build-launch
+
+build-launch:
+	@echo "Building mainnet launch contracts from launch-manifest.toml..."
+	@for pkg in $$(bash scripts/check-launch-manifest.sh --list-packages); do \
+		echo "  Building $$pkg..."; \
+		cargo build --release --target wasm32-unknown-unknown -p "$$pkg" || exit 1; \
 	done
-	@echo "✓ Build successful - all contracts compiled to WASM"
+	@echo "✓ Launch build successful - all manifest contracts compiled to WASM"
+
+check-launch-size:
+	@echo "Checking WASM size budgets against launch-manifest.toml..."
+	@bash scripts/check-launch-manifest.sh --check-size target/wasm32-unknown-unknown/release
+	@echo "✓ All launch WASMs are within their manifest size budget"
 
 build-adapters:
 	@echo "Building yield source adapters to WASM..."

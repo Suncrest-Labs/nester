@@ -15,21 +15,41 @@ document; it requires a real, completed engagement.
 
 ## Target scope (proposed)
 
-- **Core Vault & Vault Factory** (`packages/contracts/contracts/vault`):
-  deposit/withdrawal accounting, share pricing invariants, pause/emergency
-  mechanics, fee collection, upgrade timelock integration.
-- **Yield Adapters**:
-  - `adapter_blend`: batch request formatting, reserve index positioning,
-    bToken accounting.
-  - `adapter_lending`: deposit/withdraw execution, slippage checks, interest
-    accrual reading.
-  - `adapter_pool`: pro-rata reserve valuation, derived APY window checks,
-    checkpoint resets.
-  - `adapter_soroswap`: AMM integration, fee compounding, liquidity
-    invariant protection.
-- **Access Control & Upgradability**: role-based permissions
-  (`Role::Upgrader`, `Role::Admin`), timelock delay enforcement, multi-sig
-  governance wiring.
+The canonical list of contracts and adapters that ship on mainnet (along with
+their WASM size budgets and audited commit hashes) is defined in
+[`packages/contracts/launch-manifest.toml`](../../packages/contracts/launch-manifest.toml).
+The mainnet deploy script, size budget gate, and audit pipeline all read from
+that manifest and reject any crate not listed in its `[contracts]` or
+`[adapters]` sections.
+
+- **Core Mainnet Contracts**:
+  - `vault` (`packages/contracts/contracts/vault`): deposit/withdrawal
+    accounting, share pricing invariants, pause/emergency mechanics, fee
+    collection, upgrade timelock integration.
+  - `vault_token` (`packages/contracts/contracts/vault_token`): SEP-41 vault
+    share token mint/burn, transfer, and allowance accounting.
+  - `vault_factory` (`packages/contracts/contracts/vault_factory`): vault
+    instance deployment and registry wiring.
+  - `treasury` (`packages/contracts/contracts/treasury`): protocol fee custody
+    and distribution.
+  - `yield_registry` (`packages/contracts/contracts/yield_registry`) &
+    `allocation_strategy` (`packages/contracts/contracts/allocation_strategy`):
+    yield source registration and capital allocation weights.
+  - `nester` (`packages/contracts/contracts/nester`): protocol orchestrator and
+    address directory.
+  - `access_control` (`packages/contracts/contracts/access_control`) &
+    `timelock` (`packages/contracts/contracts/timelock`): role-based
+    permissions (`Role::Upgrader`, `Role::Admin`), timelock delay enforcement,
+    multi-sig governance wiring.
+- **Mainnet Yield Adapters**:
+  - `adapter_blend` (`packages/contracts/contracts/adapter_blend`): batch
+    request formatting, reserve index positioning, bToken accounting.
+  - `adapter_soroswap` (`packages/contracts/contracts/adapter_soroswap`): AMM
+    integration, fee compounding, liquidity invariant protection.
+- **Explicitly Excluded from Mainnet v1 Launch** (listed under `[excluded]` in
+  [`packages/contracts/launch-manifest.toml`](../../packages/contracts/launch-manifest.toml)):
+  `lp_aggregator`, `referral`, `goal_rewards`, `savings_goal`,
+  `recurring_deposit`, `adapter_lending`, `adapter_pool`, and `rent_escrow`.
 
 This scope is a starting proposal for the eventual RFP, not a commitment
 any auditor has reviewed or accepted.

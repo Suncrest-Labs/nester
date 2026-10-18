@@ -1,0 +1,155 @@
+# =============================================================================
+# Nester Mainnet Launch Manifest (Issue #1501)
+#
+# Single source of truth for the contracts and yield adapters that ship on
+# Stellar Mainnet. Read by:
+#   - Mainnet/testnet deployment scripts (`scripts/mainnet-deploy-dryrun.sh`,
+#     `packages/contracts/scripts/deploy-testnet.sh`)
+#   - WASM size budget gate (`packages/contracts/scripts/check-launch-manifest.sh`)
+#   - Pre-deploy contract audit script (`scripts/contract-audit.sh`)
+#   - Audit scope documentation (`docs/security/contract_audits.md`)
+#
+# Any contract crate not listed under `[contracts.*]` or `[adapters.*]` MUST
+# be rejected by the mainnet deployment pipeline.
+# =============================================================================
+
+[manifest]
+schema_version = 1
+max_wasm_bytes = 131072 # 128 KiB Soroban mainnet WASM size limit
+
+# ── Core Mainnet Launch Contracts ─────────────────────────────────────────────
+
+[contracts.vault]
+package = "vault-contract"
+wasm = "vault_contract.wasm"
+path = "contracts/vault"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[contracts.vault_token]
+package = "vault-token-contract"
+wasm = "vault_token.wasm"
+path = "contracts/vault_token"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[contracts.vault_factory]
+package = "vault-factory-contract"
+wasm = "vault_factory_contract.wasm"
+path = "contracts/vault_factory"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[contracts.treasury]
+package = "treasury-contract"
+wasm = "treasury_contract.wasm"
+path = "contracts/treasury"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[contracts.yield_registry]
+package = "yield-registry-contract"
+wasm = "yield_registry.wasm"
+path = "contracts/yield_registry"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[contracts.allocation_strategy]
+package = "allocation-strategy-contract"
+wasm = "allocation_strategy_contract.wasm"
+path = "contracts/allocation_strategy"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[contracts.nester]
+package = "nester-contract"
+wasm = "nester_contract.wasm"
+path = "contracts/nester"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[contracts.access_control]
+package = "nester-access-control"
+wasm = "nester_access_control.wasm"
+path = "contracts/access_control"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[contracts.timelock]
+package = "nester-timelock"
+wasm = "nester_timelock.wasm"
+path = "contracts/timelock"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+# ── Mainnet Launch Yield Adapters ─────────────────────────────────────────────
+
+[adapters.adapter_blend]
+package = "adapter-blend-contract"
+wasm = "adapter_blend.wasm"
+path = "contracts/adapter_blend"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+[adapters.adapter_soroswap]
+package = "adapter-soroswap-contract"
+wasm = "adapter_soroswap.wasm"
+path = "contracts/adapter_soroswap"
+max_wasm_bytes = 131072
+audited_commit = "77a7c43b88a33001355cf90a6b388133e6e703a6"
+
+# ── Excluded from Mainnet Launch (Must Never Be Deployed by Mainnet Scripts) ──
+
+[excluded.lp_aggregator]
+package = "lp_aggregator"
+wasm = "lp_aggregator.wasm"
+path = "contracts/lp_aggregator"
+reason = "Swap execution is still a stub (execute_hop returns 0)"
+
+[excluded.referral]
+package = "referral-contract"
+wasm = "referral.wasm"
+path = "contracts/referral"
+reason = "Post-launch growth feature; excluded from v1 mainnet launch scope"
+
+[excluded.goal_rewards]
+package = "goal-rewards-contract"
+wasm = "goal_rewards.wasm"
+path = "contracts/goal_rewards"
+reason = "Post-launch savings reward feature; excluded from v1 mainnet launch scope"
+
+[excluded.savings_goal]
+package = "savings-goal-contract"
+wasm = "savings_goal.wasm"
+path = "contracts/savings_goal"
+reason = "Post-launch savings goal feature; excluded from v1 mainnet launch scope"
+
+[excluded.recurring_deposit]
+package = "nester-recurring-deposit"
+wasm = "nester_recurring_deposit.wasm"
+path = "contracts/recurring_deposit"
+reason = "Post-launch automation feature; excluded from v1 mainnet launch scope"
+
+[excluded.adapter_lending]
+package = "adapter-lending-contract"
+wasm = "adapter_lending.wasm"
+path = "contracts/adapter_lending"
+reason = "Generic mock/reference lending adapter; replaced by protocol-specific adapter_blend"
+
+[excluded.adapter_pool]
+package = "adapter-pool-contract"
+wasm = "adapter_pool.wasm"
+path = "contracts/adapter_pool"
+reason = "Generic mock/reference LP adapter; replaced by protocol-specific adapter_soroswap"
+
+[excluded.rent_escrow]
+package = "nester-rent-escrow"
+wasm = "nester_rent_escrow.wasm"
+path = "contracts/rent_escrow"
+reason = "Unimplemented compile_error! placeholder crate"
+
+[excluded.dummy_vault]
+package = "dummy-vault"
+wasm = "dummy_vault.wasm"
+path = "contracts/test_fixtures/dummy_vault"
+reason = "Test fixture only"
