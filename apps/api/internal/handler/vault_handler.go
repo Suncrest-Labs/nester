@@ -795,6 +795,9 @@ func (h *VaultHandler) writeDomainError(w http.ResponseWriter, r *http.Request, 
 	case errors.Is(err, vault.ErrDepositNotAllowlisted):
 		response.WriteJSON(w, http.StatusForbidden,
 			response.Err(http.StatusForbidden, "DEPOSIT_NOT_ALLOWLISTED", err.Error()))
+	case errors.Is(err, vault.ErrAddressRestricted):
+		response.WriteJSON(w, http.StatusForbidden,
+			response.Err(http.StatusForbidden, "WALLET_RESTRICTED", err.Error()))
 	case errors.Is(err, vault.ErrInsufficientBalance), errors.Is(err, vault.ErrVaultClosed), errors.Is(err, vault.ErrVaultNotActive):
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 	// 400, not 500: the deposit is well-formed, it just would push this
@@ -887,7 +890,8 @@ func stringToDecimal(s string) (decimal.Decimal, error) {
 }
 
 func (h *VaultHandler) previewDeposit(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.GetUserFromContext(r.Context()); !ok {
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
 		response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized"))
 		return
 	}
@@ -912,8 +916,9 @@ func (h *VaultHandler) previewDeposit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := h.service.PreviewDeposit(r.Context(), service.PreviewDepositInput{
-		VaultID: vaultID,
-		Amount:  amount,
+		VaultID:       vaultID,
+		Amount:        amount,
+		WalletAddress: user.WalletAddress,
 	})
 	if err != nil {
 		h.writeDomainError(w, r, err)

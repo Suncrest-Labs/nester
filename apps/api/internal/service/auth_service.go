@@ -30,6 +30,7 @@ var (
 	ErrChallengeExpired          = errors.New("challenge expired or invalid")
 	ErrSignatureInvalid          = errors.New("signature is invalid")
 	ErrWalletInvalid             = errors.New("wallet address is invalid")
+	ErrWalletRestricted          = errors.New("request cannot be processed for this wallet address")
 	ErrDeviceFingerprintRequired = errors.New("device fingerprint is required")
 	// ErrRefreshFailed is the single generic error surfaced to callers of
 	// Refresh, regardless of the internal cause (invalid, expired, reused,
@@ -37,6 +38,12 @@ var (
 	// leak over the wire, only into the audit log / anomaly hook.
 	ErrRefreshFailed = errors.New("refresh token is invalid or expired")
 )
+
+// WalletSanctionsScreener is the narrow interface used by AuthService and
+// VaultService to screen wallet addresses at auth and deposit (nester#1522).
+type WalletSanctionsScreener interface {
+	ScreenWalletAddress(ctx context.Context, walletAddress string) error
+}
 
 // SessionMetadata carries the request context captured when a session is
 // created or refreshed.
@@ -92,6 +99,7 @@ type authService struct {
 	anomaly     AnomalyDetector
 	audit       AuditLogger
 	wsHub       WSSessionCloser
+	screener    WalletSanctionsScreener
 	config      AuthConfig
 }
 
@@ -117,6 +125,14 @@ func NewAuthService(
 	}
 }
 
+// SetSanctionsScreener configures wallet sanctions screening on an AuthService
+// if the concrete implementation supports it (nester#1522).
+func SetAuthSanctionsScreener(svc AuthService, screener WalletSanctionsScreener) {
+	if impl, ok := svc.(*authService); ok {
+		impl.screener = screener
+	}
+}
+
 func (s *authService) GenerateChallenge(ctx context.Context, walletAddress string) (string, error) {
 	if _, err := keypair.ParseAddress(walletAddress); err != nil {
 		return "", ErrWalletInvalid
@@ -137,6 +153,24 @@ func (s *authService) GenerateChallenge(ctx context.Context, walletAddress strin
 func (s *authService) VerifyAndIssue(ctx context.Context, walletAddress, signature, challenge string, meta SessionMetadata) (Tokens, error) {
 	if meta.DeviceFingerprint == "" {
 		return Tokens{}, ErrDeviceFingerprintRequired
+	}
+
+	if s.screener != nil {
+		if err := s.screener.ScreenWalletAddress(ctx, walletAddress); err != nil {
+			if s.audit != nil {
+				_ = s.audit.Log(ctx, AuditEntry{
+					Action:     "compliance.sanctions_blocked",
+					EntityType: "wallet",
+					EntityID:   uuid.Nil,
+					IPAddress:  meta.IPAddress,
+					NewValue: map[string]any{
+						"wallet_address": walletAddress,
+						"checkpoint":     "auth_verify",
+					},
+				})
+			}
+			return Tokens{}, ErrWalletRestricted
+		}
 	}
 
 	stored, err := s.store.GetAndDelete(ctx, walletAddress)

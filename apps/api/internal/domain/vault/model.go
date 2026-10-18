@@ -130,6 +130,9 @@ var (
 	// Kind is Forbidden: the service is available, the user is simply not in
 	// the current cohort.
 	ErrDepositNotAllowlisted error = apperror.NewForbidden("VAULT_DEPOSIT_NOT_ALLOWLISTED", "your account is not yet enabled for deposits; join the waitlist")
+	// ErrAddressRestricted is returned when a wallet address hits sanctions
+	// screening at deposit time (nester#1522).
+	ErrAddressRestricted error = apperror.NewForbidden("WALLET_RESTRICTED", "request cannot be processed for this wallet address")
 )
 
 const (

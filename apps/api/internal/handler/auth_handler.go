@@ -170,6 +170,10 @@ func (h *AuthHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 	tokens, err := h.authService.VerifyAndIssue(r.Context(), req.WalletAddress, req.Signature, req.Challenge, clientMetadata(r, req.DeviceFingerprint))
 	if err != nil {
+		if errors.Is(err, service.ErrWalletRestricted) {
+			response.WriteJSON(w, http.StatusForbidden, response.Err(http.StatusForbidden, "WALLET_RESTRICTED", err.Error()))
+			return
+		}
 		if errors.Is(err, service.ErrChallengeExpired) || errors.Is(err, service.ErrSignatureInvalid) || errors.Is(err, service.ErrWalletInvalid) {
 			response.WriteJSON(w, http.StatusUnauthorized, response.Err(http.StatusUnauthorized, "UNAUTHORIZED", err.Error()))
 			return

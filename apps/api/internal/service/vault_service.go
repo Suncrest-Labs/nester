@@ -187,6 +187,10 @@ type VaultService struct {
 	// as before configurability existed. Production wires an override in
 	// SetOutflowBreakerConfig when the operator has set non-default values.
 	outflowBreakerConfig *vault.OutflowBreakerConfig
+	// sanctionsScreener screens wallet addresses at deposit intent building
+	// and deposit recording (nester#1522). Optional: a nil screener allows
+	// all addresses.
+	sanctionsScreener WalletSanctionsScreener
 }
 
 // BalanceAuditRecorder appends one balance-changing operation to the
@@ -361,6 +365,11 @@ type DepositAllowlistGate interface {
 // SetDepositAllowlist installs the deposit allowlist gate.
 func (s *VaultService) SetDepositAllowlist(gate DepositAllowlistGate) {
 	s.depositAllowlist = gate
+}
+
+// SetSanctionsScreener installs the wallet sanctions screener (nester#1522).
+func (s *VaultService) SetSanctionsScreener(screener WalletSanctionsScreener) {
+	s.sanctionsScreener = screener
 }
 
 // GoalYieldRouter lets VaultService honor a savings goal's per-goal
@@ -623,6 +632,13 @@ func (s *VaultService) RecordDeposit(ctx context.Context, input RecordDepositInp
 	if s.depositAllowlist != nil && input.UserID != uuid.Nil {
 		if err := s.depositAllowlist.EnsureDepositAllowed(ctx, input.UserID); err != nil {
 			return vault.Vault{}, err
+		}
+	}
+
+	// Wallet sanctions screening (nester#1522).
+	if s.sanctionsScreener != nil && strings.TrimSpace(input.WalletAddress) != "" {
+		if err := s.sanctionsScreener.ScreenWalletAddress(ctx, input.WalletAddress); err != nil {
+			return vault.Vault{}, vault.ErrAddressRestricted
 		}
 	}
 
@@ -1852,8 +1868,9 @@ func (s *VaultService) InvalidateSharePriceCache(vaultID uuid.UUID) {
 // ── Preview endpoints ─────────────────────────────────────────────────────────
 
 type PreviewDepositInput struct {
-	VaultID uuid.UUID
-	Amount  decimal.Decimal
+	VaultID       uuid.UUID
+	Amount        decimal.Decimal
+	WalletAddress string
 }
 
 type PreviewDepositOutput struct {
@@ -1877,6 +1894,11 @@ type PreviewWithdrawOutput struct {
 }
 
 func (s *VaultService) PreviewDeposit(ctx context.Context, input PreviewDepositInput) (PreviewDepositOutput, error) {
+	if s.sanctionsScreener != nil && strings.TrimSpace(input.WalletAddress) != "" {
+		if err := s.sanctionsScreener.ScreenWalletAddress(ctx, input.WalletAddress); err != nil {
+			return PreviewDepositOutput{}, vault.ErrAddressRestricted
+		}
+	}
 	if input.VaultID == uuid.Nil {
 		return PreviewDepositOutput{}, vault.ErrInvalidVault
 	}
