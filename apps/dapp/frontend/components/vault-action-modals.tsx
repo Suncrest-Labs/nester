@@ -31,6 +31,7 @@ import {
 import {
     buildDepositTransaction,
     buildWithdrawTransaction,
+    computeMinSharesOut,
     signTransaction,
     submitTransaction,
     UserRejectedError,
@@ -241,6 +242,11 @@ export function DepositModal({
                     : vault.contractAddress) ??
                 requireContractId(selectedAsset === "XLM" ? "vaultXlm" : "vault");
 
+            const minSharesOut =
+                depositPreview?.available && depositPreview.sharesExpected > BigInt(0)
+                    ? computeMinSharesOut(depositPreview.sharesExpected)
+                    : BigInt(0);
+
             const { xdr } = await buildDepositTransaction({
                 walletAddress: address,
                 contractId,
@@ -249,6 +255,7 @@ export function DepositModal({
                 // reintroduces the precision loss this parsing work exists
                 // to remove.
                 amount: amountStroops ?? BigInt(0),
+                minSharesOut,
             });
             const signedXdr = await signTransaction(xdr);
 

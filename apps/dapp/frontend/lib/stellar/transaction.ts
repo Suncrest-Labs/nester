@@ -39,6 +39,22 @@ export const VAULT_XLM_CONTRACT_ID = getContractId("vaultXlm");
 
 export const USDC_CONTRACT_ID = getContractId("usdc");
 
+/** Default slippage tolerance in basis points (0.5% = 50 bps) (#1502). */
+export const DEFAULT_SLIPPAGE_BPS = 50;
+
+/**
+ * Compute minimum shares to receive given `sharesExpected` from `preview_deposit`
+ * and a slippage tolerance in basis points (#1502).
+ */
+export function computeMinSharesOut(
+  sharesExpected: bigint,
+  slippageBps: number = DEFAULT_SLIPPAGE_BPS
+): bigint {
+  if (sharesExpected <= BigInt(0)) return BigInt(0);
+  const clampedBps = Math.max(0, Math.min(10_000, Math.floor(slippageBps)));
+  return (sharesExpected * BigInt(10_000 - clampedBps)) / BigInt(10_000);
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface DepositParams {
@@ -48,6 +64,11 @@ export interface DepositParams {
   contractId: string;
   /** Amount in stroops (bigint, 7 decimals = 1 XLM, 6 decimals = 1 USDC). */
   amount: bigint | number;
+  /**
+   * Minimum vault shares to receive in stroops (slippage guard, 3rd arg of
+   * `deposit(user, amount, min_shares_out)`). Defaults to 0 (#1502).
+   */
+  minSharesOut?: bigint | number;
 }
 
 export interface WithdrawParams {
@@ -256,14 +277,13 @@ export async function estimateWithdrawFee(
 /**
  * Build a Soroban `deposit` contract invocation transaction.
  *
- * The vault contract's `deposit(user, amount)` function is called.
- * Amount can be provided as bigint stroops (recommended) or as a human-readable number
- * (for backwards compatibility; will be converted to stroops using Math.round).
+ * The vault contract's `deposit(user, amount, min_shares_out)` function is called (#1502).
+ * Amount and minSharesOut can be provided as bigint stroops (recommended) or as human-readable numbers.
  */
 export async function buildDepositTransaction(
   params: DepositParams
 ): Promise<BuiltTransaction> {
-  const { walletAddress, contractId, amount: rawAmount } = params;
+  const { walletAddress, contractId, amount: rawAmount, minSharesOut: rawMinShares = 0 } = params;
   const network = getCurrentNetwork();
 
   const server = getServer(network.rpcUrl);
@@ -273,6 +293,10 @@ export async function buildDepositTransaction(
   const amountStroops = typeof rawAmount === "bigint"
     ? rawAmount
     : BigInt(Math.round(rawAmount * 10_000_000));
+
+  const minSharesStroops = typeof rawMinShares === "bigint"
+    ? rawMinShares
+    : BigInt(Math.round(Number(rawMinShares) * 10_000_000));
 
   const contract = new Contract(assertValidContractId(contractId, "vault contract"));
 
@@ -284,7 +308,8 @@ export async function buildDepositTransaction(
       contract.call(
         "deposit",
         new Address(walletAddress).toScVal(),
-        nativeToScVal(amountStroops, { type: "i128" })
+        nativeToScVal(amountStroops, { type: "i128" }),
+        nativeToScVal(minSharesStroops, { type: "i128" })
       )
     )
     .setTimeout(30)
@@ -507,14 +532,30 @@ export async function executeVaultDeposit(params: {
   contractId: string;
   asset: "USDC" | "XLM";
   amount: number;
+  minSharesOut?: bigint | number;
+  slippageBps?: number;
 }): Promise<TransactionReceipt> {
-  const { walletAddress, contractId, amount } = params;
+  const { walletAddress, contractId, amount, slippageBps = DEFAULT_SLIPPAGE_BPS } = params;
 
   if (!isRealContractId(contractId)) {
     throw new Error("Vault is not yet live. Deposits are currently disabled.");
   }
 
-  const { xdr } = await buildDepositTransaction({ walletAddress, contractId, amount });
+  let minSharesOut = params.minSharesOut;
+  if (minSharesOut === undefined) {
+    const preview = await previewDeposit({ walletAddress, contractId, amount });
+    minSharesOut =
+      preview.available && preview.sharesExpected > BigInt(0)
+        ? computeMinSharesOut(preview.sharesExpected, slippageBps)
+        : BigInt(0);
+  }
+
+  const { xdr } = await buildDepositTransaction({
+    walletAddress,
+    contractId,
+    amount,
+    minSharesOut,
+  });
   const signedXdr = await signTransaction(xdr);
   return submitTransaction(signedXdr);
 }
