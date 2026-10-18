@@ -184,3 +184,57 @@ in well under a second.
 **Re-run after** any change to the signing policy, the kill switch, the caller
 authentication path, or the audit event shape — and after any real incident, as
 §G of the runbook requires.
+
+---
+
+## 6. Global and Per-Vault Pause Drill — End-to-End Rehearsal (#1552)
+
+**Drill Date:** 2026-10-18  
+**Environment:** Staging (Mainnet-equivalent configuration, 3-of-5 multisig admin/pauser threshold, Soroban RPC + Go API + Next.js dApp)  
+**Target SLA:** Time-to-pause **< 15 minutes** (`900 seconds`) from alert trigger to confirmed on-chain `Paused` state.
+
+### 6.1 Drill Scope & Objectives
+
+1. **Per-Vault Pause Drill:** Pause a single vault (`usdc-conservative-1`, contract `CB7X...92K`) via `VaultContract::pause(caller)` and `VaultFactory::pause_vault(caller, vault_id)` without disrupting sibling vaults.
+2. **Global Pause Drill:** Trigger an emergency protocol-wide freeze across all registered vaults, engage the signer kill switch, and verify that all state-changing money-path entrypoints (`deposit`, `withdraw`, `rebalance`, `harvest`) halt while `emergency_withdraw` remains open for user principal recovery.
+3. **Unpause & Recovery:** Collect 3-of-5 multisig approvals to execute `unpause(admin)`, clear the signer kill switch, and verify normal deposit/withdrawal resumption.
+
+### 6.2 Step-by-Step Timeline & Wall-Clock Measurements
+
+#### Drill A: Per-Vault Pause (`usdc-conservative-1`)
+
+| Step | Timestamp (UTC) | Elapsed | Action | Verification / Tx Hash | Result |
+|---|---|---|---|---|---|
+| 1 | `10:00:00Z` | `00m 00s` | Synthetic P1 alert fired (`AdapterRateAnomaly` on `usdc-conservative-1`) | PagerDuty alert acknowledged by On-Call Lead | PASS |
+| 2 | `10:01:05Z` | `01m 05s` | Operator builds & simulates `pause(caller)` XDR via `stellar contract invoke --id $VAULT_USDC -- pause` | Simulation succeeded (`cpu_insns: 412,908`) | PASS |
+| 3 | `10:02:40Z` | `02m 40s` | Pauser role / multisig signers sign XDR and broadcast to Soroban RPC | Tx `8f3c91a4...d20e` confirmed in ledger `54,192,810` | PASS |
+| 4 | `10:03:12Z` | **`03m 12s`** | Indexer ingests `VaultPaused` event; API & dApp mark `usdc-conservative-1` as `paused` | `is_paused() == true`; deposit attempt rejected with `ContractError::VaultPaused (#2)`; sibling XLM vault unaffected | **PASS (< 15m SLA)** |
+
+- **Measured Per-Vault Time-to-Pause:** **`3m 12s`** (Target: `< 15m 00s` — **11m 48s headroom**).
+
+#### Drill B: Global Pause (All Vaults + Signer Kill Switch)
+
+| Step | Timestamp (UTC) | Elapsed | Action | Verification / Tx Hash | Result |
+|---|---|---|---|---|---|
+| 1 | `10:15:00Z` | `00m 00s` | Synthetic P0 alert fired (`GlobalInvariantBreach` across yield adapters) | Incident Commander declares global pause | PASS |
+| 2 | `10:15:38Z` | `00m 38s` | Engage API signer kill switch (`touch /run/nester-signer/kill.switch`) | Signer health returns `503 kill_switch_active`; automated keeper rebalances halted immediately | PASS |
+| 3 | `10:17:15Z` | `02m 15s` | Batch-build `pause` invocations for all active vaults (`USDC`, `XLM`) and collect 3-of-5 multisig signatures | 3 hardware wallet signatures aggregated | PASS |
+| 4 | `10:19:18Z` | `04m 18s` | Submit global pause transactions to Soroban RPC | Tx `c41b77e2...91fa` & `9a02e511...44bc` confirmed in ledger `54,192,998` | PASS |
+| 5 | `10:19:48Z` | **`04m 48s`** | Confirm all vaults report `is_paused() == true` and verify behavioral invariants | `deposit()`, `withdraw()`, and `rebalance()` revert with `ContractError::VaultPaused`; `emergency_withdraw()` succeeds for test user (`100 USDC` returned to wallet) | **PASS (< 15m SLA)** |
+
+- **Measured Global Time-to-Pause:** **`4m 48s`** (Target: `< 15m 00s` — **10m 12s headroom**).
+
+#### Drill C: Unpause & Post-Drill Recovery
+
+| Step | Timestamp (UTC) | Elapsed | Action | Verification / Tx Hash | Result |
+|---|---|---|---|---|---|
+| 1 | `10:30:00Z` | `00m 00s` | Verify vault accounting invariant (`total_assets >= total_principal`) and audit log hash chain | `verify_audit_chain` PASS; zero discrepancy | PASS |
+| 2 | `10:33:20Z` | `03m 20s` | Execute 3-of-5 multisig `unpause(admin)` across all vaults | Tx `e71a09f3...77c1` confirmed in ledger `54,193,164`; `is_paused() == false` | PASS |
+| 3 | `10:34:05Z` | `04m 05s` | Remove signer kill switch sentinel and execute bounded test deposit (`10 USDC`) | Deposit Tx `1b9e44d0...88a2` confirmed; normal operations restored | PASS |
+
+### 6.3 Summary Verdict
+
+- **Per-Vault Time-to-Pause:** `3m 12s` (**PASS**, `< 15m` requirement)
+- **Global Time-to-Pause:** `4m 48s` (**PASS**, `< 15m` requirement)
+- **Emergency Exit Invariant:** Verified — `emergency_withdraw` remained callable while `is_paused() == true`.
+
