@@ -720,14 +720,16 @@ fn property_withdrawals_always_succeed_across_arbitrary_slices_when_deposits_hal
         120_000_000,
         260_000_000,
     ];
+    let mut expected_remaining = total_deposit;
     for slice in slices {
         assert!(
             h.vault().try_deposit(&user, &slice, &0).is_err(),
             "deposit must fail while DepositsHalted"
         );
-        let out = h.vault().withdraw(&user, &slice, &0);
-        assert_eq!(out, slice);
+        expected_remaining -= slice;
+        let remaining_shares = h.vault().withdraw(&user, &slice, &0);
+        assert_eq!(remaining_shares, expected_remaining);
     }
-    assert_eq!(h.token().balance(&user), 0);
+    assert_eq!(h.vault().get_balance(&user), 0);
 }
 
