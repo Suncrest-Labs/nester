@@ -86,3 +86,9 @@ pub enum ContractError {
 
 // Alias for backwards compatibility
 pub type Error = ContractError;
+
+impl ContractError {
+    /// Alias for [`ContractError::ArithmeticOverflow`].
+    #[allow(non_upper_case_globals)]
+    pub const Overflow: ContractError = ContractError::ArithmeticOverflow;
+}

@@ -21,6 +21,12 @@ libfuzzer-sys = "0.4"
 [dependencies.vault-contract]
 path = ".."
 
+[dependencies.vault-token-contract]
+path = "../../vault_token"
+
+[dependencies.nester-common]
+path = "../../../libs/common"
+
 [[bin]]
 name = "conversion_math"
 path = "fuzz_targets/conversion_math.rs"

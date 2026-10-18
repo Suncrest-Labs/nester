@@ -533,31 +533,89 @@ fn set_total_assets_updates_value() {
 #[test]
 fn pure_shares_for_deposit_first() {
     // total_supply == 0 → 1:1
-    assert_eq!(crate::shares_for_deposit_math(1_000, 0, 0), 1_000);
+    assert_eq!(crate::shares_for_deposit_math(1_000, 0, 0), Ok(1_000));
 }
 
 #[test]
 fn pure_shares_for_deposit_proportional() {
     // 1_000 into vault with 10_000 supply / 20_000 assets → 500 shares
-    assert_eq!(crate::shares_for_deposit_math(1_000, 10_000, 20_000), 500);
+    assert_eq!(
+        crate::shares_for_deposit_math(1_000, 10_000, 20_000),
+        Ok(500)
+    );
 }
 
 #[test]
 fn pure_amount_for_shares_no_supply() {
     // total_supply == 0 → 1:1
-    assert_eq!(crate::amount_for_shares_math(500, 0, 0), 500);
+    assert_eq!(crate::amount_for_shares_math(500, 0, 0), Ok(500));
 }
 
 #[test]
 fn pure_amount_for_shares_proportional() {
     // 500 shares of 10_000 supply backed by 20_000 assets → 1_000
-    assert_eq!(crate::amount_for_shares_math(500, 10_000, 20_000), 1_000);
+    assert_eq!(
+        crate::amount_for_shares_math(500, 10_000, 20_000),
+        Ok(1_000)
+    );
 }
 
 #[test]
 fn pure_floor_division_truncates() {
     // 1 share of 3 supply backed by 10 assets → floor(10/3) = 3
-    assert_eq!(crate::amount_for_shares_math(1, 3, 10), 3);
+    assert_eq!(crate::amount_for_shares_math(1, 3, 10), Ok(3));
+}
+
+#[test]
+fn pure_conversion_overflow_near_max_over_1e7_returns_typed_error() {
+    let scale = 10_000_000_i128; // 10^7
+    let near_limit = (i128::MAX / scale) + 1;
+
+    assert_eq!(
+        crate::shares_for_deposit_math(near_limit, scale, 1),
+        Err(nester_common::ContractError::ArithmeticOverflow)
+    );
+    assert_eq!(
+        crate::amount_for_shares_math(near_limit, 1, scale),
+        Err(nester_common::ContractError::ArithmeticOverflow)
+    );
+    // Exact boundary that fits without overflowing i128::MAX
+    let exact_limit = i128::MAX / scale;
+    assert_eq!(
+        crate::shares_for_deposit_math(exact_limit, scale, scale),
+        Ok(exact_limit)
+    );
+    assert_eq!(
+        crate::amount_for_shares_math(exact_limit, scale, scale),
+        Ok(exact_limit)
+    );
+}
+
+#[test]
+fn contract_conversion_overflow_near_max_over_1e7_returns_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let user = Address::generate(&env);
+
+    let scale = 10_000_000_i128; // 10^7
+    client.mint_for_deposit(&user, &scale);
+
+    let near_limit = (i128::MAX / scale) + 1;
+    let expected_err = Err(Ok(soroban_sdk::Error::from_contract_error(
+        nester_common::ContractError::ArithmeticOverflow as u32,
+    )));
+
+    assert_eq!(client.try_shares_for_deposit(&near_limit), expected_err);
+    assert_eq!(client.try_amount_for_shares(&near_limit), expected_err);
+    assert_eq!(
+        client.try_mint_for_deposit(&user, &near_limit),
+        expected_err
+    );
+    assert_eq!(
+        client.try_burn_for_withdrawal(&user, &near_limit),
+        expected_err
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +659,10 @@ fn set_total_assets_unauthorized_caller_rejected() {
 
     env.mock_auths(&[]);
     let result = client.try_set_total_assets(&500_i128);
-    assert!(result.is_err(), "non-vault caller must not update total_assets");
+    assert!(
+        result.is_err(),
+        "non-vault caller must not update total_assets"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -655,8 +716,16 @@ fn transfer_to_self_is_a_no_op() {
     let before_supply = client.total_supply();
     client.transfer(&user, &user, &500_i128);
 
-    assert_eq!(client.balance(&user), 1_000_i128, "self-transfer must preserve balance");
-    assert_eq!(client.total_supply(), before_supply, "self-transfer must not change supply");
+    assert_eq!(
+        client.balance(&user),
+        1_000_i128,
+        "self-transfer must preserve balance"
+    );
+    assert_eq!(
+        client.total_supply(),
+        before_supply,
+        "self-transfer must not change supply"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -690,7 +759,11 @@ fn transfer_from_decrements_allowance() {
     client.approve(&owner, &spender, &800_i128, &(current_ledger + 1_000));
 
     client.transfer_from(&spender, &owner, &to, &300_i128);
-    assert_eq!(client.allowance(&owner, &spender), 500_i128, "allowance decremented");
+    assert_eq!(
+        client.allowance(&owner, &spender),
+        500_i128,
+        "allowance decremented"
+    );
     assert_eq!(client.balance(&to), 300_i128);
     assert_eq!(client.balance(&owner), 700_i128);
 }
@@ -712,21 +785,34 @@ fn total_supply_invariant_across_full_sequence() {
     assert_eq!(client.balance(&a), 1_000_i128);
     assert_eq!(client.balance(&b), 0_i128);
     assert_eq!(client.total_supply(), 1_000_i128);
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 2. Transfer 400 A → B. Supply unchanged.
     client.transfer(&a, &b, &400_i128);
     assert_eq!(client.balance(&a), 600_i128);
     assert_eq!(client.balance(&b), 400_i128);
-    assert_eq!(client.total_supply(), 1_000_i128, "supply must not change on transfer");
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        1_000_i128,
+        "supply must not change on transfer"
+    );
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 3. Burn 100 from A's own balance. Supply decreases by 100.
     client.burn(&a, &100_i128);
     assert_eq!(client.balance(&a), 500_i128);
     assert_eq!(client.balance(&b), 400_i128);
     assert_eq!(client.total_supply(), 900_i128);
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 4. Burn the rest via burn_for_withdrawal. Supply → 0.
     client.burn_for_withdrawal(&a, &500_i128);

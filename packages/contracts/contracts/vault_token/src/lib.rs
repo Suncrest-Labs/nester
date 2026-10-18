@@ -182,13 +182,20 @@ impl VaultTokenContract {
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
         let assets_to_reduce = if total_supply > 0 && total_assets > 0 {
-            amount * total_assets / total_supply
+            amount_for_shares_math(amount, total_supply, total_assets)
+                .unwrap_or_else(|e| panic_with_error!(&env, e))
         } else {
             0
         };
         spend_balance(&env, &from, amount);
-        set_total_supply(&env, total_supply - amount);
-        set_total_assets(&env, total_assets - assets_to_reduce);
+        let new_supply = total_supply
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        let new_assets = total_assets
+            .checked_sub(assets_to_reduce)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_total_supply(&env, new_supply);
+        set_total_assets(&env, new_assets);
         env.events().publish((symbol_short!("burn"), from), amount);
     }
 
@@ -199,13 +206,20 @@ impl VaultTokenContract {
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
         let assets_to_reduce = if total_supply > 0 && total_assets > 0 {
-            amount * total_assets / total_supply
+            amount_for_shares_math(amount, total_supply, total_assets)
+                .unwrap_or_else(|e| panic_with_error!(&env, e))
         } else {
             0
         };
         spend_balance(&env, &from, amount);
-        set_total_supply(&env, total_supply - amount);
-        set_total_assets(&env, total_assets - assets_to_reduce);
+        let new_supply = total_supply
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        let new_assets = total_assets
+            .checked_sub(assets_to_reduce)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_total_supply(&env, new_supply);
+        set_total_assets(&env, new_assets);
         env.events()
             .publish((symbol_short!("burn_frm"), spender, from), amount);
     }
@@ -246,12 +260,14 @@ impl VaultTokenContract {
     /// Does not change state.
     pub fn shares_for_deposit(env: Env, amount: i128) -> i128 {
         shares_for_deposit_math(amount, get_total_supply(&env), get_total_assets(&env))
+            .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
     /// Preview: underlying that `shares` would redeem for **right now**.
     /// Does not change state.
     pub fn amount_for_shares(env: Env, shares: i128) -> i128 {
         amount_for_shares_math(shares, get_total_supply(&env), get_total_assets(&env))
+            .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
     /// Price per share. Uses 10,000,000 as the 1.0 unit denominator since decimals is 7.
@@ -259,12 +275,14 @@ impl VaultTokenContract {
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
         amount_for_shares_math(10_000_000, total_supply, total_assets)
+            .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
     /// Calculates underlying asset value corresponding to the user's current token balance.
     pub fn underlying_balance(env: Env, user: Address) -> i128 {
         let balance = get_balance(&env, &user);
         amount_for_shares_math(balance, get_total_supply(&env), get_total_assets(&env))
+            .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
     // -----------------------------------------------------------------------
@@ -283,10 +301,17 @@ impl VaultTokenContract {
         require_vault(&env);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
-        let shares = shares_for_deposit_math(amount, total_supply, total_assets);
+        let shares = shares_for_deposit_math(amount, total_supply, total_assets)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+        let new_supply = total_supply
+            .checked_add(shares)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        let new_assets = total_assets
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
         receive_balance(&env, &to, shares);
-        set_total_supply(&env, total_supply + shares);
-        set_total_assets(&env, total_assets + amount);
+        set_total_supply(&env, new_supply);
+        set_total_assets(&env, new_assets);
         // Record deposit time so the vault can enforce the early-withdrawal
         // lock period even when shares are later received via transfer.
         env.storage().persistent().set(
@@ -310,10 +335,17 @@ impl VaultTokenContract {
         require_vault(&env);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
-        let amount = amount_for_shares_math(shares, total_supply, total_assets);
+        let amount = amount_for_shares_math(shares, total_supply, total_assets)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
         spend_balance(&env, &from, shares);
-        set_total_supply(&env, total_supply - shares);
-        set_total_assets(&env, total_assets - amount);
+        let new_supply = total_supply
+            .checked_sub(shares)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        let new_assets = total_assets
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_total_supply(&env, new_supply);
+        set_total_assets(&env, new_assets);
         env.events()
             .publish((symbol_short!("vlt_burn"), from), (shares, amount));
         amount
@@ -343,8 +375,11 @@ impl VaultTokenContract {
             return;
         }
         let total_supply = get_total_supply(&env);
+        let new_supply = total_supply
+            .checked_add(shares)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
         receive_balance(&env, &to, shares);
-        set_total_supply(&env, total_supply + shares);
+        set_total_supply(&env, new_supply);
         env.events()
             .publish((symbol_short!("bst_mint"), to), shares);
     }
@@ -367,7 +402,10 @@ impl VaultTokenContract {
         }
         let total_supply = get_total_supply(&env);
         spend_balance(&env, &from, shares);
-        set_total_supply(&env, total_supply - shares);
+        let new_supply = total_supply
+            .checked_sub(shares)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+        set_total_supply(&env, new_supply);
         env.events()
             .publish((symbol_short!("lck_burn"), from), shares);
     }
@@ -390,23 +428,47 @@ impl VaultTokenContract {
 /// Shares to mint for a deposit of `amount`.
 ///
 /// * First deposit (`total_supply == 0`): issues 1:1.
-/// * Subsequent: `floor(amount * total_supply / total_assets)`.
-pub fn shares_for_deposit_math(amount: i128, total_supply: i128, total_assets: i128) -> i128 {
+/// * Subsequent: `floor(amount * total_supply / total_assets)` using checked
+///   arithmetic (`checked_mul` and `checked_div`), returning
+///   [`ContractError::ArithmeticOverflow`] on overflow or division by zero.
+pub fn shares_for_deposit_math(
+    amount: i128,
+    total_supply: i128,
+    total_assets: i128,
+) -> Result<i128, ContractError> {
+    if amount < 0 || total_supply < 0 || total_assets < 0 {
+        return Err(ContractError::InvalidAmount);
+    }
     if total_supply == 0 || total_assets == 0 {
-        amount
+        Ok(amount)
     } else {
-        amount * total_supply / total_assets
+        amount
+            .checked_mul(total_supply)
+            .and_then(|product| product.checked_div(total_assets))
+            .ok_or(ContractError::ArithmeticOverflow)
     }
 }
 
 /// Underlying amount for `shares`.
 ///
-/// `floor(shares * total_assets / total_supply)`.
-pub fn amount_for_shares_math(shares: i128, total_supply: i128, total_assets: i128) -> i128 {
+/// `floor(shares * total_assets / total_supply)` using checked arithmetic
+/// (`checked_mul` and `checked_div`), returning
+/// [`ContractError::ArithmeticOverflow`] on overflow or division by zero.
+pub fn amount_for_shares_math(
+    shares: i128,
+    total_supply: i128,
+    total_assets: i128,
+) -> Result<i128, ContractError> {
+    if shares < 0 || total_supply < 0 || total_assets < 0 {
+        return Err(ContractError::InvalidAmount);
+    }
     if total_supply == 0 {
-        shares
+        Ok(shares)
     } else {
-        shares * total_assets / total_supply
+        shares
+            .checked_mul(total_assets)
+            .and_then(|product| product.checked_div(total_supply))
+            .ok_or(ContractError::ArithmeticOverflow)
     }
 }
 
@@ -428,7 +490,10 @@ fn set_balance(env: &Env, account: &Address, amount: i128) {
 }
 
 fn receive_balance(env: &Env, account: &Address, amount: i128) {
-    set_balance(env, account, get_balance(env, account) + amount);
+    let next = get_balance(env, account)
+        .checked_add(amount)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+    set_balance(env, account, next);
 }
 
 fn spend_balance(env: &Env, account: &Address, amount: i128) {

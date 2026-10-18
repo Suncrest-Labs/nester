@@ -131,4 +131,36 @@ fuzz_target!(|input: Input| {
             }
         }
     }
+
+    // Exercise vault_token checked share conversion math across the i128::MAX
+    // multiplication overflow boundary (Issue #1478).
+    let deposit_res = vault_token::shares_for_deposit_math(amount, total_shares, total_assets);
+    if amount >= 0 && total_shares > 0 && total_assets > 0 {
+        match amount.checked_mul(total_shares) {
+            Some(prod) => {
+                assert_eq!(deposit_res, Ok(prod / total_assets));
+            }
+            None => {
+                assert_eq!(
+                    deposit_res,
+                    Err(nester_common::ContractError::ArithmeticOverflow)
+                );
+            }
+        }
+    }
+
+    let redeem_res = vault_token::amount_for_shares_math(amount, total_shares, total_assets);
+    if amount >= 0 && total_shares > 0 && total_assets >= 0 {
+        match amount.checked_mul(total_assets) {
+            Some(prod) => {
+                assert_eq!(redeem_res, Ok(prod / total_shares));
+            }
+            None => {
+                assert_eq!(
+                    redeem_res,
+                    Err(nester_common::ContractError::ArithmeticOverflow)
+                );
+            }
+        }
+    }
 });
