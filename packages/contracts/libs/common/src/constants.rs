@@ -60,6 +60,8 @@ pub const MIN_UPGRADE_DELAY_VAULT: u64 = 172_800;
 pub const MIN_UPGRADE_DELAY_YIELD_REGISTRY: u64 = 172_800;
 /// Mandatory timelock delay for Allocation Strategy upgrades (48 hours).
 pub const MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY: u64 = 172_800;
+/// Mandatory timelock delay for Nester orchestrator upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_NESTER: u64 = 172_800;
 /// Mandatory timelock delay for Treasury upgrades (7 days).
 pub const MIN_UPGRADE_DELAY_TREASURY: u64 = 604_800;
 

@@ -2,7 +2,10 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Bytes, BytesN, Env,
+};
 
 use nester_access_control::Role;
 
@@ -14,9 +17,12 @@ use crate::{ContractKind, NesterContract, NesterContractClient, ProtocolInitConf
 // initialize
 //   U: initialize_requires_admin_signature
 //   A: initialize_stores_all_addresses                     R: N/A (one-shot)
-// upgrade
-//   U: non_admin_cannot_upgrade; privileged_calls_require_signatures
-//   A: admin_reaches_wasm_validation_and_upgrades
+// propose_upgrade / cancel_upgrade / execute_upgrade
+//   U: propose_upgrade_rejects_caller_without_upgrader_role;
+//      propose_upgrade_rejects_delay_shorter_than_minimum;
+//      execute_upgrade_before_eta_is_rejected_even_for_upgrader;
+//      privileged_calls_require_signatures
+//   A: timelocked_upgrade_lifecycle_updates_wasm_and_version
 //   R: revoked_admin_cannot_call_admin_operations
 // update_contract
 //   U: non_admin_cannot_update_contract_reference; privileged_calls_require_signatures
@@ -95,9 +101,15 @@ fn setup(env: &Env) -> (NesterContractClient<'_>, Address, ProtocolAddresses) {
 
 fn uploaded_test_wasm_hash(env: &Env) -> BytesN<32> {
     // Soroban testutils accepts an empty Wasm blob for native-contract upgrade
-    // lifecycle tests. This gives `upgrade` a ledger-backed hash without adding
+    // lifecycle tests. This gives `execute_upgrade` a ledger-backed hash without adding
     // a generated Wasm artifact to the repository.
     env.deployer().upload_contract_wasm(Bytes::new(env))
+}
+
+fn advance_time(env: &Env, seconds: u64) {
+    env.ledger().with_mut(|li| {
+        li.timestamp = li.timestamp.saturating_add(seconds);
+    });
 }
 
 // ── Initialization ────────────────────────────────────────────────────────────
@@ -149,9 +161,7 @@ fn initialize_requires_admin_signature() {
     let id = env.register_contract(None, NesterContract);
     let client = NesterContractClient::new(&env, &id);
 
-    assert!(client
-        .try_initialize(&admin, &p.clone().into())
-        .is_err());
+    assert!(client.try_initialize(&admin, &p.clone().into()).is_err());
     assert_eq!(
         client.version(),
         0,
@@ -192,28 +202,111 @@ fn treasury_panics_before_initialize() {
     client.treasury();
 }
 
-// -- upgrade ---------------------------------------------------------------
+// ── Timelocked upgrade posture (Issue #1474) ──────────────────────────────────
 
 #[test]
-fn admin_reaches_wasm_validation_and_upgrades() {
+#[should_panic]
+fn propose_upgrade_rejects_caller_without_upgrader_role() {
     let env = Env::default();
     let (client, admin, _) = setup(&env);
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let eta = env.ledger().timestamp() + 200_000;
+
+    // `admin` holds Role::Admin but was never granted Role::Upgrader.
+    client.propose_upgrade(&admin, &new_hash, &eta);
+}
+
+#[test]
+fn propose_upgrade_rejects_delay_shorter_than_minimum() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    client.grant_role(&admin, &admin, &Role::Upgrader);
+
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    // MIN_UPGRADE_DELAY_NESTER is 172_800s (48h); this eta is far too soon.
+    let too_soon_eta = env.ledger().timestamp() + 60;
+
+    let result = client.try_propose_upgrade(&admin, &new_hash, &too_soon_eta);
+    assert!(
+        result.is_err(),
+        "propose_upgrade must enforce the 48h minimum timelock delay"
+    );
+}
+
+#[test]
+fn execute_upgrade_before_eta_is_rejected_even_for_upgrader() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    client.grant_role(&admin, &admin, &Role::Upgrader);
+
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let eta = env.ledger().timestamp() + 172_800; // MIN_UPGRADE_DELAY_NESTER
+    client.propose_upgrade(&admin, &new_hash, &eta);
+
+    // Before maturity, execution must fail regardless of caller or hash.
+    let early_result = client.try_execute_upgrade(&admin, &new_hash);
+    assert!(
+        early_result.is_err(),
+        "execute_upgrade must reject before the pending upgrade's ETA"
+    );
+
+    advance_time(&env, 172_800);
+
+    // Once matured, the timelock no longer blocks execution — only a hash
+    // mismatch would.
+    let wrong_hash = BytesN::from_array(&env, &[9u8; 32]);
+    let matured_wrong_hash_result = client.try_execute_upgrade(&admin, &wrong_hash);
+    assert!(
+        matured_wrong_hash_result.is_err(),
+        "execute_upgrade must still validate the wasm hash after maturity"
+    );
+
+    // The pending upgrade must remain untouched since no execution succeeded.
+    let pending = client
+        .get_pending_upgrade()
+        .expect("pending upgrade must persist");
+    assert_eq!(pending.wasm_hash, new_hash);
+    assert_eq!(pending.eta, eta);
+}
+
+#[test]
+fn timelocked_upgrade_lifecycle_updates_wasm_and_version() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    let upgrader = Address::generate(&env);
+    let relayer = Address::generate(&env);
+    client.grant_role(&admin, &upgrader, &Role::Upgrader);
+
     let wasm_hash = uploaded_test_wasm_hash(&env);
+    let eta = env.ledger().timestamp() + nester_common::MIN_UPGRADE_DELAY_NESTER;
 
-    client.upgrade(&admin, &wasm_hash);
+    client.propose_upgrade(&upgrader, &wasm_hash, &eta);
+    assert!(client.get_pending_upgrade().is_some());
 
+    advance_time(&env, nester_common::MIN_UPGRADE_DELAY_NESTER);
+    client.execute_upgrade(&relayer, &wasm_hash);
+
+    assert!(client.get_pending_upgrade().is_none());
     assert_eq!(client.version(), 2);
 }
 
 #[test]
-fn non_admin_cannot_upgrade() {
+fn cancel_upgrade_requires_upgrader_and_clears_pending() {
     let env = Env::default();
-    let (client, _, _) = setup(&env);
-    let outsider = Address::generate(&env);
-    let wasm_hash = uploaded_test_wasm_hash(&env);
+    let (client, admin, _) = setup(&env);
+    let upgrader = Address::generate(&env);
+    client.grant_role(&admin, &upgrader, &Role::Upgrader);
 
-    assert!(client.try_upgrade(&outsider, &wasm_hash).is_err());
-    assert_eq!(client.version(), 1);
+    let wasm_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let eta = env.ledger().timestamp() + nester_common::MIN_UPGRADE_DELAY_NESTER;
+    client.propose_upgrade(&upgrader, &wasm_hash, &eta);
+
+    // Admin without Upgrader role cannot cancel
+    assert!(client.try_cancel_upgrade(&admin).is_err());
+    assert!(client.get_pending_upgrade().is_some());
+
+    client.cancel_upgrade(&upgrader);
+    assert!(client.get_pending_upgrade().is_none());
 }
 
 // ── update_contract ───────────────────────────────────────────────────────────
@@ -407,7 +500,10 @@ fn revoked_admin_cannot_call_admin_operations() {
         .is_err());
 
     let wasm_hash = uploaded_test_wasm_hash(&env);
-    assert!(client.try_upgrade(&initial_admin, &wasm_hash).is_err());
+    let eta = env.ledger().timestamp() + nester_common::MIN_UPGRADE_DELAY_NESTER;
+    assert!(client
+        .try_propose_upgrade(&initial_admin, &wasm_hash, &eta)
+        .is_err());
     assert_eq!(client.version(), 1);
 }
 
@@ -418,7 +514,9 @@ fn privileged_calls_require_signatures() {
     let operator = Address::generate(&env);
     let proposed_admin = Address::generate(&env);
     let wasm_hash = uploaded_test_wasm_hash(&env);
+    let eta = env.ledger().timestamp() + nester_common::MIN_UPGRADE_DELAY_NESTER;
     client.grant_role(&admin, &operator, &Role::Operator);
+    client.grant_role(&admin, &admin, &Role::Upgrader);
     client.transfer_admin(&admin, &proposed_admin);
 
     env.mock_auths(&[]);
@@ -436,5 +534,7 @@ fn privileged_calls_require_signatures() {
         .try_transfer_admin(&admin, &Address::generate(&env))
         .is_err());
     assert!(client.try_accept_admin(&proposed_admin).is_err());
-    assert!(client.try_upgrade(&admin, &wasm_hash).is_err());
+    assert!(client
+        .try_propose_upgrade(&admin, &wasm_hash, &eta)
+        .is_err());
 }

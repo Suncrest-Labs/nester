@@ -29,7 +29,6 @@ use nester_common::{emit_event, ContractError};
 
 const NESTER: Symbol = symbol_short!("NESTER");
 const INIT: Symbol = symbol_short!("INIT");
-const UPGRADED: Symbol = symbol_short!("UPGRADED");
 const CTR_UPD: Symbol = symbol_short!("CTR_UPD");
 
 // ── Event payloads ────────────────────────────────────────────────────────────
@@ -125,8 +124,14 @@ impl NesterContract {
         AccessControl::initialize(&env, &admin);
 
         let s = env.storage().instance();
-        s.set(&DataKey::Contract(ContractKind::VaultUsdc), &config.vault_usdc);
-        s.set(&DataKey::Contract(ContractKind::VaultXlm), &config.vault_xlm);
+        s.set(
+            &DataKey::Contract(ContractKind::VaultUsdc),
+            &config.vault_usdc,
+        );
+        s.set(
+            &DataKey::Contract(ContractKind::VaultXlm),
+            &config.vault_xlm,
+        );
         s.set(
             &DataKey::Contract(ContractKind::VaultTokenUsdc),
             &config.vault_token_usdc,
@@ -145,6 +150,7 @@ impl NesterContract {
             &config.allocation_strategy,
         );
         s.set(&DataKey::Version, &1u32);
+        nester_common::Upgrade::set_schema_version(&env, 1u32);
 
         emit_event(
             &env,
@@ -163,42 +169,70 @@ impl NesterContract {
         );
     }
 
-    // ── Upgrade ───────────────────────────────────────────────────────────────
+    // ── Upgradeability & Schema Migration ─────────────────────────────────────
 
-    /// Replace the contract WASM with `new_wasm_hash`. Admin-only.
+    /// Proposes a new WASM upgrade for the orchestrator.
     ///
-    /// The version counter is incremented and the event is published *before*
-    /// the WASM swap so that the current ABI encodes both correctly.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
-        admin.require_auth();
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_NESTER (48 hours).
+    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, eta: u64) {
         require_initialized(&env);
-        AccessControl::require_role(&env, &admin, Role::Admin);
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &admin,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_NESTER,
+            eta,
+        );
+    }
 
-        let version: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::Version)
-            .unwrap_or(1);
-        let next_version = version + 1;
+    /// Cancels a pending WASM upgrade for the orchestrator.
+    ///
+    /// Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, admin: Address) {
+        require_initialized(&env);
+        AccessControl::require_role(&env, &admin, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &admin);
+    }
+
+    /// Executes a matured WASM upgrade for the orchestrator.
+    ///
+    /// Execution is permissionless after maturity.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        require_initialized(&env);
+        let version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
         env.storage()
             .instance()
-            .set(&DataKey::Version, &next_version);
+            .set(&DataKey::Version, &(version + 1));
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
 
-        env.events()
-            .publish((NESTER, UPGRADED, admin), next_version);
+    /// Retrieves pending upgrade details if present.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
+    }
 
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    /// Returns current contract schema version.
+    pub fn get_schema_version(env: Env) -> u32 {
+        nester_common::Upgrade::get_schema_version(&env)
+    }
+
+    /// Bumps schema version if needed (idempotent).
+    pub fn migrate(env: Env) -> u32 {
+        let current = nester_common::Upgrade::get_schema_version(&env);
+        let target = 1u32;
+        if current < target {
+            nester_common::Upgrade::set_schema_version(&env, target);
+            target
+        } else {
+            current
+        }
     }
 
     // ── Protocol contract registry ────────────────────────────────────────────
 
     /// Update a single protocol contract reference. Admin-only.
-    pub fn update_contract(
-        env: Env,
-        admin: Address,
-        kind: ContractKind,
-        new_address: Address,
-    ) {
+    pub fn update_contract(env: Env, admin: Address, kind: ContractKind, new_address: Address) {
         admin.require_auth();
         require_initialized(&env);
         AccessControl::require_role(&env, &admin, Role::Admin);
@@ -260,10 +294,7 @@ impl NesterContract {
     }
 
     pub fn version(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::Version)
-            .unwrap_or(0)
+        env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
     // ── Access control ────────────────────────────────────────────────────────
