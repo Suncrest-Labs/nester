@@ -181,7 +181,7 @@ export function DepositModal({
     const { prices: tokenPrices } = useTokenPrices();
 
     const depositFeeParams = useMemo(() => {
-        if (!vault || !address || amount <= 0) return null;
+        if (!vault || !address || !amountStroops || amountStroops <= BigInt(0)) return null;
         const contractId =
             selectedAsset === "XLM"
                 ? vault.contractXlmAddress || vault.contractAddress
@@ -190,8 +190,8 @@ export function DepositModal({
         // Previously this passed "" and the estimate failed inside the SDK
         // with nothing pointing at the missing environment variable.
         if (!contractId) return null;
-        return { walletAddress: address, contractId, amount };
-    }, [vault, address, amount, selectedAsset]);
+        return { walletAddress: address, contractId, amount: amountStroops };
+    }, [vault, address, amountStroops, selectedAsset]);
 
     const { estimate: depositFee, loading: depositFeeLoading } = useStellarFeeEstimate(
         "deposit",
