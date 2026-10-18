@@ -321,6 +321,42 @@ fn advance_head_past_gaps(env: &Env) {
 /// Pure with respect to storage: reads entries but does not mutate them.
 /// Callers must invoke [`apply_fill`] once the real asset transfer for each
 /// planned fill has succeeded.
+/// Pure round cap calculation (`available_liquidity * fill_bps / 10_000`).
+pub fn compute_round_cap(available_liquidity: i128, fill_bps: u32) -> i128 {
+    if available_liquidity <= 0 {
+        return 0;
+    }
+    mul_div(available_liquidity, fill_bps as i128, 10_000).unwrap_or(available_liquidity)
+}
+
+/// Pure single-entry fill calculation used by [`plan_fills`] and cargo-fuzz.
+/// Returns `(fill_shares, fill_assets, fully_filled)`.
+pub fn compute_entry_fill(
+    remaining_shares: i128,
+    round_cap: i128,
+    remaining_liquidity: i128,
+    shares_to_assets: impl Fn(i128) -> i128,
+) -> (i128, i128, bool) {
+    if remaining_shares <= 0 || remaining_liquidity <= 0 || round_cap <= 0 {
+        return (0, 0, false);
+    }
+    let assets_equiv = shares_to_assets(remaining_shares);
+    let entry_room = round_cap.min(remaining_liquidity);
+    let fill_assets = assets_equiv.min(entry_room);
+    if fill_assets <= 0 {
+        return (0, 0, false);
+    }
+    let fill_shares = if fill_assets >= assets_equiv {
+        remaining_shares
+    } else {
+        mul_div(remaining_shares, fill_assets, assets_equiv).unwrap_or(0)
+    };
+    if fill_shares <= 0 {
+        return (0, 0, false);
+    }
+    (fill_shares, fill_assets, fill_shares >= remaining_shares)
+}
+
 pub fn plan_fills(
     env: &Env,
     max_entries: u32,
@@ -334,8 +370,7 @@ pub fn plan_fills(
 
     let capped_max_entries = max_entries.min(MAX_PROCESS_ENTRIES);
     let fill_bps = max_fill_share_bps(env);
-    let round_cap =
-        mul_div(available_liquidity, fill_bps as i128, 10_000).unwrap_or(available_liquidity);
+    let round_cap = compute_round_cap(available_liquidity, fill_bps);
 
     let tail = get_tail(env);
     let mut seq = get_head(env);

@@ -18,12 +18,36 @@ arbitrary = { version = "1", features = ["derive"] }
 ethnum = "1.5"
 libfuzzer-sys = "0.4"
 
+[dependencies.nester-common]
+path = "../../../libs/common"
+
 [dependencies.vault-contract]
 path = ".."
 
 [[bin]]
 name = "conversion_math"
 path = "fuzz_targets/conversion_math.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fee_tiers"
+path = "fuzz_targets/fee_tiers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lock_settlement"
+path = "fuzz_targets/lock_settlement.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "queue_processing"
+path = "fuzz_targets/queue_processing.rs"
 test = false
 doc = false
 bench = false

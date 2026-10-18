@@ -126,7 +126,7 @@ impl<'a> VaultTokenContractClient<'a> {
     }
 }
 
-mod queue;
+pub mod queue;
 mod rebalance;
 
 use nester_access_control::{AccessControl, Role};
