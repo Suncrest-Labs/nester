@@ -308,6 +308,7 @@ type ServerConfig struct {
 	idleTimeout       time.Duration
 	gracefulShutdown  time.Duration
 	maxHeaderBytes    int
+	publicOnly        bool
 }
 
 type DatabaseConfig struct {
@@ -450,6 +451,7 @@ func Load() (*Config, error) {
 			idleTimeout:       loader.durationDefault("SERVER_IDLE_TIMEOUT", 60*time.Second),
 			gracefulShutdown:  loader.durationDefault("SERVER_SHUTDOWN_TIMEOUT", 20*time.Second),
 			maxHeaderBytes:    loader.intDefault("SERVER_MAX_HEADER_BYTES", 1<<20),
+			publicOnly:        loader.boolDefault("PUBLIC_ONLY", false),
 		},
 		database: DatabaseConfig{
 			dsn:               loader.requiredString("DATABASE_DSN"),
@@ -1606,6 +1608,12 @@ func (s ServerConfig) GracefulShutdown() time.Duration {
 
 func (s ServerConfig) MaxHeaderBytes() int {
 	return s.maxHeaderBytes
+}
+
+// PublicOnly reports whether this instance serves public traffic only and must
+// not mount or expose /api/v1/admin/* endpoints (#1561).
+func (s ServerConfig) PublicOnly() bool {
+	return s.publicOnly
 }
 
 func (s ServerConfig) Address() string {

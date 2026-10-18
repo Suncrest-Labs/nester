@@ -33,7 +33,7 @@ func NewJobQueueAdminHandler(repo jobQueueAdminRepo) *JobQueueAdminHandler {
 // Register registers the routes on the given ServeMux. These fall under the
 // /api/v1/admin/ prefix so they're gated to the "admin" role by the
 // Authenticate middleware's route rules.
-func (h *JobQueueAdminHandler) Register(mux *http.ServeMux) {
+func (h *JobQueueAdminHandler) Register(mux routeMux) {
 	mux.HandleFunc("GET /api/v1/admin/jobs/dead", h.listDead)
 	mux.HandleFunc("POST /api/v1/admin/jobs/{id}/retry", h.retry)
 }

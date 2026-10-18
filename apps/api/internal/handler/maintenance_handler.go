@@ -28,7 +28,7 @@ func NewMaintenanceHandler(repo systemStateRepo) *MaintenanceHandler {
 }
 
 // Register registers the maintenance routes on the given ServeMux.
-func (h *MaintenanceHandler) Register(mux *http.ServeMux) {
+func (h *MaintenanceHandler) Register(mux routeMux) {
 	mux.HandleFunc("GET /api/v1/admin/maintenance", h.getMode)
 	mux.HandleFunc("PUT /api/v1/admin/maintenance", h.setMode)
 }

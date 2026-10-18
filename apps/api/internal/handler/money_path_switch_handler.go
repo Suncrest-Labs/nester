@@ -34,7 +34,7 @@ func NewMoneyPathSwitchHandler(svc MoneyPathSwitchService) *MoneyPathSwitchHandl
 	return &MoneyPathSwitchHandler{service: svc}
 }
 
-func (h *MoneyPathSwitchHandler) Register(mux *http.ServeMux) {
+func (h *MoneyPathSwitchHandler) Register(mux routeMux) {
 	mux.HandleFunc("GET /api/v1/admin/money-path/switches", h.list)
 	mux.HandleFunc("PUT /api/v1/admin/money-path/switches/{operation}", h.set)
 

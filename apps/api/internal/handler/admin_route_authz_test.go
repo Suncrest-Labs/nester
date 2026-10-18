@@ -269,3 +269,105 @@ func TestNonAdminAllowlistRoutesAreReadOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestPublicOnlyMode_NoAdminRoutesMountedAndReturns404 verifies #1561: when
+// PUBLIC_ONLY=true, no /api/v1/admin/* route is mounted on the public router,
+// and hitting any /api/v1/admin/* endpoint returns 404 Not Found (never 401 or
+// 403, which would confirm the route exists).
+func TestPublicOnlyMode_NoAdminRoutesMountedAndReturns404(t *testing.T) {
+	rec := &recordingMux{}
+	pubRegistrar := &publicOnlyTestRegistrar{inner: rec, publicOnly: true}
+
+	adminH := NewAdminHandler(newAdminHandlerStubService(uuid.New()), nil)
+	adminH.Register(pubRegistrar)
+	NewMaintenanceHandler(nil).Register(pubRegistrar)
+	NewMoneyPathSwitchHandler(nil).Register(pubRegistrar)
+	NewJobQueueAdminHandler(nil).Register(pubRegistrar)
+
+	for _, pattern := range rec.patterns {
+		_, path := splitPattern(t, pattern)
+		if strings.HasPrefix(path, "/api/v1/admin/") || path == "/api/v1/admin" {
+			t.Errorf("PUBLIC_ONLY=true mounted admin route %q on public mux", pattern)
+		}
+	}
+
+	// Build a real ServeMux with PUBLIC_ONLY=true and the full auth middleware
+	// behind the public-ingress guard to verify 404 (not 401/403).
+	mux := http.NewServeMux()
+	realPubRegistrar := &publicOnlyTestRegistrar{inner: mux, publicOnly: true}
+	adminH.Register(realPubRegistrar)
+	NewMaintenanceHandler(nil).Register(realPubRegistrar)
+	NewMoneyPathSwitchHandler(nil).Register(realPubRegistrar)
+	NewJobQueueAdminHandler(nil).Register(realPubRegistrar)
+
+	authedHandler := middleware.Authenticate(
+		testAuthSecret,
+		"",
+		adminAuthRules,
+		noopRevocationChecker{},
+	)(mux)
+
+	publicIngressHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/admin" || strings.HasPrefix(r.URL.Path, "/api/v1/admin/") {
+			http.NotFound(w, r)
+			return
+		}
+		authedHandler.ServeHTTP(w, r)
+	})
+
+	adminToken := tokenWithRoles(t, []string{"admin"})
+	userToken := tokenWithRoles(t, []string{"user"})
+
+	for _, pattern := range registeredAdminRoutes(t) {
+		method, path := splitPattern(t, pattern)
+		if !strings.HasPrefix(path, "/api/v1/admin/") {
+			continue
+		}
+		target := concreteize(path)
+
+		for _, tc := range []struct {
+			name  string
+			token string
+		}{
+			{name: "anonymous", token: ""},
+			{name: "user_token", token: userToken},
+			{name: "admin_token", token: adminToken},
+		} {
+			t.Run(pattern+"/"+tc.name, func(t *testing.T) {
+				req := httptest.NewRequest(method, target, nil)
+				if tc.token != "" {
+					req.Header.Set("Authorization", "Bearer "+tc.token)
+				}
+				w := httptest.NewRecorder()
+				publicIngressHandler.ServeHTTP(w, req)
+				if w.Code != http.StatusNotFound {
+					t.Fatalf("PUBLIC_ONLY=true %s (%s): got %d, want 404 Not Found", pattern, tc.name, w.Code)
+				}
+			})
+		}
+	}
+}
+
+type publicOnlyTestRegistrar struct {
+	inner      routeMux
+	publicOnly bool
+}
+
+func (r *publicOnlyTestRegistrar) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	if r.publicOnly {
+		_, path := splitPatternNoT(pattern)
+		if path == "/api/v1/admin" || strings.HasPrefix(path, "/api/v1/admin/") {
+			return
+		}
+	}
+	r.inner.HandleFunc(pattern, handler)
+}
+
+func splitPatternNoT(pattern string) (string, string) {
+	parts := strings.SplitN(pattern, " ", 2)
+	if len(parts) != 2 {
+		return "", pattern
+	}
+	return parts[0], strings.TrimSpace(parts[1])
+}
+

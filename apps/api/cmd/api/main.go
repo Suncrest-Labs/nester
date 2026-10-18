@@ -50,6 +50,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/retry"
 	"github.com/suncrestlabs/nester/apps/api/internal/scheduler"
+	serverpkg "github.com/suncrestlabs/nester/apps/api/internal/server"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	performancesvc "github.com/suncrestlabs/nester/apps/api/internal/service/performance"
 	tvlsvc "github.com/suncrestlabs/nester/apps/api/internal/service/tvl"
@@ -1007,10 +1008,11 @@ func run() error {
 	activityService := service.NewActivityService(activityRepository)
 	activityHandler := handler.NewActivityHandler(activityService)
 	activityHandler.Register(mux)
+	routeRegistrar := serverpkg.NewRouteRegistrar(mux, cfg.Server().PublicOnly())
 	userHandler.Register(mux)
 	notificationHandler.Register(mux)
-	adminHandler.Register(mux)
-	handler.NewMoneyPathSwitchHandler(moneyPathSwitchService).Register(mux)
+	adminHandler.Register(routeRegistrar)
+	handler.NewMoneyPathSwitchHandler(moneyPathSwitchService).Register(routeRegistrar)
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
 	performanceHandler.Register(mux)
@@ -1027,7 +1029,7 @@ func run() error {
 
 	// System-wide maintenance mode (#1328): halt or read-only, gated to admins.
 	maintenanceHandler := handler.NewMaintenanceHandler(systemStateRepository)
-	maintenanceHandler.Register(mux)
+	maintenanceHandler.Register(routeRegistrar)
 	maintenanceGate := middleware.NewMaintenanceGate(systemStateRepository, 5*time.Second)
 
 	// Risk service
@@ -1375,7 +1377,7 @@ func run() error {
 
 	// Dead-letter inspection and manual retry (#1329), gated to admins.
 	jobQueueAdminHandler := handler.NewJobQueueAdminHandler(jobQueueRepo)
-	jobQueueAdminHandler.Register(mux)
+	jobQueueAdminHandler.Register(routeRegistrar)
 
 	// Recurring deposit sweep (#846): classified SINGLETON (money-moving —
 	// see RecurringDepositJob's doc comment). The sweep loop itself only
@@ -1884,8 +1886,9 @@ func run() error {
 										// lockout bookkeeping (nester#1104).
 										authGuard(
 											writeLimiter(
-												authenticator(
-													maintenanceGate.Middleware(authRules)(
+												serverpkg.BlockAdminOnPublicIngress(cfg.Server().PublicOnly())(
+													authenticator(
+														maintenanceGate.Middleware(authRules)(
 														walletBinding(
 															idempotencyMiddleware(
 																costQuota(
@@ -1903,6 +1906,7 @@ func run() error {
 															),
 														),
 													),
+												),
 												),
 											),
 										),

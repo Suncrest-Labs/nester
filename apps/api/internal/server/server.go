@@ -7,13 +7,65 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 )
 
-const defaultMaxBodyBytes int64 = 1 << 20 // 1 MiB
+const (
+	defaultMaxBodyBytes int64 = 1 << 20 // 1 MiB
+	adminPathPrefix           = "/api/v1/admin"
+)
+
+// RouteRegistrar is the subset of *http.ServeMux used to mount HTTP routes.
+type RouteRegistrar interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
+type publicOnlyRegistrar struct {
+	mux        RouteRegistrar
+	publicOnly bool
+}
+
+// NewRouteRegistrar wraps mux so that when publicOnly is true, no route under
+// /api/v1/admin is mounted on the public ingress listener (#1561).
+func NewRouteRegistrar(mux RouteRegistrar, publicOnly bool) RouteRegistrar {
+	return &publicOnlyRegistrar{mux: mux, publicOnly: publicOnly}
+}
+
+func (r *publicOnlyRegistrar) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	if r.publicOnly && isAdminPattern(pattern) {
+		return
+	}
+	r.mux.HandleFunc(pattern, handler)
+}
+
+func isAdminPattern(pattern string) bool {
+	path := pattern
+	if parts := strings.SplitN(pattern, " ", 2); len(parts) == 2 {
+		path = strings.TrimSpace(parts[1])
+	}
+	return path == adminPathPrefix || strings.HasPrefix(path, adminPathPrefix+"/")
+}
+
+// BlockAdminOnPublicIngress returns middleware that responds with 404 Not Found
+// (never 401/403) for any /api/v1/admin/* request when publicOnly is true (#1561).
+func BlockAdminOnPublicIngress(publicOnly bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if !publicOnly {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == adminPathPrefix || strings.HasPrefix(r.URL.Path, adminPathPrefix+"/") {
+				http.NotFound(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 // HealthChecker is a function that returns nil when the service is healthy.
 // Callers may supply a database ping, a no-op, or a stub for tests.

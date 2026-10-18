@@ -686,3 +686,38 @@ func TestGracefulShutdown_DrainsInFlightMoneyPathWorkMidDeposit(t *testing.T) {
 		t.Fatal("timed out waiting for deposit HTTP response")
 	}
 }
+
+func TestPublicOnlyRegistrar_SkipsAdminRoutesAndReturns404(t *testing.T) {
+	mux := http.NewServeMux()
+	reg := server.NewRouteRegistrar(mux, true)
+
+	reg.HandleFunc("GET /api/v1/admin/dashboard", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	reg.HandleFunc("POST /api/v1/admin/vaults/{id}/pause", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	reg.HandleFunc("GET /api/v1/vaults", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	h := server.BlockAdminOnPublicIngress(true)(mux)
+
+	for _, target := range []struct {
+		method string
+		path   string
+		want   int
+	}{
+		{http.MethodGet, "/api/v1/admin/dashboard", http.StatusNotFound},
+		{http.MethodPost, "/api/v1/admin/vaults/123/pause", http.StatusNotFound},
+		{http.MethodGet, "/api/v1/vaults", http.StatusOK},
+	} {
+		req := httptest.NewRequest(target.method, target.path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != target.want {
+			t.Errorf("%s %s with PUBLIC_ONLY=true: got %d, want %d", target.method, target.path, rec.Code, target.want)
+		}
+	}
+}
+
