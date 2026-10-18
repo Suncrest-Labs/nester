@@ -1,69 +1,12 @@
 {
-  "timestamp": "2026-08-26T23:27:54.372Z",
-  "totalEntries": 46,
+  "timestamp": "2026-10-18T07:42:18.309Z",
+  "totalEntries": 156,
   "summary": {
-    "resolved": 25,
-    "open": 21,
+    "resolved": 112,
+    "open": 44,
     "needsMoreInfo": 0
   },
-  "issues": [
-    {
-      "id": "SC-09",
-      "title": "common lib",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: File not found: packages/contracts/contracts/common/src/lib.rs"
-      ]
-    },
-    {
-      "id": "SC-10",
-      "title": "test_utils lib",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: File not found: packages/contracts/contracts/test_utils/src/lib.rs"
-      ]
-    },
-    {
-      "id": "API-21",
-      "title": "Event indexer cursor persistence",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: Migration file not found: apps/api/migrations/025_add_system_state_table.sql"
-      ]
-    },
-    {
-      "id": "API-23",
-      "title": "Event indexer idempotency",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: Test name not found in apps/api/internal/stellar/poller_test.go: TestIntegrationReplay_DuplicateDelivery"
-      ]
-    },
-    {
-      "id": "DB-01",
-      "title": "Migrations 001-003",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: Migration file not found: apps/api/migrations/001_create_users_table.sql"
-      ]
-    },
-    {
-      "id": "DB-02",
-      "title": "Migrations 005-006",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: Migration file not found: apps/api/migrations/005_create_allocations_table.sql"
-      ]
-    },
-    {
-      "id": "DAPP-01",
-      "title": "Stellar Freighter",
-      "status": "Resolved",
-      "issues": [
-        "Invalid evidence: File not found: apps/dapp/frontend/lib/stellar.ts"
-      ]
-    }
-  ],
+  "issues": [],
   "resolvedWithEvidence": [
     {
       "id": "SC-01",
@@ -108,12 +51,72 @@
     {
       "id": "SC-09",
       "title": "common lib",
-      "evidence": "file: packages/contracts/contracts/common/src/lib.rs"
+      "evidence": "file: packages/contracts/libs/common/src/lib.rs"
     },
     {
       "id": "SC-10",
       "title": "test_utils lib",
-      "evidence": "file: packages/contracts/contracts/test_utils/src/lib.rs"
+      "evidence": "file: packages/contracts/libs/test_utils/src/lib.rs"
+    },
+    {
+      "id": "SC-11",
+      "title": "adapter_blend contract",
+      "evidence": "file: packages/contracts/contracts/adapter_blend/src/lib.rs"
+    },
+    {
+      "id": "SC-12",
+      "title": "adapter_soroswap contract",
+      "evidence": "file: packages/contracts/contracts/adapter_soroswap/src/lib.rs"
+    },
+    {
+      "id": "SC-13",
+      "title": "adapter_lending contract",
+      "evidence": "file: packages/contracts/contracts/adapter_lending/src/lib.rs"
+    },
+    {
+      "id": "SC-14",
+      "title": "adapter_pool contract",
+      "evidence": "file: packages/contracts/contracts/adapter_pool/src/lib.rs"
+    },
+    {
+      "id": "SC-15",
+      "title": "vault_factory contract",
+      "evidence": "file: packages/contracts/contracts/vault_factory/src/lib.rs"
+    },
+    {
+      "id": "SC-16",
+      "title": "savings_goal contract",
+      "evidence": "file: packages/contracts/contracts/savings_goal/src/lib.rs"
+    },
+    {
+      "id": "SC-17",
+      "title": "goal_rewards contract",
+      "evidence": "file: packages/contracts/contracts/goal_rewards/src/lib.rs"
+    },
+    {
+      "id": "SC-18",
+      "title": "recurring_deposit contract",
+      "evidence": "file: packages/contracts/contracts/recurring_deposit/src/lib.rs"
+    },
+    {
+      "id": "SC-19",
+      "title": "referral contract",
+      "evidence": "file: packages/contracts/contracts/referral/src/lib.rs"
+    },
+    {
+      "id": "SC-20",
+      "title": "rent_escrow contract",
+      "evidence": "file: packages/contracts/contracts/rent_escrow/src/lib.rs"
+    },
+    {
+      "id": "SC-21",
+      "title": "Timelock-governed upgradeability (#806)",
+      "evidence": "file: packages/contracts/contracts/vault/src/lib.rs, file: packages/contracts/contracts/yield_registry/src/lib.rs"
+    },
+    {
+      "id": "SC-22",
+      "title": "Upgrade policy documentation (#1135)",
+      "evidence": "file: docs/security/upgrade-policy.md"
     },
     {
       "id": "API-01",
@@ -131,9 +134,84 @@
       "evidence": "file: apps/api/go.mod, file: apps/api/internal/service/auth_service.go"
     },
     {
+      "id": "API-04",
+      "title": "Health and readiness endpoints",
+      "evidence": "file: apps/api/internal/stellar/health.go, file: apps/api/internal/stellar/health_test.go"
+    },
+    {
       "id": "API-05",
       "title": "Auth challenge/verify",
       "evidence": "test: apps/api/internal/service/auth_service_test.go::TestAuthService_GenerateChallenge, test: apps/api/internal/service/auth_service_test.go::TestAuthService_VerifyAndIssue_Success"
+    },
+    {
+      "id": "API-06",
+      "title": "Isolated transaction signer service",
+      "evidence": "file: apps/api/cmd/signer/main.go, file: apps/api/internal/signing/signer.go"
+    },
+    {
+      "id": "API-07",
+      "title": "Signing policy enforcement",
+      "evidence": "file: apps/api/internal/signing/policy.go, file: apps/api/internal/signing/policy_test.go"
+    },
+    {
+      "id": "API-08",
+      "title": "Signer kill switch",
+      "evidence": "file: apps/api/internal/signing/killswitch.go, file: apps/api/internal/signing/gameday_test.go"
+    },
+    {
+      "id": "API-09",
+      "title": "Tamper-evident audit log",
+      "evidence": "file: apps/api/internal/signing/audit.go"
+    },
+    {
+      "id": "API-10",
+      "title": "Envelope encryption at rest",
+      "evidence": "file: apps/api/internal/crypto/account_cipher.go, file: apps/api/internal/crypto/account_cipher_test.go"
+    },
+    {
+      "id": "API-11",
+      "title": "Rate limiting middleware",
+      "evidence": "file: apps/api/internal/middleware/ratelimit.go, file: apps/api/internal/middleware/ratelimit_test.go"
+    },
+    {
+      "id": "API-12",
+      "title": "Idempotency middleware",
+      "evidence": "file: apps/api/internal/middleware/idempotency.go, test: apps/api/internal/middleware/idempotency_test.go::TestIdempotency"
+    },
+    {
+      "id": "API-13",
+      "title": "Auth lockout middleware",
+      "evidence": "file: apps/api/internal/middleware/authlockout.go, test: apps/api/internal/middleware/authlockout_test.go::TestAuthLockout"
+    },
+    {
+      "id": "API-14",
+      "title": "Authorization matrix coverage",
+      "evidence": "file: apps/api/internal/middleware/authz_rules.go, file: apps/api/internal/middleware/authz_matrix_test.go"
+    },
+    {
+      "id": "API-15",
+      "title": "Wallet binding verification",
+      "evidence": "file: apps/api/internal/middleware/wallet_binding.go, test: apps/api/internal/middleware/wallet_binding_test.go::TestWalletBinding"
+    },
+    {
+      "id": "API-16",
+      "title": "Maintenance mode middleware",
+      "evidence": "file: apps/api/internal/middleware/maintenance.go, test: apps/api/internal/middleware/maintenance_test.go::TestMaintenance"
+    },
+    {
+      "id": "API-17",
+      "title": "CORS security policy",
+      "evidence": "file: apps/api/internal/middleware/cors.go, test: apps/api/internal/middleware/cors_test.go::TestCORS"
+    },
+    {
+      "id": "API-18",
+      "title": "OpenTelemetry request tracing",
+      "evidence": "file: apps/api/internal/middleware/tracing.go, test: apps/api/internal/middleware/tracing_test.go::TestTracing"
+    },
+    {
+      "id": "API-19",
+      "title": "Freshness headers middleware",
+      "evidence": "file: apps/api/internal/middleware/freshness.go, file: apps/api/internal/middleware/freshness_test.go"
     },
     {
       "id": "API-20",
@@ -143,7 +221,7 @@
     {
       "id": "API-21",
       "title": "Event indexer cursor persistence",
-      "evidence": "test: apps/api/internal/stellar/poller_test.go::TestIntegrationCursorAndBalanceCommitAtomically, migration: apps/api/migrations/025_add_system_state_table.sql"
+      "evidence": "test: apps/api/internal/stellar/poller_test.go::TestIntegrationCursorAndBalanceCommitAtomically, migration: apps/api/migrations/025_create_system_state_table.up.sql"
     },
     {
       "id": "API-22",
@@ -153,22 +231,112 @@
     {
       "id": "API-23",
       "title": "Event indexer idempotency",
-      "evidence": "test: apps/api/internal/stellar/poller_test.go::TestIntegrationReplay_DuplicateDelivery, test: apps/api/internal/stellar/poller_test.go::TestIntegrationReplay_RepeatedFullReplay, migration: apps/api/migrations/022_create_processed_events_table.sql"
+      "evidence": "test: apps/api/internal/stellar/poller_test.go::TestIntegrationPollStopsAtFailedEvent, migration: apps/api/migrations/022_create_event_indexer_tables.up.sql"
+    },
+    {
+      "id": "API-24",
+      "title": "Backfill service",
+      "evidence": "file: apps/api/internal/stellar/backfill.go, file: apps/api/internal/stellar/backfill_test.go"
+    },
+    {
+      "id": "API-25",
+      "title": "Balance ownership verification",
+      "evidence": "file: apps/api/internal/stellar/balance_ownership.go, file: apps/api/internal/stellar/balance_ownership_test.go"
+    },
+    {
+      "id": "API-26",
+      "title": "Chain event verifier",
+      "evidence": "file: apps/api/internal/stellar/chain_event_verifier.go, file: apps/api/internal/stellar/chain_event_verifier_test.go"
+    },
+    {
+      "id": "API-27",
+      "title": "Deposit observer",
+      "evidence": "file: apps/api/internal/stellar/deposit_observer.go, file: apps/api/internal/stellar/deposit_observer_test.go"
+    },
+    {
+      "id": "API-28",
+      "title": "Slippage guard in stellar invoker",
+      "evidence": "file: apps/api/internal/stellar/slippage.go, file: apps/api/internal/stellar/slippage_test.go"
     },
     {
       "id": "DB-01",
       "title": "Migrations 001-003",
-      "evidence": "migration: apps/api/migrations/001_create_users_table.sql, migration: apps/api/migrations/002_create_vaults_table.sql, migration: apps/api/migrations/003_create_transactions_table.sql"
+      "evidence": "migration: apps/api/migrations/001_create_users_table.up.sql, migration: apps/api/migrations/002_create_vaults_table.up.sql, migration: apps/api/migrations/003_create_transactions_table.up.sql"
     },
     {
       "id": "DB-02",
       "title": "Migrations 005-006",
-      "evidence": "migration: apps/api/migrations/005_create_allocations_table.sql"
+      "evidence": "migration: apps/api/migrations/005_create_allocations_table.up.sql"
+    },
+    {
+      "id": "DB-03",
+      "title": "Vaults and transactions schema",
+      "evidence": "migration: apps/api/migrations/002_create_vaults_table.up.sql, migration: apps/api/migrations/003_create_transactions_table.up.sql"
+    },
+    {
+      "id": "DB-04",
+      "title": "Event indexer tables",
+      "evidence": "migration: apps/api/migrations/022_create_event_indexer_tables.up.sql"
+    },
+    {
+      "id": "DB-05",
+      "title": "System state table",
+      "evidence": "migration: apps/api/migrations/025_create_system_state_table.up.sql"
     },
     {
       "id": "DAPP-01",
-      "title": "Stellar Freighter",
-      "evidence": "file: apps/dapp/frontend/lib/stellar.ts, file: apps/dapp/frontend/components/WalletConnector.tsx"
+      "title": "Stellar Wallet Integration",
+      "evidence": "file: apps/dapp/frontend/lib/stellar/transaction.ts, file: apps/dapp/frontend/components/wallet-provider.tsx"
+    },
+    {
+      "id": "DAPP-02",
+      "title": "Network configuration & selector",
+      "evidence": "file: apps/dapp/frontend/lib/networks.ts, file: apps/dapp/frontend/components/network/NetworkSelector.tsx"
+    },
+    {
+      "id": "DAPP-03",
+      "title": "Vault harvest & action modals",
+      "evidence": "file: apps/dapp/frontend/components/vault/HarvestModal.tsx"
+    },
+    {
+      "id": "DAPP-04",
+      "title": "Portfolio dashboard",
+      "evidence": "file: apps/dapp/frontend/app/dashboard/page.tsx"
+    },
+    {
+      "id": "DAPP-05",
+      "title": "Vaults explorer page",
+      "evidence": "file: apps/dapp/frontend/app/vaults/page.tsx"
+    },
+    {
+      "id": "DAPP-06",
+      "title": "Savings goals page",
+      "evidence": "file: apps/dapp/frontend/app/savings/page.tsx"
+    },
+    {
+      "id": "DAPP-07",
+      "title": "Settings page",
+      "evidence": "file: apps/dapp/frontend/app/settings/page.tsx"
+    },
+    {
+      "id": "DAPP-08",
+      "title": "Global styles and layout",
+      "evidence": "file: apps/dapp/frontend/app/globals.css"
+    },
+    {
+      "id": "DAPP-09",
+      "title": "Lighthouse CI configuration",
+      "evidence": "file: apps/dapp/frontend/lighthouserc.json"
+    },
+    {
+      "id": "DAPP-10",
+      "title": "Frontend package manifest",
+      "evidence": "file: apps/dapp/frontend/package.json"
+    },
+    {
+      "id": "DAPP-11",
+      "title": "Soroban transaction builder",
+      "evidence": "file: apps/dapp/frontend/lib/stellar/transaction.ts"
     },
     {
       "id": "DAPP-12",
@@ -176,9 +344,39 @@
       "evidence": "file: apps/dapp/frontend/app/stocks/page.tsx"
     },
     {
+      "id": "DAPP-13",
+      "title": "Website landing page",
+      "evidence": "file: apps/website/src/app/page.tsx"
+    },
+    {
+      "id": "DAPP-14",
+      "title": "Website security & audit page",
+      "evidence": "file: apps/website/src/app/security/page.tsx"
+    },
+    {
       "id": "CI-01",
       "title": "GitHub Actions CI",
       "evidence": "file: .github/workflows/ci.yml"
+    },
+    {
+      "id": "CI-02",
+      "title": "Security workflow",
+      "evidence": "file: .github/workflows/security.yml"
+    },
+    {
+      "id": "CI-03",
+      "title": "Staging deployment workflow",
+      "evidence": "file: .github/workflows/deploy-staging.yml"
+    },
+    {
+      "id": "CI-04",
+      "title": "Synthetic probes workflow",
+      "evidence": "file: .github/workflows/synthetic-probes.yml"
+    },
+    {
+      "id": "CI-05",
+      "title": "Vulnerability waiver list",
+      "evidence": "file: .vulnignore"
     },
     {
       "id": "CI-06",
@@ -189,6 +387,186 @@
       "id": "CI-07",
       "title": "govulncheck",
       "evidence": "ci: security::govulncheck"
+    },
+    {
+      "id": "CI-08",
+      "title": "Security policy documentation",
+      "evidence": "file: SECURITY.md"
+    },
+    {
+      "id": "CI-09",
+      "title": "Audit threat model",
+      "evidence": "file: docs/security/threat-model.md, file: docs/security/contract-invariant-threat-model.md"
+    },
+    {
+      "id": "CI-10",
+      "title": "Signing isolation architecture",
+      "evidence": "file: docs/security/signing-isolation.md"
+    },
+    {
+      "id": "LNCH-1371",
+      "title": "Separate mainnet environment config (#1371)",
+      "evidence": "file: apps/api/internal/config/config.go, file: apps/api/internal/config/config_stellar_test.go"
+    },
+    {
+      "id": "LNCH-1372",
+      "title": "Independent third-party audit tracking (#1372)",
+      "evidence": "file: docs/security/contract_audits.md"
+    },
+    {
+      "id": "LNCH-1373",
+      "title": "Timelocked upgrade proxy with public delay window (#1373)",
+      "evidence": "file: packages/contracts/contracts/timelock/src/lib.rs, file: packages/contracts/contracts/vault/src/lib.rs"
+    },
+    {
+      "id": "LNCH-1374",
+      "title": "Multisig-controlled admin key (#1374)",
+      "evidence": "file: docs/security/multisig-signers.md"
+    },
+    {
+      "id": "LNCH-1375",
+      "title": "Incident response runbook & game-day rehearsal (#1375)",
+      "evidence": "file: docs/security/incident-response.md, file: docs/security/game-day.md"
+    },
+    {
+      "id": "LNCH-1376",
+      "title": "Mainnet-only hard cap on TVL per vault (#1376)",
+      "evidence": "file: apps/api/internal/domain/caps/model.go, file: apps/api/internal/domain/caps/model_test.go"
+    },
+    {
+      "id": "LNCH-1377",
+      "title": "Withdrawal circuit breaker on rolling outflow rate (#1377)",
+      "evidence": "file: apps/api/internal/domain/vault/breaker.go, test: apps/api/internal/service/vault_service_withdrawal_breaker_test.go::TestWithdrawalCircuitBreaker"
+    },
+    {
+      "id": "LNCH-1378",
+      "title": "On-call rotation and paging setup for money-path alerts (#1378)",
+      "evidence": "file: deploy/observability/oncall-rotation.md, file: docker/alertmanager/alertmanager.yml"
+    },
+    {
+      "id": "LNCH-1379",
+      "title": "Real-time balance/TVL dashboard for mainnet operations (#1379)",
+      "evidence": "file: docker/grafana/dashboards/slo-mainnet-operations.json"
+    },
+    {
+      "id": "LNCH-1380",
+      "title": "Mainnet launch checklist gating go/no-go decision (#1380)",
+      "evidence": "file: docs/LAUNCH_CHECKLIST.md"
+    },
+    {
+      "id": "LNCH-1381",
+      "title": "Property-based testing of share-price invariant (#1381)",
+      "evidence": "file: packages/contracts/tests/integration/src/integration/property_tests.rs"
+    },
+    {
+      "id": "LNCH-1382",
+      "title": "Dry-run/simulation mode for mainnet deploy scripts (#1382)",
+      "evidence": "file: apps/api/scripts/simulate_mainnet_deploy.go"
+    },
+    {
+      "id": "LNCH-1384",
+      "title": "Automated daily encrypted database backup and restore (#1384)",
+      "evidence": "file: scripts/db-backup.sh, file: scripts/db-restore.sh, file: docs/observability/runbooks/database-restore-runbook.md"
+    },
+    {
+      "id": "LNCH-1385",
+      "title": "Mainnet fee-estimation guardrail (#1385)",
+      "evidence": "file: apps/api/internal/stellar/fee_guardrail.go, test: apps/api/internal/stellar/fee_guardrail_test.go::TestFeeGuardrail"
+    },
+    {
+      "id": "LNCH-1386",
+      "title": "Load test API and job queue at projected launch traffic (#1386)",
+      "evidence": "file: apps/api/internal/service/launch_load_test.go, file: docs/LOAD_TESTING_BASELINE.md"
+    },
+    {
+      "id": "LNCH-1387",
+      "title": "Emergency pause function independently callable (#1387)",
+      "evidence": "file: packages/contracts/contracts/vault/src/lib.rs, file: packages/contracts/contracts/access_control/src/lib.rs"
+    },
+    {
+      "id": "LNCH-1388",
+      "title": "Terms of service and risk disclosures before mainnet deposit (#1388)",
+      "evidence": "file: docs/security/mainnet-risk-disclosures.md"
+    },
+    {
+      "id": "LNCH-1389",
+      "title": "Mainnet deposit allowlist/waitlist gate (#1389)",
+      "evidence": "file: apps/api/internal/service/deposit_allowlist_gate.go, file: apps/api/internal/service/deposit_allowlist_gate_test.go"
+    },
+    {
+      "id": "LNCH-1390",
+      "title": "Synthetic monitoring canary for deposit/withdraw cycle (#1390)",
+      "evidence": "file: apps/api/internal/scheduler/canary.go, test: apps/api/internal/scheduler/canary_test.go::TestCanary"
+    },
+    {
+      "id": "LNCH-1391",
+      "title": "Reconciliation alert escalation on ledger-vs-chain drift (#1391)",
+      "evidence": "file: apps/api/internal/scheduler/ledger_reconciliation.go, test: apps/api/internal/scheduler/ledger_reconciliation_test.go::TestLedgerReconciliation"
+    },
+    {
+      "id": "LNCH-1393",
+      "title": "Rate-limit protocol adapter harvest calls (#1393)",
+      "evidence": "file: packages/contracts/contracts/vault/src/lib.rs"
+    },
+    {
+      "id": "LNCH-1394",
+      "title": "Adapter integration testing (#1394)",
+      "evidence": "file: packages/contracts/contracts/adapter_blend/src/lib.rs, file: packages/contracts/contracts/adapter_soroswap/src/lib.rs"
+    },
+    {
+      "id": "LNCH-1395",
+      "title": "Mainnet 24h rollback runbook (#1395)",
+      "evidence": "file: docs/MAINNET_LAUNCH_ROLLBACK.md"
+    },
+    {
+      "id": "LNCH-1396",
+      "title": "Separate mainnet and testnet API base URLs and routing guard (#1396)",
+      "evidence": "file: apps/api/internal/config/config.go, file: apps/api/internal/config/config_stellar_test.go"
+    },
+    {
+      "id": "LNCH-1399",
+      "title": "Full mainnet contract deploy dry-run (#1399)",
+      "evidence": "file: docs/security/mainnet-deploy-dryrun.md, file: scripts/mainnet-deploy-dryrun.sh"
+    },
+    {
+      "id": "LNCH-1401",
+      "title": "Mainnet support/on-call escalation tree (#1401)",
+      "evidence": "file: docs/SUPPORT_ESCALATION.md, file: docs/SUPPORT_TRIAGE_GUIDE.md, file: docs/LAUNCH_GO_NO_GO.md"
+    },
+    {
+      "id": "LNCH-1408",
+      "title": "Data retention and user data deletion policy review (#1408)",
+      "evidence": "file: docs/data-retention.md"
+    },
+    {
+      "id": "LNCH-1409",
+      "title": "Mainnet transaction submission retry policy with idempotency (#1409)",
+      "evidence": "file: apps/api/internal/stellar/submission.go, file: apps/api/internal/stellar/submission_test.go"
+    },
+    {
+      "id": "LNCH-1411",
+      "title": "Mainnet cost monitoring and budget alerts (#1411)",
+      "evidence": "file: docker/prometheus/rules/slo_alerts.yml"
+    },
+    {
+      "id": "LNCH-1412",
+      "title": "Chaos test simulating mainnet RPC provider outage (#1412)",
+      "evidence": "file: apps/api/internal/oracle/chaos_scenario_test.go"
+    },
+    {
+      "id": "LNCH-1413",
+      "title": "Multisig signer set, key custody, and rotation procedure (#1413)",
+      "evidence": "file: docs/security/multisig-signers.md, file: docs/security/key-rotation.md"
+    },
+    {
+      "id": "LNCH-1415",
+      "title": "Automated mainnet vault balance snapshot to cold storage (#1415)",
+      "evidence": "file: apps/api/internal/scheduler/ledger_reconciliation.go"
+    },
+    {
+      "id": "LNCH-1419",
+      "title": "Post-launch 30-day heightened-monitoring plan (#1419)",
+      "evidence": "file: docs/POST_LAUNCH_MONITORING.md"
     }
   ]
 }

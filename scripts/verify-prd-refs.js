@@ -121,7 +121,7 @@ const EVIDENCE_VALIDATORS = {
 
 function parseRegister(content) {
   const entries = [];
-  const lines = content.split('\n');
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
   
   let currentEntry = null;
   
