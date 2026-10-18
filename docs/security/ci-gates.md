@@ -14,6 +14,7 @@ This document describes the security gates that protect the Nester codebase. Eac
 | All                   | `gitleaks`                          | any secret detection                      | `security.yml`           |
 | All                   | `semgrep`                           | all violations (XSS, injection, etc.)     | `security.yml`           |
 | All                   | `CodeQL`                            | all violations                            | `security.yml`           |
+| Containers (OCI)      | `trivy` + `cosign`                  | 0 unwaived HIGH/CRITICAL CVEs + signed digest | `scripts/scan-and-sign-images.sh`, `scripts/verify-signed-image.sh` |
 
 ## Go (apps/api)
 
@@ -273,3 +274,33 @@ db.query(query, [userId]);
 **Fails when:** Static analysis detects potential security issues across Go or TypeScript.
 
 **Example:** SQL injection pattern, path traversal, or unsafe deserialization → CodeQL detects → CI fails.
+
+---
+
+## Container Image Scanning & Cosign Signing (Issue #1532)
+
+### Trivy Container Image Vulnerability Gate
+
+Every built OCI image (`ghcr.io/suncrest-labs/nester/api`, `ghcr.io/suncrest-labs/nester/signer`) is scanned with **Trivy** before push/release via `scripts/scan-and-sign-images.sh`:
+
+```bash
+./scripts/scan-and-sign-images.sh
+```
+
+- **Threshold:** Any unwaived `HIGH` or `CRITICAL` OS package or language dependency CVE (`--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`) fails the build.
+- **Waivers:** Temporary waivers must carry an expiry date and owner in `.vulnignore` / `.trivyignore`.
+
+### Cosign Keyless OIDC Signing & Deploy-Time Verification
+
+1. **Release Signing (`SIGN_IMAGES=true ./scripts/scan-and-sign-images.sh`):**
+   - Release images are signed by their immutable `@sha256:<digest>` reference using **Cosign keyless OIDC** backed by GitHub Actions workload identity (`https://token.actions.githubusercontent.com`) and recorded in the Rekor transparency log.
+2. **Deploy-Time Signature & Digest Verification (`./scripts/verify-signed-image.sh`):**
+   - Production deployments are forbidden from pulling mutable tags (`:latest`, `:main`).
+   - Before rolling out a new revision, the deployment pipeline runs:
+     ```bash
+     ./scripts/verify-signed-image.sh \
+       ghcr.io/suncrest-labs/nester/api@sha256:<64-hex-digest> \
+       ghcr.io/suncrest-labs/nester/signer@sha256:<64-hex-digest>
+     ```
+   - `verify-signed-image.sh` rejects any image ref without `@sha256:...` and runs `cosign verify` against the `Suncrest-Labs/nester` OIDC identity and GitHub Actions OIDC issuer.
+
