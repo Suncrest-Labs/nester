@@ -588,3 +588,235 @@ fn regression_1029_harvest_pays_treasury_correctly() {
         "Performance fee should be positive for yield above principal"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #1542: Invariant that sum of holder shares == total_supply (including
+// boost shares from time-locked positions) across deposit, withdraw,
+// deposit_locked, unlock, early unlock (break_lock), report_yield, harvest,
+// and transfer.
+// ---------------------------------------------------------------------------
+
+const LOCK_TIERS: [u64; 4] = [
+    30 * 86_400,
+    90 * 86_400,
+    180 * 86_400,
+    365 * 86_400,
+];
+
+#[derive(Debug, Clone)]
+enum LockAndBoostOp {
+    Deposit { user_idx: usize, amount: i128 },
+    Withdraw { user_idx: usize, share_bps: u32 },
+    DepositLocked { user_idx: usize, amount: i128, tier_idx: usize },
+    Unlock { user_idx: usize },
+    EarlyUnlock { user_idx: usize },
+    ReportYield { yield_bps: u32 },
+    Harvest { user_idx: usize },
+    Transfer { from_idx: usize, to_idx: usize, share_bps: u32 },
+}
+
+fn lock_and_boost_op_strategy(num_users: usize) -> impl Strategy<Value = LockAndBoostOp> {
+    prop_oneof![
+        3 => (0..num_users, amount_strategy())
+            .prop_map(|(user_idx, amount)| LockAndBoostOp::Deposit { user_idx, amount }),
+        3 => (0..num_users, 1_u32..=10_000_u32)
+            .prop_map(|(user_idx, share_bps)| LockAndBoostOp::Withdraw { user_idx, share_bps }),
+        3 => (0..num_users, amount_strategy(), 0..LOCK_TIERS.len())
+            .prop_map(|(user_idx, amount, tier_idx)| LockAndBoostOp::DepositLocked {
+                user_idx,
+                amount,
+                tier_idx,
+            }),
+        2 => (0..num_users).prop_map(|user_idx| LockAndBoostOp::Unlock { user_idx }),
+        2 => (0..num_users).prop_map(|user_idx| LockAndBoostOp::EarlyUnlock { user_idx }),
+        3 => (1_u32..=1_500_u32)
+            .prop_map(|yield_bps| LockAndBoostOp::ReportYield { yield_bps }),
+        2 => (0..num_users).prop_map(|user_idx| LockAndBoostOp::Harvest { user_idx }),
+        2 => (0..num_users, 0..num_users, 1_u32..=5_000_u32)
+            .prop_map(|(from_idx, to_idx, share_bps)| LockAndBoostOp::Transfer {
+                from_idx,
+                to_idx,
+                share_bps,
+            }),
+    ]
+}
+
+fn execute_lock_and_boost_sequence(ops: &[LockAndBoostOp]) {
+    let (h, users) = setup_harness_with_users(3);
+    configure_invariant_harness(&h);
+
+    for op in ops {
+        match *op {
+            LockAndBoostOp::Deposit { user_idx, amount } => {
+                if amount < MIN_DEPOSIT {
+                    continue;
+                }
+                let _ = h.vault().try_deposit(&users[user_idx], &amount, &0);
+            }
+            LockAndBoostOp::Withdraw { user_idx, share_bps } => {
+                let owned = h.token().balance(&users[user_idx]);
+                let locked = h
+                    .vault()
+                    .get_locked_positions(&users[user_idx])
+                    .total_locked_shares;
+                let flexible = owned.saturating_sub(locked);
+                if flexible <= 0 {
+                    continue;
+                }
+                let shares = (flexible * i128::from(share_bps) / 10_000)
+                    .max(1)
+                    .min(flexible);
+                let _ = h.vault().try_withdraw(&users[user_idx], &shares, &0);
+            }
+            LockAndBoostOp::DepositLocked {
+                user_idx,
+                amount,
+                tier_idx,
+            } => {
+                if amount < MIN_DEPOSIT {
+                    continue;
+                }
+                let duration = LOCK_TIERS[tier_idx % LOCK_TIERS.len()];
+                let _ = h
+                    .vault()
+                    .try_deposit_locked(&users[user_idx], &amount, &0, &duration);
+            }
+            LockAndBoostOp::Unlock { user_idx } => {
+                let view = h.vault().get_locked_positions(&users[user_idx]);
+                if let Some(pos) = view.positions.get(0) {
+                    let now = h.env.ledger().timestamp();
+                    if now < pos.unlock_at {
+                        h.env.ledger().with_mut(|l| l.timestamp = pos.unlock_at + 1);
+                    }
+                    let _ = h.vault().try_unlock_position(&users[user_idx], &pos.lock_id);
+                }
+            }
+            LockAndBoostOp::EarlyUnlock { user_idx } => {
+                let view = h.vault().get_locked_positions(&users[user_idx]);
+                if let Some(pos) = view.positions.get(0) {
+                    let _ = h.vault().try_break_lock(&users[user_idx], &pos.lock_id);
+                }
+            }
+            LockAndBoostOp::ReportYield { yield_bps } => {
+                let total_assets = h.vault().total_assets();
+                if h.vault().total_shares() == 0 || total_assets == 0 {
+                    continue;
+                }
+                let amount = (total_assets * i128::from(yield_bps) / 10_000).max(1);
+                h.mint_deposit_tokens(&h.vault_id, amount);
+                h.vault().report_yield(&h.admin, &amount);
+                // Advance past the yield vesting window so vested yield is released
+                let vest = h.vault().get_yield_vesting_period();
+                h.env.ledger().with_mut(|l| l.timestamp += vest + 1);
+            }
+            LockAndBoostOp::Harvest { user_idx } => {
+                let _ = h.vault().try_harvest(&users[user_idx]);
+            }
+            LockAndBoostOp::Transfer {
+                from_idx,
+                to_idx,
+                share_bps,
+            } => {
+                if from_idx == to_idx {
+                    continue;
+                }
+                let owned = h.token().balance(&users[from_idx]);
+                let locked = h
+                    .vault()
+                    .get_locked_positions(&users[from_idx])
+                    .total_locked_shares;
+                let flexible = owned.saturating_sub(locked);
+                if flexible <= 0 {
+                    continue;
+                }
+                let shares = (flexible * i128::from(share_bps) / 10_000)
+                    .max(1)
+                    .min(flexible);
+                let _ = h
+                    .token()
+                    .try_transfer(&users[from_idx], &users[to_idx], &shares);
+            }
+        }
+
+        let total_supply = h.token().total_supply();
+        let vault_total_shares = h.vault().total_shares();
+        let holder_shares_sum = sum_user_shares(&h, &users);
+        let total_assets = h.vault().total_assets();
+        let withdrawable_sum = sum_user_assets(&h, &users);
+
+        assert_eq!(
+            holder_shares_sum, total_supply,
+            "holder shares ({}) != token total_supply ({}) after {:?}",
+            holder_shares_sum, total_supply, op
+        );
+        assert_eq!(
+            total_supply, vault_total_shares,
+            "token total_supply ({}) != vault total_shares ({}) after {:?}",
+            total_supply, vault_total_shares, op
+        );
+        assert!(
+            total_assets >= withdrawable_sum,
+            "total_assets ({}) < sum of withdrawable amounts ({}) after {:?}",
+            total_assets,
+            withdrawable_sum,
+            op
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(16),
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_holder_shares_equal_total_supply_including_boost_shares(
+        ops in prop::collection::vec(lock_and_boost_op_strategy(3), 1..25)
+    ) {
+        execute_lock_and_boost_sequence(&ops);
+    }
+}
+
+#[test]
+fn regression_1542_holder_shares_equal_total_supply_across_boost_locks_and_transfers() {
+    let seeded_sequence = [
+        LockAndBoostOp::Deposit {
+            user_idx: 0,
+            amount: 100 * XLM,
+        },
+        LockAndBoostOp::DepositLocked {
+            user_idx: 1,
+            amount: 200 * XLM,
+            tier_idx: 1,
+        },
+        LockAndBoostOp::DepositLocked {
+            user_idx: 2,
+            amount: 150 * XLM,
+            tier_idx: 3,
+        },
+        LockAndBoostOp::ReportYield { yield_bps: 500 },
+        LockAndBoostOp::Transfer {
+            from_idx: 0,
+            to_idx: 1,
+            share_bps: 2_500,
+        },
+        LockAndBoostOp::EarlyUnlock { user_idx: 1 },
+        LockAndBoostOp::ReportYield { yield_bps: 800 },
+        LockAndBoostOp::Harvest { user_idx: 0 },
+        LockAndBoostOp::Unlock { user_idx: 2 },
+        LockAndBoostOp::Withdraw {
+            user_idx: 2,
+            share_bps: 5_000,
+        },
+        LockAndBoostOp::Withdraw {
+            user_idx: 0,
+            share_bps: 10_000,
+        },
+    ];
+    execute_lock_and_boost_sequence(&seeded_sequence);
+}
+
