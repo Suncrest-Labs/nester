@@ -5,6 +5,7 @@ import { ArrowRightLeft, X, Loader2 } from "lucide-react";
 import { vaultsApi, type RebalanceSuggestion } from "@/lib/api/vaults";
 import { cn } from "@/lib/utils";
 import { safeStorage } from "@/lib/storage";
+import { isAiEnabled } from "@/lib/ai-gate";
 
 const DISMISS_KEY = "nester_rebalance_dismissed";
 
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export function RebalanceSuggestionCard({ vaultId, vaultName }: Props) {
+  const aiEnabled = isAiEnabled();
   const [suggestion, setSuggestion] = useState<RebalanceSuggestion | null>(null);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -25,6 +27,10 @@ export function RebalanceSuggestionCard({ vaultId, vaultName }: Props) {
   const [dismissed, setDismissed] = useState(false);
 
   const load = useCallback(async () => {
+    if (!aiEnabled) {
+      setLoading(false);
+      return;
+    }
     // #1233: safeStorage never throws — a throwing accessor falls back to
     // the in-memory map instead of crashing the load callback.
     if (safeStorage.get<boolean>(dismissKey(vaultId), false)) {
@@ -40,7 +46,7 @@ export function RebalanceSuggestionCard({ vaultId, vaultName }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [vaultId]);
+  }, [vaultId, aiEnabled]);
 
   useEffect(() => {
     void load();
