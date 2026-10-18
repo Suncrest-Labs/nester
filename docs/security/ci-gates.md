@@ -273,3 +273,32 @@ db.query(query, [userId]);
 **Fails when:** Static analysis detects potential security issues across Go or TypeScript.
 
 **Example:** SQL injection pattern, path traversal, or unsafe deserialization → CodeQL detects → CI fails.
+
+---
+
+## Branch Protection & Money-Path Two-Reviewer Policy (Issue #1533)
+
+Changes to smart contracts, transaction signing services, frontend Stellar transaction builders, and CI workflows are governed by path-specific rules in [`.github/CODEOWNERS`](../../.github/CODEOWNERS) and GitHub branch protection on `main` (and `dev`).
+
+### Protected Money-Path Directories (`.github/CODEOWNERS`)
+
+| Path | Scope | Required Code Owners |
+|------|-------|----------------------|
+| `/packages/contracts/` | All Soroban smart contracts (`vault`, `vault_token`, `allocation_strategy`, `yield_registry`, `timelock`, `treasury`, `access_control`, adapters) | `@0xDeon`, `@Suncrest-Labs/security-reviewers`, `@Suncrest-Labs/core-maintainers` |
+| `/apps/api/internal/signing/` | Transaction signing policy, Ed25519/KMS signer, rate limits, and allowlists | `@0xDeon`, `@Suncrest-Labs/security-reviewers`, `@Suncrest-Labs/core-maintainers` |
+| `/apps/api/cmd/signer/` | Isolated signer binary entrypoint and server configuration | `@0xDeon`, `@Suncrest-Labs/security-reviewers`, `@Suncrest-Labs/core-maintainers` |
+| `/apps/dapp/frontend/lib/stellar/` | Frontend Soroban XDR assembly, simulation, and wallet signing flows | `@0xDeon`, `@Suncrest-Labs/security-reviewers`, `@Suncrest-Labs/core-maintainers` |
+| `/.github/workflows/` | All CI/CD, security scanning, and release pipelines | `@0xDeon`, `@Suncrest-Labs/security-reviewers`, `@Suncrest-Labs/core-maintainers` |
+
+### Enforced GitHub Branch Protection Settings (`main` / `dev`)
+
+| Setting | Configured Value | Rationale |
+|---------|------------------|-----------|
+| `required_approving_review_count` | `2` | No single maintainer can author and merge a money-path or workflow change |
+| `require_code_owner_reviews` | `true` | Requires explicit sign-off from `.github/CODEOWNERS` owners (`@Suncrest-Labs/security-reviewers` / `@Suncrest-Labs/core-maintainers`, >= 2 members) |
+| `dismiss_stale_reviews_on_push` | `true` | Any new commit pushed to an approved PR automatically invalidates prior approvals |
+| `require_last_push_approval` | `true` | The person who pushed the most recent commit cannot be the sole approver |
+| `required_signatures` | `true` | All commits merged to protected branches must be cryptographically signed (GPG / SSH / GitHub Vigilant Mode) |
+| `required_Linear_history` | `true` | Prevents merge-commit smuggling and keeps audit history linear |
+| `enforce_admins` | `true` | Branch protection rules apply equally to repository administrators |
+

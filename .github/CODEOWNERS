@@ -1,1 +1,15 @@
+# Default repository owner
 * @0xDeon
+
+# =============================================================================
+# Money-Path & Security-Critical Code (Issue #1533)
+# Requires review from at least two maintainers / security council members
+# alongside branch protection rules (2 required approvals + CODEOWNERS review).
+# =============================================================================
+/packages/contracts/              @0xDeon @Suncrest-Labs/security-reviewers @Suncrest-Labs/core-maintainers
+/apps/api/internal/signing/       @0xDeon @Suncrest-Labs/security-reviewers @Suncrest-Labs/core-maintainers
+/apps/api/cmd/signer/             @0xDeon @Suncrest-Labs/security-reviewers @Suncrest-Labs/core-maintainers
+/apps/dapp/frontend/lib/stellar/  @0xDeon @Suncrest-Labs/security-reviewers @Suncrest-Labs/core-maintainers
+/.github/workflows/               @0xDeon @Suncrest-Labs/security-reviewers @Suncrest-Labs/core-maintainers
+/SECURITY.md                      @0xDeon @Suncrest-Labs/security-reviewers
+/docs/security/                   @0xDeon @Suncrest-Labs/security-reviewers
