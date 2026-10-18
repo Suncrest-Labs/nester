@@ -12,6 +12,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 )
 
 // newTestRedisClient returns a *redis.Client for the address in REDIS_ADDR,
@@ -293,3 +295,58 @@ func TestHub_PerIPConnectionLimit_RejectsBeyondLimit(t *testing.T) {
 		t.Errorf("expected 429 Too Many Requests, got %d", status)
 	}
 }
+
+func TestHub_PerIPConnectionLimit_SpoofedXForwardedFor(t *testing.T) {
+	middleware.ConfigureClientIP(1)
+	t.Cleanup(func() { middleware.ConfigureClientIP(0) })
+
+	hub := newTestHubWithRedis(nil, 1) // limit of 1 connection per IP
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hub.Run(ctx)
+
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeWs))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=tok1"
+
+	// First connection from real IP 203.0.113.42 with spoofed left-most entry 1.2.3.4
+	hdr1 := http.Header{}
+	hdr1.Set("X-Forwarded-For", "1.2.3.4, 203.0.113.42")
+	conn1, _, err := websocket.DefaultDialer.Dial(wsURL, hdr1)
+	if err != nil {
+		t.Fatalf("first dial should succeed: %v", err)
+	}
+	defer conn1.Close()
+
+	// Verify the connection counted against the real IP (203.0.113.42), not 1.2.3.4
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4, 203.0.113.42")
+	if got := clientIP(req); got != "203.0.113.42" {
+		t.Fatalf("expected clientIP to resolve to real IP 203.0.113.42, got %q", got)
+	}
+
+	// Second connection from the same real IP (203.0.113.42) with a different
+	// spoofed left-most entry (5.6.7.8) must still be rejected as 429.
+	hdr2 := http.Header{}
+	hdr2.Set("X-Forwarded-For", "5.6.7.8, 203.0.113.42")
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, hdr2)
+	if err == nil {
+		t.Fatal("expected second connection from same real IP with rotated spoofed X-Forwarded-For to be rejected")
+	}
+	if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 Too Many Requests, got %v", resp)
+	}
+
+	// A connection whose real IP is 1.2.3.4 must succeed because 1.2.3.4's
+	// bucket was NOT consumed by the spoofed header above.
+	hdr3 := http.Header{}
+	hdr3.Set("X-Forwarded-For", "1.2.3.4")
+	conn3, _, err := websocket.DefaultDialer.Dial(wsURL, hdr3)
+	if err != nil {
+		t.Fatalf("expected connection from real IP 1.2.3.4 to succeed: %v", err)
+	}
+	defer conn3.Close()
+}
+

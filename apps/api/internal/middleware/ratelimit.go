@@ -94,6 +94,13 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 // the right-most hop and the entry trustedProxyCount positions further left is
 // returned. Counting from the right means a client cannot spoof its way past the
 // trusted-proxy boundary by injecting extra left-most X-Forwarded-For entries.
+// ClientIP returns the originating client address for r using the configured
+// trustedProxyCount. Exported so other packages (such as internal/ws) share
+// the exact same right-to-left trusted-proxy extraction (#1518).
+func ClientIP(r *http.Request) string {
+	return clientIP(r)
+}
+
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
