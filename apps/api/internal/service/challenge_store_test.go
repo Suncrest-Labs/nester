@@ -146,3 +146,27 @@ func TestChallengeStore_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestInMemoryChallengeStore_EnforcesMaxActiveChallenges(t *testing.T) {
+	store := NewInMemoryChallengeStore(5 * time.Minute).WithMaxActiveChallenges(3)
+	ctx := context.Background()
+
+	require.NoError(t, store.Set(ctx, "WALLET_1", "c1"))
+	require.NoError(t, store.Set(ctx, "WALLET_2", "c2"))
+	require.NoError(t, store.Set(ctx, "WALLET_3", "c3"))
+
+	// Overwriting an existing wallet must still succeed at capacity.
+	require.NoError(t, store.Set(ctx, "WALLET_1", "c1-updated"))
+
+	// A 4th distinct wallet must be rejected with ErrChallengeCapacityExceeded.
+	err := store.Set(ctx, "WALLET_4", "c4")
+	require.ErrorIs(t, err, ErrChallengeCapacityExceeded)
+
+	// Consuming one active challenge frees a slot.
+	got, err := store.GetAndDelete(ctx, "WALLET_1")
+	require.NoError(t, err)
+	assert.Equal(t, "c1-updated", got)
+
+	require.NoError(t, store.Set(ctx, "WALLET_4", "c4"))
+}
+

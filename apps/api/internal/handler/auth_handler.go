@@ -120,6 +120,10 @@ func (h *AuthHandler) handleChallenge(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr(err.Error()))
 			return
 		}
+		if errors.Is(err, service.ErrChallengeCapacityExceeded) {
+			response.WriteJSON(w, http.StatusTooManyRequests, response.Err(http.StatusTooManyRequests, "CHALLENGE_CAPACITY_EXCEEDED", "too many pending auth challenges; try again shortly"))
+			return
+		}
 		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "failed to generate challenge"))
 		return
 	}

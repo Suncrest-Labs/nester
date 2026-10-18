@@ -21,6 +21,7 @@ import (
 
 type stubAuthSvc struct {
 	tokens         service.Tokens
+	challengeErr   error
 	verifyErr      error
 	refreshErr     error
 	logoutErr      error
@@ -31,6 +32,9 @@ type stubAuthSvc struct {
 }
 
 func (s *stubAuthSvc) GenerateChallenge(context.Context, string) (string, error) {
+	if s.challengeErr != nil {
+		return "", s.challengeErr
+	}
 	return "stub-challenge", nil
 }
 
@@ -314,3 +318,27 @@ func TestAuthHandler_RevokeSession_NotFoundReturns404(t *testing.T) {
 		t.Errorf("expected RevokeSession called with %s, got %s", targetID, svc.revokedID)
 	}
 }
+
+func TestAuthHandler_GetChallenge_CapacityExceededReturns429(t *testing.T) {
+	svc := &stubAuthSvc{challengeErr: service.ErrChallengeCapacityExceeded}
+	h := handler.NewAuthHandler(svc, true, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	validWallet := "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
+	body, _ := json.Marshal(map[string]string{"wallet_address": validWallet})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/challenge", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 when challenge capacity is exceeded, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := decodeEnvelope(t, rec.Body.Bytes())
+	errObj, _ := out["error"].(map[string]any)
+	if errObj["code"] != "CHALLENGE_CAPACITY_EXCEEDED" {
+		t.Errorf("expected error code CHALLENGE_CAPACITY_EXCEEDED, got %v", errObj["code"])
+	}
+}
+
