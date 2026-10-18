@@ -44,7 +44,7 @@ pub fn assets_to_shares_down(
     // this state would let a new depositor recapitalise existing holders and
     // receive an incorrect ownership fraction.
     if total_assets == 0 {
-        return Err(ContractError::InvalidOperation);
+        return Err(ContractError::VaultImpaired);
     }
     mul_div_down(assets, total_shares, total_assets)
 }
@@ -60,7 +60,7 @@ pub fn assets_to_shares_up(
         return Ok(assets);
     }
     if total_assets == 0 {
-        return Err(ContractError::InvalidOperation);
+        return Err(ContractError::VaultImpaired);
     }
     mul_div_up(assets, total_shares, total_assets)
 }

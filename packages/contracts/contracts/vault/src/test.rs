@@ -2239,7 +2239,10 @@ fn emergency_withdraw_blocked_by_degraded_source_failures_alone() {
     vault.record_source_failure(&admin);
     vault.record_source_failure(&admin);
     vault.record_source_failure(&admin);
-    assert_eq!(vault.get_breaker_status().severity, Severity::DepositsHalted);
+    assert_eq!(
+        vault.get_breaker_status().severity,
+        Severity::DepositsHalted
+    );
 
     // A degraded yield source on its own is documented as *not* sufficient
     // to unlock the emergency exit — only an explicit pause or an escalation
@@ -2271,7 +2274,11 @@ fn emergency_withdraw_recovers_principal_once_degraded_state_escalates_to_full_h
     assert_eq!(vault.get_breaker_status().severity, Severity::FullHalt);
 
     let returned = vault.emergency_withdraw(&user);
-    assert_eq!(returned, 500 * XLM, "user must recover their full principal");
+    assert_eq!(
+        returned,
+        500 * XLM,
+        "user must recover their full principal"
+    );
 }
 
 #[test]
@@ -2291,7 +2298,11 @@ fn emergency_withdraw_all_unwinds_healthy_positions_when_one_adapter_fails_while
     vault.pause(&admin);
     let result = vault.emergency_withdraw_all(&user);
 
-    assert_eq!(result.failed.len(), 1, "the failing adapter must not block others");
+    assert_eq!(
+        result.failed.len(),
+        1,
+        "the failing adapter must not block others"
+    );
     assert_eq!(result.failed.get(0).unwrap().protocol, aave);
     assert_eq!(result.succeeded.len(), 1);
     assert_eq!(result.succeeded.get(0).unwrap().protocol, blend);
@@ -2991,7 +3002,9 @@ fn execute_upgrade_before_eta_is_rejected_even_for_upgrader() {
     );
 
     // The pending upgrade must remain untouched since no execution succeeded.
-    let pending = vault.get_pending_upgrade().expect("pending upgrade must persist");
+    let pending = vault
+        .get_pending_upgrade()
+        .expect("pending upgrade must persist");
     assert_eq!(pending.wasm_hash, new_hash);
     assert_eq!(pending.eta, eta);
 }
@@ -3243,6 +3256,42 @@ mod proptests {
                     expected_redeemable = expected_redeemable
                 );
             }
+        }
+
+        /// Property 5: Full impairment (`total_supply > 0 && total_assets == 0`) rejects deposits
+        /// with `ContractError::VaultImpaired` instead of falling back to 1:1 share issuance (#1477).
+        #[test]
+        fn prop_full_impairment_rejects_deposit_with_vault_impaired(
+            initial_deposit in nester_common::MIN_DEPOSIT_AMOUNT..500_000 * XLM,
+            next_deposit in nester_common::MIN_DEPOSIT_AMOUNT..500_000 * XLM,
+        ) {
+            let (env, admin, token, vault, _treasury) = setup();
+            let alice = Address::generate(&env);
+            let bob = Address::generate(&env);
+            mint(&token, &alice, initial_deposit);
+            mint(&token, &bob, next_deposit);
+
+            // Disable circuit breakers so full impairment can be reported directly
+            let mut breaker = vault.get_breaker_config_v2();
+            breaker.price_move_enabled = false;
+            breaker.yield_sanity_enabled = false;
+            vault.set_breaker_config(&admin, &breaker);
+
+            vault.deposit(&alice, &initial_deposit, &0);
+            vault.grant_role(&admin, &admin, &Role::Manager);
+            vault.report_yield(&admin, &(-initial_deposit));
+
+            prop_assert_eq!(vault.total_assets(), 0);
+            prop_assert!(vault.total_shares() > 0);
+
+            let res = vault.try_deposit(&bob, &next_deposit, &0);
+            prop_assert_eq!(
+                res,
+                Err(Ok(soroban_sdk::Error::from_contract_error(
+                    nester_common::ContractError::VaultImpaired as u32
+                ))),
+                "Deposit into a fully impaired vault must be rejected with VaultImpaired"
+            );
         }
     }
 }

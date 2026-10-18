@@ -81,7 +81,10 @@ impl ReferenceModel {
     }
 
     fn deposit(&mut self, user_idx: usize, amount: i128) -> i128 {
-        let shares = if self.total_shares == 0 || self.total_assets == 0 {
+        if self.total_shares > 0 && self.total_assets == 0 {
+            return 0;
+        }
+        let shares = if self.total_shares == 0 {
             amount
         } else {
             amount * self.total_shares / self.total_assets
@@ -392,6 +395,39 @@ proptest! {
             let shares = h.vault().deposit(&users[0], &(MIN_DEPOSIT + STROOP), &0);
             prop_assert!(shares > 0, "valid deposit minted no shares");
         }
+    }
+
+    #[test]
+    fn prop_impaired_to_zero_rejects_deposit_with_vault_impaired(
+        initial_deposit in MIN_DEPOSIT..(100_000 * XLM),
+        next_deposit in MIN_DEPOSIT..(100_000 * XLM),
+    ) {
+        let (h, users) = setup_harness_with_users(2);
+        configure_invariant_harness(&h);
+
+        h.vault().deposit(&users[0], &initial_deposit, &0);
+        h.vault().report_yield(&h.admin, &(-initial_deposit));
+
+        prop_assert_eq!(h.vault().total_assets(), 0);
+        prop_assert!(h.vault().total_shares() > 0);
+
+        let expected_err = Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::VaultImpaired as u32,
+        )));
+
+        let vault_res = h.vault().try_deposit(&users[1], &next_deposit, &0);
+        prop_assert_eq!(
+            vault_res,
+            expected_err.clone(),
+            "vault deposit after full impairment must return VaultImpaired"
+        );
+
+        let token_res = h.token().try_shares_for_deposit(&next_deposit);
+        prop_assert_eq!(
+            token_res,
+            expected_err,
+            "vault_token shares_for_deposit after full impairment must return VaultImpaired"
+        );
     }
 }
 

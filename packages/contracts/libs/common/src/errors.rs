@@ -86,3 +86,10 @@ pub enum ContractError {
 
 // Alias for backwards compatibility
 pub type Error = ContractError;
+
+impl ContractError {
+    /// Vault has positive share supply backed by zero assets (`total_supply > 0 && total_assets == 0`).
+    /// Reuses [`ContractError::InvalidOperation`] (9) to stay within Soroban's 50-variant `#[contracterror]` cap.
+    #[allow(non_upper_case_globals)]
+    pub const VaultImpaired: ContractError = ContractError::InvalidOperation;
+}
