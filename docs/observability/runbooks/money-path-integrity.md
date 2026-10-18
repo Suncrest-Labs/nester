@@ -269,6 +269,30 @@ their visible balance and have not arrived anywhere they can act on.
 
 ---
 
+# 4. `VaultTotalAssetsDivergence` (#1547)
+
+Unlike `ReconciliationDivergence` (which compares the PostgreSQL ledger with on-chain state), `VaultTotalAssetsDivergence` compares two **on-chain** quantities:
+
+$$\text{total\_assets}() \quad \text{vs.} \quad \text{USDC SAC } \text{balance}(\text{vault}) + \sum_i \text{adapter}_i.\text{position}(\text{vault})$$
+
+When `nester_vault_assets_divergence_bps` exceeds `10 bps` (`0.10%`) for 5 minutes:
+
+1. **Inspect the exported breakdown immediately:**
+   ```promql
+   nester_vault_total_assets_stroops{vault_id="<vault_id>"}
+   nester_vault_usdc_sac_balance_stroops{vault_id="<vault_id>"}
+   nester_vault_adapter_positions_stroops{vault_id="<vault_id>"}
+   nester_vault_assets_divergence_stroops{vault_id="<vault_id>"}
+   ```
+2. **Execute the per-vault pause drill (`docs/security/game-day.md`)** if `nester_vault_assets_divergence_stroops > 0` (meaning reported `total_assets` exceeds actual backing assets, indicating an adapter impairment or exploit).
+3. **Verify directly on-chain via Stellar CLI:**
+   ```bash
+   stellar contract invoke --id "$VAULT_CONTRACT_ID" --network mainnet -- total_assets
+   stellar contract invoke --id "$USDC_SAC_CONTRACT_ID" --network mainnet -- balance --id "$VAULT_CONTRACT_ID"
+   ```
+
+---
+
 ## Verifying recovery
 
 Do not resolve on the alert clearing alone. Confirm all three:
@@ -297,3 +321,4 @@ trap this whole runbook is built around.
 - [Flow success](flow-success.md) — deposit and withdrawal failure rates.
 - [Flow latency](flow-latency.md) — settlement latency.
 - `docs/observability/slo.md` — SLI definitions and burn-rate arithmetic.
+

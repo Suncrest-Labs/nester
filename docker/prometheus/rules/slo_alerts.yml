@@ -670,6 +670,25 @@ groups:
           dashboard: /d/nester-slo-money-path/money-path-integrity
           runbook: docs/observability/runbooks/money-path-integrity.md
 
+      - alert: VaultTotalAssetsDivergence
+        # Independent on-chain solvency check (#1547): compares the vault's
+        # reported total_assets() with the sum of its USDC SAC balance(vault)
+        # and adapter positions. Diverging past 10 bps (0.10%) indicates an
+        # accounting bug or adapter/vault exploit.
+        expr: nester_vault_assets_divergence_bps > 10
+        for: 5m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Vault {{ $labels.vault_id }} total_assets diverges from backing USDC and adapter positions by {{ $value | printf "%.1f" }} bps
+          description: >-
+            On-chain total_assets() for vault {{ $labels.vault_id }} differs from the sum of its USDC SAC balance and adapter positions by {{ $value | printf "%.1f" }} bps (threshold 10 bps). Execute the per-vault pause drill immediately and inspect on-chain balances.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/money-path-integrity.md
+
   - name: slo_alerts_meta
     rules:
       - alert: SLOTargetDown

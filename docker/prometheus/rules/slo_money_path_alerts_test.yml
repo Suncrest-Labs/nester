@@ -404,3 +404,35 @@ tests:
       - eval_time: 15m
         alertname: MoneyPathMetricsAbsent
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # 7. On-chain vault total_assets vs USDC + adapter backing (#1547)
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: vault total_assets divergence exceeding 10 bps pages
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x30'
+      - series: 'nester_reconcile_balance_last_run_age_seconds'
+        values: '0+0x30'
+      - series: 'nester_vault_assets_divergence_bps{vault_id="vault-main-usdc"}'
+        values: '50x30'
+      - series: 'nester_vault_assets_divergence_bps{vault_id="vault-healthy"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: VaultTotalAssetsDivergence
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: money_path_integrity
+              service: api
+              vault_id: vault-main-usdc
+            exp_annotations:
+              summary: >-
+                Vault vault-main-usdc total_assets diverges from backing USDC and adapter positions by 50.0 bps
+              description: >-
+                On-chain total_assets() for vault vault-main-usdc differs from the sum of its USDC SAC balance and adapter positions by 50.0 bps (threshold 10 bps). Execute the per-vault pause drill immediately and inspect on-chain balances.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/money-path-integrity.md
+
