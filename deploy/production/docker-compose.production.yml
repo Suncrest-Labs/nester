@@ -1,0 +1,95 @@
+services:
+  signer_production:
+    image: ghcr.io/suncrest-labs/nester/signer@${SIGNER_IMAGE_DIGEST:?SIGNER_IMAGE_DIGEST (@sha256:...) is required}
+    container_name: nester_signer_production
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - STELLAR_NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015
+      - STELLAR_RPC_URL=${STELLAR_RPC_URL:?set in deploy/production/.env}
+      - STELLAR_HORIZON_URL=${STELLAR_HORIZON_URL:-https://horizon.stellar.org}
+      - SIGNER_REQUIRE_KMS=true
+      - SIGNER_KMS_KEY_ID=${SIGNER_KMS_KEY_ID:?set in deploy/production/.env}
+      - SIGNER_KMS_PUBLIC_ADDRESS=${SIGNER_KMS_PUBLIC_ADDRESS:?set in deploy/production/.env}
+      - SIGNER_KMS_ENDPOINT_URL=${SIGNER_KMS_ENDPOINT_URL:?set in deploy/production/.env}
+      - SIGNER_SOCKET_PATH=/run/nester-signer/signer.sock
+      - SIGNER_SOCKET_MODE=0660
+      - SIGNER_KILL_SWITCH_PATH=/run/nester-killswitch/state
+      - SIGNER_ALLOWED_CONTRACTS=${SIGNER_ALLOWED_CONTRACTS:?set in deploy/production/.env}
+    volumes:
+      - signer_socket:/run/nester-signer
+      - ./killswitch:/run/nester-killswitch:ro
+    networks:
+      - signer_isolated_net
+
+  api_production:
+    image: ghcr.io/suncrest-labs/nester/api@${API_IMAGE_DIGEST:?API_IMAGE_DIGEST (@sha256:...) is required}
+    container_name: nester_api_production
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - APP_ENV=production
+      - RUN_MIGRATIONS=false
+      - STELLAR_NETWORK=mainnet
+      - STELLAR_NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015
+      - STELLAR_RPC_URL=${STELLAR_RPC_URL:?set in deploy/production/.env}
+      - STELLAR_HORIZON_URL=${STELLAR_HORIZON_URL:-https://horizon.stellar.org}
+      - DATABASE_URL=${DATABASE_URL:?set in deploy/production/.env}
+      - REDIS_URL=${REDIS_URL:?set in deploy/production/.env}
+      - SIGNER_SOCKET_PATH=/run/nester-signer/signer.sock
+      - CONTRACT_ADDRESS_VAULT=${VAULT_CONTRACT_ID:?set in deploy/production/.env}
+      - CONTRACT_ADDRESS_YIELD_REGISTRY=${YIELD_REGISTRY_CONTRACT_ID:?set in deploy/production/.env}
+    volumes:
+      - signer_socket:/run/nester-signer
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - signer_production
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - api_external_net
+      - signer_isolated_net
+
+  dapp_production:
+    image: ghcr.io/suncrest-labs/nester/dapp@${DAPP_IMAGE_DIGEST:?DAPP_IMAGE_DIGEST (@sha256:...) is required}
+    container_name: nester_dapp_production
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_STELLAR_NETWORK=mainnet
+      - NEXT_PUBLIC_API_URL=https://api.nester.finance/api/v1
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api_production:
+        condition: service_healthy
+    networks:
+      - api_external_net
+
+volumes:
+  signer_socket:
+
+networks:
+  api_external_net:
+  signer_isolated_net:
+    internal: false
