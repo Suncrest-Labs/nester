@@ -670,6 +670,7 @@ export function WithdrawModal({
     const [showLargeWarning, setShowLargeWarning] = useState(false);
     const [state, setState] = useState<ActionState>("input");
     const [error, setError] = useState("");
+    const [restoreNotice, setRestoreNotice] = useState("");
     const { prices: tokenPrices } = useTokenPrices();
     const [receipt, setReceipt] = useState<{
         txHash: string;
@@ -721,6 +722,7 @@ export function WithdrawModal({
         resetForm();
         setState("input");
         setError("");
+        setRestoreNotice("");
         setReceipt(null);
         setShowLargeWarning(false);
         onClose();
@@ -731,6 +733,7 @@ export function WithdrawModal({
         submittingRef.current = true;
 
         setError("");
+        setRestoreNotice("");
         setState("confirming");
         setShowLargeWarning(false);
 
@@ -745,6 +748,7 @@ export function WithdrawModal({
                 contractId,
                 shares: quote.sharesBurned,
                 minAssetsOut: quote.netAmount,
+                onRestoreRequired: (msg) => setRestoreNotice(msg),
             });
             const signedXdr = await signTransaction(xdr);
 
@@ -929,6 +933,20 @@ export function WithdrawModal({
                             </div>
                         ))}
                     </div>
+
+                    {/* Restore footprint notice (#1487) */}
+                    {restoreNotice && (
+                        <div
+                            data-testid="restore-footprint-notice"
+                            className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800"
+                        >
+                            <p className="font-medium">{restoreNotice}</p>
+                            <p className="mt-1">
+                                An archived Soroban ledger entry must be restored on-chain before
+                                your withdrawal can execute. Please approve both wallet signatures.
+                            </p>
+                        </div>
+                    )}
 
                     {/* Success receipt */}
                     {state === "success" && receipt && (

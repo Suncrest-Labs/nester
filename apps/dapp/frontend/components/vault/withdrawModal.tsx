@@ -168,6 +168,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
   const [errorMsg, setErrorMsg] = useState("");
+  const [restoreNotice, setRestoreNotice] = useState<string>("");
   const [receipt, setReceipt] = useState<(TransactionReceipt & { penaltyAmount: number; netAmount: number }) | null>(null);
   const submittingRef = useRef(false);
 
@@ -200,6 +201,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     setAmountInput("");
     setState("input");
     setErrorMsg("");
+    setRestoreNotice("");
     setReceipt(null);
     onClose();
   };
@@ -209,6 +211,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     submittingRef.current = true;
 
     setErrorMsg("");
+    setRestoreNotice("");
 
     try {
       const vaultDef = getVaultById(position.vaultId);
@@ -223,6 +226,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
         asset: position.asset?.toUpperCase() === "XLM" ? "XLM" : "USDC",
         shares: quote.sharesBurned,
         minAssetsOut: quote.netAmount,
+        onRestoreRequired: (msg) => setRestoreNotice(msg),
       });
 
       const result = recordWithdrawal({
@@ -439,9 +443,28 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                     <Sparkles className="mt-0.5 h-4 w-4 text-foreground/50" />
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       Partial withdrawals burn shares proportionally. Full withdrawals
-                      close the position entirely and return all remaining funds.
+                      close the position entirely and return all remaining funds. If
+                      on-chain storage has been archived,{" "}
+                      <span className="font-medium text-foreground">
+                        Your position needs to be reactivated first
+                      </span>{" "}
+                      with an extra restoration signature before withdrawing.
                     </p>
                   </div>
+                </div>
+              )}
+
+              {/* Restore footprint notice (#1487) */}
+              {restoreNotice && (
+                <div
+                  data-testid="restore-footprint-notice"
+                  className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800"
+                >
+                  <p className="font-medium">{restoreNotice}</p>
+                  <p className="mt-1">
+                    An archived Soroban ledger entry must be restored on-chain before
+                    your withdrawal can execute. Please approve both wallet signatures.
+                  </p>
                 </div>
               )}
 
