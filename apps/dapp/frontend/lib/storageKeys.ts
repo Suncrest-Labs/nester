@@ -50,3 +50,28 @@ export function readNetworkId(): NetworkId | null {
 export function writeNetworkId(networkId: NetworkId): void {
   safeStorage.set(NETWORK_STORAGE_KEY, networkId);
 }
+
+/** Prefix for one-time per-wallet Mainnet risk acknowledgement (#1507). */
+export const MAINNET_RISK_ACK_PREFIX = "nester_mainnet_risk_ack_v1:";
+
+/**
+ * Returns whether the given wallet address has acknowledged the Mainnet
+ * real-funds risk disclosure (#1507).
+ */
+export function hasMainnetRiskAcknowledgement(
+  walletAddress: string | null | undefined
+): boolean {
+  const normalized = walletAddress?.trim();
+  if (!normalized) return false;
+  return safeStorage.get<boolean>(`${MAINNET_RISK_ACK_PREFIX}${normalized}`) === true;
+}
+
+/**
+ * Persists a one-time Mainnet risk acknowledgement for the given wallet address (#1507).
+ */
+export function setMainnetRiskAcknowledgement(walletAddress: string): void {
+  const normalized = walletAddress.trim();
+  if (!normalized) return;
+  safeStorage.set(`${MAINNET_RISK_ACK_PREFIX}${normalized}`, true);
+}
+

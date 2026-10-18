@@ -1,20 +1,19 @@
-# Mainnet Deposit Risk Disclosures & Terms of Service
+# Mainnet Risk Disclosures
 
-## Overview
-Before depositing real funds (mainnet) into Nester Smart Vaults or recurring investment schedules, users must explicitly review and acknowledge our Terms of Service and comprehensive Risk Disclosures.
+Depositing into Nester vaults on **Stellar Mainnet** involves real funds (`USDC`, `XLM`, and other supported assets). Please review the following risks before signing any Mainnet transaction:
 
-## 1. Smart Contract & Technical Risk
-- **Audit Status**: While smart contracts undergo rigorous internal and third-party security audits, experimental code always carries inherent risk.
-- **Bugs and Exploits**: Unforeseen vulnerabilities in Nester contracts or integrated underlying DeFi protocols (such as Blend, Soroswap, or lending adapters) may result in the permanent loss of deposited funds.
+1. **Real Funds & Irreversibility**
+   - Mainnet transactions move real economic value on the Stellar public network.
+   - Once signed by your wallet and confirmed on-chain, transactions are **irreversible**. Neither Suncrest Labs nor any third party can reverse a signed transaction.
 
-## 2. No FDIC-Equivalent Insurance
-- **Non-Custodial & Uninsured**: Nester is a decentralized, self-custodial protocol on Stellar. Deposits are **not** insured by the Federal Deposit Insurance Corporation (FDIC), Securities Investor Protection Corporation (SIPC), or any government agency.
-- **Principal Loss**: You may lose some or all of your principal.
+2. **Smart Contract & Adapter Risk**
+   - Funds deposited into Nester vaults are governed by Soroban smart contracts and allocated to downstream yield strategies (such as Blend lending pools and liquidity adapters).
+   - Despite security reviews and testing, smart contracts and external DeFi protocols carry inherent technical, economic, and oracle risks.
 
-## 3. Yield Variability & Market Risk
-- **Variable Returns**: Target APYs and projected yields are estimated based on historical on-chain metrics and real-time DeFi lending rates. They are not guaranteed.
-- **Market Fluctuation**: Asset prices, stablecoin de-pegging risks, and fluctuating liquidity pool rewards can materially impact earnings.
+3. **How to Read the Vault Deposit Cap**
+   - During staged Mainnet rollouts, each vault enforces an on-chain deposit cap (`MaxDeposit`).
+   - Any deposit that would cause total vault assets to exceed the active cap is rejected closed by the contract (`DepositCapExceeded`). Check the vault details panel in the dapp for current TVL and remaining capacity before depositing.
 
-## 4. Terms of Service Summary
-- Users must be of legal age in their jurisdiction and legally permitted to interact with decentralized finance protocols.
-- The Nester platform is provided on an 'as-is' and 'as-available' basis without warranties of any kind.
+4. **Security & Audit Documentation**
+   - Review our security architecture and audit scope at [`/security`](/security).
+   - Usage of the Nester interface and smart contracts is subject to our [Terms of Service](/terms).

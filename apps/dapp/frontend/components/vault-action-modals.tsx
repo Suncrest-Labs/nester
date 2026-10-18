@@ -42,6 +42,11 @@ import {
 import { cn } from "@/lib/utils";
 import { type VaultContract as VaultDefinition, type SupportedAsset, vaultContracts as vaultDefinitions, getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 import { requireContractId } from "@/lib/contracts";
+import {
+    hasMainnetRiskAcknowledgement,
+    setMainnetRiskAcknowledgement,
+} from "@/lib/storageKeys";
+import { MainnetDepositAcknowledgementModal } from "@/components/network/NetworkSelector";
 import { useWallet } from "@/components/wallet-provider";
 import { useNetwork } from "@/hooks/useNetwork";
 
@@ -288,13 +293,35 @@ export function DepositModal({
         }
     };
 
+    const [showMainnetAck, setShowMainnetAck] = useState(false);
+
     const handleDeposit = handleSubmit(() => {
+        if (
+            currentNetwork.id === "mainnet" &&
+            address &&
+            !hasMainnetRiskAcknowledgement(address)
+        ) {
+            setShowMainnetAck(true);
+            return;
+        }
         if (amount > 10000 && !showLargeWarning) {
             setShowLargeWarning(true);
             return;
         }
         processDeposit();
     });
+
+    const handleMainnetAcknowledge = () => {
+        if (address) {
+            setMainnetRiskAcknowledgement(address);
+        }
+        setShowMainnetAck(false);
+        if (amount > 10000 && !showLargeWarning) {
+            setShowLargeWarning(true);
+            return;
+        }
+        processDeposit();
+    };
 
     return (
         <ModalShell
@@ -303,6 +330,11 @@ export function DepositModal({
             title={`Deposit into ${vault?.name ?? "Vault"}`}
             subtitle="Review expected yield, lock terms, and the signing flow before committing funds."
         >
+            <MainnetDepositAcknowledgementModal
+                open={showMainnetAck}
+                onAcknowledge={handleMainnetAcknowledge}
+                onCancel={() => setShowMainnetAck(false)}
+            />
             {vault && (
                 <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
                     <div className="border-b border-border p-6 lg:border-b-0 lg:border-r">
