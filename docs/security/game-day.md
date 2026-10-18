@@ -184,3 +184,18 @@ in well under a second.
 **Re-run after** any change to the signing policy, the kill switch, the caller
 authentication path, or the audit event shape — and after any real incident, as
 §G of the runbook requires.
+
+---
+
+## 6. Incident Communication Template Rehearsal (#1541)
+
+Executed on 2026-10-18 against the pre-approved templates in
+`docs/security/incident-response.md` §F.4 using the `#incident-comms-test`
+webhook sandbox:
+
+| Step | Template Exercised | Target Channel | Approvers Recorded | Outcome |
+|---|---|---|---|---|
+| 1 | Template 1 (`Deposits Paused`) | `#incident-comms-test` (Discord/Telegram sandbox) + staging Status Page | Security Lead + Engineering Lead (SEV-2) | PASS — rendered with vault contract ID, UTC timestamp, and zero prohibited detail |
+| 2 | Template 3 (`Funds Verified Safe`) | `#incident-comms-test` | Security Lead + Engineering Lead (SEV-2) | PASS — reconciliation ledger reference populated and staged recovery window announced |
+| 3 | Template 5 (`Resolved`) | `#incident-comms-test` | Security Lead + Engineering Lead (SEV-2) | PASS — resolution notice and 72h post-mortem commitment posted |
+

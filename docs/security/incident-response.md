@@ -438,6 +438,104 @@ attribution.
 | Affected-user notification | Within 24 hours of confirming impact |
 | Post-incident review | Within 1 week |
 
+### F.4 Pre-approved public communication templates (#1541)
+
+#### Approval authority by severity
+
+| Severity | Definition | Approver(s) Required Before Posting |
+|---|---|---|
+| **SEV-3 (Degraded Service)** | RPC failover, indexer lag, or UI read degradation; no contract pause and no funds at risk | On-Call Engineer + Engineering Lead |
+| **SEV-2 (Protective Pause)** | Deposit-only breaker (`DepositsHalted`) or precautionary per-vault pause; no confirmed loss of funds | Security Lead + Engineering Lead |
+| **SEV-1 (Active Exploit / Fund Risk)** | Confirmed or suspected unauthorized fund movement, `FullHalt`, or partial impairment | CEO / Founder + Security Lead + Legal Counsel |
+
+#### What CAN and CANNOT be said publicly
+
+- **Allowed:** Current operational state of deposits/withdrawals/emergency queue, exact contract addresses affected, verified on-chain facts, timestamp of the next scheduled update, and official support/status URLs (`status.nester.fi`, `nester.fi/security`).
+- **Prohibited while incident is open:** Unverified assurances ("100% of funds are guaranteed safe" before reconciliation §C.3 completes), exploit mechanics or PoC details, internal IP/host/signer identifiers, attribution speculation, or promises of reimbursement terms without Founder + Legal sign-off.
+
+---
+
+#### Template 1: Deposits Paused (`DepositsHalted` / Precautionary)
+- **Severity / Approver:** SEV-2 (Security Lead + Engineering Lead)
+- **Status Page (`status.nester.fi`):**
+  > **[Investigating — Deposits Paused]** New deposits into Nester Vault (`<VAULT_CONTRACT_ID>`) have been temporarily paused by our automated circuit breaker / guardian at `<TIMESTAMP_UTC>`. Existing positions, normal withdrawals, and lock unlocks remain open and unaffected. Next update by `<NEXT_UPDATE_UTC>`.
+- **X (`@NesterProtocol`):**
+  > We have temporarily paused new deposits on Nester Vault (`<SHORT_CONTRACT_ID>`) as a precautionary measure while we investigate an automated alert.
+  >
+  > Normal withdrawals and position unlocks remain open. Do not interact with unofficial links. Updates: https://status.nester.fi
+- **Discord / Telegram (`#announcements`):**
+  > **Precautionary Deposit Pause — `<TIMESTAMP_UTC>`**
+  > New deposits into `<VAULT_NAME>` are temporarily paused while engineering reviews a circuit-breaker alert.
+  > - **Withdrawals:** Open and operating normally
+  > - **Action required:** None. Team members will NEVER DM you first or ask for your seed phrase.
+  > - **Next update:** `<NEXT_UPDATE_UTC>` on https://status.nester.fi
+
+#### Template 2: Investigating (Degraded Service / Full Pause)
+- **Severity / Approver:** SEV-2 / SEV-1 (Security Lead + Engineering Lead)
+- **Status Page:**
+  > **[Investigating]** Nester Vault operations are currently paused while our security team investigates anomalous activity detected at `<TIMESTAMP_UTC>`. The emergency withdrawal queue remains accessible on-chain. Next update within 60 minutes (`<NEXT_UPDATE_UTC>`).
+- **X:**
+  > Nester Vault operations are currently paused while our security team investigates an on-chain alert. We are actively assessing the scope and will share verified facts within 60 minutes.
+  >
+  > Official updates only via @NesterProtocol and https://status.nester.fi.
+- **Discord / Telegram:**
+  > **Incident Investigation Underway — `<TIMESTAMP_UTC>`**
+  > We have engaged a protocol pause to investigate an alert triggered at `<TIMESTAMP_UTC>`.
+  > - **What we know:** Signing and standard vault operations are halted pending full reconciliation.
+  > - **What not to do:** Ignore any third-party "revoke" or "claim" links posted outside this channel.
+  > - **Next update:** `<NEXT_UPDATE_UTC>`.
+
+#### Template 3: Funds Verified Safe (Post-Reconciliation)
+- **Severity / Approver:** SEV-2 (Security Lead + Engineering Lead)
+- **Status Page:**
+  > **[Identified — Funds Verified Safe]** On-chain reconciliation (`<RECONCILIATION_TX_OR_LEDGER>`) confirms that all vault assets match accounted shares (`total_assets == vault USDC balance`) and no user funds were lost. Staged recovery will begin at `<RECOVERY_START_UTC>`.
+- **X:**
+  > Update: On-chain verification is complete. All user funds in Nester Vaults are accounted for and unaffected.
+  >
+  > The pause was triggered by `<BRIEF_NON_SENSITIVE_CAUSE>`. We are beginning staged recovery and will post when full operations resume: https://status.nester.fi
+- **Discord / Telegram:**
+  > **Update: Vault Assets Verified Safe — `<TIMESTAMP_UTC>`**
+  > Full on-chain reconciliation against ledger `<LEDGER_SEQ>` confirms zero loss of funds.
+  > - **Current state:** Transitioning through staged circuit-breaker recovery (`DepositsHalted` -> `Throttled` -> `Normal`).
+  > - **Next update:** `<NEXT_UPDATE_UTC>`.
+
+#### Template 4: Partial Impairment Confirmed
+- **Severity / Approver:** SEV-1 (CEO / Founder + Security Lead + Legal Counsel)
+- **Status Page:**
+  > **[Impact Confirmed — Partial Impairment]** Investigation confirms an impairment of approximately `<AMOUNT_USDC>` USDC (`<PCT_TVL>%` of vault TVL) in `<VAULT_NAME>` originating from `<ADAPTER_OR_COMPONENT>` at ledger `<LEDGER_SEQ>`. The affected path is isolated and halted. Fair-ordering emergency withdrawals are being prepared. Next update at `<NEXT_UPDATE_UTC>`.
+- **X:**
+  > We have confirmed an incident affecting `<VAULT_NAME>` resulting in an estimated impact of `<AMOUNT_USDC>` USDC (`<PCT_TVL>%` of vault TVL). The affected component has been isolated and halted; remaining vault reserves (`<REMAINING_USDC>` USDC) are secured.
+  >
+  > Full details and next steps: https://status.nester.fi
+- **Discord / Telegram:**
+  > **Confirmed Incident Impact & Containment — `<TIMESTAMP_UTC>`**
+  > - **Confirmed impact:** `<AMOUNT_USDC>` USDC (`<PCT_TVL>%` of `<VAULT_NAME>`) at ledger `<LEDGER_SEQ>`.
+  > - **Secured reserves:** `<REMAINING_USDC>` USDC remains secured in the vault contract.
+  > - **User exits:** Proportional redemption via the fair-ordering emergency queue is active.
+  > - **Next update:** `<NEXT_UPDATE_UTC>`.
+
+#### Template 5: Resolved
+- **Severity / Approver:** SEV-2 / SEV-1 (Engineering Lead + Security Lead)
+- **Status Page:**
+  > **[Resolved]** Normal operations for `<VAULT_NAME>` resumed at `<TIMESTAMP_UTC>` following fix verification (`<COMMIT_OR_WASM_HASH>`) and staged circuit-breaker recovery. All monitoring alerts are green.
+- **X:**
+  > All Nester Vault operations have returned to normal following our staged recovery and verification checks.
+  >
+  > A full post-mortem will be published within 72 hours. Thank you for your patience. Status: https://status.nester.fi
+- **Discord / Telegram:**
+  > **Incident Resolved — `<TIMESTAMP_UTC>`**
+  > `<VAULT_NAME>` has completed staged recovery back to `Severity::Normal`. Deposits, withdrawals, harvests, and lock operations are operating normally. A full post-mortem will be published by `<POSTMORTEM_DATE_UTC>`.
+
+#### Template 6: Post-Mortem Published
+- **Severity / Approver:** All Severities (Security Lead + Engineering Lead)
+- **Status Page:**
+  > **[Post-Mortem Published]** The root-cause analysis, timeline, on-chain transaction references, and remediation report for the `<INCIDENT_DATE>` incident is now available at `<POSTMORTEM_URL>`.
+- **X:**
+  > We have published the full post-mortem for the `<INCIDENT_DATE>` incident, including the exact ledger timeline, root cause, and preventative controls added: `<POSTMORTEM_URL>`
+- **Discord / Telegram:**
+  > **Post-Mortem Published — `<INCIDENT_DATE>` Incident**
+  > Read the full technical timeline, root cause, and remediation verification here: `<POSTMORTEM_URL>`.
+
 ---
 
 ## G. Post-incident
