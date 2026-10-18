@@ -78,6 +78,19 @@ func newPostgresDB(cfg config.DatabaseConfig, tracingEnabled bool) (*PostgresDB,
 	poolConfig.MaxConnLifetime = time.Hour
 	poolConfig.HealthCheckPeriod = poolConfig.MaxConnIdleTime
 
+	if poolConfig.ConnConfig.RuntimeParams == nil {
+		poolConfig.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	if cfg.StatementTimeout() > 0 {
+		poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = fmt.Sprintf("%d", cfg.StatementTimeout().Milliseconds())
+	}
+	if cfg.LockTimeout() > 0 {
+		poolConfig.ConnConfig.RuntimeParams["lock_timeout"] = fmt.Sprintf("%d", cfg.LockTimeout().Milliseconds())
+	}
+	if cfg.IdleInTransactionSessionTimeout() > 0 {
+		poolConfig.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = fmt.Sprintf("%d", cfg.IdleInTransactionSessionTimeout().Milliseconds())
+	}
+
 	if tracingEnabled {
 		// IncludeQueryParameters is deliberately not set: bound parameters
 		// are user financial data and must never reach a span.

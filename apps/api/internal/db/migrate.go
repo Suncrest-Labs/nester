@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -52,6 +53,11 @@ func MigrateUp(db *sql.DB, dir string) error {
 			return fmt.Errorf("migrate up: begin tx (%s): %w", file, err)
 		}
 
+		if err := OverrideTxTimeouts(context.Background(), tx, MigrationStatementTimeout, MigrationLockTimeout, 0); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("migrate up: override timeouts (%s): %w", file, err)
+		}
+
 		if _, err := tx.Exec(string(content)); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("migrate up: apply %s: %w", file, err)
@@ -101,6 +107,11 @@ func MigrateDown(db *sql.DB, dir string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("migrate down: begin tx (%s): %w", version, err)
+	}
+
+	if err := OverrideTxTimeouts(context.Background(), tx, MigrationStatementTimeout, MigrationLockTimeout, 0); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("migrate down: override timeouts (%s): %w", version, err)
 	}
 
 	if _, err := tx.Exec(string(content)); err != nil {

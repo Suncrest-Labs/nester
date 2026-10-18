@@ -311,9 +311,12 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	dsn               string
-	poolSize          int
-	connectionTimeout time.Duration
+	dsn                             string
+	poolSize                        int
+	connectionTimeout               time.Duration
+	statementTimeout                time.Duration
+	lockTimeout                     time.Duration
+	idleInTransactionSessionTimeout time.Duration
 }
 
 type StellarConfig struct {
@@ -439,6 +442,17 @@ func Load() (*Config, error) {
 		loader.addError("APP_ENV must be one of development, staging, production, test")
 	}
 
+	isMainnetProfile := strings.EqualFold(strings.TrimSpace(os.Getenv("STELLAR_NETWORK")), "mainnet") ||
+		strings.Contains(strings.ToLower(os.Getenv("STELLAR_NETWORK_PASSPHRASE")), "public global stellar network")
+	defaultStmtTimeout := 10 * time.Second
+	defaultLockTimeout := 3 * time.Second
+	defaultIdleTxTimeout := 15 * time.Second
+	if isMainnetProfile {
+		defaultStmtTimeout = 5 * time.Second
+		defaultLockTimeout = 2 * time.Second
+		defaultIdleTxTimeout = 10 * time.Second
+	}
+
 	cfg := &Config{
 		environment: environment,
 		server: ServerConfig{
@@ -452,9 +466,12 @@ func Load() (*Config, error) {
 			maxHeaderBytes:    loader.intDefault("SERVER_MAX_HEADER_BYTES", 1<<20),
 		},
 		database: DatabaseConfig{
-			dsn:               loader.requiredString("DATABASE_DSN"),
-			poolSize:          loader.intDefault("DATABASE_POOL_SIZE", 25),
-			connectionTimeout: loader.durationDefault("DATABASE_CONNECTION_TIMEOUT", 5*time.Second),
+			dsn:                             loader.requiredString("DATABASE_DSN"),
+			poolSize:                        loader.intDefault("DATABASE_POOL_SIZE", 25),
+			connectionTimeout:               loader.durationDefault("DATABASE_CONNECTION_TIMEOUT", 5*time.Second),
+			statementTimeout:                loader.durationDefault("DATABASE_STATEMENT_TIMEOUT", defaultStmtTimeout),
+			lockTimeout:                     loader.durationDefault("DATABASE_LOCK_TIMEOUT", defaultLockTimeout),
+			idleInTransactionSessionTimeout: loader.durationDefault("DATABASE_IDLE_IN_TX_SESSION_TIMEOUT", defaultIdleTxTimeout),
 		},
 		stellar: StellarConfig{
 			networkPassphrase:                 loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
@@ -1622,6 +1639,18 @@ func (d DatabaseConfig) PoolSize() int {
 
 func (d DatabaseConfig) ConnectionTimeout() time.Duration {
 	return d.connectionTimeout
+}
+
+func (d DatabaseConfig) StatementTimeout() time.Duration {
+	return d.statementTimeout
+}
+
+func (d DatabaseConfig) LockTimeout() time.Duration {
+	return d.lockTimeout
+}
+
+func (d DatabaseConfig) IdleInTransactionSessionTimeout() time.Duration {
+	return d.idleInTransactionSessionTimeout
 }
 
 func (s StellarConfig) NetworkPassphrase() string {
