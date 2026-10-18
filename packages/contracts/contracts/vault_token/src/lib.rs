@@ -152,13 +152,29 @@ impl VaultTokenContract {
         expiration_ledger: u32,
     ) {
         from.require_auth();
-        env.storage().instance().set(
-            &DataKey::Allowance(from.clone(), spender.clone()),
+        if amount < 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        if amount > 0 && expiration_ledger < env.ledger().sequence() {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
+
+        let key = DataKey::Allowance(from.clone(), spender.clone());
+        env.storage().temporary().set(
+            &key,
             &AllowanceValue {
                 amount,
                 expiration_ledger,
             },
         );
+
+        if amount > 0 {
+            let live_for = expiration_ledger
+                .checked_sub(env.ledger().sequence())
+                .unwrap();
+            env.storage().temporary().extend_ttl(&key, live_for, live_for);
+        }
+
         env.events().publish(
             (symbol_short!("approve"), from, spender),
             (amount, expiration_ledger),
@@ -462,10 +478,11 @@ fn set_total_assets(env: &Env, value: i128) {
 }
 
 fn get_allowance(env: &Env, from: &Address, spender: &Address) -> i128 {
+    let key = DataKey::Allowance(from.clone(), spender.clone());
     match env
         .storage()
-        .instance()
-        .get::<DataKey, AllowanceValue>(&DataKey::Allowance(from.clone(), spender.clone()))
+        .temporary()
+        .get::<DataKey, AllowanceValue>(&key)
     {
         None => 0,
         Some(v) => {
@@ -484,14 +501,22 @@ fn spend_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
         panic_with_error!(env, ContractError::Unauthorized);
     }
     let key = DataKey::Allowance(from.clone(), spender.clone());
-    let existing: AllowanceValue = env.storage().instance().get(&key).unwrap();
-    env.storage().instance().set(
+    let existing: AllowanceValue = env.storage().temporary().get(&key).unwrap();
+    let new_amount = current - amount;
+    env.storage().temporary().set(
         &key,
         &AllowanceValue {
-            amount: current - amount,
+            amount: new_amount,
             expiration_ledger: existing.expiration_ledger,
         },
     );
+    if new_amount > 0 && existing.expiration_ledger >= env.ledger().sequence() {
+        let live_for = existing
+            .expiration_ledger
+            .checked_sub(env.ledger().sequence())
+            .unwrap();
+        env.storage().temporary().extend_ttl(&key, live_for, live_for);
+    }
 }
 
 /// Panic unless the invocation is authorised by the stored Vault address.

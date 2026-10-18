@@ -366,12 +366,66 @@ fn expired_allowance_returns_zero() {
     let spender = Address::generate(&env);
 
     client.mint_for_deposit(&alice, &10_000_i128);
-    // Approve expiring at ledger 1 (already past when ledger is 0+)
-    client.approve(&alice, &spender, &5_000_i128, &0u32);
+    // Approve expiring at ledger 5
+    client.approve(&alice, &spender, &5_000_i128, &5u32);
+    assert_eq!(client.allowance(&alice, &spender), 5_000);
 
-    // Ledger sequence starts at 0, expiration at 0 → expired (sequence > expiration_ledger)
-    // Advance the ledger past 0
-    env.ledger().with_mut(|li| li.sequence_number = 1);
+    // Advance the ledger sequence past expiration_ledger (sequence > 5)
+    env.ledger().with_mut(|li| li.sequence_number = 6);
+    assert_eq!(client.allowance(&alice, &spender), 0);
+}
+
+#[test]
+#[should_panic]
+fn approve_negative_amount_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    client.approve(&alice, &spender, &-100_i128, &100u32);
+}
+
+#[test]
+#[should_panic]
+fn approve_past_expiration_panics_when_amount_positive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    // Advance ledger to sequence 10
+    env.ledger().with_mut(|li| li.sequence_number = 10);
+
+    // Expiration ledger 9 < current sequence 10 with amount > 0 must panic
+    client.approve(&alice, &spender, &500_i128, &9u32);
+}
+
+#[test]
+fn approve_zero_amount_revoke_with_past_expiration_allowed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    // Advance ledger to sequence 10
+    env.ledger().with_mut(|li| li.sequence_number = 10);
+
+    // First grant an allowance valid until ledger 20
+    client.approve(&alice, &spender, &500_i128, &20u32);
+    assert_eq!(client.allowance(&alice, &spender), 500);
+
+    // Advance to ledger 15
+    env.ledger().with_mut(|li| li.sequence_number = 15);
+
+    // Zero-amount revoke with past expiration (e.g. 5 < 15) is allowed per SEP-41
+    client.approve(&alice, &spender, &0_i128, &5u32);
     assert_eq!(client.allowance(&alice, &spender), 0);
 }
 
