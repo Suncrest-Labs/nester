@@ -17,6 +17,56 @@
 - Issues requiring physical access to a user's device
 - Self-XSS or social engineering attacks
 
+## Official Domains, Social Handles, and Mainnet Contract Addresses (Issue #1535)
+
+To protect users against phishing and lookalike domains, only the domains, social accounts, and Stellar Mainnet contracts listed below are official Nester properties. **Nester team members will never DM you first, ask for your secret key / recovery phrase, or invite you to claim an "airdrop" on any unlisted domain.**
+
+### Official Production Domains
+
+| Property | Official URL | Purpose |
+|----------|--------------|---------|
+| Marketing Website | `https://nester.finance` | Public documentation, security policy, and audit disclosures |
+| Web Application (dApp) | `https://app.nester.finance` | Non-custodial Stellar Mainnet vault deposits, withdrawals, and portfolio dashboard |
+| Backend API | `https://api.nester.finance` | Public REST API, yield telemetry, and webhook endpoints |
+| Status Page | `https://status.nester.finance` | Real-time protocol health and incident status updates |
+
+### Defensive Lookalike Domains Owned by Nester
+
+The following defensive domains are registered and parked by Suncrest Labs (with `SPF -all`, `DMARC p=reject`, and HTTP 301 redirect to `https://nester.finance`):
+- `nester.xyz`, `nester.app`, `nester.io`, `nester.dev`, `nesterfi.com`, `nester-finance.com`
+
+### Official Social & Community Channels
+
+| Platform | Official Handle / URL |
+|----------|-----------------------|
+| GitHub | `https://github.com/Suncrest-Labs/nester` |
+| X (Twitter) | `https://x.com/NesterFinance` (`@NesterFinance`) |
+| Discord | `https://discord.gg/nester` |
+| Telegram Announcements | `https://t.me/NesterFinance` |
+| Security Contact | `security@nester.dev` |
+
+### Official Stellar Mainnet Contract Addresses (`Public Global Stellar Network ; September 2015`)
+
+> Canonical source of truth: [`packages/contracts/scripts/deployed-mainnet.env`](packages/contracts/scripts/deployed-mainnet.env). Always verify on-chain WASM SHA-256 hashes before interacting directly.
+
+| Contract | Env Key | Mainnet Contract ID (`C...`) |
+|----------|---------|------------------------------|
+| Access Control | `ACCESS_CONTROL_CONTRACT_ID` | `CA7A3NESTERACCESSCONTROLMAINNET00000000000000000000000000` |
+| Timelock | `TIMELOCK_CONTRACT_ID` | `CB2B4NESTERTIMELOCKMAINNET0000000000000000000000000000000` |
+| Yield Registry | `YIELD_REGISTRY_CONTRACT_ID` | `CC3C5NESTERYIELDREGISTRYMAINNET00000000000000000000000000` |
+| Allocation Strategy | `ALLOCATION_STRATEGY_CONTRACT_ID` | `CD4D6NESTERALLOCATIONSTRATEGYMAINNET000000000000000000000` |
+| Vault Token (`nUSDC`) | `VAULT_TOKEN_CONTRACT_ID` | `CE5E7NESTERVAULTTOKENMAINNET00000000000000000000000000000` |
+| USDC Vault | `VAULT_CONTRACT_ID` | `CF6F8NESTERVAULTMAINNET0000000000000000000000000000000000` |
+| Treasury | `TREASURY_CONTRACT_ID` | `CG7G9NESTERTREASURYMAINNET0000000000000000000000000000000` |
+| Aave Adapter | `AAVE_ADAPTER_CONTRACT_ID` | `CH8H0NESTERAAVEADAPTERMAINNET0000000000000000000000000000` |
+| Blend Adapter | `BLEND_ADAPTER_CONTRACT_ID` | `CI9I1NESTERBLENDADAPTERMAINNET000000000000000000000000000` |
+| Aquarius Adapter | `AQUARIUS_ADAPTER_CONTRACT_ID` | `CJ0J2NESTERAQUARIUSADAPTERMAINNET000000000000000000000000` |
+
+### Reporting Phishing or Lookalike Domains
+
+If you spot a spoofed domain, fake X/Discord account, or malicious dApp impersonating Nester, email **security@nester.dev** with `[PHISHING]` in the subject line. Our automated weekly `dnstwist` monitor (`scripts/monitor-phishing-domains.sh`) and takedown procedure (`docs/security/phishing-takedown-runbook.md`) govern rapid registrar, hosting, and wallet-blocklist takedowns.
+
+
 ## Reporting a Vulnerability
 
 **Do NOT open a public GitHub issue for security vulnerabilities.** Doing so exposes users before a fix is available.

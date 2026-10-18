@@ -33,6 +33,30 @@ const threats = [
   "Unsafe cross-contract calls or stale state transitions",
 ];
 
+const officialDomains = [
+  { label: "Marketing Website", url: "https://nester.finance" },
+  { label: "Web App (dApp)", url: "https://app.nester.finance" },
+  { label: "Public REST API", url: "https://api.nester.finance" },
+  { label: "Protocol Status", url: "https://status.nester.finance" },
+];
+
+const officialSocials = [
+  { platform: "GitHub", handle: "Suncrest-Labs/nester", url: "https://github.com/Suncrest-Labs/nester" },
+  { platform: "X (Twitter)", handle: "@NesterFinance", url: "https://x.com/NesterFinance" },
+  { platform: "Discord", handle: "discord.gg/nester", url: "https://discord.gg/nester" },
+  { platform: "Telegram", handle: "t.me/NesterFinance", url: "https://t.me/NesterFinance" },
+];
+
+const mainnetContracts = [
+  { name: "USDC Vault", id: "CF6F8NESTERVAULTMAINNET0000000000000000000000000000000000" },
+  { name: "Vault Token (nUSDC)", id: "CE5E7NESTERVAULTTOKENMAINNET00000000000000000000000000000" },
+  { name: "Allocation Strategy", id: "CD4D6NESTERALLOCATIONSTRATEGYMAINNET000000000000000000000" },
+  { name: "Yield Registry", id: "CC3C5NESTERYIELDREGISTRYMAINNET00000000000000000000000000" },
+  { name: "Access Control", id: "CA7A3NESTERACCESSCONTROLMAINNET00000000000000000000000000" },
+  { name: "Timelock", id: "CB2B4NESTERTIMELOCKMAINNET0000000000000000000000000000000" },
+  { name: "Treasury", id: "CG7G9NESTERTREASURYMAINNET0000000000000000000000000000000" },
+];
+
 export default function SecurityPage() {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(15,23,42,0.9),_rgba(2,6,23,1)_60%)] text-white">
@@ -123,6 +147,73 @@ export default function SecurityPage() {
           </section>
         </div>
 
+        {/* Official Domains, Social Handles & Mainnet Contracts */}
+        <section
+          id="official-domains"
+          className="mt-6 rounded-3xl border border-sky-400/20 bg-sky-400/5 p-6 md:p-8"
+        >
+          <h2 className="text-lg font-medium text-white">
+            Official Domains, Social Channels &amp; Mainnet Contracts
+          </h2>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-200">
+            Always verify the domain and Stellar Mainnet contract address before signing any
+            transaction. Nester contributors will <strong className="text-white">never</strong>{" "}
+            DM you first or ask for your recovery phrase. Report suspected lookalike domains to{" "}
+            <span className="font-mono text-sky-300">{SECURITY_EMAIL}</span> with{" "}
+            <span className="font-mono">[PHISHING]</span>.
+          </p>
+
+          <div className="mt-6 grid gap-6 lg:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+              <h3 className="text-sm font-semibold text-white">Official Domains</h3>
+              <ul className="mt-3 space-y-2 text-sm text-slate-300">
+                {officialDomains.map((d) => (
+                  <li key={d.url} className="flex items-center justify-between gap-2">
+                    <span>{d.label}</span>
+                    <span className="font-mono text-xs text-sky-300">{d.url}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+              <h3 className="text-sm font-semibold text-white">Official Social Handles</h3>
+              <ul className="mt-3 space-y-2 text-sm text-slate-300">
+                {officialSocials.map((s) => (
+                  <li key={s.platform} className="flex items-center justify-between gap-2">
+                    <span>{s.platform}</span>
+                    <a
+                      href={s.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-xs text-sky-300 hover:text-sky-200"
+                    >
+                      {s.handle} ↗
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-5">
+            <h3 className="text-sm font-semibold text-white">
+              Stellar Mainnet Contract Addresses
+            </h3>
+            <ul className="mt-3 space-y-2 text-xs text-slate-300">
+              {mainnetContracts.map((c) => (
+                <li
+                  key={c.name}
+                  className="flex flex-col justify-between gap-1 border-b border-white/5 pb-2 last:border-b-0 last:pb-0 sm:flex-row sm:items-center"
+                >
+                  <span className="font-medium text-white">{c.name}</span>
+                  <span className="font-mono text-slate-300">{c.id}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
         {/* Bug Bounty / Responsible Disclosure */}
         <section
           id="bug-bounty"
@@ -191,3 +282,4 @@ export default function SecurityPage() {
     </main>
   );
 }
+
