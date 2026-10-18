@@ -1,23 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Nester database restore script
-# Usage: scripts/db-restore.sh <path-to-backup.dump> [target DSN]
+# Nester database restore script (#1565)
+# Supports both unencrypted (.dump) and AES-256-CBC encrypted (.dump.enc) artifacts.
+# Usage: scripts/db-restore.sh <path-to-backup.dump[.enc]> [target DSN]
 
 BACKUP_FILE="${1:-}"
 TARGET_DSN="${2:-${DATABASE_DSN:-postgres://nester:nester_dev_password@localhost:5432/nester_dev?sslmode=disable}}"
+BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY:-}"
 
 if [ -z "$BACKUP_FILE" ] || [ ! -f "$BACKUP_FILE" ]; then
   echo "[-] ERROR: Please specify a valid backup file path." >&2
-  echo "Usage: $0 <path-to-backup.dump> [target DSN]" >&2
+  echo "Usage: $0 <path-to-backup.dump[.enc]> [target DSN]" >&2
   exit 1
 fi
 
+RESTORE_SOURCE="$BACKUP_FILE"
+CLEANUP_DEC=""
+
+cleanup() {
+  if [ -n "$CLEANUP_DEC" ] && [ -f "$CLEANUP_DEC" ]; then
+    rm -f "$CLEANUP_DEC"
+  fi
+}
+trap cleanup EXIT
+
+if [[ "$BACKUP_FILE" == *.enc ]]; then
+  if [ -z "$BACKUP_ENCRYPTION_KEY" ]; then
+    echo "[-] ERROR: Encrypted backup '$BACKUP_FILE' requires BACKUP_ENCRYPTION_KEY to be set." >&2
+    exit 1
+  fi
+  CLEANUP_DEC="$(mktemp "${TMPDIR:-/tmp}/nester_restore_XXXXXX.dump")"
+  echo "[+] Decrypting $BACKUP_FILE ..."
+  openssl enc -d -aes-256-cbc -pbkdf2 \
+    -pass env:BACKUP_ENCRYPTION_KEY \
+    -in "$BACKUP_FILE" \
+    -out "$CLEANUP_DEC"
+  RESTORE_SOURCE="$CLEANUP_DEC"
+fi
+
 echo "[+] Validating backup file: $BACKUP_FILE ..."
-pg_restore --list "$BACKUP_FILE" > /dev/null
+pg_restore --list "$RESTORE_SOURCE" > /dev/null
 
 echo "[+] Restoring database from $BACKUP_FILE into target ..."
-pg_restore --dbname="$TARGET_DSN" --clean --if-exists --no-owner --no-privileges --exit-on-error "$BACKUP_FILE"
+pg_restore --dbname="$TARGET_DSN" --clean --if-exists --no-owner --no-privileges --exit-on-error "$RESTORE_SOURCE"
 
 echo "[+] Database restore completed successfully."
 echo "[+] Verifying migration state ..."
@@ -39,7 +65,9 @@ else
   for up_file in "$MIGRATIONS_DIR"/*.up.sql; do
     [ -e "$up_file" ] || continue
     version="$(basename "$up_file" .up.sql)"
-    if ! grep -qxF "$version" <<<"$restored_versions"; then
+    # golang-migrate stores integer version prefixes; accept either full filename prefix or numeric prefix
+    num_prefix="$(echo "$version" | sed -E 's/^0*([0-9]+)_.*$/\1/')"
+    if ! grep -qxE "(${version}|${num_prefix})" <<<"$restored_versions"; then
       echo "[-] MISSING migration in restored database: ${version}" >&2
       missing=1
     fi

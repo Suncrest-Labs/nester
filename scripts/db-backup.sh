@@ -3,11 +3,13 @@ set -euo pipefail
 
 # Nester automated logical backup script (pg_dump custom format -Fc)
 # Stated retention: 14 days default (configurable via BACKUP_RETENTION_DAYS).
-# RPO: up to backup frequency (recommended every 1 hour or daily depending on tier).
+# When BACKUP_ENCRYPTION_KEY is set, outputs an AES-256-CBC PBKDF2 encrypted
+# artifact (.dump.enc) matching the production backup pipeline (#1565).
 
 DATABASE_DSN="${DATABASE_DSN:-postgres://nester:nester_dev_password@localhost:5432/nester_dev?sslmode=disable}"
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
+BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY:-}"
 
 mkdir -p "$BACKUP_DIR"
 
@@ -28,14 +30,25 @@ pg_restore --list "$TEMP_FILE" > /dev/null
 if grep -q -E '(PRIVATE KEY|sentry_auth_token)' "$TEMP_FILE" 2>/dev/null; then
   echo "[-] ERROR: Backup contains forbidden secret-like patterns! Aborting." >&2
   rm -f "$TEMP_FILE"
-    exit 1
-  fi
+  exit 1
+fi
 
-# Atomically rename on success
-mv "$TEMP_FILE" "$FINAL_FILE"
+if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
+  ENC_FILE="${FINAL_FILE}.enc"
+  echo "[+] Encrypting backup artifact with AES-256-CBC (PBKDF2) to $ENC_FILE ..."
+  openssl enc -aes-256-cbc -pbkdf2 -salt \
+    -pass env:BACKUP_ENCRYPTION_KEY \
+    -in "$TEMP_FILE" \
+    -out "$ENC_FILE"
+  rm -f "$TEMP_FILE"
+  FINAL_FILE="$ENC_FILE"
+else
+  mv "$TEMP_FILE" "$FINAL_FILE"
+fi
+
 echo "[+] Backup successfully created and verified: $FINAL_FILE"
 
 # Prune backups older than retention window
 echo "[+] Pruning backups older than $BACKUP_RETENTION_DAYS days ..."
-find "$BACKUP_DIR" -name "nester_*.dump" -mtime +"$BACKUP_RETENTION_DAYS" -delete
+find "$BACKUP_DIR" \( -name "nester_*.dump" -o -name "nester_*.dump.enc" \) -mtime +"$BACKUP_RETENTION_DAYS" -delete
 echo "[+] Backup and prune completed successfully."
