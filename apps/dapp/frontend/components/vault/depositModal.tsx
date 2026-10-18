@@ -26,9 +26,14 @@ import {
   UserRejectedError,
   TransactionFailedError,
   TransactionTimeoutError,
+  AmbiguousTransactionError,
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
+import {
+  canRetryVaultAction,
+  getWalletTxHistory,
+} from "@/lib/stellar/tx-history";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,16 +59,34 @@ function humanizeError(err: unknown): string {
   if (err instanceof UserRejectedError) {
     return "You cancelled the transaction in your wallet. No funds were moved.";
   }
+  if (err instanceof AmbiguousTransactionError) {
+    return err.message;
+  }
   if (err instanceof TransactionFailedError) {
     return `Transaction failed on-chain: ${err.reason}`;
   }
   if (err instanceof TransactionTimeoutError) {
-    return "Transaction timed out. Check Stellar Explorer for the current status.";
+    return err.isExpiredNotFound
+      ? "Transaction expired past its timebounds (NOT_FOUND). You may safely retry."
+      : "Transaction timed out. Check Stellar Explorer for the current status.";
   }
   if (err instanceof Error) {
     return err.message;
   }
   return "An unexpected error occurred. Please try again.";
+}
+
+function extractErrorTxLink(err: unknown): { txHash: string; explorerUrl: string } | null {
+  if (
+    (err instanceof TransactionFailedError ||
+      err instanceof TransactionTimeoutError ||
+      err instanceof AmbiguousTransactionError) &&
+    err.txHash &&
+    err.explorerUrl
+  ) {
+    return { txHash: err.txHash, explorerUrl: err.explorerUrl };
+  }
+  return null;
 }
 
 // ── ModalShell ────────────────────────────────────────────────────────────────
@@ -217,6 +240,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
   const [errorMsg, setErrorMsg] = useState("");
+  const [errorTxLink, setErrorTxLink] = useState<{ txHash: string; explorerUrl: string } | null>(null);
   const [receipt, setReceipt] = useState<TransactionReceipt | null>(null);
   const [userAssetOverride, setUserAssetOverride] = useState<"USDC" | "XLM" | null>(null);
   const [selectedStrategy, setSelectedStrategy] = useState<MarketStrategy | null>(
@@ -249,6 +273,21 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const meta = vault ? getVaultMeta(vault) : null;
   const balance = getAvailableBalance(selectedAsset);
 
+  const retryGuard = useMemo(
+    () => (address && vault ? canRetryVaultAction(address, vault.id, "deposit") : { canRetry: true, blockingTx: null }),
+    [address, vault, state, errorMsg],
+  );
+
+  const recentVaultTxs = useMemo(
+    () =>
+      address && vault
+        ? getWalletTxHistory(address)
+            .filter((tx) => tx.vaultId === vault.id)
+            .slice(0, 3)
+        : [],
+    [address, vault, state, receipt, errorMsg],
+  );
+
   const validationError = useMemo(() => {
     if (!amount) return null;
     if (amount <= 0) return "Amount must be greater than 0.";
@@ -258,7 +297,13 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   }, [amount, balance, selectedAsset]);
 
   const canSubmit =
-    !!vault && !!address && amount > 0 && !validationError && state === "input" && !isOffline;
+    !!vault &&
+    !!address &&
+    amount > 0 &&
+    !validationError &&
+    state === "input" &&
+    !isOffline &&
+    retryGuard.canRetry;
 
   const effectiveApy = selectedStrategy ? selectedStrategy.apy / 100 : (meta ? meta.apy : 0);
   const estimatedYield = amount * effectiveApy;
@@ -267,6 +312,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
     setAmountInput("");
     setState("input");
     setErrorMsg("");
+    setErrorTxLink(null);
     setReceipt(null);
     onClose();
   };
@@ -347,6 +393,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
       // localStorage as "Pending" forever.
       failPendingDeposit(pendingTxId);
       setErrorMsg(humanizeError(err));
+      setErrorTxLink(extractErrorTxLink(err));
       setState("error");
     } finally {
       submittingRef.current = false;
@@ -628,7 +675,77 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
             <div className="mb-4 rounded-2xl border border-destructive/20 bg-destructive/10 p-4">
               <div className="flex items-start gap-2 text-sm text-destructive">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>{errorMsg}</span>
+                <div className="space-y-2">
+                  <p>{errorMsg}</p>
+                  {errorTxLink && (
+                    <Link
+                      href={errorTxLink.explorerUrl}
+                      target="_blank"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:shadow"
+                    >
+                      View {truncateTxHash(errorTxLink.txHash)} on Stellar Explorer
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!retryGuard.canRetry && retryGuard.blockingTx && state === "input" && (
+            <div
+              data-testid="ambiguous-tx-banner"
+              className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800"
+            >
+              <div className="flex items-start gap-2">
+                <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <div className="space-y-1.5">
+                  <p className="font-medium">
+                    In-flight transaction awaiting finality ({truncateTxHash(retryGuard.blockingTx.txHash)})
+                  </p>
+                  <p>
+                    Retries are paused until the transaction timebound expires and the network confirms NOT_FOUND.
+                  </p>
+                  <Link
+                    href={retryGuard.blockingTx.explorerUrl}
+                    target="_blank"
+                    className="inline-flex items-center gap-1 font-medium underline"
+                  >
+                    View on Stellar Explorer
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {recentVaultTxs.length > 0 && (
+            <div data-testid="recent-tx-history" className="mb-4 rounded-2xl border border-border bg-secondary/20 p-3">
+              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                Recent Transactions
+              </p>
+              <div className="mt-2 space-y-1.5">
+                {recentVaultTxs.map((tx) => (
+                  <div key={tx.txHash} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-foreground/80">{truncateTxHash(tx.txHash)}</span>
+                      <span
+                        data-testid={`tx-status-${tx.txHash}`}
+                        className="rounded-full border border-border bg-white dark:bg-[#100F0F] px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground"
+                      >
+                        {tx.status}
+                      </span>
+                    </div>
+                    <Link
+                      href={tx.status === "archived" ? tx.horizonUrl || tx.explorerUrl : tx.explorerUrl}
+                      target="_blank"
+                      className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                    >
+                      {tx.status === "archived" ? "View Archived" : "Explorer"}
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -655,7 +772,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
               <button
                 onClick={
                   state === "error"
-                    ? () => { setState("input"); setErrorMsg(""); }
+                    ? () => { setState("input"); setErrorMsg(""); setErrorTxLink(null); }
                     : handleDeposit
                 }
                 disabled={
@@ -663,6 +780,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                   state === "signing" ||
                   state === "submitting" ||
                   state === "pending" ||
+                  !retryGuard.canRetry ||
                   (state === "input" && !canSubmit)
                 }
                 className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"

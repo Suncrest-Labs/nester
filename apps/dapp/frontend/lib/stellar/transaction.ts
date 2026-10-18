@@ -12,6 +12,14 @@ import {
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
 import { readNetworkId } from "@/lib/storageKeys";
 import { assertValidContractId, getContractId } from "@/lib/contracts";
+import {
+  canRetryVaultAction,
+  extractTxExpiryMs,
+  recordSubmittedTransaction,
+  resolveTxStatusFromRpc,
+  updateSubmittedTxStatus,
+  type VaultTxAction,
+} from "@/lib/stellar/tx-history";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -105,7 +113,11 @@ export class UserRejectedError extends Error {
  * `reason` contains the Soroban result code string for display.
  */
 export class TransactionFailedError extends Error {
-  constructor(public readonly reason: string) {
+  constructor(
+    public readonly reason: string,
+    public readonly txHash?: string,
+    public readonly explorerUrl?: string,
+  ) {
     super(`Transaction failed on-chain: ${reason}`);
     this.name = "TransactionFailedError";
   }
@@ -135,9 +147,30 @@ export class WalletDisconnectedError extends Error {
  * Thrown when the submission times out waiting for ledger confirmation.
  */
 export class TransactionTimeoutError extends Error {
-  constructor() {
+  constructor(
+    public readonly txHash?: string,
+    public readonly explorerUrl?: string,
+    public readonly isExpiredNotFound: boolean = false,
+  ) {
     super("Transaction timed out waiting for on-chain confirmation.");
     this.name = "TransactionTimeoutError";
+  }
+}
+
+/**
+ * Thrown when a retry is attempted while an earlier submission is still
+ * pending or ambiguous within its ledger timebounds (#1557).
+ */
+export class AmbiguousTransactionError extends Error {
+  constructor(
+    public readonly txHash: string,
+    public readonly explorerUrl: string,
+    public readonly expiresAt: number,
+  ) {
+    super(
+      `Previous transaction (${truncateTxHash(txHash)}) is still awaiting network finality. Retry is blocked until its timebound expires and NOT_FOUND is confirmed.`
+    );
+    this.name = "AmbiguousTransactionError";
   }
 }
 
@@ -444,21 +477,31 @@ export async function signTransaction(txXdr: string): Promise<string> {
 const POLL_INTERVAL_MS = 2_000;
 const MAX_POLL_ATTEMPTS = 15; // 30 seconds total
 
+export interface SubmitTransactionMetadata {
+  walletAddress: string;
+  vaultId: string;
+  action: VaultTxAction;
+  amount: number;
+  asset: "USDC" | "XLM";
+}
+
 /**
  * Submit a signed transaction to the Soroban RPC and poll until it is
- * confirmed or fails.
+ * confirmed, fails, or expires past its timebounds (#1557).
  *
  * @throws {TransactionFailedError}  if the transaction fails on-chain.
  * @throws {TransactionTimeoutError} if confirmation is not received in time.
  */
 export async function submitTransaction(
-  signedXdr: string
+  signedXdr: string,
+  meta?: SubmitTransactionMetadata,
 ): Promise<TransactionReceipt> {
   const network = getCurrentNetwork();
   const server = getServer(network.rpcUrl);
 
   // Re-parse from signed XDR so we have a Transaction object to submit
   const tx = new Transaction(signedXdr, network.networkPassphrase);
+  const expiresAt = extractTxExpiryMs(tx);
   const sendResult = await server.sendTransaction(tx);
 
   if (sendResult.status === "ERROR") {
@@ -468,31 +511,78 @@ export async function submitTransaction(
   }
 
   const txHash = sendResult.hash;
+  const explorerUrl = `${network.explorerUrl}/tx/${txHash}`;
+
+  const recorded = meta
+    ? recordSubmittedTransaction({
+        txHash,
+        walletAddress: meta.walletAddress,
+        vaultId: meta.vaultId,
+        action: meta.action,
+        amount: meta.amount,
+        asset: meta.asset,
+        expiresAt,
+      })
+    : null;
 
   // Poll for confirmation
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
     await sleep(POLL_INTERVAL_MS);
 
     const getResult = await server.getTransaction(txHash);
+    const nowMs = Date.now();
 
     if (getResult.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      if (recorded) {
+        updateSubmittedTxStatus(recorded.walletAddress, txHash, {
+          status: "success",
+          ledger: getResult.ledger,
+        });
+      }
       return {
         txHash,
-        explorerUrl: `${network.explorerUrl}/tx/${txHash}`,
+        explorerUrl,
         ledger: getResult.ledger,
       };
     }
 
     if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-      throw new TransactionFailedError(
-        getResult.resultMetaXdr?.toXDR("base64") ?? "on-chain execution failed"
-      );
+      const reason = getResult.resultMetaXdr?.toXDR("base64") ?? "on-chain execution failed";
+      if (recorded) {
+        updateSubmittedTxStatus(recorded.walletAddress, txHash, {
+          status: "failed",
+          errorReason: reason,
+        });
+      }
+      throw new TransactionFailedError(reason, txHash, explorerUrl);
     }
 
-    // NOT_FOUND means still pending — keep polling
+    // NOT_FOUND: check whether the transaction's timebounds have already elapsed
+    if (nowMs >= expiresAt) {
+      if (recorded) {
+        const resolved = resolveTxStatusFromRpc(
+          recorded,
+          { status: getResult.status },
+          { nowMs },
+        );
+        updateSubmittedTxStatus(recorded.walletAddress, txHash, resolved);
+      }
+      throw new TransactionTimeoutError(txHash, explorerUrl, true);
+    }
   }
 
-  throw new TransactionTimeoutError();
+  const finalNowMs = Date.now();
+  const isExpired = finalNowMs >= expiresAt;
+  if (recorded) {
+    const resolved = resolveTxStatusFromRpc(
+      recorded,
+      { status: "NOT_FOUND" },
+      { nowMs: finalNowMs, pollTimedOut: true },
+    );
+    updateSubmittedTxStatus(recorded.walletAddress, txHash, resolved);
+  }
+
+  throw new TransactionTimeoutError(txHash, explorerUrl, isExpired);
 }
 
 // ── High-level vault flows ───────────────────────────────────────────────────
@@ -508,15 +598,30 @@ export async function executeVaultDeposit(params: {
   asset: "USDC" | "XLM";
   amount: number;
 }): Promise<TransactionReceipt> {
-  const { walletAddress, contractId, amount } = params;
+  const { walletAddress, vaultId, contractId, asset, amount } = params;
 
   if (!isRealContractId(contractId)) {
     throw new Error("Vault is not yet live. Deposits are currently disabled.");
   }
 
+  const retryCheck = canRetryVaultAction(walletAddress, vaultId, "deposit");
+  if (!retryCheck.canRetry && retryCheck.blockingTx) {
+    throw new AmbiguousTransactionError(
+      retryCheck.blockingTx.txHash,
+      retryCheck.blockingTx.explorerUrl,
+      retryCheck.blockingTx.expiresAt,
+    );
+  }
+
   const { xdr } = await buildDepositTransaction({ walletAddress, contractId, amount });
   const signedXdr = await signTransaction(xdr);
-  return submitTransaction(signedXdr);
+  return submitTransaction(signedXdr, {
+    walletAddress,
+    vaultId,
+    action: "deposit",
+    amount,
+    asset,
+  });
 }
 
 export async function executeVaultWithdraw(params: {
@@ -527,15 +632,30 @@ export async function executeVaultWithdraw(params: {
   shares: number;
   minAssetsOut?: number;
 }): Promise<TransactionReceipt> {
-  const { walletAddress, contractId, shares, minAssetsOut } = params;
+  const { walletAddress, vaultId, contractId, asset, shares, minAssetsOut } = params;
 
   if (!isRealContractId(contractId)) {
     throw new Error("Vault is not yet live. Withdrawals are currently disabled.");
   }
 
+  const retryCheck = canRetryVaultAction(walletAddress, vaultId, "withdraw");
+  if (!retryCheck.canRetry && retryCheck.blockingTx) {
+    throw new AmbiguousTransactionError(
+      retryCheck.blockingTx.txHash,
+      retryCheck.blockingTx.explorerUrl,
+      retryCheck.blockingTx.expiresAt,
+    );
+  }
+
   const { xdr } = await buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut });
   const signedXdr = await signTransaction(xdr);
-  return submitTransaction(signedXdr);
+  return submitTransaction(signedXdr, {
+    walletAddress,
+    vaultId,
+    action: "withdraw",
+    amount: shares,
+    asset,
+  });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

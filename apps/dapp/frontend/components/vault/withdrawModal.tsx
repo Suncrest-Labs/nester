@@ -28,9 +28,11 @@ import {
   UserRejectedError,
   TransactionFailedError,
   TransactionTimeoutError,
+  AmbiguousTransactionError,
   truncateTxHash,
   type TransactionReceipt,
 } from "@/lib/stellar/transaction";
+import { canRetryVaultAction } from "@/lib/stellar/tx-history";
 import type { Vault as VaultDefinition } from "@/lib/types/vault";
 import { getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 
@@ -48,14 +50,32 @@ function humanizeError(err: unknown): string {
   if (err instanceof UserRejectedError) {
     return "You cancelled the transaction in your wallet. No funds were moved.";
   }
+  if (err instanceof AmbiguousTransactionError) {
+    return err.message;
+  }
   if (err instanceof TransactionFailedError) {
     return `Transaction failed on-chain: ${err.reason}`;
   }
   if (err instanceof TransactionTimeoutError) {
-    return "Transaction timed out. Check Stellar Explorer for the current status, then retry if needed.";
+    return err.isExpiredNotFound
+      ? "Transaction expired past its timebounds (NOT_FOUND). You may safely retry."
+      : "Transaction timed out. Check Stellar Explorer for the current status, then retry if needed.";
   }
   if (err instanceof Error) return err.message;
   return "An unexpected error occurred. Please try again.";
+}
+
+function extractErrorTxLink(err: unknown): { txHash: string; explorerUrl: string } | null {
+  if (
+    (err instanceof TransactionFailedError ||
+      err instanceof TransactionTimeoutError ||
+      err instanceof AmbiguousTransactionError) &&
+    err.txHash &&
+    err.explorerUrl
+  ) {
+    return { txHash: err.txHash, explorerUrl: err.explorerUrl };
+  }
+  return null;
 }
 
 // ── ModalShell ────────────────────────────────────────────────────────────────
@@ -168,6 +188,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
   const [errorMsg, setErrorMsg] = useState("");
+  const [errorTxLink, setErrorTxLink] = useState<{ txHash: string; explorerUrl: string } | null>(null);
   const [receipt, setReceipt] = useState<(TransactionReceipt & { penaltyAmount: number; netAmount: number }) | null>(null);
   const submittingRef = useRef(false);
 
@@ -176,6 +197,14 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const quote = useMemo(
     () => (position ? getWithdrawalQuote(position.id, amount) : null),
     [amount, getWithdrawalQuote, position]
+  );
+
+  const retryGuard = useMemo(
+    () =>
+      address && position
+        ? canRetryVaultAction(address, position.vaultId, "withdraw")
+        : { canRetry: true, blockingTx: null },
+    [address, position, state, errorMsg],
   );
 
   const validationError = useMemo(() => {
@@ -194,12 +223,14 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     !validationError &&
     !!quote &&
     state === "input" &&
-    !isOffline;
+    !isOffline &&
+    retryGuard.canRetry;
 
   const reset = () => {
     setAmountInput("");
     setState("input");
     setErrorMsg("");
+    setErrorTxLink(null);
     setReceipt(null);
     onClose();
   };
@@ -259,6 +290,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
       refreshBalances();
     } catch (err) {
       setErrorMsg(humanizeError(err));
+      setErrorTxLink(extractErrorTxLink(err));
       setState("error");
     } finally {
       submittingRef.current = false;
@@ -481,7 +513,46 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                 <div className="mt-5 rounded-2xl border border-destructive/20 bg-destructive/10 p-4">
                   <div className="flex items-start gap-2 text-sm text-destructive">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{errorMsg}</span>
+                    <div className="space-y-2">
+                      <p>{errorMsg}</p>
+                      {errorTxLink && (
+                        <Link
+                          href={errorTxLink.explorerUrl}
+                          target="_blank"
+                          className="inline-flex items-center gap-1.5 rounded-full bg-white dark:bg-[#100F0F] px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:shadow"
+                        >
+                          View {truncateTxHash(errorTxLink.txHash)} on Stellar Explorer
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!retryGuard.canRetry && retryGuard.blockingTx && state === "input" && (
+                <div
+                  data-testid="ambiguous-tx-banner"
+                  className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800"
+                >
+                  <div className="flex items-start gap-2">
+                    <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <div className="space-y-1.5">
+                      <p className="font-medium">
+                        In-flight transaction awaiting finality ({truncateTxHash(retryGuard.blockingTx.txHash)})
+                      </p>
+                      <p>
+                        Retries are paused until the transaction timebound expires and the network confirms NOT_FOUND.
+                      </p>
+                      <Link
+                        href={retryGuard.blockingTx.explorerUrl}
+                        target="_blank"
+                        className="inline-flex items-center gap-1 font-medium underline"
+                      >
+                        View on Stellar Explorer
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </div>
                   </div>
                 </div>
               )}
@@ -508,12 +579,17 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
 
                 {state !== "success" && (
                   <button
-                    onClick={state === "error" ? () => { setState("input"); setErrorMsg(""); } : handleWithdraw}
+                    onClick={
+                      state === "error"
+                        ? () => { setState("input"); setErrorMsg(""); setErrorTxLink(null); }
+                        : handleWithdraw
+                    }
                     disabled={
                       state === "building" ||
                       state === "signing" ||
                       state === "submitting" ||
                       state === "pending" ||
+                      !retryGuard.canRetry ||
                       (state === "input" && !canSubmit)
                     }
                     className="flex-1 rounded-full bg-[#0a0a0a] px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
