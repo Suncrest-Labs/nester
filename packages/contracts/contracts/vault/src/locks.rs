@@ -76,31 +76,31 @@ use nester_common::{
 };
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
-/// One admin-configured lock duration and its boost multiplier.
+// One admin-configured lock duration and its boost multiplier.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LockTier {
     pub duration_secs: u64,
-    /// Basis points; 10_000 = 1x (no boost).
+    // Basis points; 10_000 = 1x (no boost).
     pub boost_bps: u32,
 }
 
-/// A single open (or matured-but-not-yet-claimed) locked position.
+// A single open (or matured-but-not-yet-claimed) locked position.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct LockedPosition {
     pub lock_id: u64,
     pub owner: Address,
-    /// Shares committed to this lock at creation. Frozen at creation time
-    /// except when `report_yield`'s boost split mints additional shares
-    /// directly into this field — see the module doc.
+    // Shares committed to this lock at creation. Frozen at creation time
+    // except when `report_yield`'s boost split mints additional shares
+    // directly into this field — see the module doc.
     pub shares: i128,
     pub created_at: u64,
     pub unlock_at: u64,
     pub tier: LockTier,
-    /// The boost multiplier captured at creation time (copy of
-    /// `tier.boost_bps`), so a later admin change to the tier table never
-    /// retroactively changes an already-open lock's economics.
+    // The boost multiplier captured at creation time (copy of
+    // `tier.boost_bps`), so a later admin change to the tier table never
+    // retroactively changes an already-open lock's economics.
     pub boost_bps: u32,
 }
 
@@ -119,9 +119,9 @@ pub struct LockedPositionsView {
 // via the same enum; see the vault's DataKey variants prefixed `Lock`.
 // ---------------------------------------------------------------------------
 
-/// Admin-configured lock tiers. Falls back to
-/// [`DEFAULT_LOCK_TIERS_SECONDS`]/[`DEFAULT_LOCK_TIER_BOOST_BPS`] paired up
-/// when never explicitly set.
+// Admin-configured lock tiers. Falls back to
+// [`DEFAULT_LOCK_TIERS_SECONDS`]/[`DEFAULT_LOCK_TIER_BOOST_BPS`] paired up
+// when never explicitly set.
 pub fn default_tiers(env: &Env) -> Vec<LockTier> {
     let mut tiers = Vec::new(env);
     for i in 0..DEFAULT_LOCK_TIERS_SECONDS.len() {
@@ -133,10 +133,10 @@ pub fn default_tiers(env: &Env) -> Vec<LockTier> {
     tiers
 }
 
-/// Validates a proposed tier table: every boost within
-/// `[BASIS_POINT_SCALE, MAX_LOCK_BOOST_BPS]` (never below 1x — a "boost"
-/// under 1x would just be a penalty for locking, contradicting the whole
-/// feature), and every duration strictly positive.
+// Validates a proposed tier table: every boost within
+// `[BASIS_POINT_SCALE, MAX_LOCK_BOOST_BPS]` (never below 1x — a "boost"
+// under 1x would just be a penalty for locking, contradicting the whole
+// feature), and every duration strictly positive.
 pub fn validate_tiers(tiers: &Vec<LockTier>) -> Result<(), ContractError> {
     if tiers.is_empty() {
         return Err(ContractError::ConfigOutOfRange);
@@ -154,10 +154,10 @@ pub fn validate_tiers(tiers: &Vec<LockTier>) -> Result<(), ContractError> {
     Ok(())
 }
 
-/// Finds the tier matching `duration_secs` exactly. Arbitrary durations are
-/// rejected (`InvalidLockDuration`, mapped to `ConfigOutOfRange` — see
-/// `errors.rs`'s reuse table): unbounded tier variety would make the boost
-/// curve impossible to reason about and bloat storage with one-off entries.
+// Finds the tier matching `duration_secs` exactly. Arbitrary durations are
+// rejected (`InvalidLockDuration`, mapped to `ConfigOutOfRange` — see
+// `errors.rs`'s reuse table): unbounded tier variety would make the boost
+// curve impossible to reason about and bloat storage with one-off entries.
 pub fn find_tier(tiers: &Vec<LockTier>, duration_secs: u64) -> Result<LockTier, ContractError> {
     for tier in tiers.iter() {
         if tier.duration_secs == duration_secs {
@@ -167,9 +167,9 @@ pub fn find_tier(tiers: &Vec<LockTier>, duration_secs: u64) -> Result<LockTier, 
     Err(ContractError::ConfigOutOfRange)
 }
 
-/// Every open lock's `shares * boost_bps`, plus every flexible share
-/// (`total_supply - total_locked_shares`) counted at `1x`
-/// (`BASIS_POINT_SCALE`) — the `W` in the module doc's derivation.
+// Every open lock's `shares * boost_bps`, plus every flexible share
+// (`total_supply - total_locked_shares`) counted at `1x`
+// (`BASIS_POINT_SCALE`) — the `W` in the module doc's derivation.
 pub fn total_weight(
     total_supply: i128,
     total_locked_shares: i128,
@@ -186,17 +186,17 @@ pub fn total_weight(
         .ok_or(ContractError::ArithmeticOverflow)
 }
 
-/// Applies one yield report's boost split to every currently open lock,
-/// eagerly and in this same call (see the module doc for why). Returns the
-/// total number of boost shares minted across all locks (already applied to
-/// each `LockedPosition.shares` and to `vault_token`'s total supply via
-/// `mint_boost_shares`; the caller is responsible for actually invoking
-/// that mint).
-///
-/// Skipped (returns `Ok(0)` immediately) when there are no open locks —
-/// the overwhelmingly common case for a vault with no locked depositors —
-/// so a vault that never uses this feature pays zero extra cost on every
-/// `report_yield` call.
+// Applies one yield report's boost split to every currently open lock,
+// eagerly and in this same call (see the module doc for why). Returns the
+// total number of boost shares minted across all locks (already applied to
+// each `LockedPosition.shares` and to `vault_token`'s total supply via
+// `mint_boost_shares`; the caller is responsible for actually invoking
+// that mint).
+//
+// Skipped (returns `Ok(0)` immediately) when there are no open locks —
+// the overwhelmingly common case for a vault with no locked depositors —
+// so a vault that never uses this feature pays zero extra cost on every
+// `report_yield` call.
 pub struct BoostSettlement {
     pub minted_total: i128,
     pub updated_positions: Vec<LockedPosition>,
@@ -248,7 +248,7 @@ pub fn settle_boost_for_all_open_locks(
     })
 }
 
-/// Validates a new lock against the per-user and vault-wide open-lock caps.
+// Validates a new lock against the per-user and vault-wide open-lock caps.
 pub fn check_lock_limits(user_open_count: u32, total_open_count: u32) -> Result<(), ContractError> {
     if user_open_count >= MAX_OPEN_LOCKS_PER_USER {
         return Err(ContractError::ExceedsLimit);
@@ -259,10 +259,10 @@ pub fn check_lock_limits(user_open_count: u32, total_open_count: u32) -> Result<
     Ok(())
 }
 
-/// Early-break penalty in asset terms for a lock being broken at `now`,
-/// derived from [`lock_break_penalty_bps`] applied to the lock's current
-/// asset value (`amount_for_shares`, computed by the caller from the
-/// lock's current — possibly boost-inflated — share count).
+// Early-break penalty in asset terms for a lock being broken at `now`,
+// derived from [`lock_break_penalty_bps`] applied to the lock's current
+// asset value (`amount_for_shares`, computed by the caller from the
+// lock's current — possibly boost-inflated — share count).
 pub fn break_penalty_amount(
     asset_value: i128,
     full_penalty_bps: u32,
@@ -279,8 +279,8 @@ pub fn break_penalty_amount(
     mul_div(asset_value, bps as i128, 10_000)
 }
 
-/// Validates a proposed full lock-break penalty rate against
-/// [`MAX_LOCK_BREAK_PENALTY_BPS`].
+// Validates a proposed full lock-break penalty rate against
+// [`MAX_LOCK_BREAK_PENALTY_BPS`].
 pub fn validate_break_penalty_bps(bps: u32) -> Result<(), ContractError> {
     if bps > MAX_LOCK_BREAK_PENALTY_BPS {
         return Err(ContractError::ConfigOutOfRange);
@@ -288,8 +288,8 @@ pub fn validate_break_penalty_bps(bps: u32) -> Result<(), ContractError> {
     Ok(())
 }
 
-/// The default full lock-break penalty rate, for `initialize`/first-read
-/// call sites that have not yet had an admin override configured.
+// The default full lock-break penalty rate, for `initialize`/first-read
+// call sites that have not yet had an admin override configured.
 pub fn default_break_penalty_bps() -> u32 {
     DEFAULT_LOCK_BREAK_PENALTY_BPS
 }

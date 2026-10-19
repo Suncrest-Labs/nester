@@ -113,6 +113,52 @@ func TestStellarNetworkConsistency_MainnetRequiresContracts(t *testing.T) {
 	})
 }
 
+// TestStellarNetworkConsistency_MainnetRequiresPositiveTVLCap ensures a
+// mainnet deployment cannot start with the API-level TVL cap unset or zero:
+// both mean "no cap", which would silently remove the guarded-launch ceiling.
+func TestStellarNetworkConsistency_MainnetRequiresPositiveTVLCap(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		set   bool
+	}{
+		{"unset", "", false},
+		{"zero", "0", true},
+		{"negative", "-5", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEnv(t)
+			requiredEnv(t)
+			t.Setenv("STELLAR_NETWORK_PASSPHRASE", StellarMainnetPassphrase)
+			t.Setenv("STELLAR_RPC_URL", "https://soroban.example.com")
+			t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
+			t.Setenv("YIELD_REGISTRY_CONTRACT", "CAAAA")
+			t.Setenv("STELLAR_ALLOCATION_STRATEGY_ADDRESS", "CBBBB")
+			if tc.set {
+				t.Setenv("STELLAR_MAINNET_VAULT_TVL_CAP", tc.value)
+			}
+			chdir(t, t.TempDir())
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected Load() to reject a missing or non-positive mainnet TVL cap")
+			}
+			if !strings.Contains(err.Error(), "STELLAR_MAINNET_VAULT_TVL_CAP") {
+				t.Errorf("expected error to mention STELLAR_MAINNET_VAULT_TVL_CAP, got: %v", err)
+			}
+		})
+	}
+
+	t.Run("testnet does not require it", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		chdir(t, t.TempDir())
+		if _, err := Load(); err != nil {
+			t.Fatalf("testnet config must not require a TVL cap, got: %v", err)
+		}
+	})
+}
+
 // TestStellarNetworkConsistency_ValidMainnet verifies that a well-formed
 // mainnet configuration loads without error.
 func TestStellarNetworkConsistency_ValidMainnet(t *testing.T) {
@@ -123,6 +169,7 @@ func TestStellarNetworkConsistency_ValidMainnet(t *testing.T) {
 	t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
 	t.Setenv("YIELD_REGISTRY_CONTRACT", "CAAAA")
 	t.Setenv("STELLAR_ALLOCATION_STRATEGY_ADDRESS", "CBBBB")
+	t.Setenv("STELLAR_MAINNET_VAULT_TVL_CAP", "10000")
 	chdir(t, t.TempDir())
 
 	_, err := Load()

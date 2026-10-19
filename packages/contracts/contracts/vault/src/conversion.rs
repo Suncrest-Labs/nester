@@ -11,14 +11,14 @@
 
 use nester_common::ContractError;
 
-/// Computes `floor(x * y / denominator)` without constructing the potentially
-/// overflowing intermediate product `x * y`.
+// Computes `floor(x * y / denominator)` without constructing the potentially
+// overflowing intermediate product `x * y`.
 pub fn mul_div_down(x: i128, y: i128, denominator: i128) -> Result<i128, ContractError> {
     mul_div(x, y, denominator).map(|(quotient, _)| quotient)
 }
 
-/// Computes `ceil(x * y / denominator)` without constructing the potentially
-/// overflowing intermediate product `x * y`.
+// Computes `ceil(x * y / denominator)` without constructing the potentially
+// overflowing intermediate product `x * y`.
 pub fn mul_div_up(x: i128, y: i128, denominator: i128) -> Result<i128, ContractError> {
     let (quotient, remainder) = mul_div(x, y, denominator)?;
     if remainder == 0 {
@@ -30,7 +30,7 @@ pub fn mul_div_up(x: i128, y: i128, denominator: i128) -> Result<i128, ContractE
     }
 }
 
-/// Shares received for an asset amount.
+// Shares received for an asset amount.
 pub fn assets_to_shares_down(
     assets: i128,
     total_assets: i128,
@@ -49,7 +49,7 @@ pub fn assets_to_shares_down(
     mul_div_down(assets, total_shares, total_assets)
 }
 
-/// Shares a user must pay for an exact asset amount.
+// Shares a user must pay for an exact asset amount.
 pub fn assets_to_shares_up(
     assets: i128,
     total_assets: i128,
@@ -65,7 +65,7 @@ pub fn assets_to_shares_up(
     mul_div_up(assets, total_shares, total_assets)
 }
 
-/// Assets received for a share amount.
+// Assets received for a share amount.
 pub fn shares_to_assets_down(
     shares: i128,
     total_assets: i128,
@@ -78,7 +78,7 @@ pub fn shares_to_assets_down(
     mul_div_down(shares, total_assets, total_shares)
 }
 
-/// Assets a user must pay for an exact share amount.
+// Assets a user must pay for an exact share amount.
 pub fn shares_to_assets_up(
     shares: i128,
     total_assets: i128,
@@ -102,9 +102,9 @@ fn validate_conversion_inputs(
     Ok(())
 }
 
-/// Binary long multiplication represented as `(quotient, remainder)` modulo
-/// `denominator`. This keeps every intermediate within `i128` while preserving
-/// the exact mathematical result.
+// Binary long multiplication represented as `(quotient, remainder)` modulo
+// `denominator`. This keeps every intermediate within `i128` while preserving
+// the exact mathematical result.
 fn mul_div(x: i128, y: i128, denominator: i128) -> Result<(i128, i128), ContractError> {
     if x < 0 || y < 0 || denominator <= 0 {
         return Err(ContractError::InvalidAmount);

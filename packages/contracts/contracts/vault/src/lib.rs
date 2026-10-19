@@ -105,7 +105,7 @@ impl<'a> VaultTokenContractClient<'a> {
         self.call("total_supply", soroban_sdk::vec![self.env])
     }
 
-    /// Issue #802: mints boost shares without changing total_assets.
+    // Issue #802: mints boost shares without changing total_assets.
     fn mint_boost_shares(&self, to: &Address, shares: &i128) {
         self.call(
             "mint_boost_shares",
@@ -117,8 +117,8 @@ impl<'a> VaultTokenContractClient<'a> {
         )
     }
 
-    /// Issue #802: burns a broken lock's shares without changing
-    /// total_assets (the vault handles the asset-side reduction itself).
+    // Issue #802: burns a broken lock's shares without changing
+    // total_assets (the vault handles the asset-side reduction itself).
     fn burn_shares(&self, from: &Address, shares: &i128) {
         self.call(
             "burn_shares",
@@ -148,22 +148,22 @@ const WITHDRAW: Symbol = symbol_short!("WITHDRAW");
 const PAUSE: Symbol = symbol_short!("PAUSE");
 const UNPAUSE: Symbol = symbol_short!("UNPAUSE");
 const REBALANCE: Symbol = symbol_short!("REBAL");
-/// Emitted when a rebalance skips a source because its adapter failed.
+// Emitted when a rebalance skips a source because its adapter failed.
 const SOURCE_SKIPPED: Symbol = symbol_short!("SRC_SKIP");
 const HARVEST: Symbol = symbol_short!("HARVEST");
-/// Time-vested yield report events (issue #803).
+// Time-vested yield report events (issue #803).
 const YIELD_STREAM_STARTED: Symbol = symbol_short!("YLD_STRT");
 const YIELD_RELEASED: Symbol = symbol_short!("YLD_RLSD");
 const MIN_REBALANCE_AMOUNT: i128 = 1;
 const DEFAULT_REBALANCE_COOLDOWN: u64 = 3600;
-/// Default minimum seconds between two `harvest` calls by the same user.
+// Default minimum seconds between two `harvest` calls by the same user.
 const DEFAULT_MIN_HARVEST_INTERVAL: u64 = 3600;
-/// Upper bound on the configurable harvest interval (7 days), so a
-/// misconfiguration cannot lock users out of harvesting indefinitely.
+// Upper bound on the configurable harvest interval (7 days), so a
+// misconfiguration cannot lock users out of harvesting indefinitely.
 const MAX_HARVEST_INTERVAL: u64 = 7 * 24 * 3600;
-/// Default rebalance slippage tolerance: 50 bps (0.5%) — issue #638.
+// Default rebalance slippage tolerance: 50 bps (0.5%) — issue #638.
 const DEFAULT_REBALANCE_SLIPPAGE_BPS: u32 = 50;
-/// Upper bound on the configurable rebalance slippage tolerance (50%).
+// Upper bound on the configurable rebalance slippage tolerance (50%).
 const MAX_REBALANCE_SLIPPAGE_BPS: u32 = 5_000;
 const FEE_CONFIG_UPDATED: Symbol = symbol_short!("FEE_CFG");
 const EMRG_REQD: Symbol = symbol_short!("EMRG_REQD");
@@ -175,17 +175,17 @@ const DEFAULT_MAX_REBALANCE_VALUE_BPS: u32 = rebalance::DEFAULT_MAX_REBALANCE_VA
 const DEFAULT_MAX_LEG_SLIPPAGE_BPS: u32 = rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING;
 const PNLTY_CHG: Symbol = symbol_short!("PNLTY_CHG");
 const PNLTY_DST: Symbol = symbol_short!("PNLTY_DST");
-/// Emitted by `set_max_deposit`/`set_min_deposit`, issue #1354: cap changes
-/// were silent on-chain, which the off-chain indexer needs to reconstruct
-/// config state without extra RPC calls.
+// Emitted by `set_max_deposit`/`set_min_deposit`, issue #1354: cap changes
+// were silent on-chain, which the off-chain indexer needs to reconstruct
+// config state without extra RPC calls.
 const CAP_CHG: Symbol = symbol_short!("CAP_CHG");
-/// Time-locked savings vault events (issue #802).
+// Time-locked savings vault events (issue #802).
 const LOCK_OPEN: Symbol = symbol_short!("LOCK_OPEN");
 const LOCK_UNLK: Symbol = symbol_short!("LOCK_UNLK");
 const LOCK_BRK: Symbol = symbol_short!("LOCK_BRK");
 const LOCK_BST: Symbol = symbol_short!("LOCK_BST");
-/// Default split: 70% of every penalty compensates remaining depositors,
-/// 30% is protocol revenue — within the compile-time treasury cap.
+// Default split: 70% of every penalty compensates remaining depositors,
+// 30% is protocol revenue — within the compile-time treasury cap.
 const DEFAULT_DEPOSITOR_SHARE_BPS: u32 = 10_000 - nester_common::MAX_TREASURY_SHARE_BPS + 2_000;
 const DEFAULT_MIN_PENALTY_DISTRIBUTION_AMOUNT: i128 = 1_000_000;
 const DEFAULT_PENALTY_DISTRIBUTION_COOLDOWN: u64 = 3_600;
@@ -206,9 +206,9 @@ pub struct FeeConfigUpdatedEventData {
     pub new_config: FeeConfig,
 }
 
-/// Shared by `set_max_deposit`/`set_min_deposit`: which cap changed, and its
-/// old/new value. One struct for both setters (DRY) rather than a
-/// near-identical struct per field.
+// Shared by `set_max_deposit`/`set_min_deposit`: which cap changed, and its
+// old/new value. One struct for both setters (DRY) rather than a
+// near-identical struct per field.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct CapChangedEventData {
@@ -267,9 +267,9 @@ pub struct TimestampEventData {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct YieldStreamStartedEventData {
-    /// Total amount now vesting over the stream's window (the new report's
-    /// amount plus any not-yet-vested remainder folded in from a prior
-    /// still-active stream — see `start_or_extend_yield_stream`).
+    // Total amount now vesting over the stream's window (the new report's
+    // amount plus any not-yet-vested remainder folded in from a prior
+    // still-active stream — see `start_or_extend_yield_stream`).
     pub total: i128,
     pub started_at: u64,
     pub ends_at: u64,
@@ -278,7 +278,7 @@ pub struct YieldStreamStartedEventData {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct YieldReleasedEventData {
-    /// Amount moved from the vesting stream into `TotalAssets` this call.
+    // Amount moved from the vesting stream into `TotalAssets` this call.
     pub released: i128,
     pub remaining: i128,
 }
@@ -321,12 +321,12 @@ pub struct EmergencyRequest {
     pub amount: i128,
 }
 
-/// Fair-ordering emergency withdrawal queue events (issue #814). Distinct
-/// from the legacy `ERG_REQ`/`ERG_QUE`/`ERG_PROC` events emitted by
-/// `emergency_withdraw`, which remains a separate, simpler paused-only exit
-/// path. `request_emergency_withdrawal` / `process_emergency_queue` /
-/// `cancel_emergency_request` are the fairness-hardened primitives intended
-/// for general withdrawal-under-stress scenarios.
+// Fair-ordering emergency withdrawal queue events (issue #814). Distinct
+// from the legacy `ERG_REQ`/`ERG_QUE`/`ERG_PROC` events emitted by
+// `emergency_withdraw`, which remains a separate, simpler paused-only exit
+// path. `request_emergency_withdrawal` / `process_emergency_queue` /
+// `cancel_emergency_request` are the fairness-hardened primitives intended
+// for general withdrawal-under-stress scenarios.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct EmergencyRequestedEventData {
@@ -353,7 +353,7 @@ pub struct EmergencyCancelledEventData {
     pub shares_returned: i128,
 }
 
-/// A single yield-source position unwound by an emergency exit.
+// A single yield-source position unwound by an emergency exit.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct PositionWithdrawal {
@@ -361,9 +361,9 @@ pub struct PositionWithdrawal {
     pub amount: i128,
 }
 
-/// Outcome of [`VaultContract::emergency_withdraw_all`]: positions that were
-/// successfully unwound and those that could not be (failures are logged, not
-/// fatal, so a single bad position can't block the rest from exiting).
+// Outcome of [`VaultContract::emergency_withdraw_all`]: positions that were
+// successfully unwound and those that could not be (failures are logged, not
+// fatal, so a single bad position can't block the rest from exiting).
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct EmergencyWithdrawAllResult {
@@ -477,6 +477,7 @@ enum DataKey {
     DepositAllowlistEnabled,
     DepositAllowlisted(Address),
     BreakerConfigV2,
+    TvlCap,
     // Multi-asset vault support (#804)
     BasketAssets,         // Vec<AssetConfig> for multi-asset vaults
     IsMultiAsset,         // bool flag indicating if vault is multi-asset
@@ -486,59 +487,59 @@ enum DataKey {
     // --- Referral integration (issue #818) ---
     ReferralContract,
     // --- Time-vested yield reports (issue #803) ---
-    /// The active (or most recently active) yield vesting stream. Absent
-    /// means no stream has ever started.
+    // The active (or most recently active) yield vesting stream. Absent
+    // means no stream has ever started.
     YieldVestingStream,
-    /// Vesting window duration in seconds, admin-configurable. Absent
-    /// defaults to [`DEFAULT_YIELD_VESTING_SECONDS`].
+    // Vesting window duration in seconds, admin-configurable. Absent
+    // defaults to [`DEFAULT_YIELD_VESTING_SECONDS`].
     YieldVestingPeriodSeconds,
     // --- Time-locked savings vault (issue #802) ---
-    /// Admin-configured lock tiers. Absent defaults to
-    /// `locks::default_tiers`.
+    // Admin-configured lock tiers. Absent defaults to
+    // `locks::default_tiers`.
     LockTiers,
-    /// Full (day-one) early-break penalty rate, in bps. Absent defaults to
-    /// `locks::default_break_penalty_bps`.
+    // Full (day-one) early-break penalty rate, in bps. Absent defaults to
+    // `locks::default_break_penalty_bps`.
     LockBreakPenaltyBps,
-    /// Next lock id to assign for `user` (monotonically increasing per
-    /// user; never reused, even after a lock is fully closed, so a stale
-    /// off-chain reference can never collide with a new lock).
+    // Next lock id to assign for `user` (monotonically increasing per
+    // user; never reused, even after a lock is fully closed, so a stale
+    // off-chain reference can never collide with a new lock).
     NextLockId(Address),
-    /// One user's open locked positions, in creation order. A lock is
-    /// removed from this list (not merely marked closed) once fully
-    /// unlocked or broken — the position's own historical record, if
-    /// needed, is reconstructable from its emitted events.
+    // One user's open locked positions, in creation order. A lock is
+    // removed from this list (not merely marked closed) once fully
+    // unlocked or broken — the position's own historical record, if
+    // needed, is reconstructable from its emitted events.
     UserLocks(Address),
-    /// Vault-wide count of currently open locks, across every user —
-    /// incremented on `deposit_locked`, decremented on `unlock_position`/
-    /// `break_lock`. Checked against
-    /// [`nester_common::constants::MAX_TOTAL_OPEN_LOCKS`] without ever
-    /// having to enumerate every user's locks to compute it.
+    // Vault-wide count of currently open locks, across every user —
+    // incremented on `deposit_locked`, decremented on `unlock_position`/
+    // `break_lock`. Checked against
+    // [`nester_common::constants::MAX_TOTAL_OPEN_LOCKS`] without ever
+    // having to enumerate every user's locks to compute it.
     TotalOpenLocks,
-    /// Sum of `shares` across every currently open lock, vault-wide. The
-    /// `total_locked_shares` term `settle_boost_for_all_open_locks` and
-    /// `total_weight` need, kept as a running total for the same reason as
-    /// `TotalOpenLocks`.
+    // Sum of `shares` across every currently open lock, vault-wide. The
+    // `total_locked_shares` term `settle_boost_for_all_open_locks` and
+    // `total_weight` need, kept as a running total for the same reason as
+    // `TotalOpenLocks`.
     TotalLockedShares,
-    /// Sum of `shares * boost_bps` across every currently open lock,
-    /// vault-wide — the `W` (minus the flexible pool's own contribution)
-    /// in the yield-boost derivation. Kept as a running total rather than
-    /// recomputed by iterating every lock on every `report_yield` call.
+    // Sum of `shares * boost_bps` across every currently open lock,
+    // vault-wide — the `W` (minus the flexible pool's own contribution)
+    // in the yield-boost derivation. Kept as a running total rather than
+    // recomputed by iterating every lock on every `report_yield` call.
     TotalLockedWeight,
-    /// Every distinct address that currently has at least one open lock —
-    /// Soroban has no native "enumerate every persistent key" primitive,
-    /// so this is what `settle_locked_boost` walks to find every open
-    /// lock, vault-wide, bounded by `MAX_TOTAL_OPEN_LOCKS`. An address is
-    /// added the first time its open-lock count goes from 0 to 1 and
-    /// removed when it goes back to 0 — see `add_open_lock_owner`/
-    /// `remove_open_lock_owner_if_empty`.
+    // Every distinct address that currently has at least one open lock —
+    // Soroban has no native "enumerate every persistent key" primitive,
+    // so this is what `settle_locked_boost` walks to find every open
+    // lock, vault-wide, bounded by `MAX_TOTAL_OPEN_LOCKS`. An address is
+    // added the first time its open-lock count goes from 0 to 1 and
+    // removed when it goes back to 0 — see `add_open_lock_owner`/
+    // `remove_open_lock_owner_if_empty`.
     OpenLockOwners,
 }
 
-/// Why a penalty was charged (issue #805). `LockBreak` and `WeightDeviation`
-/// are reserved for the time-lock and multi-asset-deposit features
-/// respectively — neither exists in this vault yet, so no path currently
-/// emits them, but the discriminant is defined up front so those features
-/// can adopt the same escrow without an event-schema change later.
+// Why a penalty was charged (issue #805). `LockBreak` and `WeightDeviation`
+// are reserved for the time-lock and multi-asset-deposit features
+// respectively — neither exists in this vault yet, so no path currently
+// emits them, but the discriminant is defined up front so those features
+// can adopt the same escrow without an event-schema change later.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PenaltyReason {
@@ -613,9 +614,9 @@ pub struct LockBoostSettledEventData {
     pub shares_minted: i128,
 }
 
-/// One (threshold, rate) breakpoint in an on-chain fee schedule (issue
-/// #813). `threshold` is a tenure in seconds for performance/exit tiers, or
-/// a TVL amount for the management tier.
+// One (threshold, rate) breakpoint in an on-chain fee schedule (issue
+// #813). `threshold` is a tenure in seconds for performance/exit tiers, or
+// a TVL amount for the management tier.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VaultFeeTier {
@@ -660,13 +661,13 @@ pub struct AllocationDeltaView {
 #[derive(Clone, Debug)]
 pub struct RebalancedEventData {
     pub source_deltas: Vec<AllocationDeltaView>,
-    /// Sources skipped because their adapter failed. A non-empty list means
-    /// the rebalance completed across the remainder rather than aborting.
+    // Sources skipped because their adapter failed. A non-empty list means
+    // the rebalance completed across the remainder rather than aborting.
     pub skipped_sources: Vec<Symbol>,
     pub timestamp: u64,
 }
 
-/// Emitted per source skipped during a rebalance due to adapter failure.
+// Emitted per source skipped during a rebalance due to adapter failure.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct SourceSkippedEventData {
@@ -674,8 +675,8 @@ pub struct SourceSkippedEventData {
     pub timestamp: u64,
 }
 
-/// Return shape of `plan_rebalance`: the plan plus its `plan_hash`, so
-/// callers never have to compute the checksum themselves off-chain.
+// Return shape of `plan_rebalance`: the plan plus its `plan_hash`, so
+// callers never have to compute the checksum themselves off-chain.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct RebalancePlan {
@@ -683,7 +684,7 @@ pub struct RebalancePlan {
     pub plan_hash: u64,
 }
 
-/// Per-leg execution record for `execute_rebalance` (issue #810).
+// Per-leg execution record for `execute_rebalance` (issue #810).
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct RebalanceLegExecutedEventData {
@@ -693,7 +694,7 @@ pub struct RebalanceLegExecutedEventData {
     pub min_out: i128,
 }
 
-/// Summary emitted once per `execute_rebalance` call.
+// Summary emitted once per `execute_rebalance` call.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct RebalanceCompletedEventData {
@@ -738,11 +739,11 @@ fn vault_token_client(env: &Env) -> VaultTokenContractClient<'_> {
     VaultTokenContractClient::new(env, &vault_token)
 }
 
-/// Slippage-safe minimum proceeds for withdrawing `gross` assets during a
-/// rebalance (#638): the net-of-fees withdrawal preview reduced by
-/// `slippage_bps`. Uses `preview_withdraw_net` (never the gross
-/// `preview_withdraw`) so fees are already accounted for. Returns 0 when the
-/// gross is too small to map to any shares.
+// Slippage-safe minimum proceeds for withdrawing `gross` assets during a
+// rebalance (#638): the net-of-fees withdrawal preview reduced by
+// `slippage_bps`. Uses `preview_withdraw_net` (never the gross
+// `preview_withdraw`) so fees are already accounted for. Returns 0 when the
+// gross is too small to map to any shares.
 fn rebalance_min_assets_out(env: &Env, gross: i128, slippage_bps: u32) -> i128 {
     let shares_equiv = vault_token_client(env).shares_for_deposit(&gross);
     if shares_equiv <= 0 {
@@ -752,35 +753,35 @@ fn rebalance_min_assets_out(env: &Env, gross: i128, slippage_bps: u32) -> i128 {
     nester_common::fees::mul_div(net, (10_000 - slippage_bps) as i128, 10_000).unwrap_or(0)
 }
 
-/// Outcome of attempting to move value through a source's adapter.
+// Outcome of attempting to move value through a source's adapter.
 enum AdapterOutcome {
-    /// The source has no adapter — bookkeeping-only, pre-adapter behaviour.
+    // The source has no adapter — bookkeeping-only, pre-adapter behaviour.
     NoAdapter,
-    /// The adapter moved value and enforced its minimum-output floor. Carries
-    /// the **realised** asset-denominated delta the protocol actually
-    /// confirmed, signed like the requested delta. Bookkeeping records this
-    /// rather than the requested figure, so the vault never books an amount the
-    /// protocol did not acknowledge.
+    // The adapter moved value and enforced its minimum-output floor. Carries
+    // the **realised** asset-denominated delta the protocol actually
+    // confirmed, signed like the requested delta. Bookkeeping records this
+    // rather than the requested figure, so the vault never books an amount the
+    // protocol did not acknowledge.
     Moved(i128),
-    /// The adapter (or the registry lookup) reverted. Isolate this source.
+    // The adapter (or the registry lookup) reverted. Isolate this source.
     Failed,
 }
 
-/// The YieldRegistry bound to this vault, if any.
+// The YieldRegistry bound to this vault, if any.
 fn get_yield_registry(env: &Env) -> Option<Address> {
     env.storage().instance().get(&DataKey::YieldRegistry)
 }
 
-/// Look up `source_id`'s adapter and move `delta` through it: a positive delta
-/// deposits into the protocol, a negative delta withdraws from it.
-///
-/// Every step — the registry read, the status check, and the adapter call
-/// itself — uses `try_invoke_contract` so a reverting third-party protocol can
-/// never abort the whole rebalance. Any failure returns
-/// [`AdapterOutcome::Failed`] and the caller isolates that one source.
-///
-/// Sources that are not `Active` (paused, degraded, deprecated) are reported
-/// as `Failed` so the caller skips them without touching allocations.
+// Look up `source_id`'s adapter and move `delta` through it: a positive delta
+// deposits into the protocol, a negative delta withdraws from it.
+//
+// Every step — the registry read, the status check, and the adapter call
+// itself — uses `try_invoke_contract` so a reverting third-party protocol can
+// never abort the whole rebalance. Any failure returns
+// [`AdapterOutcome::Failed`] and the caller isolates that one source.
+//
+// Sources that are not `Active` (paused, degraded, deprecated) are reported
+// as `Failed` so the caller skips them without touching allocations.
 fn move_via_adapter(
     env: &Env,
     registry_id: &Address,
@@ -893,13 +894,13 @@ fn move_via_adapter(
     }
 }
 
-/// Authorize `adapter` to `transfer` exactly `amount` of `token` out of this
-/// vault, scoped to the next invocation only.
-///
-/// This is the canonical Soroban mechanism for a contract to permit a nested
-/// transfer from its own address. The grant names the token, the exact
-/// arguments, and nothing else, so the adapter cannot move a different amount,
-/// a different asset, or anyone else's funds.
+// Authorize `adapter` to `transfer` exactly `amount` of `token` out of this
+// vault, scoped to the next invocation only.
+//
+// This is the canonical Soroban mechanism for a contract to permit a nested
+// transfer from its own address. The grant names the token, the exact
+// arguments, and nothing else, so the adapter cannot move a different amount,
+// a different asset, or anyone else's funds.
 fn authorize_adapter_pull(env: &Env, token: &Address, adapter: &Address, amount: i128) {
     let me = env.current_contract_address();
     let args: Vec<Val> = soroban_sdk::vec![
@@ -922,10 +923,10 @@ fn authorize_adapter_pull(env: &Env, token: &Address, adapter: &Address, amount:
     ]);
 }
 
-/// Convert an asset amount into adapter position units, pro-rata against the
-/// adapter's current position. Returns `None` when the adapter cannot be read
-/// or holds nothing to value against — callers treat that as a failure and
-/// skip the source rather than guessing a unit count.
+// Convert an asset amount into adapter position units, pro-rata against the
+// adapter's current position. Returns `None` when the adapter cannot be read
+// or holds nothing to value against — callers treat that as a failure and
+// skip the source rather than guessing a unit count.
 fn assets_to_units(env: &Env, adapter: &Address, assets: i128) -> Option<i128> {
     let me = env.current_contract_address();
     let owner_args: Vec<Val> = soroban_sdk::vec![env, me.into_val(env)];
@@ -956,10 +957,10 @@ fn assets_to_units(env: &Env, adapter: &Address, assets: i128) -> Option<i128> {
     units_held.checked_mul(assets).map(|n| n / value)
 }
 
-/// Minimum position units to accept for a deposit of `assets`, derived from
-/// the adapter's existing position and the configured slippage tolerance.
-/// Falls back to 1 (the protocol must mint something) when there is no prior
-/// position to price against.
+// Minimum position units to accept for a deposit of `assets`, derived from
+// the adapter's existing position and the configured slippage tolerance.
+// Falls back to 1 (the protocol must mint something) when there is no prior
+// position to price against.
 fn deposit_min_units_out(env: &Env, adapter: &Address, assets: i128, slippage_bps: u32) -> i128 {
     match assets_to_units(env, adapter, assets) {
         Some(expected) if expected > 0 => {
@@ -971,9 +972,9 @@ fn deposit_min_units_out(env: &Env, adapter: &Address, assets: i128, slippage_bp
     }
 }
 
-/// Tell the registry that this source's adapter failed. Best-effort: a
-/// registry that rejects the report must not abort the rebalance that is
-/// already skipping the source.
+// Tell the registry that this source's adapter failed. Best-effort: a
+// registry that rejects the report must not abort the rebalance that is
+// already skipping the source.
 fn report_source_failure(env: &Env, registry_id: &Address, source_id: &Symbol) {
     let args: Vec<Val> = soroban_sdk::vec![
         env,
@@ -987,7 +988,7 @@ fn report_source_failure(env: &Env, registry_id: &Address, source_id: &Symbol) {
     );
 }
 
-/// Reverts with `SlippageExceeded` when realised proceeds fall below the floor.
+// Reverts with `SlippageExceeded` when realised proceeds fall below the floor.
 fn enforce_rebalance_slippage(env: &Env, min_assets_out: i128, actual_received: i128) {
     if actual_received < min_assets_out {
         panic_with_error!(env, ContractError::SlippageExceeded);
@@ -1033,14 +1034,14 @@ fn set_total_assets(env: &Env, amount: i128) {
     env.storage().instance().set(&DataKey::TotalAssets, &amount);
 }
 
-/// Assets backing shares after already-accrued vault fees.
+// Assets backing shares after already-accrued vault fees.
 fn get_net_total_assets(env: &Env) -> i128 {
     get_total_assets(env).saturating_sub(get_accrued_fees(env))
 }
 
-/// Remaining assets that can be withdrawn without crossing the configured
-/// rolling circuit-breaker threshold. This helper is read-only and deliberately
-/// uses saturating arithmetic so `max_*` queries never fail.
+// Remaining assets that can be withdrawn without crossing the configured
+// rolling circuit-breaker threshold. This helper is read-only and deliberately
+// uses saturating arithmetic so `max_*` queries never fail.
 fn circuit_breaker_headroom(env: &Env) -> i128 {
     let Some(config) = env
         .storage()
@@ -1076,8 +1077,8 @@ fn circuit_breaker_headroom(env: &Env) -> i128 {
     threshold.saturating_sub(used)
 }
 
-/// Maximum gross assets the holder can presently redeem. Unlike the mutating
-/// withdrawal path this function never panics.
+// Maximum gross assets the holder can presently redeem. Unlike the mutating
+// withdrawal path this function never panics.
 fn max_withdrawable_assets(env: &Env, user: &Address) -> i128 {
     if !env.storage().instance().has(&DataKey::Token) || is_paused(env) {
         return 0;
@@ -1191,14 +1192,14 @@ fn clear_first_deposit_at(env: &Env, user: &Address) {
         .remove(&DataKey::FirstDepositAt(user.clone()));
 }
 
-/// Seconds since `user`'s first deposit into their current position. Reset
-/// only by a full exit (see [`clear_first_deposit_at`]); unaffected by
-/// partial withdrawals or additional deposits.
-///
-/// Existence is checked explicitly rather than comparing the stored
-/// timestamp to zero — a deposit genuinely made at ledger timestamp 0 (the
-/// start of any fresh test/dev chain) is a legitimate value, not a sentinel
-/// for "unset".
+// Seconds since `user`'s first deposit into their current position. Reset
+// only by a full exit (see [`clear_first_deposit_at`]); unaffected by
+// partial withdrawals or additional deposits.
+//
+// Existence is checked explicitly rather than comparing the stored
+// timestamp to zero — a deposit genuinely made at ledger timestamp 0 (the
+// start of any fresh test/dev chain) is a legitimate value, not a sentinel
+// for "unset".
 fn tenure_secs(env: &Env, user: &Address) -> u64 {
     if !has_first_deposit_at(env, user) {
         return 0;
@@ -1244,10 +1245,10 @@ fn set_management_tiers(env: &Env, tiers: &Vec<VaultFeeTier>) {
         .set(&DataKey::ManagementFeeTiers, tiers);
 }
 
-/// Converts a bounded on-chain `Vec<VaultFeeTier>` into a fixed-size array so
-/// it can be handed to `nester_common::fees`'s pure, Soroban-free tier math.
-/// Bounded by `MAX_FEE_TIERS`, so this is cheap regardless of on-chain size
-/// (which is itself validated to never exceed that bound on write).
+// Converts a bounded on-chain `Vec<VaultFeeTier>` into a fixed-size array so
+// it can be handed to `nester_common::fees`'s pure, Soroban-free tier math.
+// Bounded by `MAX_FEE_TIERS`, so this is cheap regardless of on-chain size
+// (which is itself validated to never exceed that bound on write).
 fn to_fee_tier_array(
     tiers: &Vec<VaultFeeTier>,
 ) -> (
@@ -1272,9 +1273,9 @@ fn to_fee_tier_array(
     (arr, n)
 }
 
-/// Tenure-tiered performance fee rate, falling back to the flat
-/// `FeeConfig::performance_fee_bps` when no tiers have been configured
-/// (empty table = feature not opted into, fully backward compatible).
+// Tenure-tiered performance fee rate, falling back to the flat
+// `FeeConfig::performance_fee_bps` when no tiers have been configured
+// (empty table = feature not opted into, fully backward compatible).
 fn effective_performance_fee_bps(env: &Env, user: &Address, config: &FeeConfig) -> u32 {
     let tiers = get_performance_tiers(env);
     let (arr, n) = to_fee_tier_array(&tiers);
@@ -1285,8 +1286,8 @@ fn effective_performance_fee_bps(env: &Env, user: &Address, config: &FeeConfig) 
     }
 }
 
-/// Tenure-tiered exit (early withdrawal) fee rate, falling back to the flat
-/// `FeeConfig::early_withdrawal_fee_bps` when no tiers are configured.
+// Tenure-tiered exit (early withdrawal) fee rate, falling back to the flat
+// `FeeConfig::early_withdrawal_fee_bps` when no tiers are configured.
 fn effective_exit_fee_bps(env: &Env, user: &Address, config: &FeeConfig) -> u32 {
     let tiers = get_exit_tiers(env);
     let (arr, n) = to_fee_tier_array(&tiers);
@@ -1297,8 +1298,8 @@ fn effective_exit_fee_bps(env: &Env, user: &Address, config: &FeeConfig) -> u32 
     }
 }
 
-/// TVL-tiered management fee rate, falling back to the flat
-/// `FeeConfig::management_fee_bps` when no tiers are configured.
+// TVL-tiered management fee rate, falling back to the flat
+// `FeeConfig::management_fee_bps` when no tiers are configured.
 fn effective_management_fee_bps(env: &Env, total_assets: i128, config: &FeeConfig) -> u32 {
     let tiers = get_management_tiers(env);
     let (arr, n) = to_fee_tier_array(&tiers);
@@ -1447,12 +1448,12 @@ fn set_user_yield(env: &Env, user: &Address, amount: i128) {
 // in tension, and is far smaller surgery on a 4000+ line vault contract.
 // ---------------------------------------------------------------------------
 
-/// Default vesting window: how long a single `report_yield` call's amount
-/// takes to fully land in `TotalAssets`. 1 day - long enough that a
-/// snipe-and-immediately-withdraw captures only a small fraction of a
-/// report, short enough that legitimate holders are not kept waiting an
-/// unreasonable time for genuinely-earned yield to become spendable.
-/// Admin-adjustable between 1 hour and 30 days via `set_yield_vesting_period`.
+// Default vesting window: how long a single `report_yield` call's amount
+// takes to fully land in `TotalAssets`. 1 day - long enough that a
+// snipe-and-immediately-withdraw captures only a small fraction of a
+// report, short enough that legitimate holders are not kept waiting an
+// unreasonable time for genuinely-earned yield to become spendable.
+// Admin-adjustable between 1 hour and 30 days via `set_yield_vesting_period`.
 pub const DEFAULT_YIELD_VESTING_SECONDS: u64 = 24 * 60 * 60;
 pub const MIN_YIELD_VESTING_SECONDS: u64 = 60 * 60;
 pub const MAX_YIELD_VESTING_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -1460,9 +1461,9 @@ pub const MAX_YIELD_VESTING_SECONDS: u64 = 30 * 24 * 60 * 60;
 #[contracttype]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct YieldVestingStream {
-    /// Total amount this stream will release by `ends_at`.
+    // Total amount this stream will release by `ends_at`.
     pub total: i128,
-    /// Amount already released into `TotalAssets` so far.
+    // Amount already released into `TotalAssets` so far.
     pub released: i128,
     pub started_at: u64,
     pub ends_at: u64,
@@ -1485,12 +1486,12 @@ fn set_yield_stream(env: &Env, stream: &YieldVestingStream) {
         .set(&DataKey::YieldVestingStream, stream);
 }
 
-/// Amount of `stream` that has vested by `now` but is not yet reflected in
-/// `stream.released`. Linear vesting: `total * elapsed / duration`, capped
-/// at `total - released` so a stale stream (nobody called anything for a
-/// long time) never over-releases. Rounds down — the vault-favouring
-/// direction — so a fraction of a base unit can be left stranded in the
-/// stream forever rather than ever over-crediting `TotalAssets`.
+// Amount of `stream` that has vested by `now` but is not yet reflected in
+// `stream.released`. Linear vesting: `total * elapsed / duration`, capped
+// at `total - released` so a stale stream (nobody called anything for a
+// long time) never over-releases. Rounds down — the vault-favouring
+// direction — so a fraction of a base unit can be left stranded in the
+// stream forever rather than ever over-crediting `TotalAssets`.
 fn vested_amount(stream: &YieldVestingStream, now: u64) -> i128 {
     let remaining = stream.total.saturating_sub(stream.released);
     if remaining <= 0 || now <= stream.started_at {
@@ -1511,17 +1512,17 @@ fn vested_amount(stream: &YieldVestingStream, now: u64) -> i128 {
         .clamp(0, remaining)
 }
 
-/// Releases whatever portion of the active yield stream has vested since it
-/// was last touched, adding it to `TotalAssets` exactly like `report_yield`
-/// already did before this stream existed. A no-op (cheap: one storage read)
-/// when there is no active stream or nothing has vested yet.
-///
-/// Must be called before any operation that reads `TotalAssets`/share price
-/// in a way that matters for fairness between holders — deposit, withdraw,
-/// harvest, and report_yield itself (so a new report correctly folds in any
-/// unreleased remainder of the previous one; see
-/// `start_or_extend_yield_stream`) — so no caller can ever observe a share
-/// price that omits yield which has already, in real time, finished vesting.
+// Releases whatever portion of the active yield stream has vested since it
+// was last touched, adding it to `TotalAssets` exactly like `report_yield`
+// already did before this stream existed. A no-op (cheap: one storage read)
+// when there is no active stream or nothing has vested yet.
+//
+// Must be called before any operation that reads `TotalAssets`/share price
+// in a way that matters for fairness between holders — deposit, withdraw,
+// harvest, and report_yield itself (so a new report correctly folds in any
+// unreleased remainder of the previous one; see
+// `start_or_extend_yield_stream`) — so no caller can ever observe a share
+// price that omits yield which has already, in real time, finished vesting.
 fn release_vested_yield(env: &Env) {
     let Some(mut stream) = get_yield_stream(env) else {
         return;
@@ -1565,19 +1566,19 @@ fn release_vested_yield(env: &Env) {
     settle_locked_boost(env, total_assets, total_supply, to_release);
 }
 
-/// Applies the locked-pool yield boost for exactly the `yield_amount` that
-/// just landed in `TotalAssets` (see `locks.rs`'s module doc for the full
-/// derivation). Called from every site that can move `TotalAssets` via
-/// vesting — `release_vested_yield` is itself called from `deposit`,
-/// `withdraw`, `report_yield`, `unlock_position`, and `break_lock`, so this
-/// one call site covers all of them rather than needing to be duplicated
-/// at each.
-///
-/// A no-op when there are no open locks (the common case for a vault with
-/// no locked depositors) or when the vault-wide open-lock count exceeds
-/// `MAX_TOTAL_OPEN_LOCKS` (defensive; `deposit_locked` itself enforces the
-/// cap, so this should be unreachable, but never panics a yield release
-/// over a lock-side invariant breaking).
+// Applies the locked-pool yield boost for exactly the `yield_amount` that
+// just landed in `TotalAssets` (see `locks.rs`'s module doc for the full
+// derivation). Called from every site that can move `TotalAssets` via
+// vesting — `release_vested_yield` is itself called from `deposit`,
+// `withdraw`, `report_yield`, `unlock_position`, and `break_lock`, so this
+// one call site covers all of them rather than needing to be duplicated
+// at each.
+//
+// A no-op when there are no open locks (the common case for a vault with
+// no locked depositors) or when the vault-wide open-lock count exceeds
+// `MAX_TOTAL_OPEN_LOCKS` (defensive; `deposit_locked` itself enforces the
+// cap, so this should be unreachable, but never panics a yield release
+// over a lock-side invariant breaking).
 fn settle_locked_boost(env: &Env, total_assets: i128, total_supply: i128, yield_amount: i128) {
     let total_locked_shares = get_total_locked_shares(env);
     if total_locked_shares <= 0 || yield_amount <= 0 {
@@ -1663,21 +1664,21 @@ fn settle_locked_boost(env: &Env, total_assets: i128, total_supply: i128, yield_
     );
 }
 
-/// Starts a new vesting stream for `amount`, folding in whatever portion of
-/// a still-active previous stream has not yet vested (its `total -
-/// released`, after `release_vested_yield` has already moved the vested
-/// portion out). Folding the remainder in — rather than either discarding it
-/// or leaving two streams running — means a manager who reports yield
-/// frequently cannot reset an in-flight stream to grief holders who were
-/// about to receive it, and cannot accidentally double-pay by starting a
-/// second concurrent stream either.
-///
-/// `amount` may be negative (an impairment): it is applied to `TotalAssets`
-/// immediately rather than vested, mirroring the pre-vesting behaviour for
-/// losses — there is no sniping concern to guard against for a loss (nobody
-/// benefits from front-running a markdown), and vesting a loss would leave
-/// share price overstated for longer than necessary, working against
-/// depositors rather than protecting them.
+// Starts a new vesting stream for `amount`, folding in whatever portion of
+// a still-active previous stream has not yet vested (its `total -
+// released`, after `release_vested_yield` has already moved the vested
+// portion out). Folding the remainder in — rather than either discarding it
+// or leaving two streams running — means a manager who reports yield
+// frequently cannot reset an in-flight stream to grief holders who were
+// about to receive it, and cannot accidentally double-pay by starting a
+// second concurrent stream either.
+//
+// `amount` may be negative (an impairment): it is applied to `TotalAssets`
+// immediately rather than vested, mirroring the pre-vesting behaviour for
+// losses — there is no sniping concern to guard against for a loss (nobody
+// benefits from front-running a markdown), and vesting a loss would leave
+// share price overstated for longer than necessary, working against
+// depositors rather than protecting them.
 fn start_or_extend_yield_stream(env: &Env, amount: i128) {
     if amount < 0 {
         let total_assets = get_total_assets(env);
@@ -1754,9 +1755,9 @@ fn set_lock_break_penalty_bps(env: &Env, bps: u32) {
         .set(&DataKey::LockBreakPenaltyBps, &bps);
 }
 
-/// Persistent storage: a user's locks live for as long as the user keeps
-/// touching the vault, TTL-bumped on every read and write (issue #802's
-/// explicit requirement) so an open lock is never archived mid-term.
+// Persistent storage: a user's locks live for as long as the user keeps
+// touching the vault, TTL-bumped on every read and write (issue #802's
+// explicit requirement) so an open lock is never archived mid-term.
 const LOCK_TTL_THRESHOLD: u32 = 1_000;
 const LOCK_TTL_EXTEND_TO: u32 = 10_000;
 
@@ -1824,9 +1825,9 @@ fn set_total_locked_shares(env: &Env, amount: i128) {
         .set(&DataKey::TotalLockedShares, &amount);
 }
 
-/// Sum of `shares` across `user`'s own open locks. Bounded by
-/// `MAX_OPEN_LOCKS_PER_USER`, so — unlike a vault-wide iteration — this is
-/// always a small, safe loop over one user's own data.
+// Sum of `shares` across `user`'s own open locks. Bounded by
+// `MAX_OPEN_LOCKS_PER_USER`, so — unlike a vault-wide iteration — this is
+// always a small, safe loop over one user's own data.
 fn user_locked_shares_total(env: &Env, user: &Address) -> i128 {
     let mut total: i128 = 0;
     for lock in get_user_locks(env, user).iter() {
@@ -1837,9 +1838,9 @@ fn user_locked_shares_total(env: &Env, user: &Address) -> i128 {
     total
 }
 
-/// Finds `lock_id` in `user_locks` (a small, per-user list bounded by
-/// `MAX_OPEN_LOCKS_PER_USER`), returning its index and a clone of the
-/// position.
+// Finds `lock_id` in `user_locks` (a small, per-user list bounded by
+// `MAX_OPEN_LOCKS_PER_USER`), returning its index and a clone of the
+// position.
 fn find_lock(
     user_locks: &Vec<locks::LockedPosition>,
     lock_id: u64,
@@ -1853,11 +1854,11 @@ fn find_lock(
     Err(ContractError::TimelockNotFound)
 }
 
-/// Removes the lock at `index` from `user_locks` (persisting the updated
-/// list) and decrements every vault-wide running total it contributed to.
-/// Shared by `unlock_position` (moves shares to flexible, no burn) and
-/// `break_lock` (shares already burned by the caller) — both need the same
-/// bookkeeping cleanup, just with a different reason for the lock closing.
+// Removes the lock at `index` from `user_locks` (persisting the updated
+// list) and decrements every vault-wide running total it contributed to.
+// Shared by `unlock_position` (moves shares to flexible, no burn) and
+// `break_lock` (shares already burned by the caller) — both need the same
+// bookkeeping cleanup, just with a different reason for the lock closing.
 fn remove_lock_and_update_totals(
     env: &Env,
     user: &Address,
@@ -1915,8 +1916,8 @@ fn set_open_lock_owners(env: &Env, owners: &Vec<Address>) {
         .set(&DataKey::OpenLockOwners, owners);
 }
 
-/// Adds `user` to the vault-wide open-lock-owners index if not already
-/// present. Called whenever a user's open-lock count goes from 0 to 1.
+// Adds `user` to the vault-wide open-lock-owners index if not already
+// present. Called whenever a user's open-lock count goes from 0 to 1.
 fn add_open_lock_owner(env: &Env, user: &Address) {
     let mut owners = get_open_lock_owners(env);
     for owner in owners.iter() {
@@ -1928,8 +1929,8 @@ fn add_open_lock_owner(env: &Env, user: &Address) {
     set_open_lock_owners(env, &owners);
 }
 
-/// Removes `user` from the vault-wide open-lock-owners index if their open
-/// lock list is now empty. Called after any lock closes.
+// Removes `user` from the vault-wide open-lock-owners index if their open
+// lock list is now empty. Called after any lock closes.
 fn remove_open_lock_owner_if_empty(env: &Env, user: &Address) {
     if !get_user_locks(env, user).is_empty() {
         return;
@@ -1944,10 +1945,10 @@ fn remove_open_lock_owner_if_empty(env: &Env, user: &Address) {
     set_open_lock_owners(env, &updated);
 }
 
-/// Every currently open lock, vault-wide, across every owner — walks
-/// `OpenLockOwners` (bounded by `MAX_TOTAL_OPEN_LOCKS` since that many
-/// distinct owners is itself bounded by that many total locks) and reads
-/// each owner's own small, per-user list.
+// Every currently open lock, vault-wide, across every owner — walks
+// `OpenLockOwners` (bounded by `MAX_TOTAL_OPEN_LOCKS` since that many
+// distinct owners is itself bounded by that many total locks) and reads
+// each owner's own small, per-user list.
 fn get_all_open_locks(env: &Env) -> Vec<locks::LockedPosition> {
     let mut all = Vec::new(env);
     for owner in get_open_lock_owners(env).iter() {
@@ -1991,9 +1992,9 @@ fn get_min_harvest_interval(env: &Env) -> u64 {
         .unwrap_or(DEFAULT_MIN_HARVEST_INTERVAL)
 }
 
-/// Fee adjustments are gated to Admin or the narrower [`Role::FeeManager`]
-/// (issue #820) — an operational key can be granted just this role instead
-/// of full Admin.
+// Fee adjustments are gated to Admin or the narrower [`Role::FeeManager`]
+// (issue #820) — an operational key can be granted just this role instead
+// of full Admin.
 fn require_admin_or_fee_manager(env: &Env, caller: &Address) {
     if !AccessControl::has_role(env, caller, Role::Admin)
         && !AccessControl::has_role(env, caller, Role::FeeManager)
@@ -2016,11 +2017,11 @@ fn get_effective_deposit_time(env: &Env, user: &Address) -> u64 {
     vault_deposit_time.max(vt_deposit_time)
 }
 
-/// Fire-and-forget hook into the referral contract (issue #818), if one is
-/// configured. The referral contract independently re-checks eligibility
-/// (minimum deposit size and tenure) before crediting anything — the vault
-/// only supplies the facts it already tracks (principal, first-deposit time)
-/// and the fee slice; it never decides eligibility itself.
+// Fire-and-forget hook into the referral contract (issue #818), if one is
+// configured. The referral contract independently re-checks eligibility
+// (minimum deposit size and tenure) before crediting anything — the vault
+// only supplies the facts it already tracks (principal, first-deposit time)
+// and the fee slice; it never decides eligibility itself.
 fn notify_referral_of_fee(env: &Env, user: &Address, performance_fee: i128, principal: i128) {
     if performance_fee <= 0 {
         return;
@@ -2036,16 +2037,16 @@ fn notify_referral_of_fee(env: &Env, user: &Address, performance_fee: i128, prin
     }
 }
 
-/// Withdrawal-velocity trip condition (issue #817). Historically this
-/// function paused the whole vault the instant the rolling window crossed
-/// `threshold_bps`. It now feeds the staged [`breaker`] severity machine
-/// instead: a velocity breach escalates to [`Severity::Throttled`] (vault
-/// stays open, limits tighten) rather than an immediate hard stop, and the
-/// withdrawal that triggered it still completes — only *subsequent*
-/// deposits/withdrawals are affected by the new severity. This still uses
-/// the legacy [`CircuitBreakerConfig`]/`set_circuit_breaker_config` knobs so
-/// existing integrations keep working; the anti-griefing margin lives in
-/// [`BreakerConfig::margin_bps`].
+// Withdrawal-velocity trip condition (issue #817). Historically this
+// function paused the whole vault the instant the rolling window crossed
+// `threshold_bps`. It now feeds the staged [`breaker`] severity machine
+// instead: a velocity breach escalates to [`Severity::Throttled`] (vault
+// stays open, limits tighten) rather than an immediate hard stop, and the
+// withdrawal that triggered it still completes — only *subsequent*
+// deposits/withdrawals are affected by the new severity. This still uses
+// the legacy [`CircuitBreakerConfig`]/`set_circuit_breaker_config` knobs so
+// existing integrations keep working; the anti-griefing margin lives in
+// [`BreakerConfig::margin_bps`].
 fn check_circuit_breaker(env: &Env, amount: i128) {
     let config: CircuitBreakerConfig = env
         .storage()
@@ -2105,11 +2106,11 @@ fn get_max_rebalance_value_bps(env: &Env) -> u32 {
         .unwrap_or(DEFAULT_MAX_REBALANCE_VALUE_BPS)
 }
 
-/// Recomputes the rebalance plan the contract would produce right now:
-/// fetches current allocations, asks the allocation strategy for deltas, and
-/// builds a fresh, slippage-safe leg plan. Used by both `plan_rebalance`
-/// (as-is, for previewing) and `execute_rebalance` (to check the submitted
-/// plan hasn't gone stale).
+// Recomputes the rebalance plan the contract would produce right now:
+// fetches current allocations, asks the allocation strategy for deltas, and
+// builds a fresh, slippage-safe leg plan. Used by both `plan_rebalance`
+// (as-is, for previewing) and `execute_rebalance` (to check the submitted
+// plan hasn't gone stale).
 fn compute_fresh_rebalance_plan(env: &Env) -> (Vec<RebalanceLeg>, i128, i128) {
     let total_assets = get_total_assets(env) - get_accrued_fees(env);
     let strategy = get_allocation_strategy(env);
@@ -2189,12 +2190,12 @@ fn get_penalty_distribution_cooldown(env: &Env) -> u64 {
         .unwrap_or(DEFAULT_PENALTY_DISTRIBUTION_COOLDOWN)
 }
 
-/// Route a penalty into the escrow and emit `penalty_charged`. The amount is
-/// value that stays inside the vault's real token balance without being
-/// reflected in `TotalAssets` (mirroring how the fee is already excluded
-/// from the amount transferred back to the exiting user) — `distribute_penalties`
-/// later either folds the depositor slice back into `TotalAssets` (raising
-/// share price) or transfers the treasury slice out.
+// Route a penalty into the escrow and emit `penalty_charged`. The amount is
+// value that stays inside the vault's real token balance without being
+// reflected in `TotalAssets` (mirroring how the fee is already excluded
+// from the amount transferred back to the exiting user) — `distribute_penalties`
+// later either folds the depositor slice back into `TotalAssets` (raising
+// share price) or transfers the treasury slice out.
 fn charge_penalty(
     env: &Env,
     user: &Address,
@@ -2233,16 +2234,16 @@ pub struct VaultContract;
 
 #[contractimpl]
 impl VaultContract {
-    /// Initialise the vault, setting `admin` as the sole Admin.
-    ///
-    /// # Token immutability
-    /// `token_address` and `vault_token_address` are written once here and
-    /// never updated again.  No admin function exists to change either address
-    /// after initialization.  This guarantees that withdrawals always redeem
-    /// the same token that was deposited, preventing an admin key compromise
-    /// from swapping the token to steal deposited funds.  Any future need to
-    /// migrate tokens must go through a governance-approved upgrade with a
-    /// timelock so depositors can exit before the change takes effect.
+    // Initialise the vault, setting `admin` as the sole Admin.
+    //
+    // # Token immutability
+    // `token_address` and `vault_token_address` are written once here and
+    // never updated again.  No admin function exists to change either address
+    // after initialization.  This guarantees that withdrawals always redeem
+    // the same token that was deposited, preventing an admin key compromise
+    // from swapping the token to steal deposited funds.  Any future need to
+    // migrate tokens must go through a governance-approved upgrade with a
+    // timelock so depositors can exit before the change takes effect.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -2328,11 +2329,43 @@ impl VaultContract {
         );
     }
 
-    /// Enable or disable the mainnet deposit allowlist gate.
-    ///
-    /// The gate is disabled by default for backwards compatibility. When it is
-    /// enabled, only addresses explicitly added with
-    /// [`Self::set_deposit_allowlisted`] may deposit.
+    // Cap on total vault assets. Unlike `set_max_deposit`, which bounds one
+    // deposit, this bounds total exposure, so repeated deposits cannot get
+    // past it. Lowering it below current assets only blocks new deposits;
+    // withdrawals are unaffected.
+    pub fn set_tvl_cap(env: Env, caller: Address, amount: i128) {
+        caller.require_auth();
+        AccessControl::require_role(&env, &caller, Role::Admin);
+        if amount <= 0 {
+            panic_with_error!(&env, ContractError::ConfigOutOfRange);
+        }
+        let old_value = Self::get_tvl_cap(env.clone());
+        env.storage().instance().set(&DataKey::TvlCap, &amount);
+        emit_event(
+            &env,
+            VAULT,
+            CAP_CHG,
+            caller,
+            CapChangedEventData {
+                field: symbol_short!("TVL_CAP"),
+                old_value,
+                new_value: amount,
+            },
+        );
+    }
+
+    pub fn get_tvl_cap(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TvlCap)
+            .unwrap_or(i128::MAX)
+    }
+
+    // Enable or disable the mainnet deposit allowlist gate.
+    //
+    // The gate is disabled by default for backwards compatibility. When it is
+    // enabled, only addresses explicitly added with
+    // [`Self::set_deposit_allowlisted`] may deposit.
     pub fn set_deposit_allowlist_enabled(env: Env, caller: Address, enabled: bool) {
         require_initialized(&env);
         caller.require_auth();
@@ -2342,7 +2375,7 @@ impl VaultContract {
             .set(&DataKey::DepositAllowlistEnabled, &enabled);
     }
 
-    /// Add or remove one depositor from the controlled-rollout allowlist.
+    // Add or remove one depositor from the controlled-rollout allowlist.
     pub fn set_deposit_allowlisted(env: Env, caller: Address, depositor: Address, allowed: bool) {
         require_initialized(&env);
         caller.require_auth();
@@ -2352,7 +2385,7 @@ impl VaultContract {
             .set(&DataKey::DepositAllowlisted(depositor), &allowed);
     }
 
-    /// Returns whether the controlled-rollout deposit gate is enabled.
+    // Returns whether the controlled-rollout deposit gate is enabled.
     pub fn deposit_allowlist_enabled(env: Env) -> bool {
         env.storage()
             .instance()
@@ -2360,7 +2393,7 @@ impl VaultContract {
             .unwrap_or(false)
     }
 
-    /// Returns whether `depositor` is currently admitted by the allowlist.
+    // Returns whether `depositor` is currently admitted by the allowlist.
     pub fn is_deposit_allowlisted(env: Env, depositor: Address) -> bool {
         env.storage()
             .persistent()
@@ -2412,9 +2445,9 @@ impl VaultContract {
             .set(&DataKey::RebalanceThreshold, &bps);
     }
 
-    /// Configure this vault's rebalance slippage tolerance, in basis points
-    /// (default 50 = 0.5%). Admin/owner only. Capped at
-    /// [`MAX_REBALANCE_SLIPPAGE_BPS`]. Issue #638.
+    // Configure this vault's rebalance slippage tolerance, in basis points
+    // (default 50 = 0.5%). Admin/owner only. Capped at
+    // [`MAX_REBALANCE_SLIPPAGE_BPS`]. Issue #638.
     pub fn set_rebalance_slippage(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -2426,7 +2459,7 @@ impl VaultContract {
             .set(&DataKey::RebalanceSlippageBps, &bps);
     }
 
-    /// Current rebalance slippage tolerance in bps (defaults to 50).
+    // Current rebalance slippage tolerance in bps (defaults to 50).
     pub fn get_rebalance_slippage(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -2491,12 +2524,12 @@ impl VaultContract {
         );
     }
 
-    /// Admin: replace one of the three tiered fee schedules (issue #813).
-    /// Validated for: bounded tier count, strictly ascending thresholds,
-    /// every rate at or below the relevant compile-time ceiling, and — the
-    /// grandfathering rule — no point on the new curve exceeding the old
-    /// curve by more than `fees::MAX_SCHEDULE_RATE_INCREASE_BPS`, so an
-    /// admin cannot retroactively spike an existing depositor's rate.
+    // Admin: replace one of the three tiered fee schedules (issue #813).
+    // Validated for: bounded tier count, strictly ascending thresholds,
+    // every rate at or below the relevant compile-time ceiling, and — the
+    // grandfathering rule — no point on the new curve exceeding the old
+    // curve by more than `fees::MAX_SCHEDULE_RATE_INCREASE_BPS`, so an
+    // admin cannot retroactively spike an existing depositor's rate.
     pub fn set_fee_tiers(env: Env, caller: Address, kind: FeeTierKind, tiers: Vec<VaultFeeTier>) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -2539,9 +2572,9 @@ impl VaultContract {
         }
     }
 
-    /// A user's current tenure, the exit/performance rates that apply to
-    /// them right now, and the next tier boundary — lets the frontend show
-    /// "wait N more days and your exit fee drops to X%".
+    // A user's current tenure, the exit/performance rates that apply to
+    // them right now, and the next tier boundary — lets the frontend show
+    // "wait N more days and your exit fee drops to X%".
     pub fn fee_schedule_preview(env: Env, user: Address) -> FeeSchedulePreview {
         require_initialized(&env);
         let config = get_fee_config(&env);
@@ -2607,8 +2640,8 @@ impl VaultContract {
         Ok(())
     }
 
-    /// Bind this vault to an AllocationStrategy contract whose targets drive
-    /// rebalancing. Must be called by Admin before `rebalance` will succeed.
+    // Bind this vault to an AllocationStrategy contract whose targets drive
+    // rebalancing. Must be called by Admin before `rebalance` will succeed.
     pub fn set_allocation_strategy(env: Env, caller: Address, strategy: Address) {
         require_initialized(&env);
         caller.require_auth();
@@ -2636,17 +2669,17 @@ impl VaultContract {
         get_allocation_strategy(&env)
     }
 
-    /// Bind this vault to the YieldRegistry so `rebalance` can resolve each
-    /// source's adapter and report adapter failures. Admin only.
-    ///
-    /// Optional: with no registry configured the vault falls back to pure
-    /// bookkeeping (pre-adapter behaviour) rather than refusing to rebalance.
-    ///
-    /// **Deployment requirement:** grant this vault the `Operator` role on the
-    /// registry (`registry.grant_role(admin, vault, Operator)`). The vault
-    /// reports the adapter failures it observes during rebalance, and without
-    /// that role those reports are rejected and silently dropped — sources
-    /// would then never reach `Degraded`.
+    // Bind this vault to the YieldRegistry so `rebalance` can resolve each
+    // source's adapter and report adapter failures. Admin only.
+    //
+    // Optional: with no registry configured the vault falls back to pure
+    // bookkeeping (pre-adapter behaviour) rather than refusing to rebalance.
+    //
+    // **Deployment requirement:** grant this vault the `Operator` role on the
+    // registry (`registry.grant_role(admin, vault, Operator)`). The vault
+    // reports the adapter failures it observes during rebalance, and without
+    // that role those reports are rejected and silently dropped — sources
+    // would then never reach `Degraded`.
     pub fn set_yield_registry(env: Env, caller: Address, registry: Address) {
         require_initialized(&env);
         caller.require_auth();
@@ -2656,12 +2689,12 @@ impl VaultContract {
             .set(&DataKey::YieldRegistry, &registry);
     }
 
-    /// Return the configured YieldRegistry, if any.
+    // Return the configured YieldRegistry, if any.
     pub fn get_yield_registry(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::YieldRegistry)
     }
 
-    /// Amount currently booked against a single yield source.
+    // Amount currently booked against a single yield source.
     pub fn get_source_allocation(env: Env, source_id: Symbol) -> i128 {
         get_source_allocation(&env, &source_id)
     }
@@ -2674,8 +2707,8 @@ impl VaultContract {
             .set(&DataKey::RebalanceCooldown, &seconds);
     }
 
-    /// Set the minimum seconds between two `harvest` calls by the same user.
-    /// Admin only; capped at [`MAX_HARVEST_INTERVAL`]. Zero disables the limit.
+    // Set the minimum seconds between two `harvest` calls by the same user.
+    // Admin only; capped at [`MAX_HARVEST_INTERVAL`]. Zero disables the limit.
     pub fn set_min_harvest_interval(env: Env, caller: Address, seconds: u64) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -2709,10 +2742,10 @@ impl VaultContract {
     // Admin operations
     // -----------------------------------------------------------------------
 
-    /// Pause all vault operations. Requires [`Role::Admin`] or
-    /// [`Role::Guardian`] — the Guardian asymmetry (issue #820): a Guardian
-    /// can always make the vault safer, so pausing is open to it, but
-    /// [`Self::unpause`] deliberately is not.
+    // Pause all vault operations. Requires [`Role::Admin`] or
+    // [`Role::Guardian`] — the Guardian asymmetry (issue #820): a Guardian
+    // can always make the vault safer, so pausing is open to it, but
+    // [`Self::unpause`] deliberately is not.
     pub fn pause(env: Env, caller: Address) {
         require_initialized(&env);
         caller.require_auth();
@@ -2735,7 +2768,7 @@ impl VaultContract {
         );
     }
 
-    /// Resume vault operations. Requires [`Role::Admin`].
+    // Resume vault operations. Requires [`Role::Admin`].
     pub fn unpause(env: Env, caller: Address) {
         require_initialized(&env);
         caller.require_auth();
@@ -2774,15 +2807,15 @@ impl VaultContract {
     // Circuit breaker (issue #817)
     // -----------------------------------------------------------------------
 
-    /// Full trip status: current severity, the last firing condition and its
-    /// observed value/threshold, and the earliest timestamp the next
-    /// recovery step is permitted.
+    // Full trip status: current severity, the last firing condition and its
+    // observed value/threshold, and the earliest timestamp the next
+    // recovery step is permitted.
     pub fn get_breaker_status(env: Env) -> BreakerStatus {
         breaker::status(&env)
     }
 
-    /// Configure the automatic trip conditions. Admin only — a Guardian must
-    /// never be able to loosen the very thresholds that constrain it.
+    // Configure the automatic trip conditions. Admin only — a Guardian must
+    // never be able to loosen the very thresholds that constrain it.
     pub fn set_breaker_config(env: Env, caller: Address, config: BreakerConfig) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -2793,8 +2826,8 @@ impl VaultContract {
         breaker::get_config(&env)
     }
 
-    /// Guardian (or Admin) manual escalation: block new deposits while
-    /// leaving withdrawals open. This can only make the vault safer.
+    // Guardian (or Admin) manual escalation: block new deposits while
+    // leaving withdrawals open. This can only make the vault safer.
     pub fn guardian_halt_deposits(env: Env, caller: Address) {
         require_initialized(&env);
         caller.require_auth();
@@ -2806,10 +2839,10 @@ impl VaultContract {
         breaker::guardian_escalate(&env, Severity::DepositsHalted);
     }
 
-    /// Guardian (or Admin) manual escalation to `FullHalt`: blocks
-    /// everything except the emergency withdrawal queue. Still only ever
-    /// makes the vault safer — reversing it requires [`Self::recover_next_stage`],
-    /// which Guardian cannot call.
+    // Guardian (or Admin) manual escalation to `FullHalt`: blocks
+    // everything except the emergency withdrawal queue. Still only ever
+    // makes the vault safer — reversing it requires [`Self::recover_next_stage`],
+    // which Guardian cannot call.
     pub fn guardian_trip_breaker(env: Env, caller: Address) {
         require_initialized(&env);
         caller.require_auth();
@@ -2821,10 +2854,10 @@ impl VaultContract {
         breaker::guardian_escalate(&env, Severity::FullHalt);
     }
 
-    /// Move severity exactly one stage down (never skips a stage), enforcing
-    /// the recovery cooldown. Requires Admin or Upgrader — deliberately
-    /// excludes Guardian, so reversing a Guardian action always requires a
-    /// higher role.
+    // Move severity exactly one stage down (never skips a stage), enforcing
+    // the recovery cooldown. Requires Admin or Upgrader — deliberately
+    // excludes Guardian, so reversing a Guardian action always requires a
+    // higher role.
     pub fn recover_next_stage(env: Env, caller: Address) -> Severity {
         require_initialized(&env);
         caller.require_auth();
@@ -2836,9 +2869,9 @@ impl VaultContract {
         breaker::recover_next_stage(&env, &caller)
     }
 
-    /// Record a yield-source adapter failure against the source-failure trip
-    /// condition. Callable by Admin, Operator, or RebalanceKeeper — whichever
-    /// integration observes the adapter fault.
+    // Record a yield-source adapter failure against the source-failure trip
+    // condition. Callable by Admin, Operator, or RebalanceKeeper — whichever
+    // integration observes the adapter fault.
     pub fn record_source_failure(env: Env, caller: Address) {
         caller.require_auth();
         if !AccessControl::has_role(&env, &caller, Role::Admin)
@@ -2860,10 +2893,10 @@ impl VaultContract {
     // Referral integration (issue #818)
     // -----------------------------------------------------------------------
 
-    /// Bind a referral contract that receives an `accrue_reward` call after
-    /// every harvest that collects a performance fee. Admin only. Also
-    /// registers the referral contract in the callee allowlist so the
-    /// cross-contract call is permitted.
+    // Bind a referral contract that receives an `accrue_reward` call after
+    // every harvest that collects a performance fee. Admin only. Also
+    // registers the referral contract in the callee allowlist so the
+    // cross-contract call is permitted.
     pub fn set_referral_contract(env: Env, caller: Address, referral: Address) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -2944,19 +2977,19 @@ impl VaultContract {
         }
     }
 
-    /// Claim the pending yield accumulated for `user` by previous `report_yield`
-    /// calls (where the caller was `user`).
-    ///
-    /// Steps (issue #518):
-    ///  1. Calculate accrued yield since last harvest.
-    ///  2. Deduct performance fee — only on net positive yield, never on impairment.
-    ///  3. Burn fee-equivalent shares from `user` and send that value to the
-    ///     treasury, preserving the exchange rate for every other holder.
-    ///  4. Leave the net yield compounded in `user`'s remaining shares.
-    ///  5. Update `LastHarvestAt` timestamp for `user`.
-    ///
-    /// Returns a zero-filled `HarvestResult` with `compounded: false` when the
-    /// user has no pending yield, so callers can always call this safely.
+    // Claim the pending yield accumulated for `user` by previous `report_yield`
+    // calls (where the caller was `user`).
+    //
+    // Steps (issue #518):
+    //  1. Calculate accrued yield since last harvest.
+    //  2. Deduct performance fee — only on net positive yield, never on impairment.
+    //  3. Burn fee-equivalent shares from `user` and send that value to the
+    //     treasury, preserving the exchange rate for every other holder.
+    //  4. Leave the net yield compounded in `user`'s remaining shares.
+    //  5. Update `LastHarvestAt` timestamp for `user`.
+    //
+    // Returns a zero-filled `HarvestResult` with `compounded: false` when the
+    // user has no pending yield, so callers can always call this safely.
     pub fn harvest(env: Env, user: Address) -> HarvestResult {
         with_reentrancy_guard(env, |env| Self::harvest_internal(env, user))
     }
@@ -2973,9 +3006,7 @@ impl VaultContract {
         // 50-variant cap.
         let now = env.ledger().timestamp();
         let last_harvest = get_last_harvest_at(&env, &user);
-        if last_harvest != 0
-            && now < last_harvest.saturating_add(get_min_harvest_interval(&env))
-        {
+        if last_harvest != 0 && now < last_harvest.saturating_add(get_min_harvest_interval(&env)) {
             panic_with_error!(&env, ContractError::TimelockNotReady);
         }
 
@@ -3115,9 +3146,9 @@ impl VaultContract {
     // iteration -- the constraint that motivated an aggregate entrypoint in the
     // first place.
 
-    /// Read-only check: does the live allocation drift exceed the strategy's
-    /// `rebalance_threshold_bps`? Returns false when no strategy is set or the
-    /// vault has no assets yet.
+    // Read-only check: does the live allocation drift exceed the strategy's
+    // `rebalance_threshold_bps`? Returns false when no strategy is set or the
+    // vault has no assets yet.
     pub fn check_rebalance_needed(env: Env) -> bool {
         if !env.storage().instance().has(&DataKey::AllocationStrategy) {
             return false;
@@ -3141,17 +3172,17 @@ impl VaultContract {
         !in_spec
     }
 
-    /// Per-source amounts currently deployed across yield sources.
+    // Per-source amounts currently deployed across yield sources.
     pub fn get_current_allocations(env: Env) -> Vec<CurrentAllocationView> {
         require_initialized(&env);
         current_allocations_vec(&env)
     }
 
-    /// Move funds between yield sources to match strategy targets.
-    ///
-    /// Bookkeeping-only in this contract: actual on-chain transfers to
-    /// yield-source adapters are appended once those adapters land. The
-    /// rebalance is atomic — either every delta applies or the call panics.
+    // Move funds between yield sources to match strategy targets.
+    //
+    // Bookkeeping-only in this contract: actual on-chain transfers to
+    // yield-source adapters are appended once those adapters land. The
+    // rebalance is atomic — either every delta applies or the call panics.
     pub fn rebalance(env: Env, caller: Address) -> Vec<AllocationDeltaView> {
         with_reentrancy_guard(env, |env| Self::rebalance_internal(env, caller))
     }
@@ -3331,11 +3362,11 @@ impl VaultContract {
     // Slippage-safe multi-hop rebalance: plan/execute split (issue #810)
     // -----------------------------------------------------------------------
 
-    /// Pure read: the rebalance plan the contract would execute right now,
-    /// with every leg's `min_out` already computed, plus the exact
-    /// `plan_hash` `execute_rebalance` expects for it. Callable by anyone —
-    /// a caller previews with this, then passes the returned `legs` and
-    /// `plan_hash` straight through to `execute_rebalance` unmodified.
+    // Pure read: the rebalance plan the contract would execute right now,
+    // with every leg's `min_out` already computed, plus the exact
+    // `plan_hash` `execute_rebalance` expects for it. Callable by anyone —
+    // a caller previews with this, then passes the returned `legs` and
+    // `plan_hash` straight through to `execute_rebalance` unmodified.
     pub fn plan_rebalance(env: Env) -> RebalancePlan {
         require_initialized(&env);
         let (plan, _total_moved, _total_assets) = compute_fresh_rebalance_plan(&env);
@@ -3346,16 +3377,16 @@ impl VaultContract {
         }
     }
 
-    /// Executes a previously planned rebalance. `plan_hash` must equal the
-    /// checksum of `legs` (integrity — the caller can't submit legs that
-    /// don't match what they committed to), and `legs` must match a
-    /// freshly recomputed plan within [`rebalance::PLAN_STALENESS_TOLERANCE_BPS`]
-    /// (freshness — rejects a plan built against prices that have since
-    /// moved too far, reverting with `PlanStale`). Every leg's `min_out` is
-    /// enforced individually: one under-delivering leg reverts the entire
-    /// call, so a manipulated leg can never hide inside an aggregate
-    /// tolerance. The total value moved is capped at
-    /// `max_rebalance_value_bps` of vault assets.
+    // Executes a previously planned rebalance. `plan_hash` must equal the
+    // checksum of `legs` (integrity — the caller can't submit legs that
+    // don't match what they committed to), and `legs` must match a
+    // freshly recomputed plan within [`rebalance::PLAN_STALENESS_TOLERANCE_BPS`]
+    // (freshness — rejects a plan built against prices that have since
+    // moved too far, reverting with `PlanStale`). Every leg's `min_out` is
+    // enforced individually: one under-delivering leg reverts the entire
+    // call, so a manipulated leg can never hide inside an aggregate
+    // tolerance. The total value moved is capped at
+    // `max_rebalance_value_bps` of vault assets.
     pub fn execute_rebalance(
         env: Env,
         caller: Address,
@@ -3500,10 +3531,10 @@ impl VaultContract {
         applied
     }
 
-    /// Admin: tighten the per-leg slippage ceiling. Bounded by the
-    /// compile-time [`rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING`] — stored
-    /// configuration can only ever be equal to or stricter than that
-    /// ceiling, never looser.
+    // Admin: tighten the per-leg slippage ceiling. Bounded by the
+    // compile-time [`rebalance::MAX_LEG_SLIPPAGE_BPS_CEILING`] — stored
+    // configuration can only ever be equal to or stricter than that
+    // ceiling, never looser.
     pub fn set_max_leg_slippage_bps(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -3519,8 +3550,8 @@ impl VaultContract {
         get_max_leg_slippage_bps(&env)
     }
 
-    /// Admin: cap the fraction of vault assets a single `execute_rebalance`
-    /// call may move.
+    // Admin: cap the fraction of vault assets a single `execute_rebalance`
+    // call may move.
     pub fn set_max_rebalance_value_bps(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -3536,24 +3567,24 @@ impl VaultContract {
         get_max_rebalance_value_bps(&env)
     }
 
-    /// Compute the `plan_hash` `execute_rebalance` expects for an arbitrary
-    /// `legs` vector. `plan_rebalance` already returns this for the current
-    /// live plan; this exists for callers constructing or inspecting a plan
-    /// independently (e.g. off-chain tooling, tests).
+    // Compute the `plan_hash` `execute_rebalance` expects for an arbitrary
+    // `legs` vector. `plan_rebalance` already returns this for the current
+    // live plan; this exists for callers constructing or inspecting a plan
+    // independently (e.g. off-chain tooling, tests).
     pub fn compute_plan_checksum(_env: Env, legs: Vec<RebalanceLeg>) -> u64 {
         rebalance::checksum(&legs)
     }
 
-    /// Operator hook used by deposit/yield-routing flows to record that a
-    /// known amount has been deployed to a specific yield source. Keeps the
-    /// vault's per-source bookkeeping in sync with off-chain settlement.
-    ///
-    /// Returns `true` when the allocation was recorded and `false` when the
-    /// source was skipped because it is not `Active` (paused, degraded,
-    /// deprecated) or its registry lookup failed. Skipping is silent-by-return
-    /// rather than a panic so a caller recording several sources in sequence
-    /// is not aborted by one unhealthy source — the same blast-radius rule
-    /// `rebalance` follows.
+    // Operator hook used by deposit/yield-routing flows to record that a
+    // known amount has been deployed to a specific yield source. Keeps the
+    // vault's per-source bookkeeping in sync with off-chain settlement.
+    //
+    // Returns `true` when the allocation was recorded and `false` when the
+    // source was skipped because it is not `Active` (paused, degraded,
+    // deprecated) or its registry lookup failed. Skipping is silent-by-return
+    // rather than a panic so a caller recording several sources in sequence
+    // is not aborted by one unhealthy source — the same blast-radius rule
+    // `rebalance` follows.
     pub fn record_source_allocation(
         env: Env,
         caller: Address,
@@ -3666,14 +3697,14 @@ impl VaultContract {
     // Early-exit penalty escrow distribution (issue #805)
     // -----------------------------------------------------------------------
 
-    /// Permissionlessly split the accumulated penalty escrow between
-    /// remaining depositors and the treasury by `depositor_share_bps`.
-    /// Gated by a minimum amount (anti-spam) and a cooldown (rate limit),
-    /// mirroring the existing rebalance cooldown pattern. Atomic: if the
-    /// treasury transfer fails, the whole call reverts and the escrow is
-    /// left untouched (Soroban aborts all state changes from this
-    /// invocation on panic, so there is no way to zero the escrow without
-    /// the transfer having already succeeded).
+    // Permissionlessly split the accumulated penalty escrow between
+    // remaining depositors and the treasury by `depositor_share_bps`.
+    // Gated by a minimum amount (anti-spam) and a cooldown (rate limit),
+    // mirroring the existing rebalance cooldown pattern. Atomic: if the
+    // treasury transfer fails, the whole call reverts and the escrow is
+    // left untouched (Soroban aborts all state changes from this
+    // invocation on panic, so there is no way to zero the escrow without
+    // the transfer having already succeeded).
     pub fn distribute_penalties(env: Env, _caller: Address) -> PenaltyDistributedEventData {
         with_reentrancy_guard(env, Self::distribute_penalties_internal)
     }
@@ -3773,12 +3804,12 @@ impl VaultContract {
         }
     }
 
-    /// Admin: set the depositor slice of every future penalty distribution.
-    /// The treasury's slice (`10_000 - depositor_share_bps`) is hard-capped
-    /// at the compile-time [`nester_common::MAX_TREASURY_SHARE_BPS`], so
-    /// `depositor_share_bps` must be at least `10_000 -
-    /// MAX_TREASURY_SHARE_BPS` — no admin configuration can send more than
-    /// that ceiling to the treasury.
+    // Admin: set the depositor slice of every future penalty distribution.
+    // The treasury's slice (`10_000 - depositor_share_bps`) is hard-capped
+    // at the compile-time [`nester_common::MAX_TREASURY_SHARE_BPS`], so
+    // `depositor_share_bps` must be at least `10_000 -
+    // MAX_TREASURY_SHARE_BPS` — no admin configuration can send more than
+    // that ceiling to the treasury.
     pub fn set_depositor_share_bps(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -3810,7 +3841,7 @@ impl VaultContract {
             .set(&DataKey::PenaltyDistributionCooldown, &seconds);
     }
 
-    /// Deposit funds into the vault.
+    // Deposit funds into the vault.
     pub fn deposit(env: Env, user: Address, amount: i128, min_shares_out: i128) -> i128 {
         with_reentrancy_guard(env, |env| {
             Self::deposit_internal(env, user, amount, min_shares_out)
@@ -3831,6 +3862,14 @@ impl VaultContract {
             .get(&DataKey::MaxDeposit)
             .unwrap_or(0);
         if amount > max_deposit {
+            panic_with_error!(&env, ContractError::ExceedsLimit);
+        }
+
+        let tvl_cap = Self::get_tvl_cap(env.clone());
+        if get_total_assets(&env)
+            .checked_add(amount)
+            .is_none_or(|total| total > tvl_cap)
+        {
             panic_with_error!(&env, ContractError::ExceedsLimit);
         }
 
@@ -3936,11 +3975,11 @@ impl VaultContract {
         new_user_shares
     }
 
-    /// Drains the legacy asset-amount queue used by [`Self::emergency_withdraw`]'s
-    /// insufficient-liquidity fallback. Distinct from the fair, share-based
-    /// queue added in issue #814 (see [`Self::process_emergency_queue`]);
-    /// kept as-is since `emergency_withdraw` is a separate, simpler
-    /// paused-only exit path with its own tests.
+    // Drains the legacy asset-amount queue used by [`Self::emergency_withdraw`]'s
+    // insufficient-liquidity fallback. Distinct from the fair, share-based
+    // queue added in issue #814 (see [`Self::process_emergency_queue`]);
+    // kept as-is since `emergency_withdraw` is a separate, simpler
+    // paused-only exit path with its own tests.
     pub fn drain_legacy_emergency_queue(env: Env) {
         with_reentrancy_guard(env, Self::process_emergency_queue_internal)
     }
@@ -3998,7 +4037,7 @@ impl VaultContract {
         set_emergency_queue(&env, &new_queue);
     }
 
-    /// Withdraw funds from the vault.
+    // Withdraw funds from the vault.
     pub fn withdraw(env: Env, user: Address, shares: i128, min_assets_out: i128) -> i128 {
         with_reentrancy_guard(env, |env| {
             Self::withdraw_internal(env, user, shares, min_assets_out)
@@ -4163,15 +4202,15 @@ impl VaultContract {
     // Time-locked savings vault (issue #802)
     // -----------------------------------------------------------------------
 
-    /// Deposit `amount` for a fixed `lock_duration_secs`, in exchange for a
-    /// yield boost proportional to that term. `lock_duration_secs` must
-    /// match one of the admin-configured tiers exactly (`get_lock_tiers`).
-    ///
-    /// Reuses `deposit_internal`'s share-minting math (so share price stays
-    /// a single global quantity — no separate accounting fork for locked
-    /// vs. flexible deposits), then immediately records the minted shares
-    /// as a new locked position instead of leaving them in the user's
-    /// flexible balance.
+    // Deposit `amount` for a fixed `lock_duration_secs`, in exchange for a
+    // yield boost proportional to that term. `lock_duration_secs` must
+    // match one of the admin-configured tiers exactly (`get_lock_tiers`).
+    //
+    // Reuses `deposit_internal`'s share-minting math (so share price stays
+    // a single global quantity — no separate accounting fork for locked
+    // vs. flexible deposits), then immediately records the minted shares
+    // as a new locked position instead of leaving them in the user's
+    // flexible balance.
     pub fn deposit_locked(
         env: Env,
         user: Address,
@@ -4266,11 +4305,11 @@ impl VaultContract {
         Ok(lock_id)
     }
 
-    /// Claims a matured lock: moves its shares into the caller's flexible
-    /// balance. Explicit rather than automatic on `unlock_at` passing —
-    /// `withdraw` never has to iterate a user's lock list to discover
-    /// newly-matured entries, keeping it cheap regardless of how many
-    /// locks a user has ever opened.
+    // Claims a matured lock: moves its shares into the caller's flexible
+    // balance. Explicit rather than automatic on `unlock_at` passing —
+    // `withdraw` never has to iterate a user's lock list to discover
+    // newly-matured entries, keeping it cheap regardless of how many
+    // locks a user has ever opened.
     pub fn unlock_position(env: Env, user: Address, lock_id: u64) -> Result<i128, ContractError> {
         with_reentrancy_guard(env, |env| {
             Self::unlock_position_internal(env, user, lock_id)
@@ -4310,15 +4349,15 @@ impl VaultContract {
         Ok(position.shares)
     }
 
-    /// Breaks a lock before maturity: burns its shares and returns their
-    /// underlying value minus a penalty that decays linearly from the
-    /// configured full rate at creation to zero at maturity. The penalty
-    /// is routed through the same escrow/distribution mechanism as the
-    /// existing early-withdrawal penalty (`charge_penalty`,
-    /// `distribute_penalties` — issue #805), not burned outright: it stays
-    /// inside the vault, lifting share price for every remaining
-    /// depositor, with an admin-configured slice instead routable to the
-    /// treasury.
+    // Breaks a lock before maturity: burns its shares and returns their
+    // underlying value minus a penalty that decays linearly from the
+    // configured full rate at creation to zero at maturity. The penalty
+    // is routed through the same escrow/distribution mechanism as the
+    // existing early-withdrawal penalty (`charge_penalty`,
+    // `distribute_penalties` — issue #805), not burned outright: it stays
+    // inside the vault, lifting share price for every remaining
+    // depositor, with an admin-configured slice instead routable to the
+    // treasury.
     pub fn break_lock(env: Env, user: Address, lock_id: u64) -> Result<i128, ContractError> {
         with_reentrancy_guard(env, |env| Self::break_lock_internal(env, user, lock_id))
     }
@@ -4412,10 +4451,10 @@ impl VaultContract {
         Ok(return_amount)
     }
 
-    /// Every open locked position for `user`, plus their total locked
-    /// share count. `get_shares` continues to return the total (flexible +
-    /// locked) so existing integrations do not break; this is the
-    /// breakdown.
+    // Every open locked position for `user`, plus their total locked
+    // share count. `get_shares` continues to return the total (flexible +
+    // locked) so existing integrations do not break; this is the
+    // breakdown.
     pub fn get_locked_positions(env: Env, user: Address) -> locks::LockedPositionsView {
         let positions = get_user_locks(&env, &user);
         let mut total_locked_shares: i128 = 0;
@@ -4489,7 +4528,7 @@ impl VaultContract {
         })
     }
 
-    /// Direct withdrawal bypassing normal logic, only available when paused.
+    // Direct withdrawal bypassing normal logic, only available when paused.
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, ContractError> {
         with_reentrancy_guard(env, |env| Self::emergency_withdraw_internal(env, user))
     }
@@ -4610,20 +4649,20 @@ impl VaultContract {
         }
     }
 
-    /// Emergency exit from **all** active yield-source positions in a single
-    /// transaction.
-    ///
-    /// Iterates every source that currently holds a live allocation, pulls the
-    /// deployed funds back into the vault's liquid reserves, and emits an
-    /// `EmergencyWithdraw` event per position carrying the amount and protocol.
-    /// Inactive positions (zero allocation) are skipped.
-    ///
-    /// Partial success is allowed: if unwinding a position fails it is recorded
-    /// in `failed` and iteration continues, so one bad position cannot block the
-    /// rest from exiting. The returned [`EmergencyWithdrawAllResult`] lists both
-    /// the succeeded and failed withdrawals.
-    ///
-    /// Authorization: callable only by the position owner (`user`).
+    // Emergency exit from **all** active yield-source positions in a single
+    // transaction.
+    //
+    // Iterates every source that currently holds a live allocation, pulls the
+    // deployed funds back into the vault's liquid reserves, and emits an
+    // `EmergencyWithdraw` event per position carrying the amount and protocol.
+    // Inactive positions (zero allocation) are skipped.
+    //
+    // Partial success is allowed: if unwinding a position fails it is recorded
+    // in `failed` and iteration continues, so one bad position cannot block the
+    // rest from exiting. The returned [`EmergencyWithdrawAllResult`] lists both
+    // the succeeded and failed withdrawals.
+    //
+    // Authorization: callable only by the position owner (`user`).
     pub fn emergency_withdraw_all(env: Env, user: Address) -> EmergencyWithdrawAllResult {
         with_reentrancy_guard(env, |env| Self::emergency_withdraw_all_internal(env, user))
     }
@@ -4686,9 +4725,9 @@ impl VaultContract {
     // Fair-ordering emergency withdrawal queue (issue #814)
     // -----------------------------------------------------------------------
 
-    /// Queue a fair, FIFO-ordered emergency withdrawal for `shares`. Calling
-    /// this again while a request is already open extends it rather than
-    /// creating a second queue position (see [`queue::request`]).
+    // Queue a fair, FIFO-ordered emergency withdrawal for `shares`. Calling
+    // this again while a request is already open extends it rather than
+    // creating a second queue position (see [`queue::request`]).
     pub fn request_emergency_withdrawal(env: Env, user: Address, shares: i128) -> QueueEntry {
         require_initialized(&env);
         user.require_auth();
@@ -4711,9 +4750,9 @@ impl VaultContract {
         entry
     }
 
-    /// Cancel `user`'s open emergency-queue request. Any unfilled shares were
-    /// never burned, so they are already sitting in the user's balance —
-    /// this call is bookkeeping only, no asset transfer.
+    // Cancel `user`'s open emergency-queue request. Any unfilled shares were
+    // never burned, so they are already sitting in the user's balance —
+    // this call is bookkeeping only, no asset transfer.
     pub fn cancel_emergency_request(env: Env, user: Address) -> i128 {
         require_initialized(&env);
         user.require_auth();
@@ -4736,10 +4775,10 @@ impl VaultContract {
         shares_returned
     }
 
-    /// Permissionlessly drive the fair emergency queue forward. Anyone may
-    /// call this — exits do not depend on operator liveness. `max_entries`
-    /// is capped by [`queue::MAX_PROCESS_ENTRIES`] regardless of the value
-    /// requested, so a single call can never exceed the tx resource budget.
+    // Permissionlessly drive the fair emergency queue forward. Anyone may
+    // call this — exits do not depend on operator liveness. `max_entries`
+    // is capped by [`queue::MAX_PROCESS_ENTRIES`] regardless of the value
+    // requested, so a single call can never exceed the tx resource budget.
     pub fn process_emergency_queue(env: Env, caller: Address, max_entries: u32) -> u32 {
         with_reentrancy_guard(env, |env| {
             Self::process_fair_queue_internal(env, caller, max_entries)
@@ -4807,22 +4846,22 @@ impl VaultContract {
         processed
     }
 
-    /// Caller's position in the fair emergency queue: sequence number,
-    /// entries/shares strictly ahead, and how much of their own request has
-    /// already been filled. Bounded-cost — see [`queue::MAX_POSITION_SCAN`].
+    // Caller's position in the fair emergency queue: sequence number,
+    // entries/shares strictly ahead, and how much of their own request has
+    // already been filled. Bounded-cost — see [`queue::MAX_POSITION_SCAN`].
     pub fn get_queue_position(env: Env, user: Address) -> QueuePosition {
         queue::position(&env, &user)
     }
 
-    /// O(1) aggregate queue stats backed by running counters, not iteration.
+    // O(1) aggregate queue stats backed by running counters, not iteration.
     pub fn get_queue_stats(env: Env) -> QueueStats {
         let available_liquidity = get_vault_liquid_reserves(&env);
         queue::stats(&env, available_liquidity)
     }
 
-    /// Admin: configure the per-entry fill cap (bps of a round's available
-    /// liquidity) that any single queue entry may absorb per
-    /// `process_emergency_queue` call. Bounded to (0, 10_000].
+    // Admin: configure the per-entry fill cap (bps of a round's available
+    // liquidity) that any single queue entry may absorb per
+    // `process_emergency_queue` call. Bounded to (0, 10_000].
     pub fn set_max_fill_share_bps(env: Env, caller: Address, bps: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -4859,18 +4898,18 @@ impl VaultContract {
         .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
-    /// Returns the **gross**, pre-fee asset value of `shares` (the raw
-    /// share-price conversion, like an EIP-4626 `previewRedeem` of the
-    /// underlying price).
-    ///
-    /// ⚠️ Do **not** pass this value straight through as `min_assets_out` to
-    /// [`VaultContract::withdraw`]. A fee-bearing withdrawal deducts a
-    /// performance fee (on realized yield) and/or an early-withdrawal fee, so
-    /// the amount actually transferred is *less* than this gross figure and the
-    /// call reverts with `ContractError::SlippageExceeded` (see #448). For a
-    /// slippage-safe floor that reflects the fees deducted on withdrawal, use
-    /// [`VaultContract::preview_withdraw_net`] or
-    /// [`VaultContract::withdrawal_fee_preview`].
+    // Returns the **gross**, pre-fee asset value of `shares` (the raw
+    // share-price conversion, like an EIP-4626 `previewRedeem` of the
+    // underlying price).
+    //
+    // ⚠️ Do **not** pass this value straight through as `min_assets_out` to
+    // [`VaultContract::withdraw`]. A fee-bearing withdrawal deducts a
+    // performance fee (on realized yield) and/or an early-withdrawal fee, so
+    // the amount actually transferred is *less* than this gross figure and the
+    // call reverts with `ContractError::SlippageExceeded` (see #448). For a
+    // slippage-safe floor that reflects the fees deducted on withdrawal, use
+    // [`VaultContract::preview_withdraw_net`] or
+    // [`VaultContract::withdrawal_fee_preview`].
     pub fn preview_withdraw(env: Env, shares: i128) -> i128 {
         require_initialized(&env);
         if shares <= 0 {
@@ -4884,8 +4923,8 @@ impl VaultContract {
         .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
-    /// Convert assets to shares at the current exchange rate. Since this is the
-    /// amount the caller would receive, a non-zero remainder rounds down.
+    // Convert assets to shares at the current exchange rate. Since this is the
+    // amount the caller would receive, a non-zero remainder rounds down.
     pub fn convert_to_shares(env: Env, assets: i128) -> i128 {
         require_initialized(&env);
         conversion::assets_to_shares_down(
@@ -4896,8 +4935,8 @@ impl VaultContract {
         .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
-    /// Convert shares to assets at the current exchange rate. Since this is the
-    /// amount the caller would receive, a non-zero remainder rounds down.
+    // Convert shares to assets at the current exchange rate. Since this is the
+    // amount the caller would receive, a non-zero remainder rounds down.
     pub fn convert_to_assets(env: Env, shares: i128) -> i128 {
         require_initialized(&env);
         conversion::shares_to_assets_down(
@@ -4908,14 +4947,14 @@ impl VaultContract {
         .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
-    /// Total underlying assets currently backing outstanding shares.
+    // Total underlying assets currently backing outstanding shares.
     pub fn total_assets(env: Env) -> i128 {
         require_initialized(&env);
         get_net_total_assets(&env)
     }
 
-    /// Maximum assets accepted by one deposit. Returns zero rather than
-    /// reverting when deposits are unavailable.
+    // Maximum assets accepted by one deposit. Returns zero rather than
+    // reverting when deposits are unavailable.
     pub fn max_deposit(env: Env, _user: Address) -> i128 {
         if !env.storage().instance().has(&DataKey::Token) || is_paused(&env) {
             return 0;
@@ -4936,12 +4975,12 @@ impl VaultContract {
         cap
     }
 
-    /// Maximum gross assets currently withdrawable by `user`.
+    // Maximum gross assets currently withdrawable by `user`.
     pub fn max_withdraw(env: Env, user: Address) -> i128 {
         max_withdrawable_assets(&env, &user)
     }
 
-    /// Maximum shares currently redeemable by `user`.
+    // Maximum shares currently redeemable by `user`.
     pub fn max_redeem(env: Env, user: Address) -> i128 {
         let max_assets = max_withdrawable_assets(&env, &user);
         if max_assets == 0 {
@@ -4957,13 +4996,13 @@ impl VaultContract {
         .min(balance)
     }
 
-    /// Returns the amount the caller actually receives after all fees —
-    /// safe to use directly as `min_assets_out` in [`VaultContract::withdraw`].
-    ///
-    /// Worst-case scenario: assumes the entire gross amount is yield (maximum
-    /// performance fee) and that the lock period is still active (early-withdrawal
-    /// fee applies). Callers that know the user's cost basis or lock status can
-    /// use [`VaultContract::withdrawal_fee_preview`] for a tighter estimate.
+    // Returns the amount the caller actually receives after all fees —
+    // safe to use directly as `min_assets_out` in [`VaultContract::withdraw`].
+    //
+    // Worst-case scenario: assumes the entire gross amount is yield (maximum
+    // performance fee) and that the lock period is still active (early-withdrawal
+    // fee applies). Callers that know the user's cost basis or lock status can
+    // use [`VaultContract::withdrawal_fee_preview`] for a tighter estimate.
     pub fn preview_withdraw_net(env: Env, shares: i128) -> i128 {
         require_initialized(&env);
         if shares <= 0 {
@@ -5060,11 +5099,11 @@ impl VaultContract {
         gross.saturating_sub(accrued_fees)
     }
 
-    /// Amount of a reported yield still vesting and not yet reflected in
-    /// share price (issue #803) — a pure read, does not release anything.
-    /// Distinct from [`Self::pending_yield`], which reports the vault's
-    /// distributable token-balance surplus, not the vesting stream's
-    /// remaining, not-yet-landed amount.
+    // Amount of a reported yield still vesting and not yet reflected in
+    // share price (issue #803) — a pure read, does not release anything.
+    // Distinct from [`Self::pending_yield`], which reports the vault's
+    // distributable token-balance surplus, not the vesting stream's
+    // remaining, not-yet-landed amount.
     pub fn pending_vesting_yield(env: Env) -> i128 {
         require_initialized(&env);
         match get_yield_stream(&env) {
@@ -5073,19 +5112,19 @@ impl VaultContract {
         }
     }
 
-    /// Returns the vesting window new `report_yield` calls use to spread a
-    /// positive amount into `TotalAssets`. Does not affect a stream already
-    /// in progress.
+    // Returns the vesting window new `report_yield` calls use to spread a
+    // positive amount into `TotalAssets`. Does not affect a stream already
+    // in progress.
     pub fn get_yield_vesting_period(env: Env) -> u64 {
         require_initialized(&env);
         get_yield_vesting_period(&env)
     }
 
-    /// Admin-only: reconfigure the vesting window future `report_yield`
-    /// calls use. Clamped to `[MIN_YIELD_VESTING_SECONDS,
-    /// MAX_YIELD_VESTING_SECONDS]` — a window that is too short reintroduces
-    /// the sniping hole this feature exists to close; one with no ceiling
-    /// could indefinitely delay legitimate yield from ever landing.
+    // Admin-only: reconfigure the vesting window future `report_yield`
+    // calls use. Clamped to `[MIN_YIELD_VESTING_SECONDS,
+    // MAX_YIELD_VESTING_SECONDS]` — a window that is too short reintroduces
+    // the sniping hole this feature exists to close; one with no ceiling
+    // could indefinitely delay legitimate yield from ever landing.
     pub fn set_yield_vesting_period(env: Env, caller: Address, seconds: u64) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
@@ -5212,9 +5251,9 @@ impl VaultContract {
     // Upgradeability & Schema Migration
     // -----------------------------------------------------------------------
 
-    /// Proposes a new WASM upgrade for the vault.
-    ///
-    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_VAULT (48 hours).
+    // Proposes a new WASM upgrade for the vault.
+    //
+    // Requires Upgrader role and enforces MIN_UPGRADE_DELAY_VAULT (48 hours).
     pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>, eta: u64) {
         AccessControl::require_role(&env, &admin, Role::Upgrader);
         nester_common::Upgrade::propose_upgrade(
@@ -5226,32 +5265,32 @@ impl VaultContract {
         );
     }
 
-    /// Cancels a pending WASM upgrade for the vault.
-    ///
-    /// Requires Upgrader role.
+    // Cancels a pending WASM upgrade for the vault.
+    //
+    // Requires Upgrader role.
     pub fn cancel_upgrade(env: Env, admin: Address) {
         AccessControl::require_role(&env, &admin, Role::Upgrader);
         nester_common::Upgrade::cancel_upgrade(&env, &admin);
     }
 
-    /// Executes a matured WASM upgrade for the vault.
-    ///
-    /// Execution is permissionless after maturity.
+    // Executes a matured WASM upgrade for the vault.
+    //
+    // Execution is permissionless after maturity.
     pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
         nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
     }
 
-    /// Retrieves pending upgrade details if present.
+    // Retrieves pending upgrade details if present.
     pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
         nester_common::Upgrade::get_pending_upgrade(&env)
     }
 
-    /// Returns current contract schema version.
+    // Returns current contract schema version.
     pub fn get_schema_version(env: Env) -> u32 {
         nester_common::Upgrade::get_schema_version(&env)
     }
 
-    /// Bumps schema version if needed (idempotent).
+    // Bumps schema version if needed (idempotent).
     pub fn migrate(env: Env) -> u32 {
         let current = nester_common::Upgrade::get_schema_version(&env);
         let target = 1u32;

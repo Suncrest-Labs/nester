@@ -24,6 +24,17 @@ to be recorded against.
 | `/v1/` API contract is frozen with a stated versioning policy | #458 (Trident) | | `docs/API_STABILITY.md` (Trident repo) reviewed and published | |
 | Full pre-launch verification checklist executed | #459 (Trident) | | `docs/LAUNCH_CHECKLIST.md` (Trident repo), all rows Pass | |
 | Rollback rehearsed end-to-end with wall-clock time recorded | #460 (Trident) | | `docs/ROLLBACK_RUNBOOK.md` (Trident repo) rehearsal section completed | |
+| Every contract fits mainnet's 131072-byte size limit after optimization | mainnet plan blocker 1 | | `bash packages/contracts/scripts/check-wasm-size.sh` exits 0 on a fresh optimized build (vault is currently 150037 bytes: FAILS) | |
+| External contract audit complete; no open Critical/High findings | SC-14 | | Report linked from `SECURITY.md`; mainnet deploy uses the audited commit hash | |
+| Mainnet contracts deployed from the audited commit and verifiable against source | mainnet plan T2 | | `deployed-mainnet.env` commit hash matches the audit; `packages/contracts/scripts/VERIFY.md` against the mainnet ids | |
+| Contract admin held by the multisig, not the deployer, on every contract | mainnet plan T3 | | `accept_admin` run for all six; treasury `has_role` and a `--send=no` admin call from the deployer (see `docs/mainnet-smoke-test.md` step 0) | |
+| Vault deposit cap, TVL cap and allowlist set before the first user deposit | mainnet plan T5 | | `get_max_deposit`, `get_tvl_cap` are finite; `deposit_allowlist_enabled` is true | |
+| API refuses to start on a mismatched network or an unset mainnet TVL cap | mainnet plan T7 | | `go test ./internal/config` passes; staging start with a bad value exits non-zero | |
+| Indexer tracked a full day on mainnet RPC with no gap and no duplicate events | mainnet plan T8 | | 24h staging soak; `processed_events` duplicate check; no `CursorBehindRetentionError` in logs | |
+| Mainnet signer and JWT keys generated in the secret manager and rotation rehearsed | mainnet plan T9 | | `cmd/rotate_keys` rehearsal on staging with elapsed time recorded | |
+| Pause drill: deposits and withdrawals halt independently and the dapp explains it | mainnet plan T11/T13 | | `docs/mainnet-smoke-test.md` step 4 | |
+| Manual mainnet smoke test passed with real funds | mainnet plan T12 | | `docs/mainnet-smoke-test.md`, all steps pass; transaction hashes recorded | |
+| Pentest re-run against mainnet config with no open High/Critical | #1118 | | Findings filed as `security` issues and closed; `docs/security/pentest-report-v1.md` updated | |
 
 ## No-go criteria
 

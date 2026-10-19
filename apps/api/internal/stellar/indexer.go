@@ -789,6 +789,9 @@ func fetchSorobanEvents(
 		return nil, 0, err
 	}
 	if rpcResp.Error != nil {
+		if gap := retentionGapFromRPCError(rpcResp.Error.Message, startLedger); gap != nil {
+			return nil, 0, gap
+		}
 		return nil, 0, fmt.Errorf("rpc error: %s", rpcResp.Error.Message)
 	}
 

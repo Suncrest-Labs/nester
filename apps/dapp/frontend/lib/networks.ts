@@ -37,7 +37,10 @@ export const NETWORKS: Record<string, NetworkConfig> = {
   mainnet: {
     id: 'mainnet',
     name: 'Mainnet',
-    rpcUrl: 'https://soroban-rpc.mainnet.stellar.org',
+    // SDF does not run a public mainnet Soroban RPC (the host this used to
+    // name does not resolve). Production deployments should set their own
+    // provider; the default is a public third-party node for development.
+    rpcUrl: process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://mainnet.sorobanrpc.com',
     horizonUrl: 'https://horizon.stellar.org',
     networkPassphrase: 'Public Global Stellar Network ; September 2015',
     explorerUrl: 'https://stellarchain.io',

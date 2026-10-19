@@ -403,6 +403,18 @@ impl TreasuryContract {
     }
 
 
+    /// Propose a new admin (step 1 of 2). The current admin keeps the role
+    /// until the successor calls `accept_admin`.
+    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
+        AccessControl::transfer_admin(&env, &current_admin, &new_admin);
+    }
+
+    /// Accept a pending admin transfer (step 2). Caller must be the proposed
+    /// new admin; the previous admin is revoked atomically.
+    pub fn accept_admin(env: Env, new_admin: Address) {
+        AccessControl::accept_admin(&env, &new_admin);
+    }
+
     // -----------------------------------------------------------------------
     // Upgradeability & Schema Migration
     // -----------------------------------------------------------------------

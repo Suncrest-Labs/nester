@@ -32,18 +32,18 @@ const BRK_TRIP: Symbol = symbol_short!("BRK_TRIP");
 const BRK_RCVR: Symbol = symbol_short!("BRK_RCVR");
 const SEV_CHG: Symbol = symbol_short!("SEV_CHG");
 
-/// Graded vault severity. Ordering matters: `derive(Ord)` follows
-/// declaration order, so `Normal < Throttled < DepositsHalted < FullHalt`.
+// Graded vault severity. Ordering matters: `derive(Ord)` follows
+// declaration order, so `Normal < Throttled < DepositsHalted < FullHalt`.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Severity {
-    /// Unrestricted.
+    // Unrestricted.
     Normal,
-    /// Per-tx/per-window limits reduced; vault stays open.
+    // Per-tx/per-window limits reduced; vault stays open.
     Throttled,
-    /// New deposits blocked; withdrawals still work.
+    // New deposits blocked; withdrawals still work.
     DepositsHalted,
-    /// Everything blocked except the emergency withdrawal queue.
+    // Everything blocked except the emergency withdrawal queue.
     FullHalt,
 }
 
@@ -73,21 +73,21 @@ pub struct BreakerConfig {
     pub source_failure_enabled: bool,
     pub max_source_failures: u32,
 
-    /// Extra margin (bps) a condition must exceed its threshold by before
-    /// firing — the anti-griefing guard.
+    // Extra margin (bps) a condition must exceed its threshold by before
+    // firing — the anti-griefing guard.
     pub margin_bps: u32,
-    /// Minimum time between staged recovery steps.
+    // Minimum time between staged recovery steps.
     pub recovery_cooldown_seconds: u64,
 }
 
 impl BreakerConfig {
-    /// Conservative out-of-the-box defaults. Per issue #817, "a threshold
-    /// that is right for a mature large vault is wrong for a new small
-    /// one" — so the value-sensitive conditions (share-price move, yield
-    /// sanity) ship *disabled* until an operator tunes and enables them for
-    /// this specific vault's expected scale via [`crate::VaultContract::set_breaker_config`].
-    /// Withdrawal velocity stays enabled by default since it reuses the
-    /// vault's existing, already-configured [`crate::CircuitBreakerConfig`].
+    // Conservative out-of-the-box defaults. Per issue #817, "a threshold
+    // that is right for a mature large vault is wrong for a new small
+    // one" — so the value-sensitive conditions (share-price move, yield
+    // sanity) ship *disabled* until an operator tunes and enables them for
+    // this specific vault's expected scale via [`crate::VaultContract::set_breaker_config`].
+    // Withdrawal velocity stays enabled by default since it reuses the
+    // vault's existing, already-configured [`crate::CircuitBreakerConfig`].
     pub fn defaults() -> Self {
         BreakerConfig {
             price_move_enabled: false,
@@ -211,10 +211,10 @@ pub fn require_not_full_halt(env: &Env) {
 // Escalation
 // ---------------------------------------------------------------------------
 
-/// Escalate severity to at least `target` (never de-escalates). Always
-/// records the firing condition, even when the current severity is already
-/// at or above `target`, so `get_breaker_status` reflects the most recent
-/// signal.
+// Escalate severity to at least `target` (never de-escalates). Always
+// records the firing condition, even when the current severity is already
+// at or above `target`, so `get_breaker_status` reflects the most recent
+// signal.
 pub fn escalate(env: &Env, target: Severity, reason: TripReason, observed: i128, threshold: i128) {
     let current = severity(env);
     if target > current {
@@ -261,9 +261,9 @@ pub fn escalate(env: &Env, target: Severity, reason: TripReason, observed: i128,
 // Trip conditions
 // ---------------------------------------------------------------------------
 
-/// Share-price movement within the configured rolling window. Resets its
-/// baseline once the window elapses so it measures *rate* of movement, not
-/// lifetime drift.
+// Share-price movement within the configured rolling window. Resets its
+// baseline once the window elapses so it measures *rate* of movement, not
+// lifetime drift.
 pub fn check_share_price_move(env: &Env, current_price: i128) {
     let cfg = get_config(env);
     if !cfg.price_move_enabled || current_price <= 0 {
@@ -319,9 +319,9 @@ pub fn check_share_price_move(env: &Env, current_price: i128) {
     }
 }
 
-/// Returns `true` when `amount` is implausible relative to `total_assets`
-/// and must be rejected (not applied) rather than accepted. Also escalates
-/// severity when it fires.
+// Returns `true` when `amount` is implausible relative to `total_assets`
+// and must be rejected (not applied) rather than accepted. Also escalates
+// severity when it fires.
 pub fn check_yield_sanity(env: &Env, amount: i128, total_assets: i128) -> bool {
     let cfg = get_config(env);
     if !cfg.yield_sanity_enabled || amount <= 0 || total_assets <= 0 {
@@ -350,14 +350,14 @@ pub fn check_yield_sanity(env: &Env, amount: i128, total_assets: i128) -> bool {
     false
 }
 
-/// Withdrawal velocity measured over value (not transaction count) within a
-/// rolling window. `window_sum` is the cumulative withdrawal value already
-/// including the current withdrawal; `raw_threshold` is `total_assets *
-/// max_withdraw_velocity_bps / 10_000` computed by the caller (which already
-/// tracks the rolling window history for the legacy config API). Firing
-/// requires exceeding `raw_threshold` by `margin_bps` — a single small
-/// withdrawal cannot tip the vault into Throttled on its own unless the
-/// window is already near the limit.
+// Withdrawal velocity measured over value (not transaction count) within a
+// rolling window. `window_sum` is the cumulative withdrawal value already
+// including the current withdrawal; `raw_threshold` is `total_assets *
+// max_withdraw_velocity_bps / 10_000` computed by the caller (which already
+// tracks the rolling window history for the legacy config API). Firing
+// requires exceeding `raw_threshold` by `margin_bps` — a single small
+// withdrawal cannot tip the vault into Throttled on its own unless the
+// window is already near the limit.
 pub fn check_withdraw_velocity(env: &Env, window_sum: i128, raw_threshold: i128) {
     let cfg = get_config(env);
     if !cfg.withdraw_velocity_enabled || raw_threshold <= 0 {
@@ -380,8 +380,8 @@ pub fn check_withdraw_velocity(env: &Env, window_sum: i128, raw_threshold: i128)
     }
 }
 
-/// Records a yield-source adapter failure. Trips to `DepositsHalted` once
-/// consecutive failures cross the configured threshold.
+// Records a yield-source adapter failure. Trips to `DepositsHalted` once
+// consecutive failures cross the configured threshold.
 pub fn note_source_failure(env: &Env) {
     let cfg = get_config(env);
     if !cfg.source_failure_enabled {
@@ -422,10 +422,10 @@ pub fn guardian_escalate(env: &Env, target: Severity) {
     escalate(env, target, TripReason::GuardianManual, 0, 0);
 }
 
-/// Move severity exactly one stage down, enforcing the recovery cooldown and
-/// refusing to skip stages. The caller (the vault contract) is responsible
-/// for checking that the invoking address holds a role higher than Guardian
-/// — this function has no role awareness of its own.
+// Move severity exactly one stage down, enforcing the recovery cooldown and
+// refusing to skip stages. The caller (the vault contract) is responsible
+// for checking that the invoking address holds a role higher than Guardian
+// — this function has no role awareness of its own.
 pub fn recover_next_stage(env: &Env, authorised_by: &soroban_sdk::Address) -> Severity {
     let current = severity(env);
     if current == Severity::Normal {

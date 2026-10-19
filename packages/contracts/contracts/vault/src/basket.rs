@@ -1,22 +1,22 @@
 use nester_common::{AssetConfig, BasketValuation, ContractError, PriceInfo};
 use soroban_sdk::{panic_with_error, Address, Env, Vec};
 
-/// Maximum number of assets allowed in a multi-asset basket
+// Maximum number of assets allowed in a multi-asset basket
 pub const MAX_BASKET_SIZE: u32 = 10;
 
-/// Maximum price age in seconds (1 hour)
+// Maximum price age in seconds (1 hour)
 pub const MAX_PRICE_AGE_SECS: u64 = 3600;
 
-/// Maximum price deviation in basis points (10% = 1000 bps)
+// Maximum price deviation in basis points (10% = 1000 bps)
 pub const MAX_PRICE_DEVIATION_BPS: u32 = 1000;
 
-/// USDC has 7 decimals on Stellar
+// USDC has 7 decimals on Stellar
 pub const USDC_DECIMALS: u32 = 7;
 
-/// Target weights must sum to exactly 10,000 basis points
+// Target weights must sum to exactly 10,000 basis points
 pub const TARGET_WEIGHT_SUM_BPS: u32 = 10_000;
 
-/// Validates that asset configurations form a valid basket.
+// Validates that asset configurations form a valid basket.
 pub fn validate_basket_config(env: &Env, assets: &Vec<AssetConfig>) -> Result<(), ContractError> {
     // Check basket size limit
     if assets.len() > MAX_BASKET_SIZE {
@@ -50,8 +50,8 @@ pub fn validate_basket_config(env: &Env, assets: &Vec<AssetConfig>) -> Result<()
     Ok(())
 }
 
-/// Calculates the total value of a multi-asset basket.
-/// Returns the total value in USDC (7 decimals) and validation status.
+// Calculates the total value of a multi-asset basket.
+// Returns the total value in USDC (7 decimals) and validation status.
 pub fn calculate_basket_value(
     env: &Env,
     assets: &Vec<AssetConfig>,
@@ -106,7 +106,7 @@ pub fn calculate_basket_value(
     }
 }
 
-/// Checks if price deviation is within acceptable bounds.
+// Checks if price deviation is within acceptable bounds.
 pub fn validate_price_deviation(
     env: &Env,
     current_price: i128,
@@ -135,7 +135,7 @@ pub fn validate_price_deviation(
     Ok(())
 }
 
-/// Finds an asset in the basket by its token address.
+// Finds an asset in the basket by its token address.
 pub fn find_asset_index(assets: &Vec<AssetConfig>, token: &Address) -> Option<usize> {
     for (i, asset) in assets.iter().enumerate() {
         if &asset.token == token {
@@ -145,7 +145,7 @@ pub fn find_asset_index(assets: &Vec<AssetConfig>, token: &Address) -> Option<us
     None
 }
 
-/// Converts an amount from one asset's decimals to USDC decimals.
+// Converts an amount from one asset's decimals to USDC decimals.
 pub fn normalize_to_usdc_decimals(amount: i128, asset_decimals: u32) -> i128 {
     if asset_decimals == USDC_DECIMALS {
         return amount;

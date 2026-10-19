@@ -17,6 +17,8 @@ import { usePortfolio } from "@/components/portfolio-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { cn } from "@/lib/utils";
 import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { useMoneyPathStatus } from "@/hooks/useMoneyPathStatus";
+import { pauseMessage } from "@/lib/money-path";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { TransactionAnnouncer } from "@/components/vault/transactionAnnouncer";
 import type { Vault as VaultDefinition, MarketStrategy } from "@/lib/types/vault";
@@ -213,6 +215,7 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   const { address } = useWallet();
   const { getAvailableBalance, recordPendingDeposit, confirmPendingDeposit, failPendingDeposit, refreshBalances } = usePortfolio();
   const { isOffline } = useOfflineStatus();
+  const { deposit: depositPause } = useMoneyPathStatus();
 
   const [amountInput, setAmountInput] = useState("");
   const [state, setState] = useState<ActionState>("input");
@@ -258,7 +261,13 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
   }, [amount, balance, selectedAsset]);
 
   const canSubmit =
-    !!vault && !!address && amount > 0 && !validationError && state === "input" && !isOffline;
+    !!vault &&
+    !!address &&
+    amount > 0 &&
+    !validationError &&
+    state === "input" &&
+    !isOffline &&
+    !depositPause.paused;
 
   const effectiveApy = selectedStrategy ? selectedStrategy.apy / 100 : (meta ? meta.apy : 0);
   const estimatedYield = amount * effectiveApy;
@@ -629,6 +638,15 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
               <div className="flex items-start gap-2 text-sm text-destructive">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{errorMsg}</span>
+              </div>
+            </div>
+          )}
+
+          {depositPause.paused && state === "input" && (
+            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <div className="flex items-start gap-2 text-sm text-amber-700">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{pauseMessage("deposit", depositPause.reason)}</span>
               </div>
             </div>
           )}

@@ -823,3 +823,46 @@ fn test_available_fees_reflects_undistributed_balance() {
     vault_receive(&env, &vault, &client, 1_000);
     assert_eq!(client.get_available_fees(), 1_000);
 }
+// ---------------------------------------------------------------------------
+// Two-step admin transfer: the treasury holds protocol fees, so the deployer
+// key must be able to hand it to a multisig and lose access.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn admin_transfer_moves_treasury_control_to_successor() {
+    let (env, admin, _op, _vault, _token, client) = setup();
+    let successor = Address::generate(&env);
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    let c = Address::generate(&env);
+
+    client.transfer_admin(&admin, &successor);
+    client.accept_admin(&successor);
+
+    client.set_recipients(&successor, &three_recipients(&env, &a, &b, &c));
+    assert!(client
+        .try_set_recipients(&admin, &three_recipients(&env, &a, &b, &c))
+        .is_err());
+}
+
+#[test]
+fn accept_admin_rejects_wrong_successor() {
+    let (env, admin, _op, _vault, _token, client) = setup();
+    let successor = Address::generate(&env);
+    let outsider = Address::generate(&env);
+
+    client.transfer_admin(&admin, &successor);
+
+    assert!(client.try_accept_admin(&outsider).is_err());
+    client.accept_admin(&successor);
+}
+
+#[test]
+fn accept_admin_requires_successor_signature() {
+    let (env, admin, _op, _vault, _token, client) = setup();
+    let successor = Address::generate(&env);
+    client.transfer_admin(&admin, &successor);
+
+    env.mock_auths(&[]);
+    assert!(client.try_accept_admin(&successor).is_err());
+}

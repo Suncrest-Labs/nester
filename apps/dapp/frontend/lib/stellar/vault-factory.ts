@@ -8,7 +8,7 @@ import {
   Transaction,
 } from "@stellar/stellar-sdk";
 
-import { getCurrentNetwork } from "@/lib/stellar/transaction";
+import { getTransactionNetwork } from "@/lib/stellar/transaction";
 import type { WizardVaultData } from "@/lib/types/vault-wizard";
 
 // Deliberately re-use the signer's resolver rather than reading
@@ -81,7 +81,7 @@ export async function createVault(
 ): Promise<CreateVaultResult> {
   // Evaluate at runtime so tests can set environment variables
   const FACTORY_CONTRACT_ID = process.env.NEXT_PUBLIC_VAULT_FACTORY_CONTRACT_ID;
-  const NETWORK = getCurrentNetwork();
+  const NETWORK = getTransactionNetwork();
   const NETWORK_PASSPHRASE = NETWORK.networkPassphrase;
   const RPC_URL = process.env.NEXT_PUBLIC_STELLAR_RPC_URL || NETWORK.rpcUrl;
 

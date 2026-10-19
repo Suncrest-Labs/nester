@@ -18,28 +18,28 @@
 use nester_common::{fees::mul_div, ContractError};
 use soroban_sdk::{contracttype, panic_with_error, Address, Env, Vec};
 
-/// Dust floor: a request below this many shares cannot be queued, so the
-/// queue cannot be spammed with entries too small to be worth processing.
+// Dust floor: a request below this many shares cannot be queued, so the
+// queue cannot be spammed with entries too small to be worth processing.
 pub const MIN_QUEUE_REQUEST_SHARES: i128 = 1_000_000; // 0.1 share at 7 decimals
 
-/// Hard ceiling on `max_entries` for a single `process_emergency_queue` call,
-/// regardless of what the caller asks for. Bounds the call's resource cost
-/// independent of queue depth.
+// Hard ceiling on `max_entries` for a single `process_emergency_queue` call,
+// regardless of what the caller asks for. Bounds the call's resource cost
+// independent of queue depth.
 pub const MAX_PROCESS_ENTRIES: u32 = 50;
 
-/// Default per-entry fill cap: no single entry may absorb more than this
-/// share of a round's available liquidity, so entries behind a very large
-/// request still make progress in the same round instead of waiting for it
-/// to fully drain the vault's liquidity.
+// Default per-entry fill cap: no single entry may absorb more than this
+// share of a round's available liquidity, so entries behind a very large
+// request still make progress in the same round instead of waiting for it
+// to fully drain the vault's liquidity.
 pub const DEFAULT_MAX_FILL_SHARE_BPS: u32 = 5_000; // 50%
 
-/// Fill caps are configurable but bounded to (0, 10_000] bps.
+// Fill caps are configurable but bounded to (0, 10_000] bps.
 pub const MAX_FILL_SHARE_BPS_CEILING: u32 = 10_000;
 
-/// `get_queue_position` walks forward from `head` counting open entries
-/// ahead of the caller. This bounds that walk to the caller's own distance
-/// from the head — never the full queue — but caps it defensively so a
-/// pathologically long, un-processed queue can't make the read unbounded.
+// `get_queue_position` walks forward from `head` counting open entries
+// ahead of the caller. This bounds that walk to the caller's own distance
+// from the head — never the full queue — but caps it defensively so a
+// pathologically long, un-processed queue can't make the read unbounded.
 pub const MAX_POSITION_SCAN: u32 = 2_000;
 
 #[contracttype]
@@ -72,9 +72,9 @@ pub struct QueueStats {
     pub available_liquidity: i128,
 }
 
-/// One entry's planned fill for the current `process_emergency_queue` round.
-/// Produced by [`plan_fills`]; the caller executes the real burn/transfer and
-/// then commits the result via [`apply_fill`].
+// One entry's planned fill for the current `process_emergency_queue` round.
+// Produced by [`plan_fills`]; the caller executes the real burn/transfer and
+// then commits the result via [`apply_fill`].
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedFill {
@@ -192,12 +192,12 @@ pub fn set_max_fill_share_bps(env: &Env, bps: u32) {
         .set(&QueueDataKey::MaxFillShareBps, &bps);
 }
 
-/// Enqueue (or extend) a withdrawal request for `user`.
-///
-/// A user may hold at most one open queue position at a time. Calling this
-/// again while a position is open *extends* it — adds `additional_shares` to
-/// the outstanding request — rather than creating a second queue position,
-/// so a user cannot occupy the front of the line multiple times over.
+// Enqueue (or extend) a withdrawal request for `user`.
+//
+// A user may hold at most one open queue position at a time. Calling this
+// again while a position is open *extends* it — adds `additional_shares` to
+// the outstanding request — rather than creating a second queue position,
+// so a user cannot occupy the front of the line multiple times over.
 pub fn request(
     env: &Env,
     user: &Address,
@@ -230,10 +230,10 @@ pub fn request(
     }
 }
 
-/// Internal: always creates a brand-new queue position. Exposed at
-/// crate-visibility only so unit tests can exercise the `QueueEntryExists`
-/// guard directly — normal callers must go through [`request`], which
-/// extends rather than duplicates.
+// Internal: always creates a brand-new queue position. Exposed at
+// crate-visibility only so unit tests can exercise the `QueueEntryExists`
+// guard directly — normal callers must go through [`request`], which
+// extends rather than duplicates.
 pub(crate) fn create_new_entry(env: &Env, user: &Address, shares: i128) -> QueueEntry {
     if get_user_seq(env, user).is_some() {
         panic_with_error!(env, ContractError::QueueEntryExists);
@@ -261,13 +261,13 @@ pub(crate) fn create_new_entry(env: &Env, user: &Address, shares: i128) -> Queue
     entry
 }
 
-/// Cancel `user`'s open request (unfilled or partially filled). Because
-/// shares are only burned at fill time, any not-yet-filled portion was never
-/// removed from the user's balance — cancellation is pure bookkeeping and
-/// needs no asset transfer. Returns the (already-unburned) share amount that
-/// was outstanding, for the caller's event/logging purposes.
-///
-/// Does not touch any other entry's `seq`: this is an O(1) map removal.
+// Cancel `user`'s open request (unfilled or partially filled). Because
+// shares are only burned at fill time, any not-yet-filled portion was never
+// removed from the user's balance — cancellation is pure bookkeeping and
+// needs no asset transfer. Returns the (already-unburned) share amount that
+// was outstanding, for the caller's event/logging purposes.
+//
+// Does not touch any other entry's `seq`: this is an O(1) map removal.
 pub fn cancel(env: &Env, user: &Address) -> i128 {
     let seq = get_user_seq(env, user)
         .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInQueue));
@@ -290,10 +290,10 @@ pub fn cancel(env: &Env, user: &Address) -> i128 {
     outstanding
 }
 
-/// Move `head` forward over any seq whose entry no longer exists (already
-/// fully filled and removed, or cancelled), stopping at the first still-open
-/// entry or at `tail`. Amortized O(1): each seq is skipped at most once
-/// across the life of the queue.
+// Move `head` forward over any seq whose entry no longer exists (already
+// fully filled and removed, or cancelled), stopping at the first still-open
+// entry or at `tail`. Amortized O(1): each seq is skipped at most once
+// across the life of the queue.
 fn advance_head_past_gaps(env: &Env) {
     let tail = get_tail(env);
     let mut head = get_head(env);
@@ -303,24 +303,24 @@ fn advance_head_past_gaps(env: &Env) {
     set_head(env, head);
 }
 
-/// Plan how much liquidity to hand to each open entry this round, starting
-/// at `head` and touching at most `max_entries` *existing* entries.
-///
-/// `available_liquidity` is the total assets available to this round.
-/// `shares_to_assets` converts a share amount to its current asset value at
-/// today's share price (injected so this function stays free of any vault
-/// token contract dependency).
-///
-/// Per-entry fill is capped at `available_liquidity * max_fill_share_bps /
-/// 10_000` so one very large request cannot absorb an entire round's
-/// liquidity — smaller requests behind it still progress in the same call.
-/// This is a fairness refinement on top of strict seq ordering, not a
-/// replacement for it: the head entry is always considered, and always
-/// filled, before any entry behind it.
-///
-/// Pure with respect to storage: reads entries but does not mutate them.
-/// Callers must invoke [`apply_fill`] once the real asset transfer for each
-/// planned fill has succeeded.
+// Plan how much liquidity to hand to each open entry this round, starting
+// at `head` and touching at most `max_entries` *existing* entries.
+//
+// `available_liquidity` is the total assets available to this round.
+// `shares_to_assets` converts a share amount to its current asset value at
+// today's share price (injected so this function stays free of any vault
+// token contract dependency).
+//
+// Per-entry fill is capped at `available_liquidity * max_fill_share_bps /
+// 10_000` so one very large request cannot absorb an entire round's
+// liquidity — smaller requests behind it still progress in the same call.
+// This is a fairness refinement on top of strict seq ordering, not a
+// replacement for it: the head entry is always considered, and always
+// filled, before any entry behind it.
+//
+// Pure with respect to storage: reads entries but does not mutate them.
+// Callers must invoke [`apply_fill`] once the real asset transfer for each
+// planned fill has succeeded.
 pub fn plan_fills(
     env: &Env,
     max_entries: u32,
@@ -391,10 +391,10 @@ pub fn plan_fills(
     plan
 }
 
-/// Commit a [`PlannedFill`] after the caller has burned `fill_shares` worth
-/// of the user's vault-token balance and transferred the corresponding
-/// assets. Returns `true` if the entry is now fully filled (and has been
-/// removed from the queue).
+// Commit a [`PlannedFill`] after the caller has burned `fill_shares` worth
+// of the user's vault-token balance and transferred the corresponding
+// assets. Returns `true` if the entry is now fully filled (and has been
+// removed from the queue).
 pub fn apply_fill(env: &Env, seq: u64, fill_shares: i128) -> bool {
     let mut entry =
         get_entry(env, seq).unwrap_or_else(|| panic_with_error!(env, ContractError::NotInQueue));
@@ -421,8 +421,8 @@ pub fn apply_fill(env: &Env, seq: u64, fill_shares: i128) -> bool {
     fully_filled
 }
 
-/// `entries` and `shares` ahead of `user`, bounded to a scan of `user`'s own
-/// distance from `head` (never the full queue). See [`MAX_POSITION_SCAN`].
+// `entries` and `shares` ahead of `user`, bounded to a scan of `user`'s own
+// distance from `head` (never the full queue). See [`MAX_POSITION_SCAN`].
 pub fn position(env: &Env, user: &Address) -> QueuePosition {
     let seq = get_user_seq(env, user)
         .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInQueue));
@@ -471,12 +471,12 @@ mod tests {
         shares
     }
 
-    /// Storage access requires an active contract context. This module is
-    /// unit-tested "without the surrounding vault" in the sense that no
-    /// vault business logic runs — but Soroban's storage API still needs
-    /// *some* registered contract address to scope keys to, so tests
-    /// register the bare `VaultContract` shell and run inside
-    /// `env.as_contract` purely to get that storage context.
+    // Storage access requires an active contract context. This module is
+    // unit-tested "without the surrounding vault" in the sense that no
+    // vault business logic runs — but Soroban's storage API still needs
+    // *some* registered contract address to scope keys to, so tests
+    // register the bare `VaultContract` shell and run inside
+    // `env.as_contract` purely to get that storage context.
     fn setup() -> Env {
         Env::default()
     }

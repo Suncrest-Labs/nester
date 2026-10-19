@@ -226,6 +226,19 @@ empty`.
 The indexer disables itself at boot when `STELLAR_RPC_URL` is empty — a common
 misconfiguration after an environment change.
 
+### Cause D — Cursor older than the RPC retention window
+
+**Distinguishing evidence:** the log line `event indexer poll failed` with
+`indexer cursor ledger N is older than the RPC retention window (oldest
+available ledger M)`, repeating every poll, and lag climbing without bound.
+
+A public RPC only keeps recent ledgers. If the indexer was down longer than
+that window, the events between its cursor and the oldest retained ledger can
+no longer be polled. Retrying does not help, and the indexer deliberately does
+**not** jump its cursor forward: that would silently skip real deposits and
+withdrawals. Run `cmd/backfill` from ledger N (or point `STELLAR_RPC_URL` at an
+archive-backed RPC), then restart the API.
+
 ---
 
 # 2. Catch up

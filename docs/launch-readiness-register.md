@@ -1,7 +1,7 @@
 # Nester Launch Readiness Register
 
 **Authoritative artifact replacing stale PRD.md claims**  
-Last verified: 2026-08-27  
+Last verified: 2026-08-27 (SC-11, SC-12, DAPP-19..24 re-verified 2026-10-12; other rows not re-checked)  
 Issue: #1115
 
 ---
@@ -23,8 +23,8 @@ Status: Resolved | Open | Needs more info
 
 ## Quick Summary
 
-- **Resolved:** 92 claims verified with code/test/CI evidence
-- **Open:** 44 claims without evidence (backlog issues created)
+- **Resolved:** 100 claims verified with code/test/CI evidence (92 on 2026-08-27, +8 re-verified 2026-10-12)
+- **Open:** 36 claims without evidence (backlog issues created) (44 on 2026-08-27, -8)
 - **Needs more info:** 1 claim needing clarification
 - **Total:** 137 PRD claims
 
@@ -85,14 +85,14 @@ Status: Resolved | Open | Needs more info
 - **Notes:** Shared test utilities
 
 #### [SC-11] Impairment regression test
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Test location needs verification
+- **Status:** Resolved
+- **Evidence:** test: packages/contracts/contracts/vault/src/test.rs::test_impairment_produces_zero_performance_fee
+- **Notes:** Impairment yields zero performance fee (re-verified 2026-10-12)
 
 #### [SC-12] preview_withdraw function
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Requires preview_withdraw_net or documentation. Issue: docs/backlog/sc-preview-withdraw-net.md
+- **Status:** Resolved
+- **Evidence:** test: packages/contracts/contracts/vault/src/test.rs::preview_withdraw_net_le_preview_withdraw, file: packages/contracts/contracts/vault/src/lib.rs (preview_withdraw_net)
+- **Notes:** Net (post-fee) preview exists and is bounded by the gross preview (re-verified 2026-10-12)
 
 #### [SC-13] Cargo test WASM dependency
 - **Status:** Open
@@ -212,34 +212,34 @@ Status: Resolved | Open | Needs more info
 - **Notes:** Fully implemented (NOT a stub)
 
 #### [DAPP-19] Error boundaries
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Add global error boundaries. Issue: docs/backlog/dapp-error-boundaries.md
+- **Status:** Resolved
+- **Evidence:** file: apps/dapp/frontend/app/error.tsx, file: apps/dapp/frontend/app/global-error.tsx, test: apps/dapp/frontend/tests/error-boundaries.spec.ts
+- **Notes:** Route-level and global error boundaries (re-verified 2026-10-12)
 
 #### [DAPP-20] Offline handling
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Implement offline mode. Issue: docs/backlog/dapp-offline-handling.md
+- **Status:** Resolved
+- **Evidence:** file: apps/dapp/frontend/components/offline-banner.tsx, file: apps/dapp/frontend/hooks/useOfflineStatus.ts
+- **Notes:** Offline banner; deposit modal disables submit when offline (re-verified 2026-10-12)
 
 #### [DAPP-21] Skeleton loaders
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Add skeleton placeholders. Issue: docs/backlog/dapp-skeleton-loaders.md
+- **Status:** Resolved
+- **Evidence:** file: apps/dapp/frontend/app/**/loading.tsx (15 routes), test: apps/dapp/frontend/tests/loading-states.spec.ts
+- **Notes:** Route loading states (re-verified 2026-10-12)
 
 #### [DAPP-22] E2E tests
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Playwright test suite. Issue: docs/backlog/dapp-e2e-tests.md
+- **Status:** Resolved
+- **Evidence:** test: apps/dapp/frontend/tests/deposit-withdraw.spec.ts, test: apps/dapp/frontend/e2e/vault-creation.spec.ts, ci: e2e-testnet-nightly
+- **Notes:** Playwright specs; nightly testnet run (re-verified 2026-10-12)
 
 #### [DAPP-23] Accessibility audit
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** WCAG 2.1 AA audit. Issue: docs/backlog/dapp-accessibility-audit.md
+- **Status:** Resolved
+- **Evidence:** test: apps/dapp/frontend/tests/accessibility.spec.ts
+- **Notes:** Axe-based accessibility spec (not a full WCAG 2.1 AA audit) (re-verified 2026-10-12)
 
 #### [DAPP-24] WebSocket heartbeat
-- **Status:** Open
-- **Evidence:** —
-- **Notes:** Add ping/pong and reconnect. Issue: docs/backlog/dapp-websocket-heartbeat.md
+- **Status:** Resolved
+- **Evidence:** file: apps/dapp/frontend/hooks/useWebSocket.ts
+- **Notes:** Heartbeat ping with pong timeout and bounded reconnect (re-verified 2026-10-12)
 
 ---
 

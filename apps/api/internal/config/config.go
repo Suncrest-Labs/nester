@@ -1551,6 +1551,13 @@ func validateStellarNetworkConsistency(s StellarConfig, loader *envLoader) {
 				"STELLAR_ALLOCATION_STRATEGY_ADDRESS must be set when STELLAR_NETWORK_PASSPHRASE is the mainnet passphrase",
 			)
 		}
+		// An unset or zero cap means "no cap" to the TVL manager. On mainnet
+		// that must be an explicit choice, not a forgotten setting.
+		if cap, err := strconv.ParseFloat(strings.TrimSpace(s.mainnetVaultTVLCap), 64); err != nil || cap <= 0 {
+			loader.addError(
+				"STELLAR_MAINNET_VAULT_TVL_CAP must be a positive number when STELLAR_NETWORK_PASSPHRASE is the mainnet passphrase",
+			)
+		}
 
 	case StellarTestnetPassphrase:
 		// A testnet passphrase pointed at mainnet URLs is equally dangerous:

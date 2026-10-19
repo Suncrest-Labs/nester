@@ -10,6 +10,8 @@ import {
 } from "@stellar/stellar-sdk";
 
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
+import { describeDepositRejection } from "@/lib/stellar/contract-errors";
+import { assertNetworkMatchesBuild } from "@/lib/stellar/network-guard";
 import { readNetworkId } from "@/lib/storageKeys";
 import { assertValidContractId, getContractId } from "@/lib/contracts";
 
@@ -28,6 +30,17 @@ import { assertValidContractId, getContractId } from "@/lib/contracts";
 export const getCurrentNetwork = () => {
   const savedNetwork = readNetworkId();
   return savedNetwork ? NETWORKS[savedNetwork] : DEFAULT_NETWORK;
+};
+
+/**
+ * The network to build a transaction for. Throws NetworkNotAvailableError when the
+ * selected network is not the one this build's contract ids belong to, so the
+ * money path never signs for one network against contracts on another.
+ */
+export const getTransactionNetwork = () => {
+  const network = getCurrentNetwork();
+  assertNetworkMatchesBuild(network);
+  return network;
 };
 
 // Contract addresses come from lib/contracts.ts, which validates them and
@@ -194,7 +207,7 @@ export async function previewDeposit(params: DepositParams): Promise<{
 }> {
   try {
     const { walletAddress, contractId, amount: rawAmount } = params;
-    const network = getCurrentNetwork();
+    const network = getTransactionNetwork();
     const server = getServer(network.rpcUrl);
     const account = await server.getAccount(walletAddress);
 
@@ -264,7 +277,7 @@ export async function buildDepositTransaction(
   params: DepositParams
 ): Promise<BuiltTransaction> {
   const { walletAddress, contractId, amount: rawAmount } = params;
-  const network = getCurrentNetwork();
+  const network = getTransactionNetwork();
 
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
@@ -294,9 +307,8 @@ export async function buildDepositTransaction(
   const sim = await server.simulateTransaction(tx);
 
   if (SorobanRpc.Api.isSimulationError(sim)) {
-    throw new TransactionFailedError(
-      (sim as SorobanRpc.Api.SimulateTransactionErrorResponse).error
-    );
+    const rawReason = (sim as SorobanRpc.Api.SimulateTransactionErrorResponse).error;
+    throw new TransactionFailedError(describeDepositRejection(rawReason) ?? rawReason);
   }
 
   const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
@@ -314,7 +326,7 @@ export async function buildWithdrawTransaction(
   params: WithdrawParams
 ): Promise<BuiltTransaction> {
   const { walletAddress, contractId, shares: rawShares, minAssetsOut: rawMinAssets = 0 } = params;
-  const network = getCurrentNetwork();
+  const network = getTransactionNetwork();
 
   const server = getServer(network.rpcUrl);
   const account = await server.getAccount(walletAddress);
@@ -374,7 +386,7 @@ export async function signTransaction(txXdr: string): Promise<string> {
     throw new WalletDisconnectedError();
   }
 
-  const network = getCurrentNetwork();
+  const network = getTransactionNetwork();
 
   // Confirm the wallet is still connected (#1099). A locked, closed, or
   // switched-account wallet surfaces as getAddress() throwing, so a failure
@@ -454,7 +466,7 @@ const MAX_POLL_ATTEMPTS = 15; // 30 seconds total
 export async function submitTransaction(
   signedXdr: string
 ): Promise<TransactionReceipt> {
-  const network = getCurrentNetwork();
+  const network = getTransactionNetwork();
   const server = getServer(network.rpcUrl);
 
   // Re-parse from signed XDR so we have a Transaction object to submit

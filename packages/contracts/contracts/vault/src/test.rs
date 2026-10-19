@@ -1740,6 +1740,10 @@ fn test_harvest_rate_limit_is_per_user() {
     vault.deposit(&alice, &(1_000 * XLM), &0);
     vault.deposit(&bob, &(1_000 * XLM), &0);
 
+    // A harvest at ledger time 0 is recorded as 0, which the contract reads as
+    // "never harvested", so the rate limit would not engage. Real ledgers never
+    // sit at 0; move the clock off it, as the sibling harvest tests do.
+    advance_time(&env, 1);
     vault.harvest(&alice);
     // Alice's harvest must not block Bob.
     assert!(vault.try_harvest(&bob).is_ok());
@@ -3672,4 +3676,68 @@ mod locks_test {
         let view = vault.get_locked_positions(&user);
         assert_eq!(view.total_locked_shares, 500 * XLM);
     }
+}
+
+// ---------------------------------------------------------------------------
+// TVL cap — bounds total exposure during a guarded launch. `max_deposit` only
+// limits one deposit, so repeated deposits could otherwise exceed any budget.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tvl_cap_is_unlimited_by_default() {
+    let (_env, _admin, _token, vault, _treasury) = setup();
+    assert_eq!(vault.get_tvl_cap(), i128::MAX);
+}
+
+#[test]
+fn deposit_that_would_exceed_tvl_cap_is_rejected_across_depositors() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    mint(&token, &alice, 1_000 * XLM);
+    mint(&token, &bob, 1_000 * XLM);
+    vault.set_tvl_cap(&admin, &(150 * XLM));
+
+    vault.deposit(&alice, &(100 * XLM), &0);
+    assert_rejected!(
+        vault.try_deposit(&bob, &(60 * XLM), &0),
+        "deposit over TVL cap"
+    );
+    // Exactly reaching the cap is allowed.
+    vault.deposit(&bob, &(50 * XLM), &0);
+    assert_rejected!(
+        vault.try_deposit(&alice, &(10 * XLM), &0),
+        "deposit at TVL cap"
+    );
+}
+
+#[test]
+fn set_tvl_cap_is_admin_only_and_positive() {
+    let (env, admin, _token, vault, _treasury) = setup();
+    let outsider = Address::generate(&env);
+
+    assert_rejected!(
+        vault.try_set_tvl_cap(&outsider, &(100 * XLM)),
+        "set_tvl_cap outsider"
+    );
+    assert_rejected!(vault.try_set_tvl_cap(&admin, &0), "set_tvl_cap zero");
+    assert_rejected!(vault.try_set_tvl_cap(&admin, &-1), "set_tvl_cap negative");
+    assert_eq!(vault.get_tvl_cap(), i128::MAX);
+}
+
+#[test]
+fn lowering_tvl_cap_below_current_assets_blocks_deposits_but_not_withdrawals() {
+    let (env, admin, token, vault, _treasury) = setup();
+    let user = Address::generate(&env);
+    mint(&token, &user, 1_000 * XLM);
+    vault.deposit(&user, &(100 * XLM), &0);
+
+    vault.set_tvl_cap(&admin, &(50 * XLM));
+
+    assert_rejected!(
+        vault.try_deposit(&user, &(10 * XLM), &0),
+        "deposit above lowered cap"
+    );
+    env.ledger().with_mut(|l| l.timestamp += 2 * DAY);
+    vault.withdraw(&user, &(10 * XLM), &0);
 }

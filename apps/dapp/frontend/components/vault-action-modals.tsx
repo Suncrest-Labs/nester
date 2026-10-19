@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { useStellarFeeEstimate } from "@/hooks/useStellarFeeEstimate";
 import { useDepositPreview } from "@/hooks/useDepositPreview";
+import { useMoneyPathStatus } from "@/hooks/useMoneyPathStatus";
+import { pauseMessage } from "@/lib/money-path";
 import { ReportProblemButton } from "@/components/report-problem-button";
 import { NetworkFeeDisplay } from "@/components/stellar/NetworkFeeEstimate";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
@@ -632,6 +634,7 @@ export function WithdrawModal({
 }) {
     const { address } = useWallet();
     const { getWithdrawalQuote, recordWithdrawal } = usePortfolio();
+    const { withdrawal: withdrawalPause } = useMoneyPathStatus();
 
     const formSchema = useMemo(() => z.object({
         amount: validateAmount({
@@ -715,7 +718,8 @@ export function WithdrawModal({
         !!address &&
         isValid &&
         amount > 0 &&
-        !!quote;
+        !!quote &&
+        !withdrawalPause.paused;
 
     const reset = () => {
         resetForm();
@@ -949,6 +953,16 @@ export function WithdrawModal({
                                     View on Explorer
                                     <ExternalLink className="h-3.5 w-3.5" />
                                 </Link>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Global pause */}
+                    {withdrawalPause.paused && state === "input" && (
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                            <div className="flex items-start gap-2">
+                                <AlertCircle className="mt-0.5 h-4 w-4" />
+                                <span>{pauseMessage("withdrawal", withdrawalPause.reason)}</span>
                             </div>
                         </div>
                     )}
