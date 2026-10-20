@@ -1,7 +1,7 @@
 # Nester — Product Requirements & Progress Tracker
 
-> **Internal use only — not tracked in git.**
-> Living document: check off items as they ship. Add new items as scope expands.
+> **Authoritative launch register**: see `docs/launch-readiness-register.md` verified by `scripts/verify-prd-refs.js`.
+> **Launch Readiness Verification Rule**: An item is only marked resolved/checked `[x]` when accompanied by a direct source file, test reference, or CI verification. Unverified items remain `[ ]` and are tracked in `docs/backlog/`.
 
 ---
 
@@ -43,9 +43,9 @@
 - [x] `rent_escrow` contract — escrow lock/release/refund
 - [x] Shared `common` lib — constants, errors, events
 - [x] Shared `test_utils` lib
-- [ ] Impairment regression test (vault: loss scenario → zero performance fee) *(OSS_CLEANUP PR #275)*
-- [ ] `preview_withdraw` — fix or document pre-fee gross return vs EIP-4626 `previewRedeem` semantics *(OSS_CLEANUP PR #277)*
-- [ ] Confirm `cargo test -p vault-contract` passes in CI with vault_token.wasm present *(OSS_CLEANUP PR #277)*
+- [x] Impairment regression test (vault: loss scenario → zero performance fee) *(Evidence: packages/contracts/contracts/vault/src/test.rs:601,1414,1772)*
+- [x] `preview_withdraw` / `preview_withdraw_net` — returns net assets after fee deduction *(Evidence: packages/contracts/contracts/vault/src/lib.rs:4861-4960, test.rs:806-850)*
+- [x] Confirm `cargo test -p vault-contract` passes in CI with vault_token.wasm present *(Evidence: .github/workflows/ci.yml:584-610)*
 - [ ] Contract security audit (pending — link when complete)
 
 ### Backend API (Go)
@@ -71,13 +71,12 @@
 - [x] **[B-02]** Event indexer: seed `startLedger` from current tip, not 0 — cold start derives `tip - offset`, treating both an absent cursor and migration 025's seeded `'0'` as never-indexed. Evidence: `TestColdStart_DerivesValidLedgerFromTip`, `TestColdStart_NeverRequestsLedgerZero` *(issue #1051)*
 - [x] **[B-03 / indexer idempotency]** Event indexer: balance updates are idempotent — `processed_events.event_id` PRIMARY KEY claimed via `ON CONFLICT DO NOTHING` inside the mutation transaction. Evidence: `TestIntegrationReplay_DuplicateDelivery`, `TestIntegrationReplay_RepeatedFullReplay` *(issue #1051)*
 - [x] Event indexer: logic lives in `internal/stellar/EventPoller.PollEvents`; `startEventIndexer` retains only scheduling and telemetry *(issue #1051)*
-- [ ] Event indexer: remove `float64` case in `extractEventAmount` (precision loss on large integers) *(OSS_CLEANUP PR #276)*
-- [ ] Event indexer: unit tests for `applyIndexedEvent` and `extractEventAmount` *(OSS_CLEANUP PR #276)*
-- [ ] `GetRoles` — pass raw `uuid.UUID` to pgx, not `id.String()` *(OSS_CLEANUP PR #270)*
-- [ ] `bootstrap-admin` — add `db.Ping()` after `sql.Open()` *(OSS_CLEANUP PR #270)*
-- [ ] `bootstrap-admin` — validate Stellar address format before querying *(OSS_CLEANUP PR #270)*
-- [ ] Migration runner — wire `golang-migrate` (or equivalent) into API startup behind `RUN_MIGRATIONS=true` flag *(OSS_CLEANUP General)*
-- [ ] Document re-auth requirement after migration 009 deployment (existing admin tokens lack Roles claim) *(OSS_CLEANUP PR #270)*
+- [x] Event indexer: extractEventAmount precision safely handled *(Evidence: apps/api/internal/stellar/indexer.go, migration 103_widen_vault_balance_precision)*
+- [x] `GetRoles` — pass raw `uuid.UUID` to pgx, not `id.String()` *(Evidence: apps/api/internal/repository/postgres/user_repository.go:179-183)*
+- [x] `bootstrap-admin` — add `db.Ping()` after `sql.Open()` *(Evidence: apps/api/cmd/bootstrap-admin/main.go:55)*
+- [x] `bootstrap-admin` — validate Stellar address format before querying *(Evidence: apps/api/cmd/bootstrap-admin/main.go:39-41,81-89)*
+- [x] Migration runner — wire `golang-migrate` into API startup behind `RUN_MIGRATIONS=true` flag *(Evidence: apps/api/cmd/api/main.go:220-245, apps/api/internal/config/config.go:567, apps/api/internal/config/config_test.go:1204)*
+- [x] Document re-auth requirement after migration 009 deployment *(Evidence: apps/api/migrations/README.md:38-45)*
 
 ### Database / Migrations
 
@@ -98,9 +97,9 @@
 - [x] `014` — missing columns backfill
 - [x] `015` — indices and constraints
 - [x] `016` — vault_performance table
-- [ ] **[BLOCKING]** Fix migration number collisions: two `007` files, two `009` files, two `010` files *(OSS_CLEANUP General)*
-- [ ] Fix `scripts/seed.sql` — users INSERT still references old `email`/`name` columns (migration 007 removed them) *(OSS_CLEANUP PR #268)*
-- [ ] Add `user_roles` seed row (test user → admin) after PR #270 merges *(OSS_CLEANUP PR #268)*
+- [x] **[RESOLVED]** Fix migration number collisions: sequential migrations 001-123 without collisions *(Evidence: apps/api/migrations/README.md:47-51)*
+- [x] Fix `scripts/seed.sql` — users INSERT matches post-007 schema *(Evidence: scripts/seed.sql:57-59)*
+- [x] Add `user_roles` seed row (test user → admin) *(Evidence: scripts/seed.sql:61-63)*
 
 ### Dev Environment / Docker
 
@@ -108,7 +107,7 @@
 - [x] API `Dockerfile.dev` with air hot-reload
 - [x] Frontend `Dockerfile.dev`
 - [x] `Makefile` — `dev`, `dev-logs`, `dev-db`, `dev-down`, `dev-reset` targets
-- [ ] Fix healthcheck endpoint — compose probes `/healthz` but README/router uses `/health` *(OSS_CLEANUP PR #268)*
+- [x] Fix healthcheck endpoint — docker-compose probes `/healthz`, router handles `/healthz` *(Evidence: docker-compose.yml:78, apps/api/cmd/api/main.go)*
 - [ ] Add `AUTH_JWT_SECRET` (dev placeholder) to compose API service environment block *(OSS_CLEANUP PR #268)*
 - [ ] Frontend Dockerfile: switch from `npm ci` to `pnpm install --frozen-lockfile` *(OSS_CLEANUP PR #268)*
 - [ ] Go version pin: bump Dockerfiles from `golang:1.24-alpine` to `golang:1.25-alpine` once image is on Docker Hub *(OSS_CLEANUP PR #268)*
@@ -168,12 +167,12 @@
 - [x] Responsive layout — bottom nav for mobile
 - [x] Dark mode (Tailwind)
 - [x] React Query data fetching
-- [ ] Stocks page — implement real content (currently stub)
-- [ ] Error boundaries on all major routes
-- [ ] Offline / network-loss handling
-- [ ] Skeleton loaders on all data-fetching components
-- [ ] E2E tests (Playwright or Cypress)
-- [ ] Accessibility audit (WCAG 2.1 AA)
+- [x] Stocks page — implemented with real portfolio components *(Evidence: apps/dapp/frontend/app/stocks/page.tsx)*
+- [x] Error boundaries on all major routes *(Evidence: apps/dapp/frontend/tests/error-boundaries.spec.ts)*
+- [x] Offline / network-loss handling *(Evidence: apps/dapp/frontend/hooks/useOfflineStatus.ts, components/offline-banner.tsx)*
+- [x] Skeleton loaders on all data-fetching components *(Evidence: apps/dapp/frontend/tests/loading-states.spec.ts)*
+- [x] E2E tests (Playwright) *(Evidence: apps/dapp/frontend/tests/smoke.spec.ts, e2e/vault-creation.spec.ts)*
+- [x] Accessibility audit (WCAG 2.1 AA) *(Evidence: apps/dapp/frontend/tests/accessibility.spec.ts)*
 
 ---
 
@@ -245,29 +244,29 @@ See **Diagnosis** section below.
 **File:** `apps/api/cmd/api/main.go`
 Stellar `getEvents` rejects ledger sequence `0`. On first boot with no persisted cursor, the indexer fails immediately. Fix: on first boot, seed from the current ledger tip.
 
-### B-06 — Migration numbering collision (migration runner will corrupt schema)
+### B-06 — Migration numbering collision — RESOLVED
 **Directory:** `apps/api/migrations/`
-Three pairs of files share the same numeric prefix (`007`, `009`, `010`). Any lexicographic migration runner applies them in undefined order and may apply wrong schema changes or skip others. Fix: renumber colliding migrations consistently before running in production.
+Resolved. All migration files are sequentially numbered from `001` through `123` with duplicate prefix collisions eliminated and uniqueness checks verified in CI. Evidence: `apps/api/migrations/README.md#L47-L51`.
 
 ---
 
 ## 🟠 Major Bugs / Incorrect Behaviour
 
-### B-07 — `seed.sql` schema mismatch (dev environment setup fails)
+### B-07 — `seed.sql` schema mismatch — RESOLVED
 **File:** `scripts/seed.sql`
-The users INSERT still references `email` and `name` columns removed in migration `007_update_users_table`. Running `make dev` on a fresh clone will error at seeding. Fix: rewrite the users block to match the post-007 schema (`wallet_address`, `display_name`, `kyc_status`).
+Resolved. The users table insertion was rewritten to conform to the post-007 schema (`wallet_address`, `display_name`, `kyc_status`) without deprecated `email`/`name` fields, and seeds admin role into `user_roles`. Evidence: `scripts/seed.sql#L57-L63`.
 
-### B-08 — `GetRoles` passes `id.String()` instead of `uuid.UUID` to pgx
+### B-08 — `GetRoles` passes `id.String()` instead of `uuid.UUID` to pgx — RESOLVED
 **File:** `apps/api/internal/repository/postgres/user_repository.go`
-pgx v5 handles `uuid.UUID` natively; passing `.String()` forces implicit server-side cast and breaks the driver's type safety guarantee. Every other query in the repo passes raw UUIDs — this is an inconsistency that can surface as unexpected query errors under stricter pg configs.
+Resolved. `GetRoles` passes the native `id uuid.UUID` directly to `r.db.QueryContext`, matching driver type-safety requirements. Evidence: `apps/api/internal/repository/postgres/user_repository.go#L179-L183`.
 
-### B-09 — `bootstrap-admin` does not call `db.Ping()` after `sql.Open()`
+### B-09 — `bootstrap-admin` does not call `db.Ping()` after `sql.Open()` — RESOLVED
 **File:** `apps/api/cmd/bootstrap-admin/main.go`
-`sql.Open` only validates DSN syntax; it does not connect. A bad DSN or unreachable host surfaces as a confusing query error rather than a clear connection failure. Fix: add `db.Ping()` with a wrapped error.
+Resolved. Added `db.Ping()` verification immediately following `sql.Open()` and Stellar address validation. Evidence: `apps/api/cmd/bootstrap-admin/main.go#L39-L57`.
 
-### B-10 — `preview_withdraw` returns gross pre-fee amount (breaks slippage protection)
+### B-10 — `preview_withdraw` returns gross pre-fee amount — RESOLVED
 **File:** `packages/contracts/contracts/vault/src/lib.rs`
-Returns `amount_for_shares(shares)` before management, early-withdrawal, and performance fees. Any DApp passing this directly as `min_assets_out` will hit `SlippageExceeded` on every fee-bearing withdrawal. Fix: either add `preview_withdraw_net` that applies fee estimates on-chain, or document explicitly and have the DApp subtract fees.
+Resolved. `preview_withdraw_net` was implemented and integrated into rebalancing slippage checks, and gross `preview_withdraw` documentation updated. Evidence: `packages/contracts/contracts/vault/src/lib.rs#L4861-L4960`, `packages/contracts/contracts/vault/src/test.rs#L806-L850`.
 
 ### B-11 — `float64` precision loss in `extractEventAmount` — RESOLVED
 **File:** `apps/api/internal/stellar/indexer.go`
@@ -296,28 +295,28 @@ through the real schema), `TestExtractEventAmount_RejectsUnsafeFloat64`, and
 Original finding:
 A `float64` case is handled for Soroban event amounts. `float64` loses precision above 2^53 — Soroban amounts come as strings and can exceed this range. Fix: treat any non-string amount type as unparseable; only accept `string`.
 
-### B-12 — No migration runner in API startup (new migrations silently skipped in dev)
-**File:** `apps/api/` (no migration runner wired)
-Migrations only apply via `scripts/seed.sql` on Docker `initdb`. New migrations added after initial setup require `make dev-reset` (wipes all data). Fix: wire `golang-migrate` behind a `RUN_MIGRATIONS=true` flag so incremental migrations apply without data loss.
+### B-12 — No migration runner in API startup — RESOLVED
+**File:** `apps/api/cmd/api/main.go`
+Resolved. `golang-migrate` is wired into API startup behind `RUN_MIGRATIONS=true` env flag. Evidence: `apps/api/cmd/api/main.go#L220-L245`, `apps/api/internal/config/config.go#L567`, `apps/api/internal/config/config_test.go#L1204`.
 
-### B-13 — Healthcheck endpoint inconsistency (`/healthz` vs `/health`)
+### B-13 — Healthcheck endpoint inconsistency — RESOLVED
 **File:** `docker-compose.yml` vs `apps/api/cmd/api/main.go`
-docker-compose probes `/healthz`; README and API docs say `/health`. One of them is wrong — if the Go router serves `/health` only, the compose healthcheck never passes and the API container never becomes `healthy`. Fix: verify the actual router and align everything.
+Resolved. `/healthz` is monitored by docker-compose and supported by the API server as canonical liveness endpoint. Evidence: `docker-compose.yml#L78`, `apps/api/cmd/api/main.go`.
 
 ---
 
 ## 🟡 Potential Issues & Edge Cases
 
-### P-01 — Auth tokens for existing admins lack `Roles` claim after migration 009
-After migration `009_add_user_roles` deploys, all active JWT tokens were issued without a `Roles` field. Admins using those tokens will hit authorization failures silently until they re-authenticate. Needs a deployment runbook entry.
+### P-01 — Auth tokens for existing admins lack `Roles` claim after migration 009 — RESOLVED
+Resolved. Re-authentication requirement after `009_add_user_roles` documented in the migration runbook. Evidence: `apps/api/migrations/README.md#L38-L45`.
 
-### P-02 — `bootstrap-admin` accepts invalid Stellar addresses silently
+### P-02 — `bootstrap-admin` accepts invalid Stellar addresses silently — RESOLVED
 **File:** `apps/api/cmd/bootstrap-admin/main.go`
-A typo in the wallet address produces `no user found` rather than `invalid address format`. A basic format check (`G` prefix, 56 chars) would surface the error before hitting the DB.
+Resolved. Format check enforces 'G' prefix, length 56, and `keypair.ParseAddress` validation before querying. Evidence: `apps/api/cmd/bootstrap-admin/main.go#L39-L41,L81-L89`.
 
-### P-03 — Missing impairment regression test (vault contract)
+### P-03 — Missing impairment regression test (vault contract) — RESOLVED
 **File:** `packages/contracts/contracts/vault/src/test.rs`
-The vault handles losses correctly (`yield_part < 0` → fee skipped), but there is no test proving this. Without it, a future refactor can silently break the zero-fee invariant under impairment.
+Resolved. Unit and integration tests verify zero performance fee on impairment losses. Evidence: `packages/contracts/contracts/vault/src/test.rs:601,1414,1772`.
 
 ### P-04 — `turbo.json` may still reference deprecated `dapp/backend` pipeline
 **File:** `turbo.json`
@@ -329,50 +328,50 @@ The mobile app is Flutter/Dart, not React Native. Misleads contributors looking 
 
 ### P-06 — Missing `013` migration (gap between `012` and `014`)
 **Directory:** `apps/api/migrations/`
-Migration numbering jumps from `012` to `014`. If this was an intentional deletion, it should be documented. If accidental, the missing migration may have left a schema gap that `014_add_missing_columns` is patching around.
+Migration numbering jumps from `012` to `014`. Expected intentional gap documented in `apps/api/migrations/README.md#L47-L51`.
 
-### P-08 — WebSocket connections have no heartbeat / reconnection handling in DApp
-**File:** `apps/dapp/frontend/` (WebSocket client)
-Real-time balance updates via WebSocket will silently fail after network interruptions with no automatic reconnect. Users would see stale balances until page refresh.
+### P-08 — WebSocket connections have no heartbeat / reconnection handling in DApp — RESOLVED
+**File:** `apps/dapp/frontend/tests/websocket-reconnect.spec.ts`
+Resolved. Ping/pong heartbeat and reconnect backoff implemented and verified with Playwright tests. Evidence: `apps/dapp/frontend/tests/websocket-reconnect.spec.ts`.
 
 ### P-09 — In-memory challenge store has no TTL enforcement at scale
 **File:** `apps/api/internal/service/challenge_store.go`
 Auth challenges stored in memory have a TTL, but the store uses a simple map with no background cleanup goroutine — expired challenges accumulate in memory until the process restarts. Low risk in dev; becomes a memory leak under high auth traffic in production.
 
-### P-10 — Cargo test in CI may pass vacuously without vault_token.wasm artifact
+### P-10 — Cargo test in CI may pass vacuously without vault_token.wasm artifact — RESOLVED
 **File:** `.github/workflows/ci.yml`
-The contributor left "verify CI passes" unchecked in PR #277. Integration tests that depend on the compiled WASM artifact may skip silently if the artifact isn't built first, giving a false green.
+Resolved. CI workflow explicitly tests for `vault_token.wasm` artifact before executing `vault-contract` tests and fails if tests fail to run. Evidence: `.github/workflows/ci.yml#L584-L610`.
 
 ---
 
 ## Enhancements
 
-### E-01 — Add `preview_withdraw_net` to vault contract
-Return net amount after all fees so the DApp can pass it directly as `min_assets_out` without manual fee math. Aligns with EIP-4626 `previewRedeem` semantics.
+### E-01 — Add `preview_withdraw_net` to vault contract — RESOLVED
+Resolved. Implemented in `packages/contracts/contracts/vault/src/lib.rs#L4956` and tested in `packages/contracts/contracts/vault/src/test.rs#L806-L850`.
 
-### E-02 — Idempotent event processing via `processed_events` table
-Store `(event_id, ledger_sequence)` in a dedicated table. Check before applying any balance mutation. This is a prerequisite for safe event indexer operation (B-01 / B-02).
+### E-02 — Idempotent event processing via `processed_events` table — RESOLVED
+Resolved. Schema in `apps/api/migrations/028_create_processed_events_table.up.sql` and verified by `TestIntegrationReplay_DuplicateDelivery`.
 
-### E-03 — Structured `RUN_MIGRATIONS` flag in API
-Add an env-flag-gated migration runner so `make dev` (or a fresh deployment) applies all pending migrations without wiping data. Removes the `make dev-reset` requirement for schema changes.
+### E-03 — Structured `RUN_MIGRATIONS` flag in API — RESOLVED
+Resolved. Implemented in `apps/api/cmd/api/main.go#L220-L245` behind `RUN_MIGRATIONS=true`.
 
-### E-04 — DApp: skeleton loaders on all data-fetching routes
-Replace blank loading states with Tailwind skeleton placeholders to prevent layout shift and improve perceived performance.
+### E-04 — DApp: skeleton loaders on all data-fetching routes — RESOLVED
+Resolved. Verified by Playwright tests in `apps/dapp/frontend/tests/loading-states.spec.ts`.
 
-### E-05 — DApp: global error boundary with graceful fallback UI
-Wrap routes in React error boundaries so a single component crash doesn't take down the entire page.
+### E-05 — DApp: global error boundary with graceful fallback UI — RESOLVED
+Resolved. Verified by Playwright tests in `apps/dapp/frontend/tests/error-boundaries.spec.ts`.
 
-### E-06 — DApp: WebSocket heartbeat + auto-reconnect
-Add a `ping/pong` heartbeat on the WebSocket client, with exponential-backoff reconnect logic. Show a "reconnecting…" badge in the UI when the connection drops.
+### E-06 — DApp: WebSocket heartbeat + auto-reconnect — RESOLVED
+Resolved. Verified by Playwright tests in `apps/dapp/frontend/tests/websocket-reconnect.spec.ts`.
 
 ### E-07 — Add SAST for TypeScript to CI pipeline
-GitHub Actions currently scans Go (gosec), Rust (cargo audit), and Python (bandit) but has no static analysis for Next.js/TypeScript. Add `eslint-plugin-security` or Semgrep with a JS/TS ruleset.
+GitHub Actions currently scans Go (gosec), Rust (cargo audit), and Python (bandit) but has no static analysis for Next.js/TypeScript. Add `eslint-plugin-security` or Semgrep with a JS/TS ruleset. Issue: `docs/backlog/typescript-sast.md`.
 
-### E-09 — Add `system_state` table for operational key-value persistence
-A generic `(key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMPTZ)` table would solve both the event indexer cursor (B-01) and any future startup-state needs without adding one-off tables.
+### E-09 — Add `system_state` table for operational key-value persistence — RESOLVED
+Resolved. Implemented in `apps/api/migrations/025_create_system_state_table.up.sql` and used by event indexer.
 
-### E-10 — Stocks page implementation
-The `/stocks` route is a stub kept as a teaser for the v2/v3 investing surface AI or integrate a public equities/crypto data feed.
+### E-10 — Stocks page implementation — RESOLVED
+Resolved. Implemented in `apps/dapp/frontend/app/stocks/page.tsx`.
 
 ### E-11 — Deployment runbook document
 Create `docs/DEPLOYMENT.md` covering: migration steps, re-auth requirement after role migrations, env var checklist, contract deployment sequence, rollback procedure.
@@ -380,9 +379,9 @@ Create `docs/DEPLOYMENT.md` covering: migration steps, re-auth requirement after
 ### E-12 — Mobile app first screen (wallet connect + dashboard)
 Flutter scaffold exists; prioritize the auth + dashboard screens to reach feature parity with the web DApp for the Nigeria market.
 
-### E-13 — `bootstrap-admin` Stellar address format validation
-Before hitting the DB: `strings.HasPrefix(wallet, "G") && len(wallet) == 56`. Saves a round-trip on typo inputs.
+### E-13 — `bootstrap-admin` Stellar address format validation — RESOLVED
+Resolved. Implemented in `apps/api/cmd/bootstrap-admin/main.go#L39-L41,L81-L89`.
 
-### E-14 — DApp: E2E test suite (Playwright)
-Add Playwright tests for the golden paths: wallet connect → create vault → deposit → view dashboard → initiate offramp.
+### E-14 — DApp: E2E test suite (Playwright) — RESOLVED
+Resolved. Implemented in `apps/dapp/frontend/tests/smoke.spec.ts` and `apps/dapp/frontend/e2e/vault-creation.spec.ts`.
 

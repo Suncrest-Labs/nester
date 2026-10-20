@@ -694,3 +694,19 @@ jobs:
           name: sbom-artifacts
           path: sbom-*.json
           if-no-files-found: error
+
+  launch-readiness:
+    name: Launch Readiness Register
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
+        with:
+          node-version: 20
+
+      - name: Verify register evidence references
+        run: node scripts/verify-prd-refs.js
+
+      - name: Run register test suite
+        run: node --test tests/prd-register.test.js
