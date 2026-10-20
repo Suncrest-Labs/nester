@@ -131,4 +131,15 @@ fuzz_target!(|input: Input| {
             }
         }
     }
+
+    // Overflow boundary (#1478): probe around `i128::MAX / 10^7` and quotient
+    // overflow boundaries so checked conversion routines return a typed error
+    // rather than panicking when the result exceeds `i128::MAX`.
+    let overflow_boundary = i128::MAX / 10_000_000;
+    let offset = a.rem_euclid(1_000);
+    let candidate = overflow_boundary.saturating_add(offset);
+    let _ = assets_to_shares_down(candidate, 1, 10_000_001);
+    let _ = assets_to_shares_up(candidate, 1, 10_000_001);
+    let _ = shares_to_assets_down(candidate, 10_000_001, 1);
+    let _ = shares_to_assets_up(candidate, 10_000_001, 1);
 });

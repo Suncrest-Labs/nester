@@ -14,7 +14,11 @@ clippy:
 	cd $(CONTRACTS_DIR) && $(CARGO) clippy --all-targets --all-features -- -D warnings
 
 build:
-	cd $(CONTRACTS_DIR) && $(CARGO) build --target $(WASM_TARGET) --release
+	$(CARGO) metadata --manifest-path $(CONTRACTS_DIR)/Cargo.toml --no-deps --format-version 1 \
+	  | python3 scripts/list_contract_packages.py \
+	  | while read -r pkg; do \
+	      $(CARGO) build --manifest-path $(CONTRACTS_DIR)/Cargo.toml --target $(WASM_TARGET) --release -p "$$pkg" || exit 1; \
+	    done
 
 test:
 	cd $(CONTRACTS_DIR) && $(CARGO) test --all
