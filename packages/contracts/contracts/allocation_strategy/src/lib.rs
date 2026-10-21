@@ -185,7 +185,10 @@ impl AllocationStrategyContract {
     }
 
     pub fn get_vault_type(env: Env) -> VaultType {
-        env.storage().instance().get(&DataKey::VaultType).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::VaultType)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     pub fn get_strategy_params(env: Env) -> StrategyParams {
@@ -194,17 +197,17 @@ impl AllocationStrategyContract {
                 .storage()
                 .instance()
                 .get(&DataKey::RebalanceThresholdBps)
-                .unwrap(),
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized)),
             max_weight_bps: env
                 .storage()
                 .instance()
                 .get(&DataKey::MaxWeightBps)
-                .unwrap(),
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized)),
             min_weight_bps: env
                 .storage()
                 .instance()
                 .get(&DataKey::MinWeightBps)
-                .unwrap(),
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized)),
         }
     }
 
@@ -248,7 +251,11 @@ impl AllocationStrategyContract {
 
         validate_weight_sum(&env, &weights);
 
-        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let registry_id: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegistryId)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let params = Self::get_strategy_params(env.clone());
 
         for weight in weights.iter() {
@@ -292,7 +299,11 @@ impl AllocationStrategyContract {
     ///
     /// Returns weights that sum to 10_000 bps. No state is written.
     pub fn suggest_weights(env: Env) -> Vec<AllocationWeight> {
-        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let registry_id: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegistryId)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let registry = RegistryClient::new(&env, &registry_id);
         let active_sources = registry.get_active_sources();
 
@@ -391,7 +402,11 @@ impl AllocationStrategyContract {
     /// future per-vault keying); this strategy instance represents the vault.
     pub fn get_optimal_allocation(env: Env, vault_id: Address) -> Vec<AllocationWeight> {
         let _ = &vault_id;
-        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let registry_id: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegistryId)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let sources = registry_get_active_sources(&env, &registry_id);
         optimal_allocation_from_sources(&env, &sources)
     }
@@ -404,7 +419,11 @@ impl AllocationStrategyContract {
     /// RPC to decide whether to trigger a rebalance.
     pub fn should_rebalance(env: Env, vault_id: Address, threshold_bps: u32) -> bool {
         let _ = &vault_id;
-        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let registry_id: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegistryId)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let sources = registry_get_active_sources(&env, &registry_id);
         if sources.is_empty() {
             return false;
@@ -431,7 +450,11 @@ impl AllocationStrategyContract {
         current_allocations: Vec<CurrentAllocation>,
         total: i128,
     ) -> Vec<AllocationDelta> {
-        let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+        let registry_id: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegistryId)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let target_weights = Self::get_weights(env.clone());
         
         let mut adjusted_weights = Vec::new(&env);
@@ -538,9 +561,10 @@ impl AllocationStrategyContract {
             if let Some(idx) = max_idx {
                 let remainder = total_to_redistribute - distributed;
                 if remainder != 0 {
-                    let mut d = deltas.get(idx).unwrap();
-                    d.delta += remainder;
-                    deltas.set(idx, d);
+                    if let Some(mut d) = deltas.get(idx) {
+                        d.delta += remainder;
+                        deltas.set(idx, d);
+                    }
                 }
             }
         } else if total_to_redistribute > 0 {
@@ -707,14 +731,13 @@ fn suggest_weights_from_sources(env: &Env, sources: Vec<RegistrySource>) -> Vec<
     let mut max_score: i128 = -1;
     let mut max_idx: u32 = 0;
 
-    for i in 0..sources.len() {
-        let source = sources.get(i).unwrap();
+    for (i, source) in sources.iter().enumerate() {
         let score = source_score(&source);
         total_score += score;
 
         if score > max_score {
             max_score = score;
-            max_idx = i;
+            max_idx = i as u32;
         }
 
         scored.push_back((source.id, score));
@@ -738,9 +761,10 @@ fn suggest_weights_from_sources(env: &Env, sources: Vec<RegistrySource>) -> Vec<
     // Allocate basis-point rounding remainder to the best-scoring source.
     let remainder = BASIS_POINT_SCALE - allocated;
     if remainder > 0 {
-        let mut top = weights.get(max_idx).unwrap();
-        top.weight_bps += remainder;
-        weights.set(max_idx, top);
+        if let Some(mut top) = weights.get(max_idx) {
+            top.weight_bps += remainder;
+            weights.set(max_idx, top);
+        }
     }
 
     weights
@@ -938,8 +962,9 @@ fn even_distribution(env: &Env, count: usize) -> Vec<u32> {
     }
 
     for index in 0..remainder {
-        let weight = out.get(index).unwrap();
-        out.set(index, weight + 1);
+        if let Some(weight) = out.get(index) {
+            out.set(index, weight + 1);
+        }
     }
 
     out
@@ -966,8 +991,8 @@ fn proportional_with_cap(env: &Env, scores: &Vec<i128>, max_weight_bps: u32) -> 
     while remaining_total > 0 {
         let mut total_score = 0_i128;
         for index in 0..len {
-            if active.get(index).unwrap() {
-                total_score += scores.get(index).unwrap();
+            if active.get(index).unwrap_or(false) {
+                total_score += scores.get(index).unwrap_or(0);
             }
         }
 
@@ -986,13 +1011,14 @@ fn proportional_with_cap(env: &Env, scores: &Vec<i128>, max_weight_bps: u32) -> 
         let mut capped_any = false;
 
         for index in 0..len {
-            if !active.get(index).unwrap() {
+            if !active.get(index).unwrap_or(false) {
                 continue;
             }
 
-            let current_assigned = assigned.get(index).unwrap();
+            let current_assigned = assigned.get(index).unwrap_or(0);
             let capacity = max_weight_bps - current_assigned;
-            let numerator = scores.get(index).unwrap() * snapshot_remaining as i128;
+            let score = scores.get(index).unwrap_or(0);
+            let numerator = score * snapshot_remaining as i128;
             let floor = (numerator / total_score) as u32;
             let ceil = ((numerator + total_score - 1) / total_score) as u32;
             floors.set(index, floor);
@@ -1012,11 +1038,12 @@ fn proportional_with_cap(env: &Env, scores: &Vec<i128>, max_weight_bps: u32) -> 
 
         let mut distributed = 0_u32;
         for index in 0..len {
-            if !active.get(index).unwrap() {
+            if !active.get(index).unwrap_or(false) {
                 continue;
             }
-            let floor = floors.get(index).unwrap();
-            assigned.set(index, assigned.get(index).unwrap() + floor);
+            let floor = floors.get(index).unwrap_or(0);
+            let current = assigned.get(index).unwrap_or(0);
+            assigned.set(index, current + floor);
             distributed += floor;
         }
 
@@ -1027,10 +1054,10 @@ fn proportional_with_cap(env: &Env, scores: &Vec<i128>, max_weight_bps: u32) -> 
             let mut best_remainder = -1_i128;
 
             for index in 0..len {
-                if !active.get(index).unwrap() || assigned.get(index).unwrap() >= max_weight_bps {
+                if !active.get(index).unwrap_or(false) || assigned.get(index).unwrap_or(0) >= max_weight_bps {
                     continue;
                 }
-                let remainder = remainders.get(index).unwrap();
+                let remainder = remainders.get(index).unwrap_or(0);
                 if remainder > best_remainder {
                     best_remainder = remainder;
                     best_index = Some(index);
@@ -1039,7 +1066,8 @@ fn proportional_with_cap(env: &Env, scores: &Vec<i128>, max_weight_bps: u32) -> 
 
             match best_index {
                 Some(index) => {
-                    assigned.set(index, assigned.get(index).unwrap() + 1);
+                    let current = assigned.get(index).unwrap_or(0);
+                    assigned.set(index, current + 1);
                     remaining_total -= 1;
                 }
                 None => break,
@@ -1074,7 +1102,11 @@ fn validate_weight_sum(env: &Env, weights: &Vec<AllocationWeight>) {
 }
 
 fn compute_weights(env: &Env, apys: Vec<SourceApy>) -> Vec<AllocationWeight> {
-    let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
+    let registry_id: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::RegistryId)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized));
     let vault_type = AllocationStrategyContract::get_vault_type(env.clone());
     let params = AllocationStrategyContract::get_strategy_params(env.clone());
 
@@ -1105,9 +1137,12 @@ fn compute_weights(env: &Env, apys: Vec<SourceApy>) -> Vec<AllocationWeight> {
         };
 
         for (slot, index) in eligible_indices.iter().enumerate() {
-            let mut weight = results.get(index).unwrap();
-            weight.weight_bps = computed.get(slot as u32).unwrap();
-            results.set(index, weight);
+            if let Some(mut weight) = results.get(index) {
+                if let Some(computed_weight) = computed.get(slot as u32) {
+                    weight.weight_bps = computed_weight;
+                    results.set(index, weight);
+                }
+            }
         }
     }
 
@@ -1146,8 +1181,9 @@ fn allocation_amounts(weights: &Vec<AllocationWeight>, total_amount: i128) -> Ve
     if let Some(index) = max_index {
         let remainder = total_amount - total_allocated;
         if remainder > 0 {
-            let (symbol, amount) = out.get(index as u32).unwrap();
-            out.set(index as u32, (symbol, amount + remainder));
+            if let Some((symbol, amount)) = out.get(index as u32) {
+                out.set(index as u32, (symbol, amount + remainder));
+            }
         }
     }
 

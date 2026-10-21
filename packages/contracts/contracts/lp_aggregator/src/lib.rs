@@ -273,8 +273,12 @@ impl LpAggregator {
         for i in 1..len {
             let mut j = i;
             while j > 0 {
-                let a = routes.get(j - 1).unwrap();
-                let b = routes.get(j).unwrap();
+                let a = routes
+                    .get(j - 1)
+                    .unwrap_or_else(|| panic_with_error!(&env, AggregatorError::NoRoutesFound));
+                let b = routes
+                    .get(j)
+                    .unwrap_or_else(|| panic_with_error!(&env, AggregatorError::NoRoutesFound));
                 if a.expected_out >= b.expected_out {
                     break;
                 }
@@ -317,8 +321,12 @@ impl LpAggregator {
                 .unwrap_or_else(|| panic_with_error!(&env, AggregatorError::NoRoutesFound));
             let hop = SwapHop {
                 pool_address: pool,
-                token_in: path.get(i).unwrap(),
-                token_out: path.get(i + 1).unwrap(),
+                token_in: path
+                    .get(i)
+                    .unwrap_or_else(|| panic_with_error!(&env, AggregatorError::EmptyPath)),
+                token_out: path
+                    .get(i + 1)
+                    .unwrap_or_else(|| panic_with_error!(&env, AggregatorError::EmptyPath)),
                 amount_in: running,
             };
             running = Self::execute_hop(&env, hop, running);
@@ -333,7 +341,10 @@ impl LpAggregator {
 
     /// Original single-route executor kept for backwards compatibility.
     pub fn execute_swap(env: Env, route: SwapRoute, min_amount_out: i128) -> i128 {
-        let first = route.hops.get(0).expect("Route has no hops");
+        let first = route
+            .hops
+            .get(0)
+            .unwrap_or_else(|| panic_with_error!(&env, AggregatorError::NoRoutesFound));
         let mut amount = first.amount_in;
 
         for hop in route.hops.iter() {

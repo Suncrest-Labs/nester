@@ -293,6 +293,32 @@ jobs:
         working-directory: packages/contracts/contracts/vault/fuzz
         run: cargo check --bin conversion_math
 
+      - name: Verify contract WASM size limits
+        run: |
+          LIMIT=131072
+          HEADROOM=4096
+          MAX_ALLOWED=$((LIMIT - HEADROOM))
+          FAILED=0
+          echo "### Contract WASM Sizes" >> $GITHUB_STEP_SUMMARY
+          echo "| Contract | Size (bytes) | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- | --- |" >> $GITHUB_STEP_SUMMARY
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            [ -f "$wasm" ] || continue
+            name=$(basename "$wasm")
+            size=$(wc -c < "$wasm" | tr -d ' ')
+            if [ "$size" -gt "$MAX_ALLOWED" ]; then
+              echo "| $name | $size | Exceeds limit ($MAX_ALLOWED bytes) |" >> $GITHUB_STEP_SUMMARY
+              echo "ERROR: $name is $size bytes (exceeds $MAX_ALLOWED limit)"
+              FAILED=1
+            else
+              echo "| $name | $size | OK |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          if [ "$FAILED" -ne 0 ]; then
+            echo "One or more deployable contracts exceed network size limit"
+            exit 1
+          fi
+
       # Blocking gate (#1484): format violations fail the job.
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -375,7 +401,7 @@ jobs:
       # thresholds behave at the boundary.
       - name: Run burn-rate alert tests
         working-directory: docker/prometheus/rules
-        run: promtool test rules slo_alerts_test.yml slo_probe_alerts_test.yml slo_money_path_alerts_test.yml
+        run: promtool test rules slo_alerts_test.yml slo_probe_alerts_test.yml slo_money_path_alerts_test.yml ttl_alerts_test.yml
 
       # The probes create real staging transactions, so their safety guards (no
       # default target, production-name and production-URL refusal, mutations

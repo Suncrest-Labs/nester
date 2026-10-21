@@ -217,12 +217,18 @@ impl VaultTokenContract {
 
     /// Token name.
     pub fn name(env: Env) -> String {
-        env.storage().instance().get(&DataKey::Name).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Name)
+            .unwrap_or_else(|| String::from_str(&env, ""))
     }
 
     /// Token symbol.
     pub fn symbol(env: Env) -> String {
-        env.storage().instance().get(&DataKey::Symbol).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Symbol)
+            .unwrap_or_else(|| String::from_str(&env, ""))
     }
 
     /// Token decimals.
@@ -520,7 +526,14 @@ fn spend_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
         panic_with_error!(env, ContractError::Unauthorized);
     }
     let key = DataKey::Allowance(from.clone(), spender.clone());
-    let existing: AllowanceValue = env.storage().instance().get(&key).unwrap();
+    let existing: AllowanceValue = env
+        .storage()
+        .instance()
+        .get(&key)
+        .unwrap_or(AllowanceValue {
+            amount: 0,
+            expiration_ledger: 0,
+        });
     env.storage().instance().set(
         &key,
         &AllowanceValue {

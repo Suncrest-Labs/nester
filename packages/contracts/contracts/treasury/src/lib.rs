@@ -119,7 +119,11 @@ impl TreasuryContract {
     }
 
     fn receive_fees_internal(env: Env, amount: i128) {
-        let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Vault)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         vault.require_auth();
 
         if amount <= 0 {
@@ -159,8 +163,7 @@ impl TreasuryContract {
 
         // Validate shares sum to exactly BPS_TOTAL.
         let mut sum: u32 = 0;
-        for i in 0..recipients.len() {
-            let r = recipients.get(i).unwrap();
+        for r in recipients.iter() {
             sum = match sum.checked_add(r.share_bps) {
                 Some(v) => v,
                 None => panic_with_error!(&env, ContractError::ExceedsLimit),
@@ -245,7 +248,9 @@ impl TreasuryContract {
         let mut total_sent: i128 = 0;
 
         for i in 0..recipient_count {
-            let mut r = recipients.get(i).unwrap();
+            let mut r = recipients
+                .get(i)
+                .unwrap_or_else(|| panic_with_error!(&env, ContractError::InvalidOperation));
 
             // The last recipient collects the remainder so that available
             // is fully distributed even with integer division rounding.
@@ -379,7 +384,10 @@ impl TreasuryContract {
 
     /// Address of the vault contract authorised to submit fees.
     pub fn get_vault(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Vault).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Vault)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     pub fn register_callee(env: Env, caller: Address, callee: Address) {

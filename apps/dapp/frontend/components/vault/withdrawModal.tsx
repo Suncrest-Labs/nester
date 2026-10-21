@@ -40,7 +40,7 @@ import { getVaultContractById as getVaultById } from "@/lib/vault-contracts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type ActionState = "input" | "building" | "signing" | "submitting" | "pending" | "success" | "error";
+type ActionState = "input" | "building" | "restoring" | "signing" | "submitting" | "pending" | "success" | "error";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -140,7 +140,7 @@ function ModalShell({
 // ── Transaction steps ─────────────────────────────────────────────────────────
 
 const TX_STEPS: { label: string; activeStates: ActionState[] }[] = [
-  { label: "Build contract call", activeStates: ["building", "signing", "submitting", "pending", "success"] },
+  { label: "Build contract call", activeStates: ["building", "restoring", "signing", "submitting", "pending", "success"] },
   { label: "Sign with wallet",    activeStates: ["signing", "submitting", "pending", "success"] },
   { label: "Submit and confirm",  activeStates: ["submitting", "pending", "success"] },
 ];
@@ -237,6 +237,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
         asset: position.asset?.toUpperCase() === "XLM" ? "XLM" : "USDC",
         shares: freshQuote.sharesBurned,
         minAssetsOut: applySlippageToAmount(freshQuote.netAmount, slippageBps),
+        onStatusChange: (nextState) => setState(nextState),
       });
 
       const result = recordWithdrawal({
@@ -282,7 +283,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   return (
     <ModalShell
       open={open && !!position}
-      onClose={state === "signing" || state === "submitting" || state === "pending" ? () => {} : reset}
+      onClose={state === "restoring" || state === "signing" || state === "submitting" || state === "pending" ? () => {} : reset}
       title={`Withdraw from ${position?.vaultName ?? "Vault"}`}
       subtitle="Review shares, lock period, and net proceeds before signing."
     >
@@ -421,9 +422,9 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                 {TX_STEPS.map(({ label, activeStates }) => {
                   const done = activeStates.includes(state);
                   const active =
-                    (label === "Build contract call" && state === "building") ||
+                    (label === "Build contract call" && (state === "building" || state === "restoring")) ||
                     (label === "Sign with wallet" && state === "signing") ||
-                    (label === "Submit and confirm" && state === "submitting");
+                    (label === "Submit and confirm" && (state === "submitting" || state === "pending"));
                   return (
                     <div
                       key={label}
@@ -452,6 +453,21 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                   );
                 })}
               </div>
+
+              {/* Reactivation notice when restorePreamble is encountered */}
+              {state === "restoring" && (
+                <div className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                  <div className="flex items-start gap-2.5 text-xs text-blue-800">
+                    <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+                    <div>
+                      <p className="font-medium">Position Reactivation Required</p>
+                      <p className="mt-0.5 leading-relaxed text-blue-700">
+                        Your position needs to be reactivated first. Please approve the initial transaction to restore your archived ledger entries.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Info note */}
               {state === "input" && (
@@ -521,7 +537,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
               <div className="mt-5 flex gap-3">
                 <button
                   onClick={reset}
-                  disabled={state === "signing" || state === "submitting" || state === "pending"}
+                  disabled={state === "restoring" || state === "signing" || state === "submitting" || state === "pending"}
                   className="flex-1 rounded-full border border-border bg-white dark:bg-[#100F0F] px-5 py-3 text-sm font-medium text-foreground transition-colors hover:border-black/15 dark:hover:border-white/15 disabled:opacity-40"
                 >
                   {state === "success" ? "Close" : "Cancel"}
@@ -532,6 +548,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                     onClick={state === "error" ? () => { setState("input"); setErrorMsg(""); } : handleWithdraw}
                     disabled={
                       state === "building" ||
+                      state === "restoring" ||
                       state === "signing" ||
                       state === "submitting" ||
                       state === "pending" ||
@@ -543,6 +560,12 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                       <span className="inline-flex items-center justify-center gap-2">
                         <Loader2 className="h-4 w-4 animate-spin" />
                         Building
+                      </span>
+                    )}
+                    {state === "restoring" && (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Reactivating position
                       </span>
                     )}
                     {state === "signing" && (

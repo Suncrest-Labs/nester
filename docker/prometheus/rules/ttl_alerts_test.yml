@@ -1,0 +1,53 @@
+# promtool unit tests for contract TTL alerts (nester#1486).
+
+rule_files:
+  - ttl_alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Healthy TTL entries with plenty of ledgers remaining do not alert.
+  - interval: 1m
+    name: healthy TTL entries do not alert
+    input_series:
+      - series: 'nester_contract_entry_ttl_ledgers_remaining{contract="CAAAAA",kind="instance"}'
+        values: '500000x30'
+      - series: 'nester_contract_entry_ttl_ledgers_remaining{contract="CAAAAA",kind="user"}'
+        values: '450000x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ContractEntryTTLLow
+        exp_alerts: []
+
+  # A transient dip below 120960 ledgers that resolves within 15m does not alert.
+  - interval: 1m
+    name: transient TTL dip does not alert
+    input_series:
+      - series: 'nester_contract_entry_ttl_ledgers_remaining{contract="CAAAAA",kind="instance"}'
+        values: '100000x10 500000x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ContractEntryTTLLow
+        exp_alerts: []
+
+  # A sustained TTL below 7 days (120960 ledgers) fires ContractEntryTTLLow after 15m.
+  - interval: 1m
+    name: sustained low TTL triggers alert
+    input_series:
+      - series: 'nester_contract_entry_ttl_ledgers_remaining{contract="CAAAAA",kind="instance"}'
+        values: '100000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ContractEntryTTLLow
+        exp_alerts:
+          - exp_labels:
+              alertname: ContractEntryTTLLow
+              severity: page
+              slo: contract_ttl
+              contract: CAAAAA
+              kind: instance
+            exp_annotations:
+              summary: Contract entry TTL low for CAAAAA (instance)
+              description: The contract entry instance for contract CAAAAA has only 100000 ledgers remaining (< 7 days). The TTL keeper may be failing or the keeper account needs funding.
+              dashboard: /d/nester-contract-ttl/contract-ttl
+              runbook: docs/observability/runbooks/ttl-keeper.md

@@ -179,7 +179,11 @@ impl ReferralContract {
         principal: i128,
         first_deposit_time: u64,
     ) {
-        let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Vault)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         vault.require_auth();
 
         if performance_fee_amount <= 0 {
@@ -343,7 +347,11 @@ impl ReferralContract {
             .instance()
             .set(&DataKey::RewardBalance(referrer.clone()), &0i128);
 
-        let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         token::Client::new(&env, &token).transfer(
             &env.current_contract_address(),
             &referrer,
@@ -415,7 +423,11 @@ impl ReferralContract {
         if amount <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
-        let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         token::Client::new(&env, &token).transfer(
             &caller,
             &env.current_contract_address(),

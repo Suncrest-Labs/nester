@@ -7,6 +7,7 @@ import {
   nativeToScVal,
   scValToNative,
   Address,
+  Operation,
 } from "@stellar/stellar-sdk";
 
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
@@ -85,6 +86,10 @@ export interface BuiltTransaction {
   xdr: string;
   /** The assembled transaction object (used for submission after signing). */
   transaction: Transaction;
+  /** Present when archived ledger entries must be restored first */
+  restoreTransaction?: Transaction;
+  restoreXdr?: string;
+  needsRestore?: boolean;
 }
 
 export interface NetworkFeeEstimate {
@@ -291,6 +296,34 @@ export async function estimateWithdrawFee(
   }
 }
 
+/**
+ * Build a transaction that restores archived footprint entries.
+ *
+ * Used when Soroban RPC returns `restorePreamble` from simulateTransaction,
+ * indicating that one or more contract entries have been archived and must
+ * be restored before the invocation can proceed.
+ */
+export function buildRestoreTransaction(
+  account: SorobanRpc.Server.AccountResponse | { accountId(): string; sequenceNumber(): string },
+  restorePreamble: {
+    minResourceFee: string | number;
+    transactionData: SorobanRpc.Api.SorobanTransactionData | string;
+  },
+  networkPassphrase: string
+): BuiltTransaction {
+  const fee = (BigInt(BASE_FEE) + BigInt(restorePreamble.minResourceFee)).toString();
+  const tx = new TransactionBuilder(account, {
+    fee,
+    networkPassphrase,
+  })
+    .setSorobanData(restorePreamble.transactionData)
+    .addOperation(Operation.restoreFootprint({}))
+    .setTimeout(30)
+    .build();
+
+  return { xdr: tx.toXDR(), transaction: tx };
+}
+
 // ── Transaction builders ──────────────────────────────────────────────────────
 
 /**
@@ -330,6 +363,21 @@ export async function buildDepositTransaction(
 
   // Simulate to populate the transaction's footprint (Soroban requirement)
   const sim = await server.simulateTransaction(tx);
+
+  if (SorobanRpc.Api.isSimulationRestore(sim)) {
+    const restoreBuilt = buildRestoreTransaction(
+      account,
+      sim.restorePreamble,
+      network.networkPassphrase
+    );
+    return {
+      xdr: restoreBuilt.xdr,
+      transaction: restoreBuilt.transaction,
+      restoreTransaction: restoreBuilt.transaction,
+      restoreXdr: restoreBuilt.xdr,
+      needsRestore: true,
+    };
+  }
 
   if (SorobanRpc.Api.isSimulationError(sim)) {
     throw new TransactionFailedError(
@@ -384,6 +432,21 @@ export async function buildWithdrawTransaction(
     .build();
 
   const sim = await server.simulateTransaction(tx);
+
+  if (SorobanRpc.Api.isSimulationRestore(sim)) {
+    const restoreBuilt = buildRestoreTransaction(
+      account,
+      sim.restorePreamble,
+      network.networkPassphrase
+    );
+    return {
+      xdr: restoreBuilt.xdr,
+      transaction: restoreBuilt.transaction,
+      restoreTransaction: restoreBuilt.transaction,
+      restoreXdr: restoreBuilt.xdr,
+      needsRestore: true,
+    };
+  }
 
   if (SorobanRpc.Api.isSimulationError(sim)) {
     throw new TransactionFailedError(
@@ -630,20 +693,43 @@ export async function executeVaultDeposit(params: {
   asset: "USDC" | "XLM";
   amount: bigint | string;
   minSharesOut: bigint;
+  onStatusChange?: (status: "building" | "restoring" | "signing" | "submitting" | "pending") => void;
 }): Promise<TransactionReceipt> {
-  const { walletAddress, contractId, amount, minSharesOut } = params;
+  const { walletAddress, contractId, amount, minSharesOut, onStatusChange } = params;
 
   if (!isRealContractId(contractId)) {
     throw new Error("Vault is not yet live. Deposits are currently disabled.");
   }
 
-  const { xdr } = await buildDepositTransaction({ walletAddress, contractId, amount, minSharesOut });
-  const signedXdr = await signTransaction(xdr);
   await assertWalletOnDappNetwork();
+  onStatusChange?.("building");
+  let built = await buildDepositTransaction({ walletAddress, contractId, amount, minSharesOut });
+
+  if (built.needsRestore && built.restoreTransaction) {
+    onStatusChange?.("restoring");
+    onStatusChange?.("signing");
+    const signedRestoreXdr = await signTransaction(built.xdr);
+    onStatusChange?.("submitting");
+    await submitTransaction(signedRestoreXdr);
+
+    onStatusChange?.("building");
+    built = await buildDepositTransaction({ walletAddress, contractId, amount, minSharesOut });
+  }
+
+  onStatusChange?.("signing");
+  let firstAttempt = true;
   const signedXdr = await signWithExpiryRebuild(
-    () => buildDepositTransaction({ walletAddress, contractId, amount }),
+    async () => {
+      if (firstAttempt) {
+        firstAttempt = false;
+        return built;
+      }
+      onStatusChange?.("building");
+      return buildDepositTransaction({ walletAddress, contractId, amount, minSharesOut });
+    },
     signTransaction
   );
+  onStatusChange?.("pending");
   return submitTransaction(signedXdr);
 }
 
@@ -654,18 +740,43 @@ export async function executeVaultWithdraw(params: {
   asset: "USDC" | "XLM";
   shares: number;
   minAssetsOut?: bigint | number;
+  onStatusChange?: (status: "building" | "restoring" | "signing" | "submitting" | "pending") => void;
 }): Promise<TransactionReceipt> {
-  const { walletAddress, contractId, shares, minAssetsOut } = params;
+  const { walletAddress, contractId, shares, minAssetsOut, onStatusChange } = params;
 
   if (!isRealContractId(contractId)) {
     throw new Error("Vault is not yet live. Withdrawals are currently disabled.");
   }
 
   await assertWalletOnDappNetwork();
+  onStatusChange?.("building");
+  let built = await buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut });
+
+  if (built.needsRestore && built.restoreTransaction) {
+    onStatusChange?.("restoring");
+    onStatusChange?.("signing");
+    const signedRestoreXdr = await signTransaction(built.xdr);
+    onStatusChange?.("submitting");
+    await submitTransaction(signedRestoreXdr);
+
+    onStatusChange?.("building");
+    built = await buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut });
+  }
+
+  onStatusChange?.("signing");
+  let firstAttempt = true;
   const signedXdr = await signWithExpiryRebuild(
-    () => buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut }),
+    async () => {
+      if (firstAttempt) {
+        firstAttempt = false;
+        return built;
+      }
+      onStatusChange?.("building");
+      return buildWithdrawTransaction({ walletAddress, contractId, shares, minAssetsOut });
+    },
     signTransaction
   );
+  onStatusChange?.("pending");
   return submitTransaction(signedXdr);
 }
 

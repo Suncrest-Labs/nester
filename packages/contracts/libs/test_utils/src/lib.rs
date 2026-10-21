@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 pub mod assertions;
 pub mod env;
 pub mod harness;

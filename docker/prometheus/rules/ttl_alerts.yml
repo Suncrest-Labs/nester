@@ -1,0 +1,27 @@
+# TTL keeper and contract entry lifetime alerts (nester#1486).
+#
+# Soroban state entries require rent to remain active. If the TTL drops to 0,
+# entries are archived and user transactions fail until restored.
+# The TTL keeper job monitors contract instances and persistent user entries,
+# extending their footprints when they come within 7 days (~120,960 ledgers)
+# of expiration.
+#
+# An alert fires when any monitored entry remains below 7 days of TTL.
+
+groups:
+  - name: ttl_alerts
+    rules:
+      - alert: ContractEntryTTLLow
+        expr: nester_contract_entry_ttl_ledgers_remaining < 120960
+        for: 15m
+        labels:
+          severity: page
+          slo: contract_ttl
+        annotations:
+          summary: >-
+            Contract entry TTL low for {{ $labels.contract }} ({{ $labels.kind }})
+          description: >-
+            The contract entry {{ $labels.kind }} for contract {{ $labels.contract }} has only
+            {{ $value }} ledgers remaining (< 7 days). The TTL keeper may be failing or the keeper account needs funding.
+          dashboard: /d/nester-contract-ttl/contract-ttl
+          runbook: docs/observability/runbooks/ttl-keeper.md

@@ -13,6 +13,7 @@
 //! real balance invariant, since this fixture exists purely to let a test
 //! set an owner's "vault balance" to an arbitrary value.
 #![no_std]
+#![allow(clippy::unwrap_used)]
 
 use soroban_sdk::{contract, contractimpl, Address, Env};
 

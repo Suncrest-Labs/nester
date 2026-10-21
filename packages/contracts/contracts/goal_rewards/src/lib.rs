@@ -332,7 +332,11 @@ impl GoalRewardsContract {
             panic_with_error!(&env, GoalRewardError::InvalidConfig);
         }
 
-        let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, GoalRewardError::NotInitialized));
         token::Client::new(&env, &token).transfer(
             &caller,
             &env.current_contract_address(),
@@ -361,7 +365,11 @@ impl GoalRewardsContract {
         caller.require_auth();
         require_admin_or_treasurer(&env, &caller);
 
-        let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, GoalRewardError::NotInitialized));
         let held = token::Client::new(&env, &token).balance(&env.current_contract_address());
         let credited: i128 = env
             .storage()
@@ -401,7 +409,11 @@ impl GoalRewardsContract {
         env.storage()
             .instance()
             .set(&DataKey::RewardPoolBalance, &(balance - amount));
-        let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, GoalRewardError::NotInitialized));
         token::Client::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);
 
         env.events().publish((GOAL_RWD, GR_DEFUND), amount);
@@ -442,7 +454,7 @@ impl GoalRewardsContract {
             .storage()
             .instance()
             .get(&DataKey::GoalRegistry)
-            .unwrap();
+            .unwrap_or_else(|| panic_with_error!(&env, GoalRewardError::NotInitialized));
         let registry_client = SavingsGoalContractClient::new(&env, &registry);
         let goal = registry_client.get_goal(&goal_id);
 
@@ -480,17 +492,17 @@ impl GoalRewardsContract {
             .storage()
             .instance()
             .get(&DataKey::MinActiveDurationSeconds)
-            .unwrap();
+            .unwrap_or_else(|| panic_with_error!(&env, GoalRewardError::NotInitialized));
         let single_ceiling_bps: u32 = env
             .storage()
             .instance()
             .get(&DataKey::SingleContributionCeilingBps)
-            .unwrap();
+            .unwrap_or_else(|| panic_with_error!(&env, GoalRewardError::NotInitialized));
         let min_periods: u32 = env
             .storage()
             .instance()
             .get(&DataKey::MinDistinctPeriods)
-            .unwrap();
+            .unwrap_or_else(|| panic_with_error!(&env, GoalRewardError::NotInitialized));
 
         check_eligibility(
             matches!(goal.status, GoalStatus::Completed),
@@ -548,7 +560,11 @@ impl GoalRewardsContract {
         }
 
         if bonus > 0 {
-            let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+            let token: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Token)
+                .unwrap_or_else(|| panic_with_error!(&env, GoalRewardError::NotInitialized));
             token::Client::new(&env, &token).transfer(
                 &env.current_contract_address(),
                 &caller,
@@ -582,11 +598,10 @@ impl GoalRewardsContract {
     /// [`GoalRewardError`] discriminant that `claim_goal_bonus` would panic
     /// with.
     pub fn preview_goal_bonus(env: Env, goal_id: BytesN<32>) -> (bool, i128, u32) {
-        let registry: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::GoalRegistry)
-            .unwrap();
+        let registry: Address = match env.storage().instance().get(&DataKey::GoalRegistry) {
+            Some(r) => r,
+            None => return (false, 0, GoalRewardError::NotInitialized as u32),
+        };
         let registry_client = SavingsGoalContractClient::new(&env, &registry);
         let goal = registry_client.get_goal(&goal_id);
 

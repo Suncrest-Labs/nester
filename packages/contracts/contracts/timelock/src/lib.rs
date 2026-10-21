@@ -325,8 +325,7 @@ impl Timelock {
             .unwrap_or(Vec::new(env));
 
         let mut pending = Vec::new(env);
-        for i in 0..ids.len() {
-            let id = ids.get(i).unwrap();
+        for id in ids.iter() {
             if let Some(op) = env
                 .storage()
                 .persistent()

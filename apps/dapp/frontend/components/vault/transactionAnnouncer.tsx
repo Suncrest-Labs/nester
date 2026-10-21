@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 export type TransactionPhase =
   | "input"
   | "building"
+  | "restoring"
   | "signing"
   | "submitting"
   | "pending"
@@ -39,6 +40,8 @@ function phraseFor(
   switch (phase) {
     case "building":
       return `Preparing ${subject}.`;
+    case "restoring":
+      return `Reactivating your position on the network.`;
     case "signing":
       return `Waiting for you to sign the ${action.toLowerCase()} in your wallet.`;
     case "submitting":

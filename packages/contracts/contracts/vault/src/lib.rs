@@ -1313,7 +1313,7 @@ fn get_fee_config(env: &Env) -> FeeConfig {
     env.storage()
         .instance()
         .get(&DataKey::FeeConfig)
-        .expect("Fee config not set")
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
 fn accrue_management_fee(env: &Env) {
@@ -1845,9 +1845,10 @@ fn find_lock(
     lock_id: u64,
 ) -> Result<(u32, locks::LockedPosition), ContractError> {
     for i in 0..user_locks.len() {
-        let position = user_locks.get(i).unwrap();
-        if position.lock_id == lock_id {
-            return Ok((i, position));
+        if let Some(position) = user_locks.get(i) {
+            if position.lock_id == lock_id {
+                return Ok((i, position));
+            }
         }
     }
     Err(ContractError::TimelockNotFound)
@@ -2051,7 +2052,7 @@ fn check_circuit_breaker(env: &Env, amount: i128) {
         .storage()
         .instance()
         .get(&DataKey::CircuitBreakerConfig)
-        .expect("CB config missing");
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized));
     let now = env.ledger().timestamp();
     let window_start = now.saturating_sub(config.window_seconds);
     let history: Vec<WithdrawalEntry> = env
@@ -2972,11 +2973,14 @@ impl VaultContract {
         // allowed. Reuses TimelockNotReady because the error enum is at the
         // 50-variant cap.
         let now = env.ledger().timestamp();
-        let last_harvest = get_last_harvest_at(&env, &user);
-        if last_harvest != 0
-            && now < last_harvest.saturating_add(get_min_harvest_interval(&env))
+        if let Some(last_harvest) = env
+            .storage()
+            .persistent()
+            .get::<_, u64>(&DataKey::LastHarvestAt(user.clone()))
         {
-            panic_with_error!(&env, ContractError::TimelockNotReady);
+            if now < last_harvest.saturating_add(get_min_harvest_interval(&env)) {
+                panic_with_error!(&env, ContractError::TimelockNotReady);
+            }
         }
 
         release_vested_yield(&env);
@@ -3958,7 +3962,10 @@ impl VaultContract {
 
         let mut i = 0;
         while i < queue.len() {
-            let req = queue.get(i).unwrap();
+            let req = match queue.get(i) {
+                Some(r) => r,
+                None => break,
+            };
             if liquid_reserves >= req.amount {
                 transfer_tokens(
                     &env,
@@ -3989,7 +3996,9 @@ impl VaultContract {
 
         let mut new_queue = soroban_sdk::Vec::new(&env);
         while i < queue.len() {
-            new_queue.push_back(queue.get(i).unwrap());
+            if let Some(r) = queue.get(i) {
+                new_queue.push_back(r);
+            }
             i += 1;
         }
 
@@ -5205,7 +5214,7 @@ impl VaultContract {
         env.storage()
             .instance()
             .get(&DataKey::CircuitBreakerConfig)
-            .expect("CB config missing")
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     // -----------------------------------------------------------------------

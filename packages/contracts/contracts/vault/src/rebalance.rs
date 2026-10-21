@@ -130,8 +130,10 @@ pub fn plan_matches_fresh(
         return false;
     }
     for i in 0..fresh.len() {
-        let f = fresh.get(i).unwrap();
-        let s = submitted.get(i).unwrap();
+        let (f, s) = match (fresh.get(i), submitted.get(i)) {
+            (Some(f), Some(s)) => (f, s),
+            _ => return false,
+        };
         if f.source_id != s.source_id {
             return false;
         }

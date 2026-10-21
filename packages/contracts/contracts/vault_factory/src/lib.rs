@@ -245,13 +245,14 @@ impl VaultFactoryContract {
         let mut i = start;
         let end = start.saturating_add(capped_limit).min(addresses.len());
         while i < end {
-            let addr = addresses.get(i).unwrap();
-            if let Some(record) = env
-                .storage()
-                .instance()
-                .get::<DataKey, VaultRecord>(&DataKey::VaultByAddress(addr))
-            {
-                out.push_back(record);
+            if let Some(addr) = addresses.get(i) {
+                if let Some(record) = env
+                    .storage()
+                    .instance()
+                    .get::<DataKey, VaultRecord>(&DataKey::VaultByAddress(addr))
+                {
+                    out.push_back(record);
+                }
             }
             i += 1;
         }

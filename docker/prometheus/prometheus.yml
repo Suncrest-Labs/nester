@@ -30,6 +30,7 @@ rule_files:
   - rules/slo_recording.yml
   - rules/slo_alerts.yml
   - rules/slo_probe_alerts.yml
+  - rules/ttl_alerts.yml
 
 alerting:
   alertmanagers:

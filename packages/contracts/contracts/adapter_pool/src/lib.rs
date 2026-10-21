@@ -94,11 +94,17 @@ impl PoolAdapterContract {
     }
 
     pub fn get_vault(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Vault).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Vault)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     pub fn get_pool(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Pool).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     /// Current derived-APY measurement basis, if any.
@@ -113,8 +119,16 @@ impl PoolAdapterContract {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
 
-        let underlying: Address = env.storage().instance().get(&DataKey::Underlying).unwrap();
-        let pool: Address = env.storage().instance().get(&DataKey::Pool).unwrap();
+        let underlying: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Underlying)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
+        let pool: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let me = env.current_contract_address();
 
         // Pull from the caller, then forward to the pool. The caller
@@ -152,7 +166,11 @@ impl PoolAdapterContract {
     }
 
     fn withdraw_internal(env: Env, to: Address, units: i128, min_out: i128) -> i128 {
-        let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Vault)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         vault.require_auth();
         if units <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
@@ -162,8 +180,16 @@ impl PoolAdapterContract {
             panic_with_error!(&env, ContractError::InsufficientBalance);
         }
 
-        let underlying: Address = env.storage().instance().get(&DataKey::Underlying).unwrap();
-        let pool: Address = env.storage().instance().get(&DataKey::Pool).unwrap();
+        let underlying: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Underlying)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
+        let pool: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let me = env.current_contract_address();
 
         let assets: i128 = env.invoke_contract(
@@ -273,7 +299,10 @@ impl YieldAdapter for PoolAdapterContract {
     }
 
     fn underlying(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Underlying).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Underlying)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     /// AMM pools accept any size; capacity is bounded by price impact, which
@@ -291,7 +320,10 @@ impl YieldAdapter for PoolAdapterContract {
 /// Value LP units pro-rata against the pool's underlying-side reserve —
 /// exactly what a burn would pay out. No spot price involved.
 fn lp_value(env: &Env) -> i128 {
-    let pool: Address = env.storage().instance().get(&DataKey::Pool).unwrap();
+    let pool: Address = match env.storage().instance().get(&DataKey::Pool) {
+        Some(p) => p,
+        None => return 0,
+    };
     let units: i128 = env.storage().instance().get(&DataKey::Units).unwrap_or(0);
     if units == 0 {
         return 0;
@@ -325,7 +357,11 @@ fn reset_checkpoint(env: &Env) {
 }
 
 fn require_vault(env: &Env, caller: &Address) {
-    let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
+    let vault: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Vault)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized));
     if caller != &vault {
         panic_with_error!(env, ContractError::Unauthorized);
     }

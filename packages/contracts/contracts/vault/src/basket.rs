@@ -67,9 +67,10 @@ pub fn calculate_basket_value(
     let mut all_prices_valid = true;
 
     for i in 0..assets.len() {
-        let asset = assets.get(i).unwrap();
-        let balance = balances.get(i).unwrap();
-        let price_info = prices.get(i).unwrap();
+        let (asset, balance, price_info) = match (assets.get(i), balances.get(i), prices.get(i)) {
+            (Some(a), Some(b), Some(p)) => (a, b, p),
+            _ => continue,
+        };
 
         // Check price freshness
         if now > price_info.timestamp + MAX_PRICE_AGE_SECS {

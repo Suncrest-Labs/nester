@@ -570,7 +570,9 @@ impl AccessControl {
         let mut i = start;
         let end = start.saturating_add(capped_limit).min(members.len());
         while i < end {
-            out.push_back(members.get(i).unwrap());
+            if let Some(member) = members.get(i) {
+                out.push_back(member);
+            }
             i += 1;
         }
         out

@@ -1527,7 +1527,9 @@ fn append_apy_snapshot(env: &Env, source: &mut YieldSource, apy_bps: u32) {
         // Keep the newest N-1 entries, then append the latest APY at the end.
         let mut trimmed = Vec::<ApySnapshot>::new(env);
         for i in 1..history.len() {
-            trimmed.push_back(history.get(i).unwrap());
+            if let Some(entry) = history.get(i) {
+                trimmed.push_back(entry);
+            }
         }
         history = trimmed;
     }

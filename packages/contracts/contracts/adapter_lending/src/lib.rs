@@ -71,11 +71,17 @@ impl LendingAdapterContract {
     }
 
     pub fn get_vault(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Vault).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Vault)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     pub fn get_protocol(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Protocol).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Protocol)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     fn deposit_internal(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128 {
@@ -85,8 +91,16 @@ impl LendingAdapterContract {
             panic_with_error!(&env, ContractError::InvalidAmount);
         }
 
-        let underlying: Address = env.storage().instance().get(&DataKey::Underlying).unwrap();
-        let protocol: Address = env.storage().instance().get(&DataKey::Protocol).unwrap();
+        let underlying: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Underlying)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
+        let protocol: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Protocol)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let me = env.current_contract_address();
 
         // Pull the assets from the caller, then forward them to the protocol.
@@ -122,7 +136,11 @@ impl LendingAdapterContract {
     }
 
     fn withdraw_internal(env: Env, to: Address, units: i128, min_out: i128) -> i128 {
-        let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Vault)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         vault.require_auth();
         if units <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
@@ -132,8 +150,16 @@ impl LendingAdapterContract {
             panic_with_error!(&env, ContractError::InsufficientBalance);
         }
 
-        let underlying: Address = env.storage().instance().get(&DataKey::Underlying).unwrap();
-        let protocol: Address = env.storage().instance().get(&DataKey::Protocol).unwrap();
+        let underlying: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Underlying)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
+        let protocol: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Protocol)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let me = env.current_contract_address();
 
         let assets: i128 = env.invoke_contract(
@@ -185,7 +211,11 @@ impl YieldAdapter for LendingAdapterContract {
     /// Asset value of the aggregate position. `_owner` is ignored: the
     /// adapter holds one position, for the vault.
     fn position_value(env: Env, _owner: Address) -> i128 {
-        let protocol: Address = env.storage().instance().get(&DataKey::Protocol).unwrap();
+        let protocol: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Protocol)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let me = env.current_contract_address();
         env.invoke_contract(
             &protocol,
@@ -198,7 +228,15 @@ impl YieldAdapter for LendingAdapterContract {
     /// If the protocol call fails, report `Unavailable` rather than panicking:
     /// the read path must never brick registry refreshes.
     fn current_apy(env: Env) -> AdapterApy {
-        let protocol: Address = env.storage().instance().get(&DataKey::Protocol).unwrap();
+        let protocol: Address = match env.storage().instance().get(&DataKey::Protocol) {
+            Some(p) => p,
+            None => {
+                return AdapterApy {
+                    apy_bps: 0,
+                    confidence: ApyConfidence::Unavailable,
+                }
+            }
+        };
         let args: Vec<Val> = Vec::new(&env);
         match env.try_invoke_contract::<u32, ContractError>(
             &protocol,
@@ -217,11 +255,17 @@ impl YieldAdapter for LendingAdapterContract {
     }
 
     fn underlying(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Underlying).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Underlying)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
     fn max_deposit(env: Env) -> i128 {
-        let protocol: Address = env.storage().instance().get(&DataKey::Protocol).unwrap();
+        let protocol: Address = match env.storage().instance().get(&DataKey::Protocol) {
+            Some(p) => p,
+            None => return 0,
+        };
         let args: Vec<Val> = Vec::new(&env);
         match env.try_invoke_contract::<i128, ContractError>(
             &protocol,
@@ -241,7 +285,11 @@ impl YieldAdapter for LendingAdapterContract {
 }
 
 fn require_vault(env: &Env, caller: &Address) {
-    let vault: Address = env.storage().instance().get(&DataKey::Vault).unwrap();
+    let vault: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Vault)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized));
     if caller != &vault {
         panic_with_error!(env, ContractError::Unauthorized);
     }
