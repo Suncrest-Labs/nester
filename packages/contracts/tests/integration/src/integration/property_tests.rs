@@ -393,6 +393,27 @@ proptest! {
             prop_assert!(shares > 0, "valid deposit minted no shares");
         }
     }
+
+    #[test]
+    fn prop_impaired_vault_rejects_deposit(
+        initial_deposit in MIN_DEPOSIT..(100_000 * XLM),
+        follow_up_deposit in MIN_DEPOSIT..(100_000 * XLM),
+    ) {
+        let (h, users) = setup_harness_with_users(2);
+        configure_invariant_harness(&h);
+
+        let minted = h.vault().deposit(&users[0], &initial_deposit, &0);
+        prop_assert_eq!(minted, initial_deposit);
+
+        // Impair vault to zero assets while supply > 0 (#1477)
+        h.vault().report_yield(&h.admin, &-initial_deposit);
+        prop_assert_eq!(h.vault().total_assets(), 0);
+        prop_assert!(h.vault().total_shares() > 0);
+
+        // Subsequent deposit must be rejected rather than minting 1:1
+        let res = h.vault().try_deposit(&users[1], &follow_up_deposit, &0);
+        prop_assert!(res.is_err(), "deposit into fully impaired vault must fail");
+    }
 }
 
 #[test]

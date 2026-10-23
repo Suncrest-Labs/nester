@@ -12,6 +12,12 @@ import json
 import os
 import sys
 
+# Crates that live under contracts/ but must never ship. Each one also carries a
+# wasm-only compile_error! guard, so building it for release fails loudly.
+NON_SHIPPING = {
+    "lp_aggregator",  # nester#1476: swap execution is a stub, no auth/allowlist
+}
+
 meta = json.load(sys.stdin)
 root = meta["workspace_root"].replace("\\", "/").rstrip("/")
 for pkg in meta["packages"]:
@@ -22,5 +28,7 @@ for pkg in meta["packages"]:
     if "/test_fixtures/" in "/" + rel:
         continue
     if not any("cdylib" in t["kind"] for t in pkg["targets"]):
+        continue
+    if pkg["name"] in NON_SHIPPING:
         continue
     print(pkg["name"])

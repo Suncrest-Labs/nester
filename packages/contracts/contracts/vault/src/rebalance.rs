@@ -13,28 +13,28 @@
 use nester_common::fees::mul_div;
 use soroban_sdk::{contracttype, Env, Symbol, Vec};
 
-/// Hard ceiling on the per-leg slippage tolerance. Stored configuration
-/// (`rebalance_slippage` combined with an admin-set `max_leg_slippage_bps`)
-/// can only ever *tighten* this, never loosen it — an admin key compromise
-/// cannot authorise a leg to lose more than this many bps.
+//  Hard ceiling on the per-leg slippage tolerance. Stored configuration
+//  (`rebalance_slippage` combined with an admin-set `max_leg_slippage_bps`)
+//  can only ever *tighten* this, never loosen it — an admin key compromise
+//  cannot authorise a leg to lose more than this many bps.
 pub const MAX_LEG_SLIPPAGE_BPS_CEILING: u32 = 1_000; // 10%
 
-/// Default cap on the fraction of vault TVL a single rebalance call may
-/// move, bounding both legitimate churn and the blast radius of a
-/// compromised keeper.
+//  Default cap on the fraction of vault TVL a single rebalance call may
+//  move, bounding both legitimate churn and the blast radius of a
+//  compromised keeper.
 pub const DEFAULT_MAX_REBALANCE_VALUE_BPS: u32 = 2_000; // 20%
 
-/// How far a submitted plan's per-leg amounts may drift from what the
-/// contract would compute right now before `execute_rebalance` rejects it
-/// as stale. This is intentionally a tolerance, not exact-hash equality:
-/// legitimate price movement between `plan_rebalance` and `execute_rebalance`
-/// must not always be treated as an attack, but a large deviation should be.
+//  How far a submitted plan's per-leg amounts may drift from what the
+//  contract would compute right now before `execute_rebalance` rejects it
+//  as stale. This is intentionally a tolerance, not exact-hash equality:
+//  legitimate price movement between `plan_rebalance` and `execute_rebalance`
+//  must not always be treated as an attack, but a large deviation should be.
 pub const PLAN_STALENESS_TOLERANCE_BPS: u32 = 200; // 2%
 
-/// One rebalance leg: move `delta` into (positive) or out of (negative)
-/// `source_id`. `min_out` is only meaningful for withdrawal legs
-/// (`delta < 0`) — the minimum assets that must be realised or the whole
-/// call reverts.
+//  One rebalance leg: move `delta` into (positive) or out of (negative)
+//  `source_id`. `min_out` is only meaningful for withdrawal legs
+//  (`delta < 0`) — the minimum assets that must be realised or the whole
+//  call reverts.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RebalanceLeg {
@@ -43,10 +43,10 @@ pub struct RebalanceLeg {
     pub min_out: i128,
 }
 
-/// A raw (source, delta) pair as returned by the allocation strategy's
-/// `calculate_rebalance_deltas` — this module's input shape, kept separate
-/// from the vault's own `AllocationDeltaView` so `rebalance.rs` has no
-/// dependency on the surrounding vault contract's types.
+//  A raw (source, delta) pair as returned by the allocation strategy's
+//  `calculate_rebalance_deltas` — this module's input shape, kept separate
+//  from the vault's own `AllocationDeltaView` so `rebalance.rs` has no
+//  dependency on the surrounding vault contract's types.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeltaInput {
@@ -54,15 +54,15 @@ pub struct DeltaInput {
     pub delta: i128,
 }
 
-/// Build a slippage-safe execution plan from raw strategy deltas.
-///
-/// `min_assets_out_for_withdrawal` converts a gross withdrawal amount into
-/// its slippage-adjusted floor (injected so this function has no vault-token
-/// contract dependency — the real vault passes a closure around
-/// `rebalance_min_assets_out`, tests pass a simple percentage function).
-///
-/// Returns the plan plus the total absolute value moved across all legs, so
-/// the caller can enforce the per-rebalance value cap.
+//  Build a slippage-safe execution plan from raw strategy deltas.
+//
+//  `min_assets_out_for_withdrawal` converts a gross withdrawal amount into
+//  its slippage-adjusted floor (injected so this function has no vault-token
+//  contract dependency — the real vault passes a closure around
+//  `rebalance_min_assets_out`, tests pass a simple percentage function).
+//
+//  Returns the plan plus the total absolute value moved across all legs, so
+//  the caller can enforce the per-rebalance value cap.
 pub fn build_plan(
     env: &Env,
     deltas: &Vec<DeltaInput>,
@@ -93,13 +93,13 @@ pub fn build_plan(
     (plan, total_moved)
 }
 
-/// Cheap integrity/commitment checksum over a plan's amounts and ordering.
-/// Not a cryptographic hash of the `Symbol` contents (Soroban's `no_std`
-/// environment has no convenient byte-serialisation for arbitrary
-/// contract types without an `Env`-bound allocation) — order and amount are
-/// the security-relevant fields here, since [`plan_matches_fresh`] separately
-/// re-validates every `source_id` by direct equality against a freshly
-/// computed plan.
+//  Cheap integrity/commitment checksum over a plan's amounts and ordering.
+//  Not a cryptographic hash of the `Symbol` contents (Soroban's `no_std`
+//  environment has no convenient byte-serialisation for arbitrary
+//  contract types without an `Env`-bound allocation) — order and amount are
+//  the security-relevant fields here, since [`plan_matches_fresh`] separately
+//  re-validates every `source_id` by direct equality against a freshly
+//  computed plan.
 pub fn checksum(legs: &Vec<RebalanceLeg>) -> u64 {
     let mut h: u64 = 1_469_598_103_934_665_603; // FNV-1a offset basis
     const PRIME: u64 = 1_099_511_628_211;
@@ -116,11 +116,11 @@ pub fn checksum(legs: &Vec<RebalanceLeg>) -> u64 {
     h
 }
 
-/// True when `submitted` matches `fresh` — same legs, same order, same
-/// sign, and each leg's `delta` within `tolerance_bps` of the freshly
-/// computed value. Used by `execute_rebalance` to reject a plan built
-/// against prices that have since moved more than the allowed tolerance
-/// (`PlanStale`).
+//  True when `submitted` matches `fresh` — same legs, same order, same
+//  sign, and each leg's `delta` within `tolerance_bps` of the freshly
+//  computed value. Used by `execute_rebalance` to reject a plan built
+//  against prices that have since moved more than the allowed tolerance
+//  (`PlanStale`).
 pub fn plan_matches_fresh(
     fresh: &Vec<RebalanceLeg>,
     submitted: &Vec<RebalanceLeg>,

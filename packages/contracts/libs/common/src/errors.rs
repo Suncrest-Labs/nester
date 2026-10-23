@@ -43,7 +43,10 @@ pub enum ContractError {
     RecoveryCooldownActive = 38,
     RecoveryStageInvalid = 39,
     NotNesterVault = 40,
-    VaultCreationFailed = 41,
+    // #1477: slot 41 was `VaultCreationFailed`, which no contract ever
+    // returned. The enum is at Soroban's 50-variant cap (see below), so the
+    // unused slot is repurposed for the impaired-vault deposit rejection.
+    VaultImpaired = 41,
     UpgradeNotMatured = 42,
     NoPendingUpgrade = 43,
     UpgradeHashMismatch = 44,

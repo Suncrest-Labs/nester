@@ -16,6 +16,7 @@
 - Rate-limiting on non-sensitive endpoints
 - Issues requiring physical access to a user's device
 - Self-XSS or social engineering attacks
+- Contracts that do not ship: `rent_escrow` and `lp_aggregator` (nester#1476). Both refuse to build for WASM and are excluded from the launch manifest (`scripts/list_contract_packages.py`).
 
 ## Reporting a Vulnerability
 

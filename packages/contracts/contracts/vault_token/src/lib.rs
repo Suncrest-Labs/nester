@@ -288,7 +288,10 @@ impl VaultTokenContract {
         require_vault(&env);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
-        let shares = shares_for_deposit_math(amount, total_supply, total_assets);
+        let shares = match try_shares_for_deposit_math(amount, total_supply, total_assets) {
+            Ok(s) => s,
+            Err(e) => panic_with_error!(&env, e),
+        };
         receive_balance(&env, &to, shares);
         set_total_supply(&env, total_supply + shares);
         set_total_assets(&env, total_assets + amount);
@@ -315,7 +318,11 @@ impl VaultTokenContract {
         require_vault(&env);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
-        let amount = amount_for_shares_math(shares, total_supply, total_assets);
+        let amount = match try_amount_for_shares_math(shares, total_supply, total_assets) {
+            Ok(a) => a,
+            Err(e) => panic_with_error!(&env, e),
+        };
+
         spend_balance(&env, &from, shares);
         set_total_supply(&env, total_supply - shares);
         set_total_assets(&env, total_assets - amount);
@@ -400,12 +407,16 @@ impl VaultTokenContract {
         };
         match user {
             None => {
-                env.storage()
-                    .instance()
-                    .extend_ttl(INSTANCE_TTL_THRESHOLD_LEDGERS, INSTANCE_TTL_EXTEND_TO_LEDGERS);
+                env.storage().instance().extend_ttl(
+                    INSTANCE_TTL_THRESHOLD_LEDGERS,
+                    INSTANCE_TTL_EXTEND_TO_LEDGERS,
+                );
             }
             Some(u) => {
-                for key in [DataKey::Balance(u.clone()), DataKey::DepositTimestamp(u.clone())] {
+                for key in [
+                    DataKey::Balance(u.clone()),
+                    DataKey::DepositTimestamp(u.clone()),
+                ] {
                     if env.storage().persistent().has(&key) {
                         env.storage().persistent().extend_ttl(
                             &key,
@@ -426,23 +437,66 @@ impl VaultTokenContract {
 /// Shares to mint for a deposit of `amount`.
 ///
 /// * First deposit (`total_supply == 0`): issues 1:1.
+/// * Impairment (`total_supply > 0 && total_assets == 0`): errors with VaultImpaired.
+/// * Overflow: errors with ArithmeticOverflow.
 /// * Subsequent: `floor(amount * total_supply / total_assets)`.
+pub fn try_shares_for_deposit_math(
+    amount: i128,
+    total_supply: i128,
+    total_assets: i128,
+) -> Result<i128, ContractError> {
+    if amount < 0 {
+        return Err(ContractError::InvalidAmount);
+    }
+    if total_supply == 0 {
+        return Ok(amount);
+    }
+    if total_assets == 0 {
+        return Err(ContractError::VaultImpaired);
+    }
+    let prod = amount
+        .checked_mul(total_supply)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    let shares = prod
+        .checked_div(total_assets)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    Ok(shares)
+}
+
 pub fn shares_for_deposit_math(amount: i128, total_supply: i128, total_assets: i128) -> i128 {
-    if total_supply == 0 || total_assets == 0 {
-        amount
-    } else {
-        amount * total_supply / total_assets
+    match try_shares_for_deposit_math(amount, total_supply, total_assets) {
+        Ok(s) => s,
+        Err(_) => 0,
     }
 }
 
 /// Underlying amount for `shares`.
 ///
 /// `floor(shares * total_assets / total_supply)`.
-pub fn amount_for_shares_math(shares: i128, total_supply: i128, total_assets: i128) -> i128 {
+pub fn try_amount_for_shares_math(
+    shares: i128,
+    total_supply: i128,
+    total_assets: i128,
+) -> Result<i128, ContractError> {
+    if shares < 0 {
+        return Err(ContractError::InvalidAmount);
+    }
     if total_supply == 0 {
-        shares
-    } else {
-        shares * total_assets / total_supply
+        return Ok(shares);
+    }
+    let prod = shares
+        .checked_mul(total_assets)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    let amount = prod
+        .checked_div(total_supply)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    Ok(amount)
+}
+
+pub fn amount_for_shares_math(shares: i128, total_supply: i128, total_assets: i128) -> i128 {
+    match try_amount_for_shares_math(shares, total_supply, total_assets) {
+        Ok(a) => a,
+        Err(_) => 0,
     }
 }
 

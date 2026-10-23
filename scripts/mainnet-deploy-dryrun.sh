@@ -15,8 +15,14 @@ RPC_URL="http://localhost:8000/soroban/rpc"
 HORIZON_URL="http://localhost:8000"
 
 echo "[*] Step 1: Building contracts for WASM release..."
+# Build only deployable crates; non-shipping prototypes such as lp_aggregator
+# (nester#1476) are excluded by list_contract_packages.py.
+cargo metadata --manifest-path packages/contracts/Cargo.toml --no-deps --format-version 1 \
+  | python3 scripts/list_contract_packages.py \
+  | while read -r pkg_name; do
+      cargo build --manifest-path packages/contracts/Cargo.toml --release --target wasm32-unknown-unknown -p "$pkg_name"
+    done
 cd packages/contracts
-cargo build --release --target wasm32-unknown-unknown
 
 echo "[*] Step 2: Setting up local test identities & funding deployer..."
 # In a true dry-run against local node, we use stellar CLI configured for local network

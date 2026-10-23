@@ -601,7 +601,10 @@ fn set_total_assets_unauthorized_caller_rejected() {
 
     env.mock_auths(&[]);
     let result = client.try_set_total_assets(&500_i128);
-    assert!(result.is_err(), "non-vault caller must not update total_assets");
+    assert!(
+        result.is_err(),
+        "non-vault caller must not update total_assets"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -655,8 +658,16 @@ fn transfer_to_self_is_a_no_op() {
     let before_supply = client.total_supply();
     client.transfer(&user, &user, &500_i128);
 
-    assert_eq!(client.balance(&user), 1_000_i128, "self-transfer must preserve balance");
-    assert_eq!(client.total_supply(), before_supply, "self-transfer must not change supply");
+    assert_eq!(
+        client.balance(&user),
+        1_000_i128,
+        "self-transfer must preserve balance"
+    );
+    assert_eq!(
+        client.total_supply(),
+        before_supply,
+        "self-transfer must not change supply"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -690,7 +701,11 @@ fn transfer_from_decrements_allowance() {
     client.approve(&owner, &spender, &800_i128, &(current_ledger + 1_000));
 
     client.transfer_from(&spender, &owner, &to, &300_i128);
-    assert_eq!(client.allowance(&owner, &spender), 500_i128, "allowance decremented");
+    assert_eq!(
+        client.allowance(&owner, &spender),
+        500_i128,
+        "allowance decremented"
+    );
     assert_eq!(client.balance(&to), 300_i128);
     assert_eq!(client.balance(&owner), 700_i128);
 }
@@ -712,21 +727,34 @@ fn total_supply_invariant_across_full_sequence() {
     assert_eq!(client.balance(&a), 1_000_i128);
     assert_eq!(client.balance(&b), 0_i128);
     assert_eq!(client.total_supply(), 1_000_i128);
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 2. Transfer 400 A → B. Supply unchanged.
     client.transfer(&a, &b, &400_i128);
     assert_eq!(client.balance(&a), 600_i128);
     assert_eq!(client.balance(&b), 400_i128);
-    assert_eq!(client.total_supply(), 1_000_i128, "supply must not change on transfer");
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        1_000_i128,
+        "supply must not change on transfer"
+    );
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 3. Burn 100 from A's own balance. Supply decreases by 100.
     client.burn(&a, &100_i128);
     assert_eq!(client.balance(&a), 500_i128);
     assert_eq!(client.balance(&b), 400_i128);
     assert_eq!(client.total_supply(), 900_i128);
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 4. Burn the rest via burn_for_withdrawal. Supply → 0.
     client.burn_for_withdrawal(&a, &500_i128);
@@ -742,4 +770,55 @@ fn balance_of_unfunded_account_is_zero() {
     let (client, _vault, _) = setup(&env);
     let stranger = Address::generate(&env);
     assert_eq!(client.balance(&stranger), 0_i128);
+}
+
+#[test]
+fn test_conversion_math_impairment_rejection() {
+    use crate::try_shares_for_deposit_math;
+    use nester_common::ContractError;
+
+    // When supply > 0 and assets == 0 (impaired), must return VaultImpaired
+    let res = try_shares_for_deposit_math(1_000, 5_000, 0);
+    assert_eq!(res, Err(ContractError::VaultImpaired));
+
+    // When supply == 0 and assets == 0 (first deposit), mints 1:1
+    let res_first = try_shares_for_deposit_math(1_000, 0, 0);
+    assert_eq!(res_first, Ok(1_000));
+
+    // Full contract path: impair total_assets to 0 after initial deposit, then attempt deposit
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    client.mint_for_deposit(&alice, &10_000_i128);
+    client.set_total_assets(&0_i128);
+
+    let impaired_deposit = client.try_mint_for_deposit(&bob, &5_000_i128);
+    assert_eq!(impaired_deposit, Err(Ok(ContractError::VaultImpaired)));
+}
+
+#[test]
+fn test_conversion_math_overflow_checked() {
+    use crate::{try_amount_for_shares_math, try_shares_for_deposit_math};
+    use nester_common::ContractError;
+
+    // Inputs near i128::MAX / 10^7 must return ArithmeticOverflow rather than trapping
+    let boundary = i128::MAX / 10_000_000;
+    assert_eq!(
+        try_shares_for_deposit_math(boundary, 10_000_001, 10_000_000),
+        Err(ContractError::ArithmeticOverflow)
+    );
+    assert_eq!(
+        try_amount_for_shares_math(boundary, 10_000_000, 10_000_001),
+        Err(ContractError::ArithmeticOverflow)
+    );
+
+    // Multiplying values near i128::MAX must return ArithmeticOverflow rather than panicking
+    let near_max = i128::MAX - 100;
+    let res_shares = try_shares_for_deposit_math(near_max, near_max, 10_000);
+    assert_eq!(res_shares, Err(ContractError::ArithmeticOverflow));
+
+    let res_amount = try_amount_for_shares_math(near_max, 10_000, near_max);
+    assert_eq!(res_amount, Err(ContractError::ArithmeticOverflow));
 }

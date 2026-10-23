@@ -19,3 +19,10 @@ soroban-sdk = { workspace = true, features = ["testutils"] }
 nester-test-utils = { path = "../../libs/test_utils" }
 vault-token-contract = { path = "../vault_token" }
 proptest = "1.4"
+
+[features]
+default = ["locks", "basket", "queue"]
+locks = []
+basket = []
+queue = []
+

@@ -5,6 +5,18 @@ extern crate nester_common;
 soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
 soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
+
+// Non-shipping prototype (nester#1476): `execute_hop` does not parse the pool's
+// return value, `execute_path_payment` routes every hop through the first
+// registered pool, `execute_swap` invokes caller-supplied pool addresses, and no
+// entrypoint calls `require_auth`. Refuse to compile a deployable WASM until
+// real routing, pool allowlisting and auth are implemented. Host builds (unit
+// tests, clippy) are unaffected.
+#[cfg(target_family = "wasm")]
+compile_error!(
+    "lp_aggregator is a non-shipping prototype and must not be built for release or deployed to mainnet (nester#1476)."
+);
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, vec,
     Address, Env, IntoVal, Symbol, Val, Vec,
@@ -358,7 +370,9 @@ impl LpAggregator {
             }
         }
         pools.push_back(pool);
-        env.storage().instance().set(&symbol_short!("POOLS"), &pools);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("POOLS"), &pools);
     }
 
     pub fn version(env: Env) -> soroban_sdk::String {
