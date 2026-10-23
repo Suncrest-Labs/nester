@@ -48,7 +48,15 @@ fn compute(total_assets: i128, total_shares: i128, amount: i128) -> Vector {
     let a2s_up = assets_to_shares_up(amount, total_assets, total_shares).unwrap_or(0);
     let s2a_down = shares_to_assets_down(amount, total_assets, total_shares).unwrap_or(0);
     let s2a_up = shares_to_assets_up(amount, total_assets, total_shares).unwrap_or(0);
-    Vector { total_assets, total_shares, amount, a2s_down, a2s_up, s2a_down, s2a_up }
+    Vector {
+        total_assets,
+        total_shares,
+        amount,
+        a2s_down,
+        a2s_up,
+        s2a_down,
+        s2a_up,
+    }
 }
 
 // ── Rounding direction invariants ─────────────────────────────────────────────
@@ -58,11 +66,11 @@ fn compute(total_assets: i128, total_shares: i128, amount: i128) -> Vector {
 fn rounding_down_never_exceeds_up() {
     let cases: &[(i128, i128, i128)] = &[
         (10_000_000, 10_000_000, 1_000_000),
-        (15_000_000, 10_000_000, 1_000_000), // share price 1.5
-        (10_000_000, 15_000_000, 1_000_000), // diluted
-        (1, 1_000_000_000, 1),               // extreme dilution
-        (1_000_000_000, 1, 500_000_000),     // extreme concentration
-        (7, 3, 1),                           // non-divisible
+        (15_000_000, 10_000_000, 1_000_000),  // share price 1.5
+        (10_000_000, 15_000_000, 1_000_000),  // diluted
+        (1, 1_000_000_000, 1),                // extreme dilution
+        (1_000_000_000, 1, 500_000_000),      // extreme concentration
+        (7, 3, 1),                            // non-divisible
         (10_000_000, 10_000_000, 10_000_001), // amount > 1 unit
     ];
 
@@ -71,12 +79,14 @@ fn rounding_down_never_exceeds_up() {
         assert!(
             v.a2s_down <= v.a2s_up,
             "a2s_down > a2s_up for ({ta},{ts},{amt}): {} > {}",
-            v.a2s_down, v.a2s_up
+            v.a2s_down,
+            v.a2s_up
         );
         assert!(
             v.s2a_down <= v.s2a_up,
             "s2a_down > s2a_up for ({ta},{ts},{amt}): {} > {}",
-            v.s2a_down, v.s2a_up
+            v.s2a_down,
+            v.s2a_up
         );
     }
 }
@@ -87,7 +97,7 @@ fn rounding_down_never_exceeds_up() {
 fn round_trip_assets_shares_assets_no_overpay() {
     let cases: &[(i128, i128, i128)] = &[
         (10_000_000, 10_000_000, 3_000_000),
-        (20_000_000, 10_000_000, 5_000_000),  // 2:1 share price
+        (20_000_000, 10_000_000, 5_000_000),   // 2:1 share price
         (10_000_003, 10_000_000, 1_000_000),   // slight yield
         (100_000_000, 99_999_997, 10_000_000), // slight impairment
     ];
@@ -185,7 +195,11 @@ fn generate_rounding_fixture() {
         vectors.push(compute(ta, ts, amt));
     }
 
-    assert!(vectors.len() >= 1_000, "expected ≥1000 vectors, got {}", vectors.len());
+    assert!(
+        vectors.len() >= 1_000,
+        "expected ≥1000 vectors, got {}",
+        vectors.len()
+    );
 
     // Serialize to JSON
     let mut json = std::string::String::from("[\n");

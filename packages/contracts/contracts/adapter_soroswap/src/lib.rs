@@ -1,9 +1,5 @@
 #![no_std]
 
-soroban_sdk::contractmeta!(key = "name", val = "AdapterSoroswap");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
-soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 //! Soroswap AMM adapter.
 //!
 //! `adapter_pool` invokes `deposit(address, amount)` on the pool. A Soroswap
@@ -32,6 +28,11 @@ soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 //! LP units are valued pro-rata against pool reserves — the same arithmetic
 //! the pair uses on burn — so no spot-price oracle is involved and a
 //! single-block swing cannot skew it.
+
+soroban_sdk::contractmeta!(key = "name", val = "AdapterSoroswap");
+soroban_sdk::contractmeta!(key = "version", val = "0.1.0");
+soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
+soroban_sdk::contractmeta!(key = "commit", val = "5a636a7b");
 
 use nester_common::adapters::{AdapterApy, ApyConfidence, YieldAdapter};
 use nester_common::{emit_event, ContractError};
@@ -169,7 +170,9 @@ impl SoroswapAdapterContract {
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage().instance().set(&DataKey::Router, &router);
         env.storage().instance().set(&DataKey::Pair, &pair);
-        env.storage().instance().set(&DataKey::Underlying, &underlying);
+        env.storage()
+            .instance()
+            .set(&DataKey::Underlying, &underlying);
         env.storage().instance().set(&DataKey::Paired, &paired);
         env.storage().instance().set(&DataKey::Units, &0i128);
     }
@@ -229,7 +232,11 @@ impl SoroswapAdapterContract {
         let token_0: Address =
             env.invoke_contract(&pair, &Symbol::new(env, "token_0"), Vec::new(env));
 
-        let underlying_reserve = if token_0 == underlying { reserve_0 } else { reserve_1 };
+        let underlying_reserve = if token_0 == underlying {
+            reserve_0
+        } else {
+            reserve_1
+        };
 
         // Both sides are counted: the position is half underlying and half
         // paired by value at the pool's own ratio, so valuing only the
@@ -292,14 +299,19 @@ impl YieldAdapter for SoroswapAdapterContract {
         }
 
         let held = units_held(&env);
-        env.storage().instance().set(&DataKey::Units, &(held + minted));
+        env.storage()
+            .instance()
+            .set(&DataKey::Units, &(held + minted));
 
         emit_event(
             &env,
             ADAPTER,
             DEPOSITED,
             from,
-            AdapterMovedEventData { amount, units: minted },
+            AdapterMovedEventData {
+                amount,
+                units: minted,
+            },
         );
         minted
     }
@@ -352,7 +364,9 @@ impl YieldAdapter for SoroswapAdapterContract {
             panic_with_error!(&env, ContractError::SlippageExceeded);
         }
 
-        env.storage().instance().set(&DataKey::Units, &(held - units));
+        env.storage()
+            .instance()
+            .set(&DataKey::Units, &(held - units));
         token::Client::new(&env, &underlying).transfer(&me, &to, &assets);
 
         emit_event(
@@ -360,7 +374,10 @@ impl YieldAdapter for SoroswapAdapterContract {
             ADAPTER,
             WITHDRAWN,
             to,
-            AdapterMovedEventData { amount: assets, units },
+            AdapterMovedEventData {
+                amount: assets,
+                units,
+            },
         );
         assets
     }
@@ -372,20 +389,32 @@ impl YieldAdapter for SoroswapAdapterContract {
     fn current_apy(env: Env) -> AdapterApy {
         let checkpoint: Option<ApyCheckpoint> = env.storage().instance().get(&DataKey::Checkpoint);
         let Some(checkpoint) = checkpoint else {
-            return AdapterApy { apy_bps: 0, confidence: ApyConfidence::Unavailable };
+            return AdapterApy {
+                apy_bps: 0,
+                confidence: ApyConfidence::Unavailable,
+            };
         };
 
-        let elapsed = env.ledger().timestamp().saturating_sub(checkpoint.timestamp);
+        let elapsed = env
+            .ledger()
+            .timestamp()
+            .saturating_sub(checkpoint.timestamp);
         // An AMM publishes no rate, so this is growth observed against a
         // checkpoint. Over a short window that measurement is dominated by
         // swap noise, so it is withheld rather than reported as a rate.
         if elapsed < MIN_APY_WINDOW_SECS || checkpoint.value <= 0 {
-            return AdapterApy { apy_bps: 0, confidence: ApyConfidence::Unavailable };
+            return AdapterApy {
+                apy_bps: 0,
+                confidence: ApyConfidence::Unavailable,
+            };
         }
 
         let now = Self::position_value_internal(&env);
         if now <= checkpoint.value {
-            return AdapterApy { apy_bps: 0, confidence: ApyConfidence::Derived };
+            return AdapterApy {
+                apy_bps: 0,
+                confidence: ApyConfidence::Derived,
+            };
         }
 
         let growth = now - checkpoint.value;
@@ -396,7 +425,10 @@ impl YieldAdapter for SoroswapAdapterContract {
             annualized
         };
 
-        AdapterApy { apy_bps: capped as u32, confidence: ApyConfidence::Derived }
+        AdapterApy {
+            apy_bps: capped as u32,
+            confidence: ApyConfidence::Derived,
+        }
     }
 
     fn underlying(env: Env) -> Address {

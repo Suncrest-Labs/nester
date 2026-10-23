@@ -74,7 +74,11 @@ fn withdraw_event_topics_match_events_md() {
 
     let (contract, action) = last_event_topics(&h);
     assert_eq!(contract, Symbol::new(&h.env, "VAULT"), "withdraw: topic[0]");
-    assert_eq!(action, Symbol::new(&h.env, "WITHDRAW"), "withdraw: topic[1]");
+    assert_eq!(
+        action,
+        Symbol::new(&h.env, "WITHDRAW"),
+        "withdraw: topic[1]"
+    );
 }
 
 /// pause() emits (VAULT, PAUSE, caller).
@@ -137,9 +141,9 @@ fn harvest_event_topics_match_events_md() {
     h.vault().grant_role(&h.admin, &h.admin, &Role::Manager);
     h.mint_deposit_tokens(&h.vault_id, DEPOSIT / 10);
     h.vault().report_yield(&h.admin, &(DEPOSIT / 10));
-    h.env.ledger().set_timestamp(
-        h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1,
-    );
+    h.env
+        .ledger()
+        .set_timestamp(h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1);
     h.vault().report_yield(&h.admin, &0);
     h.vault().harvest(&user);
 
@@ -173,9 +177,9 @@ fn generate_event_fixtures() {
     h.vault().grant_role(&h.admin, &h.admin, &Role::Manager);
     h.mint_deposit_tokens(&h.vault_id, DEPOSIT / 10);
     h.vault().report_yield(&h.admin, &(DEPOSIT / 10));
-    h.env.ledger().set_timestamp(
-        h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1,
-    );
+    h.env
+        .ledger()
+        .set_timestamp(h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1);
     h.vault().report_yield(&h.admin, &0);
     h.vault().harvest(&user);
     h.vault().pause(&h.admin);
@@ -200,7 +204,9 @@ fn generate_event_fixtures() {
         // Symbols implement Debug in testutils.
         entries.push(std::format!(
             "{{\"contract\":\"{:?}\",\"topic0\":\"{:?}\",\"topic1\":\"{:?}\"}}",
-            contract_id, t0, t1
+            contract_id,
+            t0,
+            t1
         ));
     }
 

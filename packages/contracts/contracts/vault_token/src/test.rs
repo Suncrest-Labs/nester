@@ -4,8 +4,10 @@ extern crate std;
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
-    Address, Env, String,
+    Address, BytesN, Env, String,
 };
+
+use nester_access_control::Role;
 
 use crate::{VaultTokenContract, VaultTokenContractClient};
 
@@ -601,7 +603,10 @@ fn set_total_assets_unauthorized_caller_rejected() {
 
     env.mock_auths(&[]);
     let result = client.try_set_total_assets(&500_i128);
-    assert!(result.is_err(), "non-vault caller must not update total_assets");
+    assert!(
+        result.is_err(),
+        "non-vault caller must not update total_assets"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -655,8 +660,16 @@ fn transfer_to_self_is_a_no_op() {
     let before_supply = client.total_supply();
     client.transfer(&user, &user, &500_i128);
 
-    assert_eq!(client.balance(&user), 1_000_i128, "self-transfer must preserve balance");
-    assert_eq!(client.total_supply(), before_supply, "self-transfer must not change supply");
+    assert_eq!(
+        client.balance(&user),
+        1_000_i128,
+        "self-transfer must preserve balance"
+    );
+    assert_eq!(
+        client.total_supply(),
+        before_supply,
+        "self-transfer must not change supply"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -690,7 +703,11 @@ fn transfer_from_decrements_allowance() {
     client.approve(&owner, &spender, &800_i128, &(current_ledger + 1_000));
 
     client.transfer_from(&spender, &owner, &to, &300_i128);
-    assert_eq!(client.allowance(&owner, &spender), 500_i128, "allowance decremented");
+    assert_eq!(
+        client.allowance(&owner, &spender),
+        500_i128,
+        "allowance decremented"
+    );
     assert_eq!(client.balance(&to), 300_i128);
     assert_eq!(client.balance(&owner), 700_i128);
 }
@@ -712,21 +729,34 @@ fn total_supply_invariant_across_full_sequence() {
     assert_eq!(client.balance(&a), 1_000_i128);
     assert_eq!(client.balance(&b), 0_i128);
     assert_eq!(client.total_supply(), 1_000_i128);
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 2. Transfer 400 A → B. Supply unchanged.
     client.transfer(&a, &b, &400_i128);
     assert_eq!(client.balance(&a), 600_i128);
     assert_eq!(client.balance(&b), 400_i128);
-    assert_eq!(client.total_supply(), 1_000_i128, "supply must not change on transfer");
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        1_000_i128,
+        "supply must not change on transfer"
+    );
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 3. Burn 100 from A's own balance. Supply decreases by 100.
     client.burn(&a, &100_i128);
     assert_eq!(client.balance(&a), 500_i128);
     assert_eq!(client.balance(&b), 400_i128);
     assert_eq!(client.total_supply(), 900_i128);
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 4. Burn the rest via burn_for_withdrawal. Supply → 0.
     client.burn_for_withdrawal(&a, &500_i128);
@@ -742,4 +772,108 @@ fn balance_of_unfunded_account_is_zero() {
     let (client, _vault, _) = setup(&env);
     let stranger = Address::generate(&env);
     assert_eq!(client.balance(&stranger), 0_i128);
+}
+
+// ---------------------------------------------------------------------------
+// Timelocked Upgrade Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic]
+fn propose_upgrade_rejects_caller_without_upgrader_role() {
+    let env = Env::default();
+    let (client, vault, _) = setup(&env);
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let eta = env.ledger().timestamp() + 200_000;
+
+    // `vault` is Admin by default, but has not been granted Role::Upgrader
+    client.propose_upgrade(&vault, &new_hash, &eta);
+}
+
+#[test]
+fn propose_upgrade_rejects_delay_shorter_than_minimum() {
+    let env = Env::default();
+    let (client, vault, _) = setup(&env);
+    let upgrader = Address::generate(&env);
+    client.grant_role(&vault, &upgrader, &Role::Upgrader);
+
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let too_soon_eta = env.ledger().timestamp() + 60; // Less than 48 hours
+
+    let result = client.try_propose_upgrade(&upgrader, &new_hash, &too_soon_eta);
+    assert!(
+        result.is_err(),
+        "propose_upgrade must enforce the 48h minimum timelock delay"
+    );
+}
+
+#[test]
+fn execute_upgrade_before_eta_is_rejected_even_for_upgrader() {
+    let env = Env::default();
+    let (client, vault, _) = setup(&env);
+    let upgrader = Address::generate(&env);
+    client.grant_role(&vault, &upgrader, &Role::Upgrader);
+
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let delay = nester_common::MIN_UPGRADE_DELAY_VAULT_TOKEN; // 172_800s (48h)
+    let eta = env.ledger().timestamp() + delay;
+
+    client.propose_upgrade(&upgrader, &new_hash, &eta);
+
+    let pending = client
+        .get_pending_upgrade()
+        .expect("pending upgrade must exist");
+    assert_eq!(pending.wasm_hash, new_hash);
+    assert_eq!(pending.eta, eta);
+    assert_eq!(pending.proposer, upgrader);
+
+    // Before maturity, execution must fail regardless of caller or hash
+    let caller = Address::generate(&env);
+    let early_result = client.try_execute_upgrade(&caller, &new_hash);
+    assert!(
+        early_result.is_err(),
+        "execute_upgrade must reject before the pending upgrade's ETA"
+    );
+
+    // Advance time past ETA
+    env.ledger().with_mut(|l| l.timestamp += delay + 1);
+
+    // Once matured, the timelock no longer blocks execution — only a hash
+    // mismatch would. Using the wrong hash here isolates that the ETA gate
+    // (not the wasm hash) was the reason the earlier call failed.
+    let wrong_hash = BytesN::from_array(&env, &[9u8; 32]);
+    let wrong_hash_result = client.try_execute_upgrade(&caller, &wrong_hash);
+    assert!(
+        wrong_hash_result.is_err(),
+        "execute_upgrade must still validate the wasm hash after maturity"
+    );
+
+    // The pending upgrade must remain untouched since no execution succeeded.
+    let pending_after = client
+        .get_pending_upgrade()
+        .expect("pending upgrade must persist");
+    assert_eq!(pending_after.wasm_hash, new_hash);
+    assert_eq!(pending_after.eta, eta);
+}
+
+#[test]
+fn cancel_upgrade_by_upgrader_succeeds() {
+    let env = Env::default();
+    let (client, vault, _) = setup(&env);
+    let upgrader = Address::generate(&env);
+    client.grant_role(&vault, &upgrader, &Role::Upgrader);
+
+    let new_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let eta = env.ledger().timestamp() + nester_common::MIN_UPGRADE_DELAY_VAULT_TOKEN;
+
+    client.propose_upgrade(&upgrader, &new_hash, &eta);
+    assert!(client.get_pending_upgrade().is_some());
+
+    // Non-upgrader cannot cancel
+    let stranger = Address::generate(&env);
+    assert!(client.try_cancel_upgrade(&stranger).is_err());
+
+    // Upgrader cancels
+    client.cancel_upgrade(&upgrader);
+    assert!(client.get_pending_upgrade().is_none());
 }

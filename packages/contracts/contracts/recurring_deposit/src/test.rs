@@ -4,8 +4,7 @@ mod test {
     use nester_common::ContractError as Error;
     use nester_test_utils::harness::NesterHarness;
     use soroban_sdk::{
-        testutils::Address as _, testutils::Ledger as _, Address, ConversionError, Env,
-        InvokeError,
+        testutils::Address as _, testutils::Ledger as _, Address, ConversionError, Env, InvokeError,
     };
 
     fn setup_contract() -> (Env, Address, RecurringDepositContractClient<'static>) {
@@ -41,7 +40,8 @@ mod test {
     }
 
     fn advance_time(env: &Env, seconds: u64) {
-        env.ledger().set_timestamp(env.ledger().timestamp() + seconds);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + seconds);
     }
 
     fn contract_err_u64(
@@ -52,7 +52,8 @@ mod test {
 
     fn contract_err_void(
         err: Error,
-    ) -> Result<Result<(), soroban_sdk::ConversionError>, Result<soroban_sdk::Error, InvokeError>> {
+    ) -> Result<Result<(), soroban_sdk::ConversionError>, Result<soroban_sdk::Error, InvokeError>>
+    {
         Err(Ok(soroban_sdk::Error::from_contract_error(err as u32)))
     }
 
@@ -69,7 +70,7 @@ mod test {
             &token,
             &10000i128,                                    // amount_per_period
             &(7 * 24 * 3600u64),                           // weekly (period_secs)
-            &env.ledger().timestamp(),                    // start_at
+            &env.ledger().timestamp(),                     // start_at
             &(env.ledger().timestamp() + 365 * 24 * 3600), // expires_at (1 year)
             &(52 * 10000i128),                             // max_total (52 weeks worth)
         );

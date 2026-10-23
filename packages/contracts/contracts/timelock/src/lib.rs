@@ -24,9 +24,9 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "NesterTimelock");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+soroban_sdk::contractmeta!(key = "version", val = "0.1.0");
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
+soroban_sdk::contractmeta!(key = "commit", val = "5a636a7b");
 
 use soroban_sdk::{contracttype, panic_with_error, symbol_short, Address, Bytes, Env, Symbol, Vec};
 
@@ -315,7 +315,6 @@ impl Timelock {
         );
     }
 
-
     /// Return all pending operations.
     pub fn get_pending(env: &Env) -> Vec<TimelockOperation> {
         let ids: Vec<u64> = env
@@ -384,9 +383,10 @@ impl Timelock {
     /// Permissionless TTL renewal so a keeper can keep timelock state alive (#1485).
     pub fn extend_ttl(env: &Env) {
         use nester_common::{INSTANCE_TTL_EXTEND_TO_LEDGERS, INSTANCE_TTL_THRESHOLD_LEDGERS};
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD_LEDGERS, INSTANCE_TTL_EXTEND_TO_LEDGERS);
+        env.storage().instance().extend_ttl(
+            INSTANCE_TTL_THRESHOLD_LEDGERS,
+            INSTANCE_TTL_EXTEND_TO_LEDGERS,
+        );
     }
 }
 

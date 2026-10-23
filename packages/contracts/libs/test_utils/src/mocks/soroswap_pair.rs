@@ -48,8 +48,14 @@ impl MockSoroswapPair {
 
     pub fn get_reserves(env: Env) -> (i128, i128) {
         (
-            env.storage().instance().get(&PairKey::Reserve0).unwrap_or(0),
-            env.storage().instance().get(&PairKey::Reserve1).unwrap_or(0),
+            env.storage()
+                .instance()
+                .get(&PairKey::Reserve0)
+                .unwrap_or(0),
+            env.storage()
+                .instance()
+                .get(&PairKey::Reserve1)
+                .unwrap_or(0),
         )
     }
 
@@ -71,8 +77,16 @@ impl MockSoroswapPair {
 
     /// Router-only bookkeeping: credit LP units and grow reserves.
     pub fn mint_for(env: Env, to: Address, amount_0: i128, amount_1: i128) -> i128 {
-        let r0: i128 = env.storage().instance().get(&PairKey::Reserve0).unwrap_or(0);
-        let r1: i128 = env.storage().instance().get(&PairKey::Reserve1).unwrap_or(0);
+        let r0: i128 = env
+            .storage()
+            .instance()
+            .get(&PairKey::Reserve0)
+            .unwrap_or(0);
+        let r1: i128 = env
+            .storage()
+            .instance()
+            .get(&PairKey::Reserve1)
+            .unwrap_or(0);
         let supply: i128 = env
             .storage()
             .instance()
@@ -87,8 +101,12 @@ impl MockSoroswapPair {
             amount_0 * supply / r0.max(1)
         };
 
-        env.storage().instance().set(&PairKey::Reserve0, &(r0 + amount_0));
-        env.storage().instance().set(&PairKey::Reserve1, &(r1 + amount_1));
+        env.storage()
+            .instance()
+            .set(&PairKey::Reserve0, &(r0 + amount_0));
+        env.storage()
+            .instance()
+            .set(&PairKey::Reserve1, &(r1 + amount_1));
         env.storage()
             .instance()
             .set(&PairKey::TotalSupply, &(supply + minted));
@@ -101,8 +119,16 @@ impl MockSoroswapPair {
 
     /// Router-only bookkeeping: burn LP units and shrink reserves pro-rata.
     pub fn burn_for(env: Env, from: Address, units: i128) -> (i128, i128) {
-        let r0: i128 = env.storage().instance().get(&PairKey::Reserve0).unwrap_or(0);
-        let r1: i128 = env.storage().instance().get(&PairKey::Reserve1).unwrap_or(0);
+        let r0: i128 = env
+            .storage()
+            .instance()
+            .get(&PairKey::Reserve0)
+            .unwrap_or(0);
+        let r1: i128 = env
+            .storage()
+            .instance()
+            .get(&PairKey::Reserve1)
+            .unwrap_or(0);
         let supply: i128 = env
             .storage()
             .instance()
@@ -115,8 +141,12 @@ impl MockSoroswapPair {
         let amount_0 = units * r0 / supply;
         let amount_1 = units * r1 / supply;
 
-        env.storage().instance().set(&PairKey::Reserve0, &(r0 - amount_0));
-        env.storage().instance().set(&PairKey::Reserve1, &(r1 - amount_1));
+        env.storage()
+            .instance()
+            .set(&PairKey::Reserve0, &(r0 - amount_0));
+        env.storage()
+            .instance()
+            .set(&PairKey::Reserve1, &(r1 - amount_1));
         env.storage()
             .instance()
             .set(&PairKey::TotalSupply, &(supply - units));
@@ -134,8 +164,16 @@ impl MockSoroswapPair {
 
     /// Applies a constant-product swap to the reserves and reports the output.
     pub fn swap_reserves(env: Env, zero_for_one: bool, amount_in: i128) -> i128 {
-        let r0: i128 = env.storage().instance().get(&PairKey::Reserve0).unwrap_or(0);
-        let r1: i128 = env.storage().instance().get(&PairKey::Reserve1).unwrap_or(0);
+        let r0: i128 = env
+            .storage()
+            .instance()
+            .get(&PairKey::Reserve0)
+            .unwrap_or(0);
+        let r1: i128 = env
+            .storage()
+            .instance()
+            .get(&PairKey::Reserve1)
+            .unwrap_or(0);
         let (reserve_in, reserve_out) = if zero_for_one { (r0, r1) } else { (r1, r0) };
         if reserve_in <= 0 || reserve_out <= 0 {
             return 0;
@@ -146,13 +184,20 @@ impl MockSoroswapPair {
         let out = amount_in_with_fee * reserve_out / (reserve_in * 1000 + amount_in_with_fee);
 
         if zero_for_one {
-            env.storage().instance().set(&PairKey::Reserve0, &(r0 + amount_in));
-            env.storage().instance().set(&PairKey::Reserve1, &(r1 - out));
+            env.storage()
+                .instance()
+                .set(&PairKey::Reserve0, &(r0 + amount_in));
+            env.storage()
+                .instance()
+                .set(&PairKey::Reserve1, &(r1 - out));
         } else {
-            env.storage().instance().set(&PairKey::Reserve1, &(r1 + amount_in));
-            env.storage().instance().set(&PairKey::Reserve0, &(r0 - out));
+            env.storage()
+                .instance()
+                .set(&PairKey::Reserve1, &(r1 + amount_in));
+            env.storage()
+                .instance()
+                .set(&PairKey::Reserve0, &(r0 - out));
         }
         out
     }
 }
-

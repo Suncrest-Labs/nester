@@ -33,9 +33,9 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "ReferralContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+soroban_sdk::contractmeta!(key = "version", val = "0.1.0");
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
+soroban_sdk::contractmeta!(key = "commit", val = "5a636a7b");
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,

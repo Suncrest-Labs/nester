@@ -26,9 +26,9 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "YieldRegistryContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+soroban_sdk::contractmeta!(key = "version", val = "0.1.0");
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
+soroban_sdk::contractmeta!(key = "commit", val = "5a636a7b");
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env,
@@ -38,7 +38,7 @@ use soroban_sdk::{
 use nester_access_control::{AccessControl, Role};
 use nester_common::adapters::{AdapterApy, ApyConfidence};
 use nester_common::{
-    emit_event_with_sym, emit_value_attested, Attestation, AttestedField, AttestationPayload,
+    emit_event_with_sym, emit_value_attested, Attestation, AttestationPayload, AttestedField,
     ContractError, ProtocolType, SourceStatus, ValueAttestedEventData, FIELD_APY, FIELD_TVL,
 };
 
@@ -126,7 +126,6 @@ pub struct SourceMigrationEventData {
     pub migration_completed: bool,
     pub migration_completed_at: u64,
 }
-
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -1049,12 +1048,7 @@ impl YieldRegistryContract {
     ///
     /// Panics with [`ContractError::InvalidOperation`] if the key is already
     /// registered.
-    pub fn register_attester(
-        env: Env,
-        caller: Address,
-        key: BytesN<32>,
-        label: Symbol,
-    ) {
+    pub fn register_attester(env: Env, caller: Address, key: BytesN<32>, label: Symbol) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
 
@@ -1102,9 +1096,7 @@ impl YieldRegistryContract {
         if !found {
             panic_with_error!(&env, ContractError::AttesterNotRegistered);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::Attesters, &new_list);
+        env.storage().instance().set(&DataKey::Attesters, &new_list);
         // Leave nonce and label in storage — they are harmless and preserve
         // the audit trail; the key simply no longer appears in the active set.
     }
@@ -1116,12 +1108,7 @@ impl YieldRegistryContract {
     /// Setting `threshold` higher than the number of registered attesters
     /// effectively makes that field un-updatable until more attesters are
     /// registered.
-    pub fn set_attestation_threshold(
-        env: Env,
-        caller: Address,
-        field_tag: u32,
-        threshold: u32,
-    ) {
+    pub fn set_attestation_threshold(env: Env, caller: Address, field_tag: u32, threshold: u32) {
         caller.require_auth();
         AccessControl::require_role(&env, &caller, Role::Admin);
 
@@ -1401,9 +1388,10 @@ impl YieldRegistryContract {
     /// All yield-registry state lives in instance storage; `user` is ignored.
     pub fn extend_ttl(env: Env, _user: Option<Address>) {
         use nester_common::{INSTANCE_TTL_EXTEND_TO_LEDGERS, INSTANCE_TTL_THRESHOLD_LEDGERS};
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD_LEDGERS, INSTANCE_TTL_EXTEND_TO_LEDGERS);
+        env.storage().instance().extend_ttl(
+            INSTANCE_TTL_THRESHOLD_LEDGERS,
+            INSTANCE_TTL_EXTEND_TO_LEDGERS,
+        );
     }
 }
 

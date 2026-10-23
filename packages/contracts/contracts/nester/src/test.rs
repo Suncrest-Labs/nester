@@ -149,9 +149,7 @@ fn initialize_requires_admin_signature() {
     let id = env.register_contract(None, NesterContract);
     let client = NesterContractClient::new(&env, &id);
 
-    assert!(client
-        .try_initialize(&admin, &p.clone().into())
-        .is_err());
+    assert!(client.try_initialize(&admin, &p.clone().into()).is_err());
     assert_eq!(
         client.version(),
         0,

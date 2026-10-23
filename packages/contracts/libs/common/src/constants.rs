@@ -56,6 +56,8 @@ pub const DEFAULT_MIN_REFERRAL_CLAIM: i128 = 1_000_000; // 0.1 unit
 // ---------------------------------------------------------------------------
 /// Mandatory timelock delay for Vault upgrades (48 hours).
 pub const MIN_UPGRADE_DELAY_VAULT: u64 = 172_800;
+/// Mandatory timelock delay for Vault Token upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_VAULT_TOKEN: u64 = 172_800;
 /// Mandatory timelock delay for Yield Registry upgrades (48 hours).
 pub const MIN_UPGRADE_DELAY_YIELD_REGISTRY: u64 = 172_800;
 /// Mandatory timelock delay for Allocation Strategy upgrades (48 hours).

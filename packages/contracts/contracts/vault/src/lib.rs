@@ -1,9 +1,9 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "VaultContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+soroban_sdk::contractmeta!(key = "version", val = "0.1.0");
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
+soroban_sdk::contractmeta!(key = "commit", val = "5a636a7b");
 
 mod basket;
 mod breaker;
@@ -2973,7 +2973,10 @@ impl VaultContract {
         // 50-variant cap.
         let now = env.ledger().timestamp();
         let last_harvest = get_last_harvest_at(&env, &user);
-        if last_harvest != 0
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::LastHarvestAt(user.clone()))
             && now < last_harvest.saturating_add(get_min_harvest_interval(&env))
         {
             panic_with_error!(&env, ContractError::TimelockNotReady);
@@ -5278,9 +5281,10 @@ impl VaultContract {
         };
         match user {
             None => {
-                env.storage()
-                    .instance()
-                    .extend_ttl(INSTANCE_TTL_THRESHOLD_LEDGERS, INSTANCE_TTL_EXTEND_TO_LEDGERS);
+                env.storage().instance().extend_ttl(
+                    INSTANCE_TTL_THRESHOLD_LEDGERS,
+                    INSTANCE_TTL_EXTEND_TO_LEDGERS,
+                );
             }
             Some(u) => {
                 for key in [

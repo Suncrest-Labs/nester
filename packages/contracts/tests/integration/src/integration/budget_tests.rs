@@ -53,13 +53,18 @@ fn test_deposit_budget() {
     setup_no_fees(&h);
     let user = h.create_user();
     let src = symbol_short!("s1");
-    h.registry()
-        .register_source(&h.admin, &src, &h.create_user(), &None, &ProtocolType::Lending);
+    h.registry().register_source(
+        &h.admin,
+        &src,
+        &h.create_user(),
+        &None,
+        &ProtocolType::Lending,
+    );
     h.vault().set_allocation_strategy(&h.admin, &h.strategy_id);
     h.vault().set_yield_registry(&h.admin, &h.registry_id);
-    h.token().mint(&user, &MIN_DEPOSIT_AMOUNT);
+    h.mint_deposit_tokens(&user, MIN_DEPOSIT_AMOUNT);
 
-    let env = h.env();
+    let env = &h.env;
     env.budget().reset_default();
     h.vault().deposit(&user, &MIN_DEPOSIT_AMOUNT, &0i128);
     let cpu = env.budget().cpu_instruction_count();
@@ -81,11 +86,11 @@ fn test_withdraw_budget() {
         .update_strategy_params(&h.admin, &500u32, &10_000u32, &100u32);
     setup_no_fees(&h);
     let user = h.create_user();
-    h.token().mint(&user, &MIN_DEPOSIT_AMOUNT);
+    h.mint_deposit_tokens(&user, MIN_DEPOSIT_AMOUNT);
     h.vault().deposit(&user, &MIN_DEPOSIT_AMOUNT, &0i128);
 
-    let shares = h.vault_token().balance(&user);
-    let env = h.env();
+    let shares = h.token().balance(&user);
+    let env = &h.env;
     env.budget().reset_default();
     h.vault().withdraw(&user, &shares, &0i128);
     let cpu = env.budget().cpu_instruction_count();

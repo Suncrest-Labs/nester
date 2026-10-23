@@ -56,8 +56,7 @@ fn test_clawback_impairment_prorata_withdrawal() {
 
     // Pool: 2 × DEPOSIT = 200 USDC.  Issuer claws back 20%.
     let clawback_amount = DEPOSIT * 2 / 5; // 40 USDC
-    StellarAssetClient::new(&h.env, &h.deposit_token_id)
-        .clawback(&h.vault_id, &clawback_amount);
+    StellarAssetClient::new(&h.env, &h.deposit_token_id).clawback(&h.vault_id, &clawback_amount);
 
     // Admin reconciles: report a negative yield equal to the clawback.
     h.vault().report_yield(&h.admin, &(-clawback_amount));
@@ -97,10 +96,7 @@ fn test_no_performance_fee_after_net_impairment() {
 
     // Treasury should have received zero performance fee.
     let treasury_balance = h.token().balance(&h.treasury_id);
-    assert_eq!(
-        treasury_balance, 0,
-        "no performance fee on net impairment"
-    );
+    assert_eq!(treasury_balance, 0, "no performance fee on net impairment");
 }
 
 // ── Freeze tests ──────────────────────────────────────────────────────────────
@@ -113,8 +109,7 @@ fn test_deposit_fails_when_vault_usdc_frozen() {
     let h = NesterHarness::setup();
 
     // Freeze the vault's USDC auth — it can no longer receive transfers.
-    StellarAssetClient::new(&h.env, &h.deposit_token_id)
-        .set_authorized(&h.vault_id, &false);
+    StellarAssetClient::new(&h.env, &h.deposit_token_id).set_authorized(&h.vault_id, &false);
 
     let user = h.create_user();
     h.mint_deposit_tokens(&user, DEPOSIT);
@@ -135,10 +130,8 @@ fn test_existing_shares_preserved_during_freeze() {
     let shares_before = h.token().balance(&alice);
 
     // Freeze then immediately unfreeze.
-    StellarAssetClient::new(&h.env, &h.deposit_token_id)
-        .set_authorized(&h.vault_id, &false);
-    StellarAssetClient::new(&h.env, &h.deposit_token_id)
-        .set_authorized(&h.vault_id, &true);
+    StellarAssetClient::new(&h.env, &h.deposit_token_id).set_authorized(&h.vault_id, &false);
+    StellarAssetClient::new(&h.env, &h.deposit_token_id).set_authorized(&h.vault_id, &true);
 
     // Alice's shares are untouched.
     assert_eq!(h.token().balance(&alice), shares_before);

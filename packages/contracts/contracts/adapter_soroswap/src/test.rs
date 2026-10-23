@@ -61,7 +61,16 @@ fn setup(seed_usdc: i128, seed_xlm: i128) -> Setup {
     let adapter = SoroswapAdapterContractClient::new(&env, &adapter_id);
     adapter.initialize(&vault, &router_id, &pair_id, &usdc_id, &xlm_id);
 
-    Setup { env, vault, adapter, pair, usdc, xlm, usdc_admin, xlm_admin }
+    Setup {
+        env,
+        vault,
+        adapter,
+        pair,
+        usdc,
+        xlm,
+        usdc_admin,
+        xlm_admin,
+    }
 }
 
 #[test]
@@ -151,13 +160,19 @@ fn position_is_valued_pro_rata_against_reserves() {
 
     // Valued through reserves rather than a price feed, so it lands near the
     // deposit less swap fees and price impact — not at some oracle figure.
-    assert!(value > 8_000 && value < 11_000, "unexpected position value: {value}");
+    assert!(
+        value > 8_000 && value < 11_000,
+        "unexpected position value: {value}"
+    );
 }
 
 #[test]
 fn apy_is_unavailable_before_a_checkpoint_exists() {
     let s = setup(1_000_000, 1_000_000);
-    assert_eq!(s.adapter.current_apy().confidence, ApyConfidence::Unavailable);
+    assert_eq!(
+        s.adapter.current_apy().confidence,
+        ApyConfidence::Unavailable
+    );
 }
 
 #[test]
@@ -170,7 +185,10 @@ fn apy_is_withheld_until_the_observation_window_passes() {
     // An hour of growth annualizes to noise, so it must not be reported.
     s.env.ledger().with_mut(|l| l.timestamp += 3_600);
 
-    assert_eq!(s.adapter.current_apy().confidence, ApyConfidence::Unavailable);
+    assert_eq!(
+        s.adapter.current_apy().confidence,
+        ApyConfidence::Unavailable
+    );
 }
 
 #[test]
@@ -184,7 +202,9 @@ fn apy_is_derived_once_the_window_has_passed() {
     s.usdc_admin.mint(&s.pair.address, &50_000);
     s.xlm_admin.mint(&s.pair.address, &50_000);
     s.pair.mint_for(&Address::generate(&s.env), &0, &0);
-    s.env.ledger().with_mut(|l| l.timestamp += MIN_APY_WINDOW_SECS + 1);
+    s.env
+        .ledger()
+        .with_mut(|l| l.timestamp += MIN_APY_WINDOW_SECS + 1);
 
     let apy = s.adapter.current_apy();
     assert_eq!(apy.confidence, ApyConfidence::Derived);

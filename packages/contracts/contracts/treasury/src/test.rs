@@ -35,11 +35,11 @@ impl MockVault {}
 /// initialise the treasury, and return the commonly needed handles.
 fn setup() -> (
     Env,
-    Address,                          // admin
-    Address,                          // operator
-    Address,                          // vault
-    Address,                          // token
-    TreasuryContractClient<'static>,  // treasury client
+    Address,                         // admin
+    Address,                         // operator
+    Address,                         // vault
+    Address,                         // token
+    TreasuryContractClient<'static>, // treasury client
 ) {
     let env = Env::default();
     env.mock_all_auths();
@@ -472,8 +472,8 @@ fn test_distribute_twice_only_distributes_new_fees() {
     fund_treasury(&env, &token, &client.address, 500);
     client.distribute(&admin, &token);
 
-    assert_eq!(token_client.balance(&a), 900);  // 600 + 300
-    assert_eq!(token_client.balance(&b), 600);  // 400 + 200
+    assert_eq!(token_client.balance(&a), 900); // 600 + 300
+    assert_eq!(token_client.balance(&b), 600); // 400 + 200
     assert_eq!(client.get_total_distributed(), 1_500);
 }
 
@@ -496,8 +496,8 @@ fn test_distribute_updates_cumulative_per_recipient() {
 
     let recipients = client.get_recipients();
     assert_eq!(recipients.get(0).unwrap().total_received, 14_000); // 7000 * 2
-    assert_eq!(recipients.get(1).unwrap().total_received, 4_000);  // 2000 * 2
-    assert_eq!(recipients.get(2).unwrap().total_received, 2_000);  // 1000 * 2
+    assert_eq!(recipients.get(1).unwrap().total_received, 4_000); // 2000 * 2
+    assert_eq!(recipients.get(2).unwrap().total_received, 2_000); // 1000 * 2
 }
 
 // ---------------------------------------------------------------------------

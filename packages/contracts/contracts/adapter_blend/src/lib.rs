@@ -1,9 +1,5 @@
 #![no_std]
 
-soroban_sdk::contractmeta!(key = "name", val = "AdapterBlend");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
-soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 //! Blend Capital lending-pool adapter.
 //!
 //! Blend does not expose `deposit`/`withdraw`. A pool takes a single
@@ -19,6 +15,11 @@ soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 //! configured at initialization and read back out of the returned struct.
 //! The value is denominated in bTokens (Blend's supply receipt), which is what
 //! the vault records as position units.
+
+soroban_sdk::contractmeta!(key = "name", val = "AdapterBlend");
+soroban_sdk::contractmeta!(key = "version", val = "0.1.0");
+soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
+soroban_sdk::contractmeta!(key = "commit", val = "5a636a7b");
 
 use nester_common::adapters::{AdapterApy, ApyConfidence, YieldAdapter};
 use nester_common::{emit_event, ContractError};

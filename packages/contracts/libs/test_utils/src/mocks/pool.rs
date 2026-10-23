@@ -1,6 +1,4 @@
-use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, token, Address, Env,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, token, Address, Env};
 
 use nester_common::ContractError;
 
@@ -98,11 +96,7 @@ impl MockAmmPool {
             .set(&PoolKey::Shares(owner), &(held - shares));
 
         let token_a: Address = env.storage().instance().get(&PoolKey::TokenA).unwrap();
-        token::Client::new(&env, &token_a).transfer(
-            &env.current_contract_address(),
-            &to,
-            &amount,
-        );
+        token::Client::new(&env, &token_a).transfer(&env.current_contract_address(), &to, &amount);
         amount
     }
 
@@ -134,4 +128,3 @@ impl MockAmmPool {
             .set(&PoolKey::ReserveA, &(reserve_a + amount));
     }
 }
-

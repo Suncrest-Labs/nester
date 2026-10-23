@@ -574,7 +574,11 @@ fn privileged_strategy_calls_require_signatures() {
     // to break by refactoring, so assert it here: with no auths mocked, both
     // must still be rejected.
     assert!(client
-        .try_propose_upgrade(&admin, &soroban_sdk::BytesN::from_array(&env, &[0u8; 32]), &0u64)
+        .try_propose_upgrade(
+            &admin,
+            &soroban_sdk::BytesN::from_array(&env, &[0u8; 32]),
+            &0u64
+        )
         .is_err());
     assert!(client.try_cancel_upgrade(&admin).is_err());
 }
@@ -1279,7 +1283,11 @@ fn rebalance_skips_paused_protocol() {
     ];
 
     // Mark Blend as Paused. It should keep its 600, and Aave should keep its 400.
-    registry.update_status(&admin, &symbol_short!("blend"), &RegistrySourceStatus::Paused);
+    registry.update_status(
+        &admin,
+        &symbol_short!("blend"),
+        &RegistrySourceStatus::Paused,
+    );
 
     let deltas = client.calculate_rebalance_deltas(&current, &1_000_i128);
 
@@ -1324,7 +1332,11 @@ fn rebalance_redistributes_from_unhealthy_to_active() {
     ];
 
     // Mark Blend as Exploit. It should be drained to 0, and all 1000 should go to Aave.
-    registry.update_status(&admin, &symbol_short!("blend"), &RegistrySourceStatus::Exploit);
+    registry.update_status(
+        &admin,
+        &symbol_short!("blend"),
+        &RegistrySourceStatus::Exploit,
+    );
 
     let deltas = client.calculate_rebalance_deltas(&current, &1_000_i128);
 
@@ -1359,7 +1371,11 @@ fn rebalance_withdraws_to_vault_when_all_unhealthy() {
     ];
 
     // Mark Aave as Exploit.
-    registry.update_status(&admin, &symbol_short!("aave"), &RegistrySourceStatus::Exploit);
+    registry.update_status(
+        &admin,
+        &symbol_short!("aave"),
+        &RegistrySourceStatus::Exploit,
+    );
 
     let deltas = client.calculate_rebalance_deltas(&current, &1_000_i128);
 
@@ -1549,7 +1565,10 @@ fn admin_can_update_min_weight_threshold() {
             },
         ],
     );
-    assert_eq!(weight_for(&client.get_weights(), symbol_short!("aave")), 400);
+    assert_eq!(
+        weight_for(&client.get_weights(), symbol_short!("aave")),
+        400
+    );
 }
 
 #[test]

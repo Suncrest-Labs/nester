@@ -2289,7 +2289,10 @@ fn emergency_withdraw_blocked_by_degraded_source_failures_alone() {
     vault.record_source_failure(&admin);
     vault.record_source_failure(&admin);
     vault.record_source_failure(&admin);
-    assert_eq!(vault.get_breaker_status().severity, Severity::DepositsHalted);
+    assert_eq!(
+        vault.get_breaker_status().severity,
+        Severity::DepositsHalted
+    );
 
     // A degraded yield source on its own is documented as *not* sufficient
     // to unlock the emergency exit — only an explicit pause or an escalation
@@ -2321,7 +2324,11 @@ fn emergency_withdraw_recovers_principal_once_degraded_state_escalates_to_full_h
     assert_eq!(vault.get_breaker_status().severity, Severity::FullHalt);
 
     let returned = vault.emergency_withdraw(&user);
-    assert_eq!(returned, 500 * XLM, "user must recover their full principal");
+    assert_eq!(
+        returned,
+        500 * XLM,
+        "user must recover their full principal"
+    );
 }
 
 #[test]
@@ -2341,7 +2348,11 @@ fn emergency_withdraw_all_unwinds_healthy_positions_when_one_adapter_fails_while
     vault.pause(&admin);
     let result = vault.emergency_withdraw_all(&user);
 
-    assert_eq!(result.failed.len(), 1, "the failing adapter must not block others");
+    assert_eq!(
+        result.failed.len(),
+        1,
+        "the failing adapter must not block others"
+    );
     assert_eq!(result.failed.get(0).unwrap().protocol, aave);
     assert_eq!(result.succeeded.len(), 1);
     assert_eq!(result.succeeded.get(0).unwrap().protocol, blend);
@@ -3041,7 +3052,9 @@ fn execute_upgrade_before_eta_is_rejected_even_for_upgrader() {
     );
 
     // The pending upgrade must remain untouched since no execution succeeded.
-    let pending = vault.get_pending_upgrade().expect("pending upgrade must persist");
+    let pending = vault
+        .get_pending_upgrade()
+        .expect("pending upgrade must persist");
     assert_eq!(pending.wasm_hash, new_hash);
     assert_eq!(pending.eta, eta);
 }
@@ -3806,7 +3819,10 @@ mod pause_matrix {
 
         vault.guardian_halt_deposits(&admin);
 
-        assert_eq!(vault.get_breaker_status().severity, Severity::DepositsHalted);
+        assert_eq!(
+            vault.get_breaker_status().severity,
+            Severity::DepositsHalted
+        );
         assert!(!vault.is_paused());
         assert_eq!(vault.get_status(), VaultStatus::Active);
     }
