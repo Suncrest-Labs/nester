@@ -2,8 +2,10 @@
 //!
 //! Split from the pair mock because `#[contractimpl]` emits module-level
 //! symbols: two contracts in one module collide on `initialize`.
+//! Entrypoints mirror the real router's ABI, argument count included.
+#![allow(clippy::too_many_arguments)]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
 
 use super::soroswap_pair::MockSoroswapPairClient;
 
@@ -24,8 +26,8 @@ impl MockSoroswapRouter {
 
     pub fn add_liquidity(
         env: Env,
-        token_a: Address,
-        token_b: Address,
+        _token_a: Address,
+        _token_b: Address,
         amount_a_desired: i128,
         amount_b_desired: i128,
         _amount_a_min: i128,

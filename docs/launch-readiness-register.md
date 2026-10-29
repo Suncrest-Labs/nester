@@ -346,7 +346,7 @@ an open issue makes no "this is done" claim to re-check.
 #### [AUDIT-1378] On-call paging for mainnet money-path alerts
 - **Status:** Resolved
 - **Evidence:** file: docker/alertmanager/alertmanager.yml#L47-L107
-- **Notes:** pagerduty-oncall receiver wired to PAGERDUTY_SERVICE_KEY.
+- **Notes:** pagerduty-oncall receiver reads its key from /etc/alertmanager/secrets/pagerduty_service_key (Alertmanager does not expand env vars).
 
 #### [AUDIT-1379] Real-time balance/TVL dashboard
 - **Status:** Resolved

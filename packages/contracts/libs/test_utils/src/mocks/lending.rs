@@ -1,9 +1,6 @@
-use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, token, Address, Env,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, token, Address, Env};
 
 use nester_common::ContractError;
-
 
 // ---------------------------------------------------------------------------
 // MockLendingProtocol — Blend-style lending market.
@@ -106,11 +103,7 @@ impl MockLendingProtocol {
             .set(&LendKey::Units(owner), &(held - units));
 
         let token_id: Address = env.storage().instance().get(&LendKey::Token).unwrap();
-        token::Client::new(&env, &token_id).transfer(
-            &env.current_contract_address(),
-            &to,
-            &assets,
-        );
+        token::Client::new(&env, &token_id).transfer(&env.current_contract_address(), &to, &assets);
         assets
     }
 
@@ -174,4 +167,3 @@ impl MockLendingProtocol {
         }
     }
 }
-

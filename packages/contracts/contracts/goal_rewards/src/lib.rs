@@ -53,9 +53,8 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "GoalRewardsContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
@@ -67,7 +66,8 @@ use nester_common::goal_effort::{
     self, check_eligibility, compute_bonus, effort_score_bps, ContributionStatsInput,
     IneligibilityReason, RewardTier,
 };
-use savings_goal::{GoalStatus, SavingsGoalContractClient};
+mod registry;
+use registry::{ContributionStats, GoalStatus, SavingsGoalContractClient};
 
 // ---------------------------------------------------------------------------
 // Errors — a SEPARATE enum from nester_common::ContractError, which is
@@ -237,8 +237,7 @@ impl GoalRewardsContract {
         AccessControl::require_role(&env, &caller, Role::Admin);
 
         if bonus_bps > MAX_BONUS_BPS
-            || max_bonus_absolute > MAX_BONUS_ABSOLUTE_CEILING
-            || max_bonus_absolute < 0
+            || !(0..=MAX_BONUS_ABSOLUTE_CEILING).contains(&max_bonus_absolute)
             || min_target < 0
         {
             panic_with_error!(&env, GoalRewardError::InvalidConfig);
@@ -693,6 +692,10 @@ impl GoalRewardsContract {
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
     }
+
+    pub fn version(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -753,7 +756,7 @@ impl From<Vec<RewardTierStored>> for TierBuf {
     }
 }
 
-fn to_pure_stats(stats: &savings_goal::ContributionStats) -> ContributionStatsInput {
+fn to_pure_stats(stats: &ContributionStats) -> ContributionStatsInput {
     ContributionStatsInput {
         contribution_count: stats.contribution_count,
         distinct_periods: stats.distinct_periods,
@@ -792,9 +795,6 @@ fn read_vault_balance(env: &Env, vault: &Address, owner: &Address) -> i128 {
 fn select_tier(tiers: &Vec<RewardTierStored>, target_amount: i128) -> Option<RewardTier> {
     let buf: TierBuf = tiers.clone().into();
     goal_effort::select_tier(&buf, target_amount)
-    pub fn version(env: Env) -> soroban_sdk::String {
-        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
-    }
 }
 
 #[cfg(test)]

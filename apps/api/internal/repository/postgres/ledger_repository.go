@@ -270,7 +270,7 @@ func (r *LedgerRepository) PostEntriesTx(ctx context.Context, tx *sql.Tx, entrie
 }
 
 // mapLedgerError translates a duplicate-key violation on the ledger_entries
-// idempotency index (uq_ledger_entries_domain_event_account, migration 122)
+// idempotency index (uq_ledger_entries_domain_event_account, migration 125)
 // into ledger.ErrAlreadyPosted, so a retried request (webhook redelivery,
 // client retry) is treated as "already applied" rather than a hard failure
 // (nester#1309). Follows the same errors.As(*pgconn.PgError) pattern as

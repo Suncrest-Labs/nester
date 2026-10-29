@@ -1,4 +1,3 @@
-#![cfg(test)]
 //! Proof that the generic pool adapter cannot drive a Soroswap pair.
 //!
 //! `adapter_pool` passes its own suite because `MockAmmPool` implements

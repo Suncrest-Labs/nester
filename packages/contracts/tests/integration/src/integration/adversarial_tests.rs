@@ -455,7 +455,7 @@ fn make_attestation(
     // Convert soroban Bytes → &[u8] for dalek
     let mut raw: std::vec::Vec<u8> = std::vec::Vec::new();
     for i in 0..payload_bytes.len() {
-        raw.push(payload_bytes.get(i as u32).unwrap());
+        raw.push(payload_bytes.get(i).unwrap());
     }
     let sig_bytes = sign_payload(secret, &raw);
     Attestation {

@@ -235,7 +235,7 @@ mod tests {
         });
         balances.push_back(1000 * 10_i128.pow(7));
         prices.push_back(PriceInfo {
-            price: 1 * 10_i128.pow(7), // $1.00 with 7 decimals
+            price: 10_i128.pow(7), // $1.00 with 7 decimals
             timestamp: env.ledger().timestamp(),
             is_valid: true,
         });

@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 extern crate std;
 
 use soroban_sdk::{
@@ -36,7 +34,13 @@ fn blend_id(env: &Env) -> Symbol {
 }
 
 fn register_default(client: &YieldRegistryContractClient, env: &Env, admin: &Address, id: &Symbol) {
-    client.register_source(admin, id, &Address::generate(env), &None, &ProtocolType::Lending);
+    client.register_source(
+        admin,
+        id,
+        &Address::generate(env),
+        &None,
+        &ProtocolType::Lending,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -661,9 +665,13 @@ mod adapter_backed {
             } else {
                 ApyConfidence::ProtocolReported
             };
-            env.storage()
-                .instance()
-                .set(&MockKey::Apy, &AdapterApy { apy_bps, confidence });
+            env.storage().instance().set(
+                &MockKey::Apy,
+                &AdapterApy {
+                    apy_bps,
+                    confidence,
+                },
+            );
         }
 
         pub fn set_broken(env: Env, broken: bool) {
@@ -961,5 +969,8 @@ fn failures_do_not_override_terminal_states() {
     }
 
     assert_eq!(client.get_source_status(&id), SourceStatus::Deprecated);
-    assert!(client.get_source_failure_count(&id) > 0, "failures still counted");
+    assert!(
+        client.get_source_failure_count(&id) > 0,
+        "failures still counted"
+    );
 }

@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 //! Authorization test matrix for every protected Vault entrypoint.
 //!
 //! Role-negative calls use valid arguments with `mock_all_auths`, isolating
@@ -1732,7 +1730,7 @@ fn test_harvest_rate_limited_within_interval() {
 
 #[test]
 fn test_harvest_rate_limit_is_per_user() {
-    let (env, admin, token, vault, _treasury) = setup();
+    let (env, _admin, token, vault, _treasury) = setup();
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
     mint(&token, &alice, 1_000 * XLM);
@@ -1740,6 +1738,9 @@ fn test_harvest_rate_limit_is_per_user() {
     vault.deposit(&alice, &(1_000 * XLM), &0);
     vault.deposit(&bob, &(1_000 * XLM), &0);
 
+    // The vault records "never harvested" as timestamp 0, and the test ledger
+    // starts at 0; move off it so Alice's first harvest is recorded.
+    advance_time(&env, 1);
     vault.harvest(&alice);
     // Alice's harvest must not block Bob.
     assert!(vault.try_harvest(&bob).is_ok());
@@ -2289,7 +2290,10 @@ fn emergency_withdraw_blocked_by_degraded_source_failures_alone() {
     vault.record_source_failure(&admin);
     vault.record_source_failure(&admin);
     vault.record_source_failure(&admin);
-    assert_eq!(vault.get_breaker_status().severity, Severity::DepositsHalted);
+    assert_eq!(
+        vault.get_breaker_status().severity,
+        Severity::DepositsHalted
+    );
 
     // A degraded yield source on its own is documented as *not* sufficient
     // to unlock the emergency exit — only an explicit pause or an escalation
@@ -2321,7 +2325,11 @@ fn emergency_withdraw_recovers_principal_once_degraded_state_escalates_to_full_h
     assert_eq!(vault.get_breaker_status().severity, Severity::FullHalt);
 
     let returned = vault.emergency_withdraw(&user);
-    assert_eq!(returned, 500 * XLM, "user must recover their full principal");
+    assert_eq!(
+        returned,
+        500 * XLM,
+        "user must recover their full principal"
+    );
 }
 
 #[test]
@@ -2341,7 +2349,11 @@ fn emergency_withdraw_all_unwinds_healthy_positions_when_one_adapter_fails_while
     vault.pause(&admin);
     let result = vault.emergency_withdraw_all(&user);
 
-    assert_eq!(result.failed.len(), 1, "the failing adapter must not block others");
+    assert_eq!(
+        result.failed.len(),
+        1,
+        "the failing adapter must not block others"
+    );
     assert_eq!(result.failed.get(0).unwrap().protocol, aave);
     assert_eq!(result.succeeded.len(), 1);
     assert_eq!(result.succeeded.get(0).unwrap().protocol, blend);
@@ -3041,7 +3053,9 @@ fn execute_upgrade_before_eta_is_rejected_even_for_upgrader() {
     );
 
     // The pending upgrade must remain untouched since no execution succeeded.
-    let pending = vault.get_pending_upgrade().expect("pending upgrade must persist");
+    let pending = vault
+        .get_pending_upgrade()
+        .expect("pending upgrade must persist");
     assert_eq!(pending.wasm_hash, new_hash);
     assert_eq!(pending.eta, eta);
 }
@@ -3328,7 +3342,7 @@ mod locks_test {
         // Locked shares still count toward the total balance...
         assert_eq!(vault.get_balance(&user), 500 * XLM);
         // ...but are not free to withdraw as flexible shares.
-        let result = vault.try_withdraw(&user, &(1 * XLM), &0);
+        let result = vault.try_withdraw(&user, &XLM, &0);
         assert!(
             result.is_err(),
             "withdraw must reject shares that are locked"
@@ -3364,10 +3378,10 @@ mod locks_test {
         mint(&token, &user, 1_000_000 * XLM);
 
         for _ in 0..20 {
-            vault.deposit_locked(&user, &(1 * XLM), &0, &THIRTY_DAYS);
+            vault.deposit_locked(&user, &XLM, &0, &THIRTY_DAYS);
         }
         // The 21st simultaneously open lock must be rejected.
-        vault.deposit_locked(&user, &(1 * XLM), &0, &THIRTY_DAYS);
+        vault.deposit_locked(&user, &XLM, &0, &THIRTY_DAYS);
     }
 
     #[test]
@@ -3806,7 +3820,10 @@ mod pause_matrix {
 
         vault.guardian_halt_deposits(&admin);
 
-        assert_eq!(vault.get_breaker_status().severity, Severity::DepositsHalted);
+        assert_eq!(
+            vault.get_breaker_status().severity,
+            Severity::DepositsHalted
+        );
         assert!(!vault.is_paused());
         assert_eq!(vault.get_status(), VaultStatus::Active);
     }
