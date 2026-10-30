@@ -14,6 +14,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "adapter-defindex-contract"
+version = "0.1.0"
+dependencies = [
+ "nester-common",
+ "nester-test-utils",
+ "savings-core",
+ "savings-reserve",
+ "soroban-sdk",
+ "soroban-spec",
+]
+
+[[package]]
 name = "adapter-lending-contract"
 version = "0.1.0"
 dependencies = [

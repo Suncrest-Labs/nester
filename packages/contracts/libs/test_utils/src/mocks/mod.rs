@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 
 pub mod blend_pool;
+pub mod defindex_vault;
 pub mod failing;
 pub mod lending;
 pub mod pool;
@@ -19,6 +20,7 @@ pub mod soroswap_router;
 pub mod yield_adapter;
 
 pub use blend_pool::{MockBlendPool, MockBlendPoolClient};
+pub use defindex_vault::{MockDefindexVault, MockDefindexVaultClient};
 pub use failing::{MockFailingAdapter, MockFailingAdapterClient};
 pub use lending::{MockLendingProtocol, MockLendingProtocolClient};
 pub use pool::{MockAmmPool, MockAmmPoolClient};
