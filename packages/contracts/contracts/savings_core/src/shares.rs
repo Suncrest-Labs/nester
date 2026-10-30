@@ -157,10 +157,21 @@ pub fn to_shares_up(assets: i128, total_assets: i128, supply: i128) -> i128 {
 }
 
 /// Assets paid for `shares` (rounded down, favours the vault).
+///
+/// The virtual assets in the formula are worth less than the virtual shares
+/// once the price is below 1, so early redeemers are paid up to
+/// `VIRTUAL_OFFSET * (1 - price)` stroops over pro-rata. The result is capped
+/// at `total_assets` for any real claim (`shares <= supply`) so that surplus
+/// can never make the last holder's redemption exceed what the core holds.
 pub fn to_assets_down(shares: i128, total_assets: i128, supply: i128) -> i128 {
-    mul_div_down(
+    let assets = mul_div_down(
         shares,
         total_assets + VIRTUAL_OFFSET,
         supply + VIRTUAL_OFFSET,
-    )
+    );
+    if shares <= supply {
+        assets.min(total_assets)
+    } else {
+        assets
+    }
 }

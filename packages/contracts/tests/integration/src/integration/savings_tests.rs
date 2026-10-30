@@ -184,25 +184,22 @@ fn test_savings_lifecycle() {
 
     // Alice redeems everything. Pro-rata of 960 USDC is exactly 576; the
     // core's virtual offset (V = 10,000 stroops) rounds in the redeemer's
-    // favour while the price is below 1, by V * (1 - price) * shares / supply.
+    // favour while the price is below 1:
+    // floor(600 * (960 USDC + V) / (1,000 shares + V)).
     let alice_out = core.redeem(&alice, &(600 * UNIT), &0);
+    let expected_alice = 600 * UNIT * (960 * UNIT + 10_000) / (1_000 * UNIT + 10_000);
+    assert_eq!(alice_out, expected_alice);
+    assert!(alice_out >= 576 * UNIT);
     assert_eq!(usdc.balance(&alice), alice_out);
-    assert!(alice_out >= 576 * UNIT, "alice got {alice_out}");
-    assert!(alice_out <= 576 * UNIT + 300, "alice got {alice_out}");
 
-    // The offset's gift to Alice comes out of what is left: Bob's 400 shares
-    // are priced above the remaining assets, so redeeming all of them
-    // reverts (see report). Bob withdraws everything that is left instead.
+    // Bob, the last holder, redeems all his shares and takes exactly what
+    // the core still holds: the conversion is capped at total assets.
     let remaining = core.total_assets();
     assert!((remaining - (960 * UNIT - alice_out)).abs() <= 2);
-    assert!(core.convert_to_assets(&(400 * UNIT)) > remaining);
-    core.withdraw(&bob, &remaining, &(400 * UNIT));
+    let bob_out = core.redeem(&bob, &(400 * UNIT), &0);
+    assert_eq!(bob_out, remaining);
     assert_eq!(usdc.balance(&bob), remaining);
-    assert!(remaining >= 384 * UNIT - 300, "bob got {remaining}");
+    assert!(bob_out >= 384 * UNIT - 300);
     assert_eq!(core.total_assets(), 0);
-    assert!(
-        core.balance(&bob) < 1_000,
-        "bob keeps {}",
-        core.balance(&bob)
-    );
+    assert_eq!(core.total_supply(), 0);
 }

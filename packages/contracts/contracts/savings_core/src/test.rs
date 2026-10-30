@@ -1385,3 +1385,29 @@ fn test_add_adapter_bound_to_another_core_rejected() {
         .unwrap();
     assert_eq!(err, SavingsError::InvalidAdapter.into());
 }
+
+#[test]
+fn test_last_holder_redeems_everything_after_a_loss() {
+    let s = setup();
+    let (alice, adapter) = invested(&s);
+    let bob = s.funded_user(100 * UNIT);
+    s.core.deposit(&bob, &(100 * UNIT), &0);
+    revalue(&s, &adapter, 60 * UNIT);
+    assert_eq!(s.core.total_assets(), 160 * UNIT);
+    assert!(s.core.share_price() < UNIT);
+
+    let alice_out = s.core.redeem(&alice, &(100 * UNIT), &0);
+    // The offset rounds in the earlier redeemer's favour, by at most
+    // V * (1 - price) stroops.
+    assert!(alice_out >= 80 * UNIT, "alice got {alice_out}");
+    assert!(alice_out <= 80 * UNIT + 10_000, "alice got {alice_out}");
+
+    let bob_shares = s.core.balance(&bob);
+    let bob_worth = s.core.convert_to_assets(&bob_shares);
+    assert_eq!(bob_worth, s.core.total_assets());
+    let bob_out = s.core.redeem(&bob, &bob_shares, &0);
+
+    assert_eq!(bob_out, 160 * UNIT - alice_out);
+    assert_eq!(s.core.total_assets(), 0);
+    assert_eq!(s.core.total_supply(), s.core.reserve_shares());
+}
