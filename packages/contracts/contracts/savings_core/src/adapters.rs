@@ -60,11 +60,11 @@ pub fn withdraw_order(env: &Env) -> Vec<Address> {
         .unwrap_or_else(|| Vec::new(env))
 }
 
-/// Register an adapter and append it to the withdraw order.
-pub fn add(env: &Env, asset: &Address, cfg: AdapterConfig) {
-    if cfg.abs_cap < 0
-        || cfg.rel_cap_bps as i128 > BPS
-        || find(env, &cfg.adapter).is_some()
+/// Reject an adapter that is already registered, has invalid caps, or whose
+/// underlying asset is not `asset`.
+pub fn check_new(env: &Env, asset: &Address, cfg: &AdapterConfig) {
+    check_caps(env, cfg.abs_cap, cfg.rel_cap_bps);
+    if find(env, &cfg.adapter).is_some()
         || !matches!(
             YieldAdapterClient::new(env, &cfg.adapter).try_underlying(),
             Ok(Ok(ref u)) if u == asset
@@ -72,6 +72,17 @@ pub fn add(env: &Env, asset: &Address, cfg: AdapterConfig) {
     {
         panic_with_error!(env, SavingsError::InvalidAdapter);
     }
+}
+
+pub fn check_caps(env: &Env, abs_cap: i128, rel_cap_bps: u32) {
+    if abs_cap < 0 || rel_cap_bps as i128 > BPS {
+        panic_with_error!(env, SavingsError::InvalidAdapter);
+    }
+}
+
+/// Register an adapter and append it to the withdraw order.
+pub fn add(env: &Env, asset: &Address, cfg: AdapterConfig) {
+    check_new(env, asset, &cfg);
     let mut order = withdraw_order(env);
     order.push_back(cfg.adapter.clone());
     let mut list = adapters(env);
@@ -100,6 +111,47 @@ pub fn set_withdraw_order(env: &Env, order: Vec<Address>) {
         .set(&AdapterKey::WithdrawOrder, &order);
 }
 
+/// Set a registered adapter's caps.
+pub fn set_caps(env: &Env, adapter: &Address, abs_cap: i128, rel_cap_bps: u32) {
+    check_caps(env, abs_cap, rel_cap_bps);
+    let mut list = adapters(env);
+    let i = index_of(env, &list, adapter);
+    list.set(
+        i,
+        AdapterConfig {
+            adapter: adapter.clone(),
+            abs_cap,
+            rel_cap_bps,
+        },
+    );
+    env.storage().instance().set(&AdapterKey::Adapters, &list);
+}
+
+/// Unregister an adapter whose position is worth exactly zero. An adapter
+/// that cannot be valued is not removable: its position may still be live.
+pub fn remove(env: &Env, adapter: &Address) {
+    let mut list = adapters(env);
+    let i = index_of(env, &list, adapter);
+    match try_value(env, adapter) {
+        Some(0) => {}
+        Some(_) => panic_with_error!(env, SavingsError::AdapterNotEmpty),
+        None => panic_with_error!(env, SavingsError::AdapterUnavailable),
+    }
+    list.remove(i);
+    let mut order = withdraw_order(env);
+    if let Some(j) = order.first_index_of(adapter) {
+        order.remove(j);
+    }
+    env.storage().instance().set(&AdapterKey::Adapters, &list);
+    env.storage()
+        .instance()
+        .set(&AdapterKey::WithdrawOrder, &order);
+}
+
+pub fn allocator(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&AdapterKey::Allocator)
+}
+
 pub fn set_allocator(env: &Env, allocator: &Address) {
     env.storage()
         .instance()
@@ -108,14 +160,24 @@ pub fn set_allocator(env: &Env, allocator: &Address) {
 
 pub fn require_allocator(env: &Env, caller: &Address) {
     caller.require_auth();
-    let allocator: Option<Address> = env.storage().instance().get(&AdapterKey::Allocator);
-    if allocator.as_ref() != Some(caller) {
+    if allocator(env).as_ref() != Some(caller) {
         panic_with_error!(env, SavingsError::Unauthorized);
     }
 }
 
 fn find(env: &Env, adapter: &Address) -> Option<AdapterConfig> {
     adapters(env).iter().find(|c| &c.adapter == adapter)
+}
+
+/// The registered config for `adapter`; `InvalidAdapter` if unknown.
+pub fn config(env: &Env, adapter: &Address) -> AdapterConfig {
+    find(env, adapter).unwrap_or_else(|| panic_with_error!(env, SavingsError::InvalidAdapter))
+}
+
+fn index_of(env: &Env, list: &Vec<AdapterConfig>, adapter: &Address) -> u32 {
+    list.iter()
+        .position(|c| &c.adapter == adapter)
+        .unwrap_or_else(|| panic_with_error!(env, SavingsError::InvalidAdapter)) as u32
 }
 
 /// The adapter's valuation of the core's position, or `None` if the call
@@ -182,8 +244,7 @@ fn try_pull(env: &Env, adapter: &Address, assets: i128, value: i128) -> Option<i
 /// Move `assets` of idle USDC into `adapter`, enforcing its caps against the
 /// strict valuation.
 pub fn allocate(env: &Env, asset: &Address, idle: i128, adapter: &Address, assets: i128) {
-    let cfg =
-        find(env, adapter).unwrap_or_else(|| panic_with_error!(env, SavingsError::InvalidAdapter));
+    let cfg = config(env, adapter);
     if assets > idle {
         panic_with_error!(env, SavingsError::InsufficientLiquidity);
     }
@@ -211,9 +272,7 @@ pub fn allocate(env: &Env, asset: &Address, idle: i128, adapter: &Address, asset
 
 /// Withdraw `assets` worth of position from `adapter` back to idle.
 pub fn deallocate(env: &Env, adapter: &Address, assets: i128) {
-    if find(env, adapter).is_none() {
-        panic_with_error!(env, SavingsError::InvalidAdapter);
-    }
+    config(env, adapter);
     let value = try_value(env, adapter)
         .unwrap_or_else(|| panic_with_error!(env, SavingsError::AdapterUnavailable));
     if assets > value {

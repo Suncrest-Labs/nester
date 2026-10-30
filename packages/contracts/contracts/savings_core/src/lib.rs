@@ -12,9 +12,11 @@ include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
 
 mod adapters;
+mod governance;
 mod shares;
 
 pub use adapters::AdapterConfig;
+pub use governance::Change;
 
 use nester_common::{INSTANCE_TTL_EXTEND_TO_LEDGERS, INSTANCE_TTL_THRESHOLD_LEDGERS};
 use soroban_sdk::{
@@ -47,6 +49,10 @@ pub enum SavingsError {
     /// Adapter is unknown, already registered, misconfigured, or the
     /// withdraw order does not list every adapter exactly once.
     InvalidAdapter = 14,
+    /// `lower_cap` would raise a cap; raising goes through `propose`.
+    CapIncrease = 15,
+    /// The adapter still holds value, so it cannot be removed.
+    AdapterNotEmpty = 16,
 }
 
 /// Data payload of the `deposit` and `withdraw` events.
@@ -60,12 +66,10 @@ pub struct AmountShares {
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
-    Owner,
     Asset,
     Reserve,
     Name,
     Symbol,
-    Timelock,
 }
 
 #[contract]
@@ -82,6 +86,7 @@ impl SavingsCore {
         symbol: String,
         timelock: u64,
     ) {
+        owner.require_auth();
         let store = env.storage().instance();
         if store.has(&DataKey::Asset) {
             panic_with_error!(&env, SavingsError::AlreadyInitialized);
@@ -91,18 +96,20 @@ impl SavingsCore {
         } else {
             timelock
         };
-        store.set(&DataKey::Owner, &owner);
+        governance::init(&env, &owner, timelock);
         store.set(&DataKey::Asset, &asset);
         store.set(&DataKey::Reserve, &reserve);
         store.set(&DataKey::Name, &name);
         store.set(&DataKey::Symbol, &symbol);
-        store.set(&DataKey::Timelock, &timelock);
         bump_instance(&env);
     }
 
     /// Deposit `assets` USDC from `from`; returns the shares minted.
     pub fn deposit(env: Env, from: Address, assets: i128, min_shares: i128) -> i128 {
         from.require_auth();
+        if governance::deposits_paused(&env) {
+            panic_with_error!(&env, SavingsError::DepositsPaused);
+        }
         require_positive(&env, assets);
         let shares = Self::convert_to_shares(env.clone(), assets);
         if shares <= 0 {
@@ -180,25 +187,132 @@ impl SavingsCore {
         Self::convert_to_assets(env, PRICE_SCALE)
     }
 
-    // --- Adapters -------------------------------------------------------
+    // --- Roles ----------------------------------------------------------
 
-    /// Register an adapter with its caps (owner, instant). Task 4 replaces
-    /// this with a timelocked proposal.
-    pub fn add_adapter(env: Env, owner: Address, cfg: AdapterConfig) {
-        require_owner(&env, &owner);
-        adapters::add(&env, &asset_address(&env), cfg);
-        bump_instance(&env);
-    }
-
-    pub fn set_withdraw_order(env: Env, owner: Address, order: Vec<Address>) {
-        require_owner(&env, &owner);
-        adapters::set_withdraw_order(&env, order);
+    pub fn set_curator(env: Env, owner: Address, curator: Address) {
+        governance::require_owner(&env, &owner);
+        governance::set_curator(&env, &curator);
         bump_instance(&env);
     }
 
     pub fn set_allocator(env: Env, owner: Address, allocator: Address) {
-        require_owner(&env, &owner);
+        governance::require_owner(&env, &owner);
         adapters::set_allocator(&env, &allocator);
+        bump_instance(&env);
+    }
+
+    pub fn set_guardian(env: Env, owner: Address, guardian: Address) {
+        governance::require_owner(&env, &owner);
+        governance::set_guardian(&env, &guardian);
+        bump_instance(&env);
+    }
+
+    /// Nominate `new_owner`; takes effect when they call `accept_ownership`.
+    pub fn transfer_ownership(env: Env, owner: Address, new_owner: Address) {
+        governance::require_owner(&env, &owner);
+        governance::transfer_ownership(&env, &new_owner);
+        bump_instance(&env);
+    }
+
+    pub fn accept_ownership(env: Env, new_owner: Address) {
+        governance::accept_ownership(&env, &new_owner);
+        bump_instance(&env);
+    }
+
+    pub fn owner(env: Env) -> Address {
+        governance::owner(&env)
+    }
+
+    pub fn curator(env: Env) -> Option<Address> {
+        governance::curator(&env)
+    }
+
+    pub fn allocator(env: Env) -> Option<Address> {
+        adapters::allocator(&env)
+    }
+
+    pub fn guardian(env: Env) -> Option<Address> {
+        governance::guardian(&env)
+    }
+
+    // --- Timelocked changes ---------------------------------------------
+
+    /// Owner or curator. A risk-adding change is queued for `timelock()`
+    /// seconds and returns its id; a risk-reducing one applies now and
+    /// returns 0.
+    pub fn propose(env: Env, caller: Address, change: Change) -> u32 {
+        governance::require_owner_or_curator(&env, &caller);
+        let id = governance::propose(&env, &asset_address(&env), change);
+        bump_instance(&env);
+        id
+    }
+
+    /// Apply a queued change once due. Anyone may call.
+    pub fn execute(env: Env, id: u32) {
+        governance::execute(&env, &asset_address(&env), id);
+        bump_instance(&env);
+    }
+
+    /// Guardian or owner: drop a queued change.
+    pub fn revoke(env: Env, caller: Address, id: u32) {
+        governance::require_owner_or_guardian(&env, &caller);
+        governance::revoke(&env, id);
+        bump_instance(&env);
+    }
+
+    /// `(id, change, eta)` for every queued change.
+    pub fn pending_changes(env: Env) -> Vec<(u32, Change, u64)> {
+        governance::pending(&env)
+    }
+
+    pub fn timelock(env: Env) -> u64 {
+        governance::timelock(&env)
+    }
+
+    // --- Instant risk reduction -----------------------------------------
+
+    /// Owner or curator: lower either cap. Raising one reverts.
+    pub fn lower_cap(env: Env, caller: Address, adapter: Address, abs_cap: i128, rel_cap_bps: u32) {
+        governance::require_owner_or_curator(&env, &caller);
+        governance::lower_cap(&env, &adapter, abs_cap, rel_cap_bps);
+        bump_instance(&env);
+    }
+
+    /// Guardian: set both of the adapter's caps to zero.
+    pub fn zero_cap(env: Env, guardian: Address, adapter: Address) {
+        governance::require_guardian(&env, &guardian);
+        governance::lower_cap(&env, &adapter, 0, 0);
+        bump_instance(&env);
+    }
+
+    /// Owner: unregister an adapter whose position is worth zero.
+    pub fn remove_adapter(env: Env, owner: Address, adapter: Address) {
+        governance::require_owner(&env, &owner);
+        adapters::remove(&env, &adapter);
+        bump_instance(&env);
+    }
+
+    pub fn pause_deposits(env: Env, guardian: Address) {
+        governance::require_guardian(&env, &guardian);
+        governance::set_deposits_paused(&env, true);
+        bump_instance(&env);
+    }
+
+    pub fn unpause_deposits(env: Env, owner: Address) {
+        governance::require_owner(&env, &owner);
+        governance::set_deposits_paused(&env, false);
+        bump_instance(&env);
+    }
+
+    pub fn deposits_paused(env: Env) -> bool {
+        governance::deposits_paused(&env)
+    }
+
+    // --- Adapters -------------------------------------------------------
+
+    pub fn set_withdraw_order(env: Env, curator: Address, order: Vec<Address>) {
+        governance::require_curator(&env, &curator);
+        adapters::set_withdraw_order(&env, order);
         bump_instance(&env);
     }
 
@@ -306,14 +420,6 @@ fn asset_address(env: &Env) -> Address {
 
 fn asset_client(env: &Env) -> token::Client<'_> {
     token::Client::new(env, &asset_address(env))
-}
-
-fn require_owner(env: &Env, caller: &Address) {
-    caller.require_auth();
-    let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
-    if &owner != caller {
-        panic_with_error!(env, SavingsError::Unauthorized);
-    }
 }
 
 fn idle_assets(env: &Env) -> i128 {

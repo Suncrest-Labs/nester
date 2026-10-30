@@ -2,14 +2,15 @@ extern crate std;
 
 use nester_test_utils::{MockYieldAdapter, MockYieldAdapterClient};
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    vec, Address, Env, IntoVal, String, Symbol,
+    vec, Address, Env, IntoVal, String, Symbol, Val,
 };
 
-use crate::{AdapterConfig, AmountShares, SavingsCore, SavingsCoreClient, SavingsError};
+use crate::{AmountShares, Change, SavingsCore, SavingsCoreClient, SavingsError};
 
 const UNIT: i128 = 10_000_000;
+const TIMELOCK: u64 = 259_200;
 
 struct Setup<'a> {
     env: Env,
@@ -18,6 +19,8 @@ struct Setup<'a> {
     usdc_admin: StellarAssetClient<'a>,
     owner: Address,
     allocator: Address,
+    curator: Address,
+    guardian: Address,
 }
 
 fn setup<'a>() -> Setup<'a> {
@@ -30,6 +33,8 @@ fn setup<'a>() -> Setup<'a> {
     let core = SavingsCoreClient::new(&env, &core_id);
     let owner = Address::generate(&env);
     let allocator = Address::generate(&env);
+    let curator = Address::generate(&env);
+    let guardian = Address::generate(&env);
     core.initialize(
         &owner,
         &usdc_id,
@@ -39,10 +44,14 @@ fn setup<'a>() -> Setup<'a> {
         &0u64,
     );
     core.set_allocator(&owner, &allocator);
+    core.set_curator(&owner, &curator);
+    core.set_guardian(&owner, &guardian);
 
     Setup {
         owner,
         allocator,
+        curator,
+        guardian,
         usdc: TokenClient::new(&env, &usdc_id),
         usdc_admin: StellarAssetClient::new(&env, &usdc_id),
         core,
@@ -57,19 +66,45 @@ impl Setup<'_> {
         user
     }
 
-    fn add_adapter(&self, abs_cap: i128, rel_cap_bps: u32) -> MockYieldAdapterClient<'_> {
+    fn new_adapter(&self) -> MockYieldAdapterClient<'_> {
         let id = self.env.register_contract(None, MockYieldAdapter);
         let adapter = MockYieldAdapterClient::new(&self.env, &id);
         adapter.initialize(&self.usdc.address);
-        self.core.add_adapter(
-            &self.owner,
-            &AdapterConfig {
-                adapter: id,
-                abs_cap,
-                rel_cap_bps,
-            },
-        );
         adapter
+    }
+
+    /// Register an adapter through the timelock: propose, wait, execute.
+    fn add_adapter(&self, abs_cap: i128, rel_cap_bps: u32) -> MockYieldAdapterClient<'_> {
+        let adapter = self.new_adapter();
+        let id = self.core.propose(
+            &self.owner,
+            &Change::AddAdapter(adapter.address.clone(), abs_cap, rel_cap_bps),
+        );
+        self.advance(self.core.timelock());
+        self.core.execute(&id);
+        adapter
+    }
+
+    fn advance(&self, seconds: u64) {
+        self.env.ledger().with_mut(|l| l.timestamp += seconds);
+    }
+
+    fn now(&self) -> u64 {
+        self.env.ledger().timestamp()
+    }
+
+    fn caps(&self, adapter: &Address) -> (i128, u32) {
+        let cfg = self
+            .core
+            .adapters()
+            .iter()
+            .find(|c| &c.adapter == adapter)
+            .unwrap();
+        (cfg.abs_cap, cfg.rel_cap_bps)
+    }
+
+    fn last_topics(&self) -> soroban_sdk::Vec<Val> {
+        self.env.events().all().last().unwrap().1
     }
 
     fn uncapped_adapter(&self) -> MockYieldAdapterClient<'_> {
@@ -434,12 +469,21 @@ fn test_withdraw_pulls_in_withdraw_order() {
 
     let err = s
         .core
-        .try_set_withdraw_order(&s.owner, &vec![&s.env, b.address.clone()])
+        .try_set_withdraw_order(&s.curator, &vec![&s.env, b.address.clone()])
         .unwrap_err()
         .unwrap();
     assert_eq!(err, SavingsError::InvalidAdapter.into());
+    let err = s
+        .core
+        .try_set_withdraw_order(
+            &s.owner,
+            &vec![&s.env, b.address.clone(), a.address.clone()],
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::Unauthorized.into());
     s.core.set_withdraw_order(
-        &s.owner,
+        &s.curator,
         &vec![&s.env, b.address.clone(), a.address.clone()],
     );
 
@@ -448,4 +492,373 @@ fn test_withdraw_pulls_in_withdraw_order() {
     assert_eq!(s.usdc.balance(&alice), 50 * UNIT);
     assert_eq!(s.core.allocation(&a.address), 40 * UNIT);
     assert_eq!(s.core.allocation(&b.address), 10 * UNIT);
+}
+
+// --- Governance ----------------------------------------------------------
+
+#[test]
+fn test_add_adapter_waits_for_timelock() {
+    let s = setup();
+    let adapter = s.new_adapter();
+    let change = Change::AddAdapter(adapter.address.clone(), 50 * UNIT, 5_000);
+    assert_eq!(s.core.timelock(), TIMELOCK);
+
+    let id = s.core.propose(&s.curator, &change);
+    assert_eq!(
+        s.last_topics(),
+        (Symbol::new(&s.env, "change_proposed"), id).into_val(&s.env)
+    );
+    assert_eq!(
+        s.core.pending_changes(),
+        vec![&s.env, (id, change, s.now() + TIMELOCK)]
+    );
+
+    let err = s.core.try_execute(&id).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::NotReady.into());
+    s.advance(TIMELOCK - 1);
+    let err = s.core.try_execute(&id).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::NotReady.into());
+    assert_eq!(s.core.adapters().len(), 0);
+
+    s.advance(1);
+    s.core.execute(&id);
+    assert_eq!(
+        s.last_topics(),
+        (Symbol::new(&s.env, "change_executed"), id).into_val(&s.env)
+    );
+    assert_eq!(s.caps(&adapter.address), (50 * UNIT, 5_000));
+    assert_eq!(
+        s.core.withdraw_order(),
+        vec![&s.env, adapter.address.clone()]
+    );
+    assert_eq!(s.core.pending_changes().len(), 0);
+
+    let err = s.core.try_execute(&id).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::NoSuchChange.into());
+}
+
+#[test]
+fn test_anyone_executes_after_eta() {
+    let s = setup();
+    let adapter = s.new_adapter();
+    let id = s.core.propose(
+        &s.owner,
+        &Change::AddAdapter(adapter.address.clone(), i128::MAX, 10_000),
+    );
+    s.advance(TIMELOCK);
+
+    s.core.execute(&id);
+
+    assert!(s.env.auths().is_empty(), "execute must not require auth");
+    assert_eq!(s.core.adapters().len(), 1);
+}
+
+#[test]
+fn test_execute_rechecks_change() {
+    let s = setup();
+    let adapter = s.new_adapter();
+    let change = Change::AddAdapter(adapter.address.clone(), UNIT, 10_000);
+    let first = s.core.propose(&s.owner, &change);
+    let second = s.core.propose(&s.curator, &change);
+    assert_ne!(first, second);
+    s.advance(TIMELOCK);
+
+    s.core.execute(&first);
+    let err = s.core.try_execute(&second).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::InvalidAdapter.into());
+
+    let err = s.core.try_propose(&s.owner, &change).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::InvalidAdapter.into());
+    let unknown = Change::RaiseCap(Address::generate(&s.env), UNIT, 10_000);
+    let err = s.core.try_propose(&s.owner, &unknown).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::InvalidAdapter.into());
+    let over_100_pct = Change::RaiseCap(adapter.address.clone(), UNIT, 10_001);
+    let err = s
+        .core
+        .try_propose(&s.owner, &over_100_pct)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::InvalidAdapter.into());
+    assert_eq!(s.core.pending_changes().len(), 1);
+}
+
+#[test]
+fn test_guardian_revokes_pending_change() {
+    let s = setup();
+    let adapter = s.new_adapter();
+    let mallory = Address::generate(&s.env);
+    let id = s.core.propose(
+        &s.curator,
+        &Change::AddAdapter(adapter.address.clone(), UNIT, 10_000),
+    );
+
+    for caller in [&mallory, &s.curator] {
+        let err = s.core.try_revoke(caller, &id).unwrap_err().unwrap();
+        assert_eq!(err, SavingsError::Unauthorized.into());
+    }
+    s.core.revoke(&s.guardian, &id);
+    assert_eq!(
+        s.last_topics(),
+        (Symbol::new(&s.env, "change_revoked"), id).into_val(&s.env)
+    );
+    assert_eq!(s.core.pending_changes().len(), 0);
+
+    s.advance(TIMELOCK);
+    let err = s.core.try_execute(&id).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::NoSuchChange.into());
+    let err = s.core.try_revoke(&s.guardian, &id).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::NoSuchChange.into());
+
+    let id = s.core.propose(&s.curator, &Change::SetTimelock(1));
+    s.core.revoke(&s.owner, &id);
+    assert_eq!(s.core.pending_changes().len(), 0);
+    assert_eq!(s.core.adapters().len(), 0);
+    assert_eq!(s.core.timelock(), TIMELOCK);
+}
+
+#[test]
+fn test_shorten_timelock_is_timelocked_lengthen_is_instant() {
+    let s = setup();
+
+    let id = s.core.propose(&s.curator, &Change::SetTimelock(400_000));
+    assert_eq!(id, 0);
+    assert_eq!(s.core.timelock(), 400_000);
+    assert_eq!(s.core.pending_changes().len(), 0);
+
+    let id = s.core.propose(&s.owner, &Change::SetTimelock(3_600));
+    assert_ne!(id, 0);
+    assert_eq!(s.core.timelock(), 400_000);
+    assert_eq!(
+        s.core.pending_changes().get(0).unwrap().2,
+        s.now() + 400_000
+    );
+
+    s.advance(TIMELOCK);
+    let err = s.core.try_execute(&id).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::NotReady.into());
+    s.advance(400_000 - TIMELOCK);
+    s.core.execute(&id);
+    assert_eq!(s.core.timelock(), 3_600);
+
+    let adapter = s.new_adapter();
+    let id = s.core.propose(
+        &s.owner,
+        &Change::AddAdapter(adapter.address.clone(), UNIT, 10_000),
+    );
+    assert_eq!(s.core.pending_changes().get(0).unwrap().2, s.now() + 3_600);
+    s.advance(3_600);
+    s.core.execute(&id);
+}
+
+#[test]
+fn test_guardian_cannot_add_risk() {
+    let s = setup();
+    let adapter = s.new_adapter();
+    let listed = s.add_adapter(UNIT, 1_000);
+    let mallory = Address::generate(&s.env);
+
+    for caller in [&s.guardian, &s.allocator, &mallory] {
+        for change in [
+            Change::AddAdapter(adapter.address.clone(), UNIT, 10_000),
+            Change::RaiseCap(listed.address.clone(), 2 * UNIT, 2_000),
+            Change::SetTimelock(1),
+        ] {
+            let err = s.core.try_propose(caller, &change).unwrap_err().unwrap();
+            assert_eq!(err, SavingsError::Unauthorized.into());
+        }
+    }
+    assert_eq!(s.core.pending_changes().len(), 0);
+}
+
+#[test]
+fn test_pause_blocks_deposits_not_withdrawals() {
+    let s = setup();
+    let alice = s.funded_user(100 * UNIT);
+    let bob = s.funded_user(10 * UNIT);
+    s.core.deposit(&alice, &(100 * UNIT), &0);
+
+    let err = s.core.try_pause_deposits(&s.owner).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::Unauthorized.into());
+    s.core.pause_deposits(&s.guardian);
+    assert!(s.core.deposits_paused());
+
+    let err = s
+        .core
+        .try_deposit(&bob, &(10 * UNIT), &0)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::DepositsPaused.into());
+    s.core.redeem(&alice, &(40 * UNIT), &0);
+    s.core.withdraw(&alice, &(10 * UNIT), &i128::MAX);
+    assert_eq!(s.usdc.balance(&alice), 50 * UNIT);
+
+    let err = s
+        .core
+        .try_unpause_deposits(&s.guardian)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::Unauthorized.into());
+    s.core.unpause_deposits(&s.owner);
+    assert!(!s.core.deposits_paused());
+    s.core.deposit(&bob, &(10 * UNIT), &0);
+}
+
+#[test]
+fn test_lower_cap_and_zero_cap_instant() {
+    let s = setup();
+    let alice = s.funded_user(100 * UNIT);
+    s.core.deposit(&alice, &(100 * UNIT), &0);
+    let a = s.add_adapter(50 * UNIT, 5_000).address;
+    let mallory = Address::generate(&s.env);
+
+    s.core.lower_cap(&s.curator, &a, &(40 * UNIT), &4_000);
+    assert_eq!(s.caps(&a), (40 * UNIT, 4_000));
+    s.core.lower_cap(&s.owner, &a, &(30 * UNIT), &4_000);
+    assert_eq!(s.caps(&a), (30 * UNIT, 4_000));
+    for (abs, rel) in [(31 * UNIT, 4_000), (30 * UNIT, 4_001)] {
+        let err = s
+            .core
+            .try_lower_cap(&s.curator, &a, &abs, &rel)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, SavingsError::CapIncrease.into());
+    }
+    for caller in [&s.guardian, &mallory] {
+        let err = s
+            .core
+            .try_lower_cap(caller, &a, &0, &0)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, SavingsError::Unauthorized.into());
+    }
+
+    // A RaiseCap that raises nothing applies on the spot.
+    let lower = Change::RaiseCap(a.clone(), 20 * UNIT, 3_000);
+    assert_eq!(s.core.propose(&s.curator, &lower), 0);
+    assert_eq!(s.caps(&a), (20 * UNIT, 3_000));
+
+    let err = s.core.try_zero_cap(&mallory, &a).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::Unauthorized.into());
+    s.core.zero_cap(&s.guardian, &a);
+    assert_eq!(s.caps(&a), (0, 0));
+    let err = s
+        .core
+        .try_allocate(&s.allocator, &a, &UNIT)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::CapExceeded.into());
+
+    // Raising either cap waits for the timelock.
+    let raise = Change::RaiseCap(a.clone(), 60 * UNIT, 0);
+    let id = s.core.propose(&s.curator, &raise);
+    assert_ne!(id, 0);
+    assert_eq!(s.caps(&a), (0, 0));
+    s.advance(TIMELOCK);
+    s.core.execute(&id);
+    assert_eq!(s.caps(&a), (60 * UNIT, 0));
+}
+
+#[test]
+fn test_remove_adapter_requires_zero_value() {
+    let s = setup();
+    let alice = s.funded_user(100 * UNIT);
+    s.core.deposit(&alice, &(100 * UNIT), &0);
+    let a = s.uncapped_adapter();
+    let b = s.uncapped_adapter();
+    s.allocate(&a.address, 10 * UNIT);
+
+    let err = s
+        .core
+        .try_remove_adapter(&s.owner, &a.address)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::AdapterNotEmpty.into());
+    let err = s
+        .core
+        .try_remove_adapter(&s.curator, &b.address)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::Unauthorized.into());
+
+    s.core.remove_adapter(&s.owner, &b.address);
+    assert_eq!(s.core.adapters().len(), 1);
+    assert_eq!(s.core.withdraw_order(), vec![&s.env, a.address.clone()]);
+
+    s.core.deallocate(&s.allocator, &a.address, &(10 * UNIT));
+    s.core.remove_adapter(&s.owner, &a.address);
+    assert_eq!(s.core.adapters().len(), 0);
+    assert_eq!(s.core.withdraw_order().len(), 0);
+    assert_eq!(s.core.total_assets(), 100 * UNIT);
+}
+
+#[test]
+fn test_roles_and_two_step_ownership() {
+    let s = setup();
+    let new_owner = Address::generate(&s.env);
+    let mallory = Address::generate(&s.env);
+
+    assert_eq!(s.core.owner(), s.owner);
+    assert_eq!(s.core.curator(), Some(s.curator.clone()));
+    assert_eq!(s.core.allocator(), Some(s.allocator.clone()));
+    assert_eq!(s.core.guardian(), Some(s.guardian.clone()));
+
+    for caller in [&s.curator, &s.guardian] {
+        let err = s
+            .core
+            .try_set_curator(caller, &mallory)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, SavingsError::Unauthorized.into());
+        let err = s
+            .core
+            .try_set_guardian(caller, &mallory)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, SavingsError::Unauthorized.into());
+        let err = s
+            .core
+            .try_transfer_ownership(caller, &mallory)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, SavingsError::Unauthorized.into());
+    }
+
+    s.core.transfer_ownership(&s.owner, &new_owner);
+    assert_eq!(s.core.owner(), s.owner);
+    let err = s.core.try_accept_ownership(&mallory).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::Unauthorized.into());
+
+    s.core.accept_ownership(&new_owner);
+    assert_eq!(s.core.owner(), new_owner);
+    let err = s
+        .core
+        .try_set_curator(&s.owner, &mallory)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::Unauthorized.into());
+    s.core.set_curator(&new_owner, &mallory);
+    assert_eq!(s.core.curator(), Some(mallory));
+    let err = s
+        .core
+        .try_accept_ownership(&new_owner)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::Unauthorized.into());
+}
+
+#[test]
+fn test_initialize_requires_owner_auth() {
+    let env = Env::default();
+    let core = SavingsCoreClient::new(&env, &env.register_contract(None, SavingsCore));
+
+    let res = core.try_initialize(
+        &Address::generate(&env),
+        &Address::generate(&env),
+        &Address::generate(&env),
+        &String::from_str(&env, "Nester Savings USDC"),
+        &String::from_str(&env, "nsUSDC"),
+        &0u64,
+    );
+
+    assert!(res.is_err());
 }
