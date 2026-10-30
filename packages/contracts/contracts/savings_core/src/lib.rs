@@ -53,6 +53,8 @@ pub enum SavingsError {
     CapIncrease = 15,
     /// The adapter still holds value, so it cannot be removed.
     AdapterNotEmpty = 16,
+    /// Timelock above `MAX_TIMELOCK` (14 days).
+    InvalidTimelock = 17,
 }
 
 /// Data payload of the `deposit` and `withdraw` events.

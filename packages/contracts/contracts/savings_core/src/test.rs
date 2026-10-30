@@ -862,3 +862,53 @@ fn test_initialize_requires_owner_auth() {
 
     assert!(res.is_err());
 }
+
+#[test]
+fn test_timelock_cannot_exceed_max() {
+    const MAX: u64 = 1_209_600;
+    let s = setup();
+
+    for caller in [&s.owner, &s.curator] {
+        let err = s
+            .core
+            .try_propose(caller, &Change::SetTimelock(MAX + 1))
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, SavingsError::InvalidTimelock.into());
+    }
+    let err = s
+        .core
+        .try_propose(&s.owner, &Change::SetTimelock(u64::MAX))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::InvalidTimelock.into());
+    assert_eq!(s.core.timelock(), TIMELOCK);
+
+    assert_eq!(s.core.propose(&s.curator, &Change::SetTimelock(MAX)), 0);
+    assert_eq!(s.core.timelock(), MAX);
+    assert_eq!(s.core.pending_changes().len(), 0);
+
+    let init = |timelock: u64| {
+        let core = SavingsCoreClient::new(&s.env, &s.env.register_contract(None, SavingsCore));
+        let res = core.try_initialize(
+            &s.owner,
+            &s.usdc.address,
+            &Address::generate(&s.env),
+            &String::from_str(&s.env, "Nester Savings USDC"),
+            &String::from_str(&s.env, "nsUSDC"),
+            &timelock,
+        );
+        (core, res)
+    };
+    let (_, res) = init(MAX + 1);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        SavingsError::InvalidTimelock.into()
+    );
+    let (core, res) = init(MAX);
+    assert!(res.is_ok());
+    assert_eq!(core.timelock(), MAX);
+    let (core, res) = init(0);
+    assert!(res.is_ok());
+    assert_eq!(core.timelock(), TIMELOCK);
+}

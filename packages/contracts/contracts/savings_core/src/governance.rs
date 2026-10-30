@@ -47,7 +47,18 @@ fn set<V: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &GovKey, 
     env.storage().instance().set(key, value);
 }
 
+/// Longest allowed timelock: 14 days. Bounds instant lengthening so it can
+/// never lock out future changes for good.
+pub const MAX_TIMELOCK: u64 = 1_209_600;
+
+fn check_timelock(env: &Env, seconds: u64) {
+    if seconds > MAX_TIMELOCK {
+        panic_with_error!(env, SavingsError::InvalidTimelock);
+    }
+}
+
 pub fn init(env: &Env, owner: &Address, timelock: u64) {
+    check_timelock(env, timelock);
     set(env, &GovKey::Owner, owner);
     set(env, &GovKey::Timelock, &timelock);
 }
@@ -166,7 +177,10 @@ pub fn propose(env: &Env, asset: &Address, change: Change) -> u32 {
             adapters::check_caps(env, *abs_cap, *rel_cap_bps);
             raises_cap(env, adapter, *abs_cap, *rel_cap_bps)
         }
-        Change::SetTimelock(seconds) => *seconds < timelock(env),
+        Change::SetTimelock(seconds) => {
+            check_timelock(env, *seconds);
+            *seconds < timelock(env)
+        }
     };
     if !adds_risk {
         apply(env, asset, &change);
