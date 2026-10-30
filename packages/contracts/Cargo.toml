@@ -12,6 +12,7 @@ members = [
   "contracts/nester",
   "contracts/recurring_deposit",
   "contracts/referral",
+  "contracts/savings_core",
   "contracts/savings_goal",
   "contracts/timelock",
   "contracts/treasury",
