@@ -77,6 +77,7 @@ impl Setup<'_> {
         let id = self.env.register_contract(None, MockYieldAdapter);
         let adapter = MockYieldAdapterClient::new(&self.env, &id);
         adapter.initialize(&self.usdc.address);
+        adapter.set_core(&self.core.address);
         adapter
     }
 
@@ -1366,4 +1367,21 @@ fn test_reserve_cannot_transfer_shares() {
 
     assert_eq!(s.core.reserve_shares(), fee_shares);
     assert_eq!(s.core.balance(&alice), alice_shares);
+}
+
+#[test]
+fn test_add_adapter_bound_to_another_core_rejected() {
+    let s = setup();
+    let adapter = s.new_adapter();
+    adapter.set_core(&Address::generate(&s.env));
+
+    let err = s
+        .core
+        .try_propose(
+            &s.owner,
+            &Change::AddAdapter(adapter.address.clone(), UNIT, 10_000),
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::InvalidAdapter.into());
 }

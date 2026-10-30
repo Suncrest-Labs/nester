@@ -277,3 +277,21 @@ fn full_withdrawal_closes_the_position_and_pays_its_value() {
         "no bToken dust may be left behind"
     );
 }
+
+#[test]
+fn initialize_needs_no_auth_from_the_vault() {
+    let env = Env::default();
+    let vault = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let underlying = Address::generate(&env);
+    let adapter =
+        BlendAdapterContractClient::new(&env, &env.register_contract(None, BlendAdapterContract));
+
+    adapter.initialize(&vault, &pool, &underlying, &RESERVE_INDEX);
+
+    assert_eq!(adapter.core(), vault);
+    assert_eq!(adapter.get_vault(), vault);
+    assert!(adapter
+        .try_initialize(&vault, &pool, &underlying, &RESERVE_INDEX)
+        .is_err());
+}

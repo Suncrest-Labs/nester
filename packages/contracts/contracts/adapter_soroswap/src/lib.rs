@@ -433,6 +433,10 @@ impl YieldAdapter for SoroswapAdapterContract {
         get(&env, &DataKey::Underlying)
     }
 
+    fn core(env: Env) -> Address {
+        Self::get_vault(env)
+    }
+
     fn max_deposit(env: Env) -> i128 {
         // An AMM takes any size; what changes is the price impact, which the
         // caller's min_units_out is what actually bounds.

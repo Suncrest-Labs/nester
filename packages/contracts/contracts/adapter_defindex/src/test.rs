@@ -334,3 +334,20 @@ fn test_initialize_is_single_use() {
     s.adapter
         .initialize(&s.core, &s.vault.address, &s.token.address);
 }
+
+#[test]
+fn initialize_needs_no_auth_from_the_core() {
+    let env = Env::default();
+    let core = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let underlying = Address::generate(&env);
+    let adapter = DefindexAdapterContractClient::new(
+        &env,
+        &env.register_contract(None, DefindexAdapterContract),
+    );
+
+    adapter.initialize(&core, &vault, &underlying);
+
+    assert_eq!(adapter.core(), core);
+    assert!(adapter.try_initialize(&core, &vault, &underlying).is_err());
+}

@@ -61,13 +61,17 @@ pub fn withdraw_order(env: &Env) -> Vec<Address> {
 }
 
 /// Whether `cfg` can be registered: valid caps, not already registered, and
-/// its underlying asset is `asset`. Never panics.
+/// its underlying asset is `asset` and it is bound to this core. Never panics.
 pub fn can_add(env: &Env, asset: &Address, cfg: &AdapterConfig) -> bool {
     caps_valid(cfg.abs_cap, cfg.rel_cap_bps)
         && !is_listed(env, &cfg.adapter)
         && matches!(
             YieldAdapterClient::new(env, &cfg.adapter).try_underlying(),
             Ok(Ok(ref u)) if u == asset
+        )
+        && matches!(
+            YieldAdapterClient::new(env, &cfg.adapter).try_core(),
+            Ok(Ok(ref c)) if *c == env.current_contract_address()
         )
 }
 

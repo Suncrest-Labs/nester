@@ -275,6 +275,10 @@ impl YieldAdapter for PoolAdapterContract {
         env.storage().instance().get(&DataKey::Underlying).unwrap()
     }
 
+    fn core(env: Env) -> Address {
+        Self::get_vault(env)
+    }
+
     /// AMM pools accept any size; capacity is bounded by price impact, which
     /// the per-call minimum-output guards already police.
     fn max_deposit(_env: Env) -> i128 {

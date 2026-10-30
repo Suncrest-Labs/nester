@@ -213,7 +213,6 @@ impl BlendAdapterContract {
         underlying: Address,
         reserve_index: u32,
     ) {
-        vault.require_auth();
         if env.storage().instance().has(&DataKey::Vault) {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
@@ -405,6 +404,10 @@ impl YieldAdapter for BlendAdapterContract {
 
     fn underlying(env: Env) -> Address {
         underlying_asset(&env)
+    }
+
+    fn core(env: Env) -> Address {
+        Self::get_vault(env)
     }
 
     fn max_deposit(env: Env) -> i128 {

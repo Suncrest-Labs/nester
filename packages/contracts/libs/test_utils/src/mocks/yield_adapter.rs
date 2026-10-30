@@ -23,6 +23,7 @@ enum MockKey {
     Value,
     Failing,
     WithdrawFailing,
+    Core,
 }
 
 #[contract]
@@ -53,6 +54,15 @@ impl MockYieldAdapter {
         env.storage()
             .instance()
             .set(&MockKey::Underlying, &underlying);
+    }
+
+    pub fn set_core(env: Env, core: Address) {
+        env.storage().instance().set(&MockKey::Core, &core);
+    }
+
+    pub fn core(env: Env) -> Address {
+        fail_if(&env, &MockKey::Failing);
+        env.storage().instance().get(&MockKey::Core).unwrap()
     }
 
     pub fn set_value(env: Env, value: i128) {

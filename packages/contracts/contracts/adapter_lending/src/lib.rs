@@ -219,6 +219,10 @@ impl YieldAdapter for LendingAdapterContract {
         env.storage().instance().get(&DataKey::Underlying).unwrap()
     }
 
+    fn core(env: Env) -> Address {
+        Self::get_vault(env)
+    }
+
     fn max_deposit(env: Env) -> i128 {
         let protocol: Address = env.storage().instance().get(&DataKey::Protocol).unwrap();
         let args: Vec<Val> = Vec::new(&env);

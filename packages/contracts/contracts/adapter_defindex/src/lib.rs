@@ -83,7 +83,6 @@ impl DefindexAdapterContract {
     /// vault fails every deposit (wrong asset count, or a transfer of a token
     /// the adapter did not authorize), so a misconfiguration cannot move funds.
     pub fn initialize(env: Env, core: Address, defindex_vault: Address, underlying: Address) {
-        core.require_auth();
         if env.storage().instance().has(&DataKey::Core) {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
@@ -248,6 +247,10 @@ impl YieldAdapter for DefindexAdapterContract {
 
     fn underlying(env: Env) -> Address {
         read(&env, &DataKey::Underlying)
+    }
+
+    fn core(env: Env) -> Address {
+        read(&env, &DataKey::Core)
     }
 
     fn max_deposit(_env: Env) -> i128 {
