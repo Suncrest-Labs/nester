@@ -4,8 +4,8 @@
 //! The adapter calls the vault by name with positional arguments, so a
 //! signature drift is a runtime failure, not a compile error. The adapter's
 //! tests run against `MockDefindexVault`; this test pins that mock to the
-//! deployed testnet vault WASM, which targets protocol 22 and so cannot run
-//! in this workspace's protocol-21 host. Its spec section can still be read.
+//! deployed testnet vault's contract spec, extracted from its WASM (see
+//! `fixtures/README.md`).
 
 extern crate std;
 
@@ -19,10 +19,10 @@ use nester_test_utils::mocks::defindex_vault::{
     AssetInvestmentAllocation, MockDefindexVault, StrategyAllocation,
 };
 
-const DEFINDEX_VAULT: &[u8] = include_bytes!("../fixtures/defindex_vault.wasm");
+const DEFINDEX_VAULT_SPEC: &[u8] = include_bytes!("../fixtures/defindex_vault.spec.xdr");
 
 fn vault_spec() -> Vec<ScSpecEntry> {
-    soroban_spec::read::from_wasm(DEFINDEX_VAULT).expect("vault spec")
+    soroban_spec::read::parse_raw(DEFINDEX_VAULT_SPEC).expect("vault spec")
 }
 
 fn vault_fn(name: &str) -> ScSpecFunctionV0 {

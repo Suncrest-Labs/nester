@@ -17,7 +17,7 @@ nester-common = { path = "../../libs/common" }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 nester-test-utils = { path = "../../libs/test_utils" }
-# Reads the DeFindex vault's contract spec from its WASM in spec_test.rs.
+# Parses the DeFindex vault's extracted contract spec in spec_test.rs.
 soroban-spec = "=21.7.7"
 savings-core = { path = "../savings_core" }
 savings-reserve = { path = "../savings_reserve" }

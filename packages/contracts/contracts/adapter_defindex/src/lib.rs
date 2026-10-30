@@ -21,8 +21,8 @@
 //! `CBMVK2JK6NTOT2O4HNQAIQFJY232BHKGLIMXDVQVHIIZKDACXDFZDWHN` (same file). Its
 //! asset is Blend's testnet USDC
 //! (`CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU`), not the
-//! Circle testnet USDC SAC the core uses, so the core can only route to it if
-//! it is deployed against that asset.
+//! Circle testnet USDC SAC, so on testnet the savings core must be deployed
+//! with that asset to route to this vault.
 
 soroban_sdk::contractmeta!(key = "name", val = "AdapterDefindex");
 include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
