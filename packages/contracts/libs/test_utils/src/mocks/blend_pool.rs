@@ -10,8 +10,12 @@
 //!
 //! Fidelity is deliberately limited to what the adapter depends on: request
 //! dispatch, bToken accounting against an exchange index, the token pull on
-//! supply, and the payout on withdraw. Interest accrual is driven manually by
-//! `set_index_bps` so a test can make a position appreciate deterministically.
+//! supply, the payout on withdraw, and Blend v2's `get_reserve` (whose
+//! `data.b_rate` is the same index at Blend's 1e12 scale). As in Blend, both
+//! supply and withdraw request amounts are in the underlying asset: supply
+//! mints bTokens rounded down, withdraw burns bTokens rounded up and caps at
+//! the whole position. Interest accrual is driven manually by `set_index_bps`
+//! so a test can make a position appreciate deterministically.
 
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Map, Vec};
 
@@ -31,6 +35,48 @@ pub struct Positions {
     pub supply: Map<u32, i128>,
 }
 
+/// Blend v2 `ReserveConfig`. Only `index` and `decimals` are meaningful here.
+#[contracttype]
+#[derive(Clone)]
+pub struct ReserveConfig {
+    pub c_factor: u32,
+    pub decimals: u32,
+    pub enabled: bool,
+    pub index: u32,
+    pub l_factor: u32,
+    pub max_util: u32,
+    pub r_base: u32,
+    pub r_one: u32,
+    pub r_three: u32,
+    pub r_two: u32,
+    pub reactivity: u32,
+    pub supply_cap: i128,
+    pub util: u32,
+}
+
+/// Blend v2 `ReserveData`. `b_rate` converts bTokens to underlying at 1e12.
+#[contracttype]
+#[derive(Clone)]
+pub struct ReserveData {
+    pub b_rate: i128,
+    pub b_supply: i128,
+    pub backstop_credit: i128,
+    pub d_rate: i128,
+    pub d_supply: i128,
+    pub ir_mod: i128,
+    pub last_time: u64,
+}
+
+/// Blend v2 `get_reserve` return value.
+#[contracttype]
+#[derive(Clone)]
+pub struct Reserve {
+    pub asset: Address,
+    pub config: ReserveConfig,
+    pub data: ReserveData,
+    pub scalar: i128,
+}
+
 #[contracttype]
 #[derive(Clone)]
 enum PoolKey {
@@ -44,6 +90,8 @@ enum PoolKey {
 }
 
 const INDEX_ONE: i128 = 10_000;
+/// Blend v2's `b_rate` scale (SCALAR_12) per index bps.
+const B_RATE_PER_INDEX_BPS: i128 = 100_000_000;
 const REQUEST_TYPE_SUPPLY: u32 = 0;
 const REQUEST_TYPE_WITHDRAW: u32 = 1;
 
@@ -64,6 +112,43 @@ impl MockBlendPool {
     /// for interest accrual.
     pub fn set_index_bps(env: Env, index_bps: i128) {
         env.storage().instance().set(&PoolKey::IndexBps, &index_bps);
+    }
+
+    pub fn get_reserve(env: Env, asset: Address) -> Reserve {
+        let index: i128 = env.storage().instance().get(&PoolKey::IndexBps).unwrap();
+        let reserve_index: u32 = env
+            .storage()
+            .instance()
+            .get(&PoolKey::ReserveIndex)
+            .unwrap_or(0);
+        Reserve {
+            asset,
+            config: ReserveConfig {
+                c_factor: 0,
+                decimals: 7,
+                enabled: true,
+                index: reserve_index,
+                l_factor: 0,
+                max_util: 0,
+                r_base: 0,
+                r_one: 0,
+                r_three: 0,
+                r_two: 0,
+                reactivity: 0,
+                supply_cap: i128::MAX,
+                util: 0,
+            },
+            data: ReserveData {
+                b_rate: index * B_RATE_PER_INDEX_BPS,
+                b_supply: 0,
+                backstop_credit: 0,
+                d_rate: 1_000_000_000_000,
+                d_supply: 0,
+                ir_mod: 1_000_000_000_000,
+                last_time: env.ledger().timestamp(),
+            },
+            scalar: 10_000_000,
+        }
     }
 
     pub fn get_positions(env: Env, address: Address) -> Positions {
@@ -103,12 +188,14 @@ impl MockBlendPool {
                     .instance()
                     .set(&PoolKey::Supply(from.clone()), &(held + units));
             } else if request.request_type == REQUEST_TYPE_WITHDRAW {
-                let units = if request.amount > held {
-                    held
-                } else {
-                    request.amount
-                };
-                let assets = units * index / INDEX_ONE;
+                // Blend: burn ceil(amount / rate); if that exceeds the
+                // position, burn it all and pay floor(held * rate).
+                let mut units = (request.amount * INDEX_ONE + index - 1) / index;
+                let mut assets = request.amount;
+                if units > held {
+                    units = held;
+                    assets = held * index / INDEX_ONE;
+                }
                 env.storage()
                     .instance()
                     .set(&PoolKey::Supply(from.clone()), &(held - units));

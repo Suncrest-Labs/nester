@@ -10,6 +10,7 @@ dependencies = [
  "nester-common",
  "nester-test-utils",
  "soroban-sdk",
+ "soroban-spec",
 ]
 
 [[package]]

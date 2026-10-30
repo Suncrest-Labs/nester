@@ -13,8 +13,10 @@
 //! Position accounting: `Positions.supply` is a map keyed by the pool's
 //! *reserve index*, not by asset address, so the index for the underlying is
 //! configured at initialization and read back out of the returned struct.
-//! The value is denominated in bTokens (Blend's supply receipt), which is what
-//! the vault records as position units.
+//! Units are bTokens (Blend's supply receipt); `max_withdraw` reports them.
+//! `position_value` converts them to the underlying through the reserve's
+//! `b_rate`, read from Blend v2's `get_reserve`. Blend v1 pools expose no
+//! `get_reserve`, so this adapter targets v2 pools only.
 
 soroban_sdk::contractmeta!(key = "name", val = "AdapterBlend");
 include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
@@ -57,6 +59,54 @@ pub struct BlendPositions {
     pub liabilities: Map<u32, i128>,
     pub supply: Map<u32, i128>,
 }
+
+/// Blend v2 `ReserveConfig`. Unused beyond decoding, but a struct decodes
+/// only when every field matches, so all of them are declared. Verified
+/// against the v2 pool WASM's spec in `spec_test.rs`.
+#[contracttype]
+#[derive(Clone)]
+pub struct BlendReserveConfig {
+    pub c_factor: u32,
+    pub decimals: u32,
+    pub enabled: bool,
+    pub index: u32,
+    pub l_factor: u32,
+    pub max_util: u32,
+    pub r_base: u32,
+    pub r_one: u32,
+    pub r_three: u32,
+    pub r_two: u32,
+    pub reactivity: u32,
+    pub supply_cap: i128,
+    pub util: u32,
+}
+
+/// Blend v2 `ReserveData`; `b_rate` converts bTokens to underlying at
+/// `B_RATE_SCALE`.
+#[contracttype]
+#[derive(Clone)]
+pub struct BlendReserveData {
+    pub b_rate: i128,
+    pub b_supply: i128,
+    pub backstop_credit: i128,
+    pub d_rate: i128,
+    pub d_supply: i128,
+    pub ir_mod: i128,
+    pub last_time: u64,
+}
+
+/// Blend v2 `get_reserve` return value.
+#[contracttype]
+#[derive(Clone)]
+pub struct BlendReserve {
+    pub asset: Address,
+    pub config: BlendReserveConfig,
+    pub data: BlendReserveData,
+    pub scalar: i128,
+}
+
+/// Blend v2 `b_rate` scale (`SCALAR_12`).
+const B_RATE_SCALE: i128 = 1_000_000_000_000;
 
 /// `request_type` for supplying an asset without posting it as collateral.
 const REQUEST_TYPE_SUPPLY: u32 = 0;
@@ -117,6 +167,21 @@ fn reserve_index(env: &Env) -> u32 {
 /// Supplied balance for this adapter's reserve, read from a `Positions`.
 fn supplied_units(env: &Env, positions: &BlendPositions) -> i128 {
     positions.supply.get(reserve_index(env)).unwrap_or(0)
+}
+
+/// The reserve's current bToken -> underlying rate, at `B_RATE_SCALE`.
+fn b_rate(env: &Env) -> i128 {
+    let reserve: BlendReserve = env.invoke_contract(
+        &pool(env),
+        &Symbol::new(env, "get_reserve"),
+        soroban_sdk::vec![env, underlying_asset(env).into_val(env)],
+    );
+    reserve.data.b_rate
+}
+
+/// Underlying value of `units` bTokens, rounded down as Blend pays it.
+fn units_to_assets(units: i128, b_rate: i128) -> i128 {
+    units * b_rate / B_RATE_SCALE
 }
 
 /// Calls `submit` with a single request and returns the resulting positions.
@@ -266,11 +331,21 @@ impl YieldAdapter for BlendAdapterContract {
         let me = env.current_contract_address();
         let balance_before = token::Client::new(&env, &underlying).balance(&me);
 
+        // Blend withdraw requests are in the underlying, and Blend burns
+        // ceil(amount / b_rate) bTokens, so asking for floor(units * b_rate)
+        // never burns more than `units`. A full exit asks for one more so
+        // Blend caps the burn at the whole position instead of leaving a
+        // dust bToken; it then pays floor(held * b_rate).
+        let mut amount = units_to_assets(units, b_rate(&env));
+        if units == held {
+            amount += 1;
+        }
+
         let positions = submit_one(
             &env,
             BlendRequest {
                 address: underlying.clone(),
-                amount: units,
+                amount,
                 request_type: REQUEST_TYPE_WITHDRAW,
             },
         );
@@ -303,15 +378,15 @@ impl YieldAdapter for BlendAdapterContract {
     }
 
     fn position_value(env: Env, _owner: Address) -> i128 {
-        // bTokens accrue interest by appreciating against the underlying, so
-        // the stored unit count is the position's value in Blend's own terms.
-        // A precise asset-denominated figure needs the reserve's current
-        // b_rate; until this adapter reads reserve data, the vault treats this
-        // as units and prices them via the registry.
-        env.storage()
+        let units: i128 = env
+            .storage()
             .instance()
             .get(&DataKey::Units)
-            .unwrap_or(0i128)
+            .unwrap_or(0i128);
+        if units == 0 {
+            return 0;
+        }
+        units_to_assets(units, b_rate(&env))
     }
 
     fn current_apy(env: Env) -> AdapterApy {
@@ -364,3 +439,6 @@ mod interface_test;
 
 #[cfg(test)]
 mod real_pool_test;
+
+#[cfg(test)]
+mod spec_test;

@@ -195,3 +195,85 @@ fn initialize_is_single_use() {
     s.adapter
         .initialize(&s.vault, &s.pool.address, &s.token.address, &RESERVE_INDEX);
 }
+
+#[test]
+fn test_position_value_in_underlying_after_rate_growth() {
+    let s = setup();
+    fund_vault(&s, 100);
+    s.adapter.deposit(&s.vault, &100, &0);
+
+    // b_rate 1.05e12: each bToken is now worth 1.05 underlying.
+    s.pool.set_index_bps(&10_500);
+
+    assert_eq!(s.adapter.max_withdraw(), 100, "max_withdraw stays in units");
+    assert_eq!(s.adapter.position_value(&s.vault), 105);
+}
+
+#[test]
+fn position_value_rounds_down() {
+    let s = setup();
+    fund_vault(&s, 3);
+    s.adapter.deposit(&s.vault, &3, &0);
+    s.pool.set_index_bps(&10_001);
+
+    // 3 * 1.0001 = 3.0003 -> 3, never rounded up.
+    assert_eq!(s.adapter.position_value(&s.vault), 3);
+}
+
+#[test]
+fn test_withdraw_pays_at_least_requested() {
+    let s = setup();
+    fund_vault(&s, 1_000_000_007);
+    s.adapter.deposit(&s.vault, &1_000_000_007, &0);
+
+    // An awkward rate so every conversion rounds.
+    s.pool.set_index_bps(&13_337);
+    s.token_admin_client
+        .mint(&s.pool.address, &1_000_000_000_000);
+
+    for requested in [1i128, 7, 333_333, 123_456_789, 400_000_003] {
+        // Convert exactly as savings_core does: units = ceil(held * X / value).
+        let held = s.adapter.max_withdraw();
+        let value = s.adapter.position_value(&s.vault);
+        let units = ((held * requested + value - 1) / value).min(held);
+
+        let before = s.token.balance(&s.vault);
+        let paid = s.adapter.withdraw(&s.vault, &units, &requested);
+
+        assert!(paid >= requested, "asked {requested}, paid {paid}");
+        assert_eq!(s.token.balance(&s.vault) - before, paid);
+        assert_eq!(
+            s.adapter.max_withdraw(),
+            s.pool
+                .get_positions(&s.adapter.address)
+                .supply
+                .get(RESERVE_INDEX)
+                .unwrap_or(0)
+        );
+    }
+}
+
+#[test]
+fn full_withdrawal_closes_the_position_and_pays_its_value() {
+    let s = setup();
+    fund_vault(&s, 1_000_003);
+    s.adapter.deposit(&s.vault, &1_000_003, &0);
+    s.pool.set_index_bps(&13_337);
+    s.token_admin_client.mint(&s.pool.address, &1_000_000);
+
+    let held = s.adapter.max_withdraw();
+    let value = s.adapter.position_value(&s.vault);
+    let paid = s.adapter.withdraw(&s.vault, &held, &value);
+
+    assert_eq!(paid, value);
+    assert_eq!(s.adapter.max_withdraw(), 0);
+    assert_eq!(
+        s.pool
+            .get_positions(&s.adapter.address)
+            .supply
+            .get(RESERVE_INDEX)
+            .unwrap_or(0),
+        0,
+        "no bToken dust may be left behind"
+    );
+}
