@@ -7,6 +7,8 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Symbol, Val,
 };
 
+use savings_reserve::{SavingsReserve, SavingsReserveClient};
+
 use crate::{AmountShares, Change, SavingsCore, SavingsCoreClient, SavingsError};
 
 const UNIT: i128 = 10_000_000;
@@ -21,6 +23,7 @@ struct Setup<'a> {
     allocator: Address,
     curator: Address,
     guardian: Address,
+    reserve: Address,
 }
 
 fn setup<'a>() -> Setup<'a> {
@@ -35,10 +38,12 @@ fn setup<'a>() -> Setup<'a> {
     let allocator = Address::generate(&env);
     let curator = Address::generate(&env);
     let guardian = Address::generate(&env);
+    let reserve = env.register_contract(None, SavingsReserve);
+    SavingsReserveClient::new(&env, &reserve).initialize(&core_id);
     core.initialize(
         &owner,
         &usdc_id,
-        &Address::generate(&env),
+        &reserve,
         &String::from_str(&env, "Nester Savings USDC"),
         &String::from_str(&env, "nsUSDC"),
         &0u64,
@@ -52,6 +57,7 @@ fn setup<'a>() -> Setup<'a> {
         allocator,
         curator,
         guardian,
+        reserve,
         usdc: TokenClient::new(&env, &usdc_id),
         usdc_admin: StellarAssetClient::new(&env, &usdc_id),
         core,
@@ -961,4 +967,279 @@ fn test_timelock_stays_within_bounds() {
     let (core, res) = init(0);
     assert!(res.is_ok());
     assert_eq!(core.timelock(), TIMELOCK);
+}
+
+// --- Fees and the reserve ---------------------------------------------------
+
+/// Deposit 100 USDC from a fresh user and allocate all of it to one adapter.
+fn invested<'a>(s: &'a Setup<'a>) -> (Address, MockYieldAdapterClient<'a>) {
+    let alice = s.funded_user(100 * UNIT);
+    s.core.deposit(&alice, &(100 * UNIT), &0);
+    let adapter = s.uncapped_adapter();
+    s.allocate(&adapter.address, 100 * UNIT);
+    (alice, adapter)
+}
+
+/// Move the adapter's position to `value`, backing any gain with tokens.
+fn revalue(s: &Setup, adapter: &MockYieldAdapterClient, value: i128) {
+    let current = s.core.allocation(&adapter.address);
+    if value > current {
+        s.usdc_admin.mint(&adapter.address, &(value - current));
+    }
+    adapter.set_value(&value);
+}
+
+#[test]
+fn test_fee_defaults() {
+    let s = setup();
+    assert_eq!(s.core.fee_bps(), 1_000);
+    assert_eq!(s.core.high_water_mark(), UNIT);
+    assert_eq!(s.core.reserve(), s.reserve);
+    assert_eq!(s.core.reserve_shares(), 0);
+    assert_eq!(
+        SavingsReserveClient::new(&s.env, &s.reserve).core(),
+        s.core.address
+    );
+}
+
+#[test]
+fn test_fee_minted_to_reserve_on_gain() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+    revalue(&s, &adapter, 110 * UNIT);
+
+    let minted = s.core.accrue();
+
+    assert!(minted > 0);
+    assert_eq!(s.core.reserve_shares(), minted);
+    let worth = s.core.convert_to_assets(&minted);
+    assert!((worth - UNIT).abs() <= 1, "reserve worth {worth}");
+    assert_eq!(s.core.total_assets(), 110 * UNIT);
+    assert_eq!(s.core.high_water_mark(), s.core.share_price());
+    assert_eq!(s.core.accrue(), 0);
+}
+
+#[test]
+fn test_no_fee_below_high_water_mark() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+    revalue(&s, &adapter, 110 * UNIT);
+    s.core.accrue();
+    let fee_shares = s.core.reserve_shares();
+    let hwm = s.core.high_water_mark();
+
+    revalue(&s, &adapter, 100 * UNIT);
+    assert_eq!(s.core.accrue(), 0);
+    assert_eq!(s.core.high_water_mark(), hwm);
+
+    revalue(&s, &adapter, 105 * UNIT);
+    assert_eq!(s.core.accrue(), 0);
+    assert_eq!(s.core.reserve_shares(), fee_shares);
+    assert_eq!(s.core.high_water_mark(), hwm);
+
+    // Only the gain above the old mark is charged: 110 -> 121 is +11 USDC.
+    revalue(&s, &adapter, 121 * UNIT);
+    let minted = s.core.accrue();
+    let worth = s.core.convert_to_assets(&minted);
+    let expected = 11 * UNIT / 10;
+    assert!((worth - expected).abs() <= 2, "fee worth {worth}");
+}
+
+#[test]
+fn test_fee_accrues_before_deposit_and_redeem() {
+    let s = setup();
+    let (alice, adapter) = invested(&s);
+    let bob = s.funded_user(109 * UNIT);
+    revalue(&s, &adapter, 110 * UNIT);
+
+    let shares = s.core.deposit(&bob, &(109 * UNIT), &0);
+
+    let fee_shares = s.core.reserve_shares();
+    assert!(fee_shares > 0);
+    // Bob pays the post-fee price, so his shares are worth what he paid.
+    let worth = s.core.convert_to_assets(&shares);
+    assert!((109 * UNIT - worth).abs() <= 1, "bob holds {worth}");
+
+    revalue(&s, &adapter, 120 * UNIT);
+    s.core.redeem(&alice, &(10 * UNIT), &0);
+    assert!(s.core.reserve_shares() > fee_shares);
+}
+
+#[test]
+fn test_fee_skipped_when_adapter_unavailable() {
+    let s = setup();
+    let alice = s.funded_user(100 * UNIT);
+    s.core.deposit(&alice, &(100 * UNIT), &0);
+    let healthy = s.uncapped_adapter();
+    let failing = s.uncapped_adapter();
+    s.allocate(&healthy.address, 50 * UNIT);
+    s.allocate(&failing.address, 10 * UNIT);
+    revalue(&s, &healthy, 80 * UNIT);
+    failing.set_failing(&true);
+
+    assert_eq!(s.core.accrue(), 0);
+    s.core.redeem(&alice, &UNIT, &0);
+    assert_eq!(s.core.reserve_shares(), 0);
+    assert_eq!(s.core.high_water_mark(), UNIT);
+
+    failing.set_failing(&false);
+    assert!(s.core.accrue() > 0);
+}
+
+#[test]
+fn test_fee_cap_enforced() {
+    let s = setup();
+    let err = s
+        .core
+        .try_propose(&s.owner, &Change::SetFee(2_001))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::FeeTooHigh.into());
+    assert_eq!(s.core.fee_bps(), 1_000);
+}
+
+#[test]
+fn test_raise_fee_timelocked_lower_instant() {
+    let s = setup();
+
+    assert_eq!(s.core.propose(&s.curator, &Change::SetFee(500)), 0);
+    assert_eq!(s.core.fee_bps(), 500);
+
+    let id = s.core.propose(&s.owner, &Change::SetFee(2_000));
+    assert!(id > 0);
+    assert_eq!(s.core.fee_bps(), 500);
+    let err = s.core.try_execute(&id).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::NotReady.into());
+
+    s.advance(TIMELOCK);
+    assert!(s.core.execute(&id));
+    assert_eq!(s.core.fee_bps(), 2_000);
+}
+
+#[test]
+fn test_zero_fee_still_advances_high_water_mark() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+    s.core.propose(&s.owner, &Change::SetFee(0));
+    revalue(&s, &adapter, 110 * UNIT);
+
+    assert_eq!(s.core.accrue(), 0);
+    assert_eq!(s.core.high_water_mark(), s.core.share_price());
+
+    let id = s.core.propose(&s.owner, &Change::SetFee(1_000));
+    s.advance(TIMELOCK);
+    assert!(s.core.execute(&id));
+    assert_eq!(s.core.accrue(), 0);
+    assert_eq!(s.core.reserve_shares(), 0);
+}
+
+#[test]
+fn test_loss_lowers_share_price() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+
+    revalue(&s, &adapter, 90 * UNIT);
+
+    // The virtual offset's 10_000 stroops do not lose value, so the price
+    // sits a few stroops above an exact 10% drop.
+    let price = s.core.share_price();
+    assert!((price - 9 * UNIT / 10).abs() <= 10, "price {price}");
+    assert_eq!(s.core.accrue(), 0);
+    assert_eq!(s.core.high_water_mark(), UNIT);
+}
+
+#[test]
+fn test_burn_reserve_restores_value_timelocked() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+    revalue(&s, &adapter, 110 * UNIT);
+    s.core.accrue();
+    let fee_shares = s.core.reserve_shares();
+    let hwm = s.core.high_water_mark();
+    revalue(&s, &adapter, 100 * UNIT);
+    let price_after_loss = s.core.share_price();
+
+    let id = s.core.propose(&s.curator, &Change::BurnReserve(fee_shares));
+    assert!(id > 0);
+    assert_eq!(s.core.reserve_shares(), fee_shares);
+    let err = s.core.try_execute(&id).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::NotReady.into());
+
+    s.advance(TIMELOCK);
+    assert!(s.core.execute(&id));
+
+    assert_eq!(s.core.reserve_shares(), 0);
+    assert_eq!(s.core.total_supply(), 100 * UNIT);
+    assert!(s.core.share_price() > price_after_loss);
+    assert_eq!(s.core.share_price(), UNIT);
+    assert_eq!(s.core.high_water_mark(), hwm);
+}
+
+#[test]
+fn test_burn_reserve_never_charges_a_fee() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+    revalue(&s, &adapter, 110 * UNIT);
+    s.core.accrue();
+    let fee_shares = s.core.reserve_shares();
+
+    let id = s.core.propose(&s.owner, &Change::BurnReserve(fee_shares));
+    s.advance(TIMELOCK);
+    assert!(s.core.execute(&id));
+
+    // The burn lifted the price above the old mark; the mark follows it so
+    // the burned value is not charged again.
+    assert_eq!(s.core.high_water_mark(), s.core.share_price());
+    assert_eq!(s.core.accrue(), 0);
+    assert_eq!(s.core.reserve_shares(), 0);
+}
+
+#[test]
+fn test_burn_reserve_validated_at_propose_and_execute() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+    revalue(&s, &adapter, 110 * UNIT);
+    s.core.accrue();
+    let fee_shares = s.core.reserve_shares();
+
+    let err = s
+        .core
+        .try_propose(&s.owner, &Change::BurnReserve(0))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::ZeroAmount.into());
+    let err = s
+        .core
+        .try_propose(&s.owner, &Change::BurnReserve(fee_shares + 1))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::InsufficientShares.into());
+
+    // Two burns of the whole reserve: the second finds it short and is
+    // dropped rather than clamped.
+    let first = s.core.propose(&s.owner, &Change::BurnReserve(fee_shares));
+    let second = s.core.propose(&s.owner, &Change::BurnReserve(fee_shares));
+    s.advance(TIMELOCK);
+    assert!(s.core.execute(&first));
+    assert!(!s.core.execute(&second));
+    assert_eq!(s.core.reserve_shares(), 0);
+    assert_eq!(s.core.pending_changes().len(), 0);
+}
+
+#[test]
+fn test_reserve_cannot_transfer_shares() {
+    let s = setup();
+    let (alice, adapter) = invested(&s);
+    revalue(&s, &adapter, 110 * UNIT);
+    s.core.accrue();
+    let fee_shares = s.core.reserve_shares();
+    let alice_shares = s.core.balance(&alice);
+
+    s.env.set_auths(&[]);
+    assert!(s.core.try_transfer(&s.reserve, &alice, &1).is_err());
+    assert!(s.core.try_approve(&s.reserve, &alice, &1, &1_000).is_err());
+    assert!(s.core.try_redeem(&s.reserve, &1, &0).is_err());
+
+    assert_eq!(s.core.reserve_shares(), fee_shares);
+    assert_eq!(s.core.balance(&alice), alice_shares);
 }

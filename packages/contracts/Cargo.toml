@@ -13,6 +13,7 @@ members = [
   "contracts/recurring_deposit",
   "contracts/referral",
   "contracts/savings_core",
+  "contracts/savings_reserve",
   "contracts/savings_goal",
   "contracts/timelock",
   "contracts/treasury",

@@ -1172,6 +1172,7 @@ version = "0.1.0"
 dependencies = [
  "nester-common",
  "nester-test-utils",
+ "savings-reserve",
  "soroban-sdk",
 ]
 
@@ -1185,6 +1186,13 @@ dependencies = [
  "nester-test-utils",
  "soroban-sdk",
  "vault-factory-contract",
+]
+
+[[package]]
+name = "savings-reserve"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]

@@ -12,6 +12,7 @@ include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
 
 mod adapters;
+mod fees;
 mod governance;
 mod shares;
 
@@ -101,6 +102,7 @@ impl SavingsCore {
             timelock
         };
         governance::init(&env, &owner, timelock);
+        fees::init(&env);
         store.set(&DataKey::Asset, &asset);
         store.set(&DataKey::Reserve, &reserve);
         store.set(&DataKey::Name, &name);
@@ -115,6 +117,7 @@ impl SavingsCore {
             panic_with_error!(&env, SavingsError::DepositsPaused);
         }
         require_positive(&env, assets);
+        fees::accrue(&env);
         let shares = Self::convert_to_shares(env.clone(), assets);
         if shares <= 0 {
             panic_with_error!(&env, SavingsError::ZeroAmount);
@@ -133,6 +136,7 @@ impl SavingsCore {
     pub fn withdraw(env: Env, owner: Address, assets: i128, max_shares: i128) -> i128 {
         owner.require_auth();
         require_positive(&env, assets);
+        fees::accrue(&env);
         let shares = shares::to_shares_up(
             assets,
             Self::total_assets(env.clone()),
@@ -149,6 +153,7 @@ impl SavingsCore {
     pub fn redeem(env: Env, owner: Address, shares: i128, min_assets: i128) -> i128 {
         owner.require_auth();
         require_positive(&env, shares);
+        fees::accrue(&env);
         let assets = Self::convert_to_assets(env.clone(), shares);
         if assets <= 0 {
             panic_with_error!(&env, SavingsError::ZeroAmount);
@@ -189,6 +194,38 @@ impl SavingsCore {
     /// Assets per 10^7 shares.
     pub fn share_price(env: Env) -> i128 {
         Self::convert_to_assets(env, PRICE_SCALE)
+    }
+
+    // --- Fees -----------------------------------------------------------
+
+    /// Charge the performance fee on any gain above the high-water mark.
+    /// Anyone may call. Returns the fee shares minted to the reserve; 0 if
+    /// there is no new high or an adapter cannot be valued (accrual is then
+    /// skipped). Also runs at the start of deposit, withdraw, redeem,
+    /// allocate and deallocate. Views are not fee-adjusted until it runs.
+    pub fn accrue(env: Env) -> i128 {
+        let minted = fees::accrue(&env);
+        bump_instance(&env);
+        minted
+    }
+
+    /// Performance fee in bps of each gain above the high-water mark.
+    pub fn fee_bps(env: Env) -> u32 {
+        fees::fee_bps(&env)
+    }
+
+    /// Highest share price (assets per 10^7 shares) a fee has been charged on.
+    pub fn high_water_mark(env: Env) -> i128 {
+        fees::high_water_mark(&env)
+    }
+
+    pub fn reserve(env: Env) -> Address {
+        reserve_address(&env)
+    }
+
+    /// Fee shares held by the reserve. They leave only by `BurnReserve`.
+    pub fn reserve_shares(env: Env) -> i128 {
+        shares::balance(&env, &reserve_address(&env))
     }
 
     // --- Roles ----------------------------------------------------------
@@ -327,6 +364,7 @@ impl SavingsCore {
     pub fn allocate(env: Env, allocator: Address, adapter: Address, assets: i128) {
         adapters::require_allocator(&env, &allocator);
         require_positive(&env, assets);
+        fees::accrue(&env);
         adapters::allocate(
             &env,
             &asset_address(&env),
@@ -341,6 +379,7 @@ impl SavingsCore {
     pub fn deallocate(env: Env, allocator: Address, adapter: Address, assets: i128) {
         adapters::require_allocator(&env, &allocator);
         require_positive(&env, assets);
+        fees::accrue(&env);
         adapters::deallocate(&env, &adapter, assets);
         bump_instance(&env);
     }
@@ -427,6 +466,10 @@ fn asset_address(env: &Env) -> Address {
 
 fn asset_client(env: &Env) -> token::Client<'_> {
     token::Client::new(env, &asset_address(env))
+}
+
+fn reserve_address(env: &Env) -> Address {
+    env.storage().instance().get(&DataKey::Reserve).unwrap()
 }
 
 fn idle_assets(env: &Env) -> i128 {

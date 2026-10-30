@@ -1,9 +1,10 @@
 //! Roles and the timelock.
 //!
 //! Risk can be cut instantly but only added slowly. Adding an adapter,
-//! raising a cap and shortening the timelock are queued for the current
-//! timelock; once due, anyone may execute them. Lowering a cap, lengthening
-//! the timelock, pausing deposits and revoking a queued change are instant.
+//! raising a cap, raising the fee, shortening the timelock and burning
+//! reserve shares are queued for the current timelock; once due, anyone may
+//! execute them. Lowering a cap or the fee, lengthening the timelock, pausing
+//! deposits and revoking a queued change are instant.
 //!
 //! - owner: manages roles, unpauses deposits, removes empty adapters.
 //! - curator: proposes changes, lowers caps, sets the withdraw order.
@@ -12,7 +13,7 @@
 use nester_common::{POSITION_TTL_EXTEND_TO_LEDGERS, POSITION_TTL_THRESHOLD_LEDGERS};
 use soroban_sdk::{contracttype, panic_with_error, Address, Env, Symbol, Vec};
 
-use crate::{adapters, AdapterConfig, SavingsError};
+use crate::{adapters, fees, reserve_address, shares, AdapterConfig, SavingsError};
 
 /// Shortest allowed timelock: 1 hour.
 pub const MIN_TIMELOCK: u64 = 3_600;
@@ -33,6 +34,14 @@ pub enum Change {
     /// Set the timelock in seconds. Queued only if shorter than the current
     /// one; otherwise applied immediately.
     SetTimelock(u64),
+    /// Set the performance fee in bps (at most `fees::MAX_FEE_BPS`). Queued
+    /// only if higher than the current fee; otherwise applied immediately.
+    SetFee(u32),
+    /// Burn this many of the reserve's shares, raising the share price for
+    /// every other holder. Always queued. Dropped at execution if the
+    /// reserve no longer holds that many shares (never clamped) or if any
+    /// adapter cannot be valued.
+    BurnReserve(i128),
 }
 
 #[contracttype]
@@ -209,6 +218,21 @@ pub fn propose(env: &Env, asset: &Address, change: Change) -> u32 {
             check_timelock(env, *seconds);
             *seconds < timelock(env)
         }
+        Change::SetFee(bps) => {
+            if *bps > fees::MAX_FEE_BPS {
+                panic_with_error!(env, SavingsError::FeeTooHigh);
+            }
+            *bps > fees::fee_bps(env)
+        }
+        Change::BurnReserve(amount) => {
+            if *amount <= 0 {
+                panic_with_error!(env, SavingsError::ZeroAmount);
+            }
+            if *amount > reserve_shares(env) {
+                panic_with_error!(env, SavingsError::InsufficientShares);
+            }
+            true
+        }
     };
     if !adds_risk {
         apply(env, asset, &change);
@@ -283,6 +307,10 @@ fn still_valid(env: &Env, asset: &Address, change: &Change) -> bool {
             adapters::caps_valid(*abs_cap, *rel_cap_bps) && adapters::is_listed(env, adapter)
         }
         Change::SetTimelock(seconds) => timelock_valid(*seconds),
+        Change::SetFee(bps) => *bps <= fees::MAX_FEE_BPS && fees::strict_total(env).is_some(),
+        Change::BurnReserve(amount) => {
+            *amount > 0 && *amount <= reserve_shares(env) && fees::strict_total(env).is_some()
+        }
     }
 }
 
@@ -295,7 +323,13 @@ fn apply(env: &Env, asset: &Address, change: &Change) {
             adapters::set_caps(env, &adapter, abs_cap, rel_cap_bps)
         }
         Change::SetTimelock(seconds) => set(env, &GovKey::Timelock, &seconds),
+        Change::SetFee(bps) => fees::set_fee_bps(env, bps),
+        Change::BurnReserve(amount) => fees::burn_reserve(env, amount),
     }
+}
+
+fn reserve_shares(env: &Env) -> i128 {
+    shares::balance(env, &reserve_address(env))
 }
 
 fn config(adapter: &Address, abs_cap: i128, rel_cap_bps: u32) -> AdapterConfig {
