@@ -53,8 +53,10 @@ pub enum SavingsError {
     CapIncrease = 15,
     /// The adapter still holds value, so it cannot be removed.
     AdapterNotEmpty = 16,
-    /// Timelock above `MAX_TIMELOCK` (14 days).
+    /// Timelock outside `MIN_TIMELOCK..=MAX_TIMELOCK` (1 hour to 14 days).
     InvalidTimelock = 17,
+    /// `MAX_PENDING` changes are already queued.
+    QueueFull = 18,
 }
 
 /// Data payload of the `deposit` and `withdraw` events.
@@ -249,10 +251,13 @@ impl SavingsCore {
         id
     }
 
-    /// Apply a queued change once due. Anyone may call.
-    pub fn execute(env: Env, id: u32) {
-        governance::execute(&env, &asset_address(&env), id);
+    /// Apply a queued change once due. Anyone may call. Returns `false` (and
+    /// drops the change) if it is no longer valid, e.g. its adapter was
+    /// already added or has been removed.
+    pub fn execute(env: Env, id: u32) -> bool {
+        let applied = governance::execute(&env, &asset_address(&env), id);
         bump_instance(&env);
+        applied
     }
 
     /// Guardian or owner: drop a queued change.

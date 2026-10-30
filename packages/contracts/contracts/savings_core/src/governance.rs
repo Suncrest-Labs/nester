@@ -9,9 +9,18 @@
 //! - curator: proposes changes, lowers caps, sets the withdraw order.
 //! - guardian: pauses deposits, zeroes caps, revokes queued changes.
 
+use nester_common::{POSITION_TTL_EXTEND_TO_LEDGERS, POSITION_TTL_THRESHOLD_LEDGERS};
 use soroban_sdk::{contracttype, panic_with_error, Address, Env, Symbol, Vec};
 
 use crate::{adapters, AdapterConfig, SavingsError};
+
+/// Shortest allowed timelock: 1 hour.
+pub const MIN_TIMELOCK: u64 = 3_600;
+/// Longest allowed timelock: 14 days. Bounds instant lengthening so it can
+/// never lock out future changes for good.
+pub const MAX_TIMELOCK: u64 = 1_209_600;
+/// Most changes that may be queued at once.
+pub const MAX_PENDING: u32 = 16;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,7 +44,10 @@ enum GovKey {
     Guardian,
     Timelock,
     Paused,
-    Pending,
+    /// Ids of the queued changes (instance storage, at most `MAX_PENDING`).
+    PendingIds,
+    /// `(change, eta)` of queued change `id` (persistent storage).
+    Pending(u32),
     NextId,
 }
 
@@ -47,12 +59,12 @@ fn set<V: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &GovKey, 
     env.storage().instance().set(key, value);
 }
 
-/// Longest allowed timelock: 14 days. Bounds instant lengthening so it can
-/// never lock out future changes for good.
-pub const MAX_TIMELOCK: u64 = 1_209_600;
+fn timelock_valid(seconds: u64) -> bool {
+    (MIN_TIMELOCK..=MAX_TIMELOCK).contains(&seconds)
+}
 
 fn check_timelock(env: &Env, seconds: u64) {
-    if seconds > MAX_TIMELOCK {
+    if !timelock_valid(seconds) {
         panic_with_error!(env, SavingsError::InvalidTimelock);
     }
 }
@@ -161,8 +173,24 @@ pub fn timelock(env: &Env) -> u64 {
     get(env, &GovKey::Timelock).unwrap()
 }
 
+fn pending_ids(env: &Env) -> Vec<u32> {
+    get(env, &GovKey::PendingIds).unwrap_or_else(|| Vec::new(env))
+}
+
 pub fn pending(env: &Env) -> Vec<(u32, Change, u64)> {
-    get(env, &GovKey::Pending).unwrap_or_else(|| Vec::new(env))
+    let mut out = Vec::new(env);
+    for id in pending_ids(env).iter() {
+        let (change, eta) = load(env, id);
+        out.push_back((id, change, eta));
+    }
+    out
+}
+
+fn load(env: &Env, id: u32) -> (Change, u64) {
+    env.storage()
+        .persistent()
+        .get(&GovKey::Pending(id))
+        .unwrap_or_else(|| panic_with_error!(env, SavingsError::NoSuchChange))
 }
 
 /// Queue a risk-adding change for `now + timelock` and return its id (from
@@ -188,43 +216,74 @@ pub fn propose(env: &Env, asset: &Address, change: Change) -> u32 {
         return 0;
     }
 
+    let mut ids = pending_ids(env);
+    if ids.len() >= MAX_PENDING {
+        panic_with_error!(env, SavingsError::QueueFull);
+    }
     let id: u32 = get(env, &GovKey::NextId).unwrap_or(1);
     let eta = env.ledger().timestamp().saturating_add(timelock(env));
-    let mut queue = pending(env);
-    queue.push_back((id, change.clone(), eta));
-    set(env, &GovKey::Pending, &queue);
+    let key = GovKey::Pending(id);
+    let store = env.storage().persistent();
+    store.set(&key, &(change.clone(), eta));
+    store.extend_ttl(
+        &key,
+        POSITION_TTL_THRESHOLD_LEDGERS,
+        POSITION_TTL_EXTEND_TO_LEDGERS,
+    );
+    ids.push_back(id);
+    set(env, &GovKey::PendingIds, &ids);
     set(env, &GovKey::NextId, &(id + 1));
     publish(env, "change_proposed", id, (change, eta));
     id
 }
 
-/// Apply a queued change once its ETA has passed. Callable by anyone; the
-/// change is re-validated as it is applied.
-pub fn execute(env: &Env, asset: &Address, id: u32) {
-    let (change, eta) = take(env, id);
+/// Apply a queued change once its ETA has passed. Callable by anyone.
+///
+/// The change is re-validated first. If it no longer holds (say the adapter
+/// was added or removed since), it is dropped from the queue, a
+/// `change_dropped` event is emitted and `false` is returned; returning
+/// rather than panicking keeps the removal. Otherwise returns `true`.
+pub fn execute(env: &Env, asset: &Address, id: u32) -> bool {
+    let (change, eta) = load(env, id);
     if env.ledger().timestamp() < eta {
         panic_with_error!(env, SavingsError::NotReady);
     }
+    remove(env, id);
+    if !still_valid(env, asset, &change) {
+        publish(env, "change_dropped", id, change);
+        return false;
+    }
     apply(env, asset, &change);
     publish(env, "change_executed", id, change);
+    true
 }
 
 pub fn revoke(env: &Env, id: u32) {
-    let (change, _) = take(env, id);
+    let (change, _) = load(env, id);
+    remove(env, id);
     publish(env, "change_revoked", id, change);
 }
 
-/// Remove pending change `id` from the queue (a later panic reverts this).
-fn take(env: &Env, id: u32) -> (Change, u64) {
-    let mut queue = pending(env);
-    let i = queue
-        .iter()
-        .position(|(pid, _, _)| pid == id)
-        .unwrap_or_else(|| panic_with_error!(env, SavingsError::NoSuchChange)) as u32;
-    let (_, change, eta) = queue.get_unchecked(i);
-    queue.remove(i);
-    set(env, &GovKey::Pending, &queue);
-    (change, eta)
+fn remove(env: &Env, id: u32) {
+    env.storage().persistent().remove(&GovKey::Pending(id));
+    let mut ids = pending_ids(env);
+    if let Some(i) = ids.first_index_of(id) {
+        ids.remove(i);
+    }
+    set(env, &GovKey::PendingIds, &ids);
+}
+
+/// Whether `change` can still be applied. Never panics.
+fn still_valid(env: &Env, asset: &Address, change: &Change) -> bool {
+    match change {
+        Change::AddAdapter(adapter, abs_cap, rel_cap_bps) => {
+            adapters::can_add(env, asset, &config(adapter, *abs_cap, *rel_cap_bps))
+        }
+        Change::RaiseCap(adapter, abs_cap, rel_cap_bps) => {
+            adapters::caps_valid(*abs_cap, *rel_cap_bps) && adapters::is_listed(env, adapter)
+        }
+        Change::SetTimelock(seconds) => timelock_valid(*seconds),
+    }
 }
 
 fn apply(env: &Env, asset: &Address, change: &Change) {

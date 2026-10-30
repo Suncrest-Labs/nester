@@ -60,24 +60,35 @@ pub fn withdraw_order(env: &Env) -> Vec<Address> {
         .unwrap_or_else(|| Vec::new(env))
 }
 
-/// Reject an adapter that is already registered, has invalid caps, or whose
-/// underlying asset is not `asset`.
-pub fn check_new(env: &Env, asset: &Address, cfg: &AdapterConfig) {
-    check_caps(env, cfg.abs_cap, cfg.rel_cap_bps);
-    if find(env, &cfg.adapter).is_some()
-        || !matches!(
+/// Whether `cfg` can be registered: valid caps, not already registered, and
+/// its underlying asset is `asset`. Never panics.
+pub fn can_add(env: &Env, asset: &Address, cfg: &AdapterConfig) -> bool {
+    caps_valid(cfg.abs_cap, cfg.rel_cap_bps)
+        && !is_listed(env, &cfg.adapter)
+        && matches!(
             YieldAdapterClient::new(env, &cfg.adapter).try_underlying(),
             Ok(Ok(ref u)) if u == asset
         )
-    {
+}
+
+pub fn check_new(env: &Env, asset: &Address, cfg: &AdapterConfig) {
+    if !can_add(env, asset, cfg) {
         panic_with_error!(env, SavingsError::InvalidAdapter);
     }
 }
 
+pub fn caps_valid(abs_cap: i128, rel_cap_bps: u32) -> bool {
+    abs_cap >= 0 && rel_cap_bps as i128 <= BPS
+}
+
 pub fn check_caps(env: &Env, abs_cap: i128, rel_cap_bps: u32) {
-    if abs_cap < 0 || rel_cap_bps as i128 > BPS {
+    if !caps_valid(abs_cap, rel_cap_bps) {
         panic_with_error!(env, SavingsError::InvalidAdapter);
     }
+}
+
+pub fn is_listed(env: &Env, adapter: &Address) -> bool {
+    find(env, adapter).is_some()
 }
 
 /// Register an adapter and append it to the withdraw order.

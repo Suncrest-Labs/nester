@@ -81,7 +81,7 @@ impl Setup<'_> {
             &Change::AddAdapter(adapter.address.clone(), abs_cap, rel_cap_bps),
         );
         self.advance(self.core.timelock());
-        self.core.execute(&id);
+        assert!(self.core.execute(&id));
         adapter
     }
 
@@ -521,7 +521,7 @@ fn test_add_adapter_waits_for_timelock() {
     assert_eq!(s.core.adapters().len(), 0);
 
     s.advance(1);
-    s.core.execute(&id);
+    assert!(s.core.execute(&id));
     assert_eq!(
         s.last_topics(),
         (Symbol::new(&s.env, "change_executed"), id).into_val(&s.env)
@@ -563,9 +563,18 @@ fn test_execute_rechecks_change() {
     assert_ne!(first, second);
     s.advance(TIMELOCK);
 
-    s.core.execute(&first);
+    assert!(s.core.execute(&first));
+
+    // The duplicate no longer applies: it is dropped, not left stuck.
+    assert!(!s.core.execute(&second));
+    assert_eq!(
+        s.last_topics(),
+        (Symbol::new(&s.env, "change_dropped"), second).into_val(&s.env)
+    );
+    assert_eq!(s.core.pending_changes().len(), 0);
+    assert_eq!(s.core.adapters().len(), 1);
     let err = s.core.try_execute(&second).unwrap_err().unwrap();
-    assert_eq!(err, SavingsError::InvalidAdapter.into());
+    assert_eq!(err, SavingsError::NoSuchChange.into());
 
     let err = s.core.try_propose(&s.owner, &change).unwrap_err().unwrap();
     assert_eq!(err, SavingsError::InvalidAdapter.into());
@@ -579,7 +588,41 @@ fn test_execute_rechecks_change() {
         .unwrap_err()
         .unwrap();
     assert_eq!(err, SavingsError::InvalidAdapter.into());
-    assert_eq!(s.core.pending_changes().len(), 1);
+
+    // A queued raise for an adapter removed in the meantime is dropped too.
+    let raise = Change::RaiseCap(adapter.address.clone(), 2 * UNIT, 10_000);
+    let id = s.core.propose(&s.curator, &raise);
+    s.core.remove_adapter(&s.owner, &adapter.address);
+    s.advance(TIMELOCK);
+    assert!(!s.core.execute(&id));
+    assert_eq!(s.core.pending_changes().len(), 0);
+    assert_eq!(s.core.adapters().len(), 0);
+}
+
+#[test]
+fn test_pending_queue_is_capped() {
+    let s = setup();
+    let shorter = Change::SetTimelock(3_600);
+    let mut ids = std::vec::Vec::new();
+    for _ in 0..16 {
+        ids.push(s.core.propose(&s.curator, &shorter));
+    }
+    assert_eq!(s.core.pending_changes().len(), 16);
+
+    let err = s.core.try_propose(&s.owner, &shorter).unwrap_err().unwrap();
+    assert_eq!(err, SavingsError::QueueFull.into());
+    // Risk-reducing changes never queue, so a full queue does not block them.
+    assert_eq!(s.core.propose(&s.owner, &Change::SetTimelock(TIMELOCK)), 0);
+
+    s.core.revoke(&s.guardian, &ids[3]);
+    let id = s.core.propose(&s.owner, &shorter);
+    assert!(!ids.contains(&id));
+    assert_eq!(s.core.pending_changes().len(), 16);
+
+    s.advance(TIMELOCK);
+    assert!(s.core.execute(&ids[0]));
+    assert_eq!(s.core.pending_changes().len(), 15);
+    assert_eq!(s.core.timelock(), 3_600);
 }
 
 #[test]
@@ -609,7 +652,7 @@ fn test_guardian_revokes_pending_change() {
     let err = s.core.try_revoke(&s.guardian, &id).unwrap_err().unwrap();
     assert_eq!(err, SavingsError::NoSuchChange.into());
 
-    let id = s.core.propose(&s.curator, &Change::SetTimelock(1));
+    let id = s.core.propose(&s.curator, &Change::SetTimelock(3_600));
     s.core.revoke(&s.owner, &id);
     assert_eq!(s.core.pending_changes().len(), 0);
     assert_eq!(s.core.adapters().len(), 0);
@@ -661,7 +704,7 @@ fn test_guardian_cannot_add_risk() {
         for change in [
             Change::AddAdapter(adapter.address.clone(), UNIT, 10_000),
             Change::RaiseCap(listed.address.clone(), 2 * UNIT, 2_000),
-            Change::SetTimelock(1),
+            Change::SetTimelock(3_600),
         ] {
             let err = s.core.try_propose(caller, &change).unwrap_err().unwrap();
             assert_eq!(err, SavingsError::Unauthorized.into());
@@ -864,25 +907,27 @@ fn test_initialize_requires_owner_auth() {
 }
 
 #[test]
-fn test_timelock_cannot_exceed_max() {
+fn test_timelock_stays_within_bounds() {
+    const MIN: u64 = 3_600;
     const MAX: u64 = 1_209_600;
     let s = setup();
 
     for caller in [&s.owner, &s.curator] {
-        let err = s
-            .core
-            .try_propose(caller, &Change::SetTimelock(MAX + 1))
-            .unwrap_err()
-            .unwrap();
-        assert_eq!(err, SavingsError::InvalidTimelock.into());
+        for seconds in [0, 1, MIN - 1, MAX + 1, u64::MAX] {
+            let err = s
+                .core
+                .try_propose(caller, &Change::SetTimelock(seconds))
+                .unwrap_err()
+                .unwrap();
+            assert_eq!(err, SavingsError::InvalidTimelock.into());
+        }
     }
-    let err = s
-        .core
-        .try_propose(&s.owner, &Change::SetTimelock(u64::MAX))
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, SavingsError::InvalidTimelock.into());
     assert_eq!(s.core.timelock(), TIMELOCK);
+    assert_eq!(s.core.pending_changes().len(), 0);
+
+    let id = s.core.propose(&s.owner, &Change::SetTimelock(MIN));
+    assert_ne!(id, 0);
+    s.core.revoke(&s.owner, &id);
 
     assert_eq!(s.core.propose(&s.curator, &Change::SetTimelock(MAX)), 0);
     assert_eq!(s.core.timelock(), MAX);
@@ -900,11 +945,16 @@ fn test_timelock_cannot_exceed_max() {
         );
         (core, res)
     };
-    let (_, res) = init(MAX + 1);
-    assert_eq!(
-        res.unwrap_err().unwrap(),
-        SavingsError::InvalidTimelock.into()
-    );
+    for seconds in [1, MIN - 1, MAX + 1] {
+        let (_, res) = init(seconds);
+        assert_eq!(
+            res.unwrap_err().unwrap(),
+            SavingsError::InvalidTimelock.into()
+        );
+    }
+    let (core, res) = init(MIN);
+    assert!(res.is_ok());
+    assert_eq!(core.timelock(), MIN);
     let (core, res) = init(MAX);
     assert!(res.is_ok());
     assert_eq!(core.timelock(), MAX);
