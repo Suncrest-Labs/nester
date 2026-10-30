@@ -11,12 +11,15 @@ soroban_sdk::contractmeta!(key = "name", val = "SavingsCore");
 include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
 
+mod adapters;
 mod shares;
+
+pub use adapters::AdapterConfig;
 
 use nester_common::{INSTANCE_TTL_EXTEND_TO_LEDGERS, INSTANCE_TTL_THRESHOLD_LEDGERS};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    Address, Env, String, Symbol,
+    Address, Env, String, Symbol, Vec,
 };
 
 const DEFAULT_TIMELOCK: u64 = 259_200;
@@ -41,6 +44,9 @@ pub enum SavingsError {
     FeeTooHigh = 11,
     AlreadyInitialized = 12,
     InvalidExpiration = 13,
+    /// Adapter is unknown, already registered, misconfigured, or the
+    /// withdraw order does not list every adapter exactly once.
+    InvalidAdapter = 14,
 }
 
 /// Data payload of the `deposit` and `withdraw` events.
@@ -143,20 +149,22 @@ impl SavingsCore {
         assets
     }
 
+    /// Idle USDC plus every adapter's live position value. A failing adapter
+    /// counts as zero (the conservative price used for withdrawals).
     pub fn total_assets(env: Env) -> i128 {
-        idle_assets(&env)
+        adapters::valuation(&env, idle_assets(&env), false).unwrap()
     }
 
     pub fn total_supply(env: Env) -> i128 {
         shares::total_supply(&env)
     }
 
+    /// Deposit preview. Values strictly: reverts with `AdapterUnavailable` if
+    /// any adapter cannot be valued.
     pub fn convert_to_shares(env: Env, assets: i128) -> i128 {
-        shares::to_shares_down(
-            assets,
-            Self::total_assets(env.clone()),
-            shares::total_supply(&env),
-        )
+        let total = adapters::valuation(&env, idle_assets(&env), true)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+        shares::to_shares_down(assets, total, shares::total_supply(&env))
     }
 
     pub fn convert_to_assets(env: Env, shares: i128) -> i128 {
@@ -170,6 +178,67 @@ impl SavingsCore {
     /// Assets per 10^7 shares.
     pub fn share_price(env: Env) -> i128 {
         Self::convert_to_assets(env, PRICE_SCALE)
+    }
+
+    // --- Adapters -------------------------------------------------------
+
+    /// Register an adapter with its caps (owner, instant). Task 4 replaces
+    /// this with a timelocked proposal.
+    pub fn add_adapter(env: Env, owner: Address, cfg: AdapterConfig) {
+        require_owner(&env, &owner);
+        adapters::add(&env, &asset_address(&env), cfg);
+        bump_instance(&env);
+    }
+
+    pub fn set_withdraw_order(env: Env, owner: Address, order: Vec<Address>) {
+        require_owner(&env, &owner);
+        adapters::set_withdraw_order(&env, order);
+        bump_instance(&env);
+    }
+
+    pub fn set_allocator(env: Env, owner: Address, allocator: Address) {
+        require_owner(&env, &owner);
+        adapters::set_allocator(&env, &allocator);
+        bump_instance(&env);
+    }
+
+    /// Move `assets` of idle USDC into `adapter`, within its caps.
+    pub fn allocate(env: Env, allocator: Address, adapter: Address, assets: i128) {
+        adapters::require_allocator(&env, &allocator);
+        require_positive(&env, assets);
+        adapters::allocate(
+            &env,
+            &asset_address(&env),
+            idle_assets(&env),
+            &adapter,
+            assets,
+        );
+        bump_instance(&env);
+    }
+
+    /// Withdraw `assets` worth of position from `adapter` back to idle.
+    pub fn deallocate(env: Env, allocator: Address, adapter: Address, assets: i128) {
+        adapters::require_allocator(&env, &allocator);
+        require_positive(&env, assets);
+        adapters::deallocate(&env, &adapter, assets);
+        bump_instance(&env);
+    }
+
+    pub fn adapters(env: Env) -> Vec<AdapterConfig> {
+        adapters::adapters(&env)
+    }
+
+    /// Live value of the core's position in `adapter` (0 if it cannot be read).
+    pub fn allocation(env: Env, adapter: Address) -> i128 {
+        adapters::try_value(&env, &adapter).unwrap_or(0)
+    }
+
+    pub fn withdraw_order(env: Env) -> Vec<Address> {
+        adapters::withdraw_order(&env)
+    }
+
+    pub fn idle(env: Env) -> i128 {
+        idle_assets(&env)
     }
 
     // --- SEP-41 ---------------------------------------------------------
@@ -231,9 +300,20 @@ impl SavingsCore {
     }
 }
 
+fn asset_address(env: &Env) -> Address {
+    env.storage().instance().get(&DataKey::Asset).unwrap()
+}
+
 fn asset_client(env: &Env) -> token::Client<'_> {
-    let asset: Address = env.storage().instance().get(&DataKey::Asset).unwrap();
-    token::Client::new(env, &asset)
+    token::Client::new(env, &asset_address(env))
+}
+
+fn require_owner(env: &Env, caller: &Address) {
+    caller.require_auth();
+    let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+    if &owner != caller {
+        panic_with_error!(env, SavingsError::Unauthorized);
+    }
 }
 
 fn idle_assets(env: &Env) -> i128 {
@@ -241,9 +321,7 @@ fn idle_assets(env: &Env) -> i128 {
 }
 
 fn pay_out(env: &Env, owner: &Address, assets: i128, shares: i128) {
-    if assets > idle_assets(env) {
-        panic_with_error!(env, SavingsError::InsufficientLiquidity);
-    }
+    adapters::ensure_idle(env, || idle_assets(env), assets);
     shares::burn(env, owner, shares);
     asset_client(env).transfer(&env.current_contract_address(), owner, &assets);
     bump_instance(env);
