@@ -13,6 +13,7 @@ use crate::{AmountShares, Change, SavingsCore, SavingsCoreClient, SavingsError};
 
 const UNIT: i128 = 10_000_000;
 const TIMELOCK: u64 = 259_200;
+const BURN_VESTING: u64 = 604_800;
 
 struct Setup<'a> {
     env: Env,
@@ -941,10 +942,12 @@ fn test_timelock_stays_within_bounds() {
 
     let init = |timelock: u64| {
         let core = SavingsCoreClient::new(&s.env, &s.env.register_contract(None, SavingsCore));
+        let reserve = s.env.register_contract(None, SavingsReserve);
+        SavingsReserveClient::new(&s.env, &reserve).initialize(&core.address);
         let res = core.try_initialize(
             &s.owner,
             &s.usdc.address,
-            &Address::generate(&s.env),
+            &reserve,
             &String::from_str(&s.env, "Nester Savings USDC"),
             &String::from_str(&s.env, "nsUSDC"),
             &timelock,
@@ -1148,31 +1151,111 @@ fn test_loss_lowers_share_price() {
     assert_eq!(s.core.high_water_mark(), UNIT);
 }
 
+/// Charge a fee on 100 -> 110, then fall back to 100. Returns the fee shares.
+fn reserve_after_loss(s: &Setup, adapter: &MockYieldAdapterClient) -> i128 {
+    revalue(s, adapter, 110 * UNIT);
+    s.core.accrue();
+    revalue(s, adapter, 100 * UNIT);
+    s.core.reserve_shares()
+}
+
+/// Propose a burn of `shares`, wait out the timelock and execute it.
+fn start_burn(s: &Setup, shares: i128) -> u64 {
+    let id = s.core.propose(&s.owner, &Change::BurnReserve(shares));
+    s.advance(TIMELOCK);
+    assert!(s.core.execute(&id));
+    s.now()
+}
+
 #[test]
 fn test_burn_reserve_restores_value_timelocked() {
     let s = setup();
     let (_, adapter) = invested(&s);
-    revalue(&s, &adapter, 110 * UNIT);
-    s.core.accrue();
-    let fee_shares = s.core.reserve_shares();
-    let hwm = s.core.high_water_mark();
+    let hwm = {
+        revalue(&s, &adapter, 110 * UNIT);
+        s.core.accrue();
+        s.core.high_water_mark()
+    };
     revalue(&s, &adapter, 100 * UNIT);
+    let fee_shares = s.core.reserve_shares();
     let price_after_loss = s.core.share_price();
 
     let id = s.core.propose(&s.curator, &Change::BurnReserve(fee_shares));
     assert!(id > 0);
-    assert_eq!(s.core.reserve_shares(), fee_shares);
     let err = s.core.try_execute(&id).unwrap_err().unwrap();
     assert_eq!(err, SavingsError::NotReady.into());
 
     s.advance(TIMELOCK);
     assert!(s.core.execute(&id));
+    let start = s.now();
+
+    // Executing only schedules the burn; nothing is burned yet.
+    assert_eq!(s.core.reserve_shares(), fee_shares);
+    assert_eq!(s.core.share_price(), price_after_loss);
+    assert_eq!(
+        s.core.burn_schedule(),
+        Some((fee_shares, 0, start, start + BURN_VESTING))
+    );
+
+    s.advance(BURN_VESTING);
+    s.core.accrue();
 
     assert_eq!(s.core.reserve_shares(), 0);
     assert_eq!(s.core.total_supply(), 100 * UNIT);
     assert!(s.core.share_price() > price_after_loss);
     assert_eq!(s.core.share_price(), UNIT);
     assert_eq!(s.core.high_water_mark(), hwm);
+    assert_eq!(
+        s.core.burn_schedule(),
+        Some((fee_shares, fee_shares, start, start + BURN_VESTING))
+    );
+}
+
+#[test]
+fn test_burn_reserve_vests_linearly() {
+    let s = setup();
+    let (alice, adapter) = invested(&s);
+    let fee_shares = reserve_after_loss(&s, &adapter);
+    let start = start_burn(&s, fee_shares);
+
+    s.advance(BURN_VESTING / 2);
+    s.core.accrue();
+    let half = fee_shares / 2;
+    assert_eq!(s.core.reserve_shares(), fee_shares - half);
+    assert_eq!(
+        s.core.burn_schedule(),
+        Some((fee_shares, half, start, start + BURN_VESTING))
+    );
+
+    // A user operation burns the rest once the window has passed.
+    s.advance(BURN_VESTING);
+    s.core.redeem(&alice, &UNIT, &0);
+    assert_eq!(s.core.reserve_shares(), 0);
+    assert_eq!(s.core.burn_schedule().unwrap().1, fee_shares);
+
+    s.advance(BURN_VESTING);
+    s.core.accrue();
+    assert_eq!(s.core.reserve_shares(), 0);
+    assert_eq!(s.core.burn_schedule().unwrap().1, fee_shares);
+}
+
+#[test]
+fn test_burn_capture_attack_limited() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+    let fee_shares = reserve_after_loss(&s, &adapter);
+    let id = s.core.propose(&s.owner, &Change::BurnReserve(fee_shares));
+    s.advance(TIMELOCK);
+
+    // Same ledger: deposit big, execute the burn, redeem everything.
+    let deposit = 10_000 * UNIT;
+    let attacker = s.funded_user(deposit);
+    let shares = s.core.deposit(&attacker, &deposit, &0);
+    assert!(s.core.execute(&id));
+    let paid = s.core.redeem(&attacker, &shares, &0);
+
+    assert!(paid <= deposit, "attacker gained {}", paid - deposit);
+    assert_eq!(s.core.reserve_shares(), fee_shares);
 }
 
 #[test]
@@ -1183,24 +1266,22 @@ fn test_burn_reserve_never_charges_a_fee() {
     s.core.accrue();
     let fee_shares = s.core.reserve_shares();
 
-    let id = s.core.propose(&s.owner, &Change::BurnReserve(fee_shares));
-    s.advance(TIMELOCK);
-    assert!(s.core.execute(&id));
+    start_burn(&s, fee_shares);
+    s.advance(BURN_VESTING);
 
-    // The burn lifted the price above the old mark; the mark follows it so
+    // The burn lifts the price above the old mark; the mark follows it so
     // the burned value is not charged again.
-    assert_eq!(s.core.high_water_mark(), s.core.share_price());
     assert_eq!(s.core.accrue(), 0);
     assert_eq!(s.core.reserve_shares(), 0);
+    assert_eq!(s.core.high_water_mark(), s.core.share_price());
+    assert_eq!(s.core.accrue(), 0);
 }
 
 #[test]
 fn test_burn_reserve_validated_at_propose_and_execute() {
     let s = setup();
     let (_, adapter) = invested(&s);
-    revalue(&s, &adapter, 110 * UNIT);
-    s.core.accrue();
-    let fee_shares = s.core.reserve_shares();
+    let fee_shares = reserve_after_loss(&s, &adapter);
 
     let err = s
         .core
@@ -1215,15 +1296,58 @@ fn test_burn_reserve_validated_at_propose_and_execute() {
         .unwrap();
     assert_eq!(err, SavingsError::InsufficientShares.into());
 
-    // Two burns of the whole reserve: the second finds it short and is
-    // dropped rather than clamped.
+    // Only one schedule vests at a time: the second burn is dropped at
+    // execution rather than stacked or clamped.
     let first = s.core.propose(&s.owner, &Change::BurnReserve(fee_shares));
-    let second = s.core.propose(&s.owner, &Change::BurnReserve(fee_shares));
+    let second = s.core.propose(&s.owner, &Change::BurnReserve(1));
     s.advance(TIMELOCK);
     assert!(s.core.execute(&first));
     assert!(!s.core.execute(&second));
-    assert_eq!(s.core.reserve_shares(), 0);
+    assert_eq!(s.core.burn_schedule().unwrap().0, fee_shares);
     assert_eq!(s.core.pending_changes().len(), 0);
+
+    s.advance(BURN_VESTING);
+    s.core.accrue();
+    assert_eq!(s.core.reserve_shares(), 0);
+    let err = s
+        .core
+        .try_propose(&s.owner, &Change::BurnReserve(1))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SavingsError::InsufficientShares.into());
+}
+
+#[test]
+fn test_initialize_rejects_unbound_reserve() {
+    let s = setup();
+    let new_core = || SavingsCoreClient::new(&s.env, &s.env.register_contract(None, SavingsCore));
+    let init = |core: &SavingsCoreClient, reserve: &Address| {
+        core.try_initialize(
+            &s.owner,
+            &s.usdc.address,
+            reserve,
+            &String::from_str(&s.env, "Nester Savings USDC"),
+            &String::from_str(&s.env, "nsUSDC"),
+            &0u64,
+        )
+    };
+
+    // Bound to another core, never initialized, and not a reserve at all.
+    let core = new_core();
+    let unbound = [
+        s.reserve.clone(),
+        s.env.register_contract(None, SavingsReserve),
+        Address::generate(&s.env),
+    ];
+    for reserve in unbound.iter() {
+        let err = init(&core, reserve).unwrap_err().unwrap();
+        assert_eq!(err, SavingsError::InvalidReserve.into());
+    }
+
+    let reserve = s.env.register_contract(None, SavingsReserve);
+    SavingsReserveClient::new(&s.env, &reserve).initialize(&core.address);
+    assert!(init(&core, &reserve).is_ok());
+    assert_eq!(core.reserve(), reserve);
 }
 
 #[test]

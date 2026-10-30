@@ -11,12 +11,20 @@
 //! skipped entirely (no fee off a partial valuation) and the mark is left
 //! alone; it is charged on a later accrual once every adapter values again.
 //!
+//! Reserve shares leave only through a `BurnReserve` schedule that vests
+//! linearly over `BURN_VESTING`: each accrual burns the portion vested since
+//! the last one. A one-step burn would be a share-price jump that anyone
+//! could capture by depositing just before it and redeeming just after;
+//! vesting spreads it so the value goes to holders in proportion to time
+//! held. Each vested burn raises the mark to the post-burn price if higher,
+//! so value returned by a burn is never charged a fee.
+//!
 //! The mark is kept internally as assets per 10^14 shares (`HWM_SCALE`) so
 //! repeated small accruals do not lose the sub-stroop part of the price and
 //! overcharge; `high_water_mark()` reports it per 10^7 shares like
 //! `share_price()`.
 
-use soroban_sdk::{contracttype, panic_with_error, symbol_short, Env};
+use soroban_sdk::{contracttype, symbol_short, Env};
 
 use crate::shares::{self, VIRTUAL_OFFSET};
 use crate::{adapters, idle_assets, reserve_address, PRICE_SCALE};
@@ -25,12 +33,24 @@ pub const DEFAULT_FEE_BPS: u32 = 1_000;
 pub const MAX_FEE_BPS: u32 = 2_000;
 const BPS: i128 = 10_000;
 const HWM_SCALE: i128 = 100_000_000_000_000;
+/// Seconds over which a reserve burn vests: 7 days.
+pub const BURN_VESTING: u64 = 604_800;
 
 #[contracttype]
 #[derive(Clone)]
 enum FeeKey {
     FeeBps,
     Hwm,
+    Burn,
+}
+
+#[contracttype]
+#[derive(Clone)]
+struct BurnSchedule {
+    total: i128,
+    burned: i128,
+    start: u64,
+    end: u64,
 }
 
 pub fn init(env: &Env) {
@@ -74,11 +94,14 @@ pub fn strict_total(env: &Env) -> Option<i128> {
 
 /// Charge any fee due and return the fee shares minted. Never panics on an
 /// unavailable adapter: accrual is skipped and 0 returned.
+/// Also burns any vested reserve shares; when skipped, they burn later.
 pub fn accrue(env: &Env) -> i128 {
-    match strict_total(env) {
-        Some(total) => accrue_at(env, total),
-        None => 0,
-    }
+    let Some(total) = strict_total(env) else {
+        return 0;
+    };
+    let minted = accrue_at(env, total);
+    burn_vested(env, total);
+    minted
 }
 
 fn accrue_at(env: &Env, total: i128) -> i128 {
@@ -113,16 +136,53 @@ fn accrue_at(env: &Env, total: i128) -> i128 {
     fee_shares
 }
 
-/// Burn `amount` of the reserve's shares. Fees due are charged first, and the
-/// mark is raised to the post-burn price if the burn lifts the price above
-/// it, so value returned to holders is never charged a fee.
-pub fn burn_reserve(env: &Env, amount: i128) {
-    let total = strict_total(env)
-        .unwrap_or_else(|| panic_with_error!(env, crate::SavingsError::AdapterUnavailable));
-    accrue_at(env, total);
-    shares::burn(env, &reserve_address(env), amount);
+fn schedule(env: &Env) -> Option<BurnSchedule> {
+    env.storage().instance().get(&FeeKey::Burn)
+}
+
+/// `(total, burned, start, end)` of the latest burn schedule.
+pub fn burn_schedule(env: &Env) -> Option<(i128, i128, u64, u64)> {
+    schedule(env).map(|s| (s.total, s.burned, s.start, s.end))
+}
+
+/// Whether a burn schedule still has shares left to burn.
+pub fn burn_vesting(env: &Env) -> bool {
+    schedule(env).is_some_and(|s| s.burned < s.total)
+}
+
+/// Start burning `amount` reserve shares linearly over `BURN_VESTING`.
+pub fn start_burn(env: &Env, amount: i128) {
+    let start = env.ledger().timestamp();
+    let schedule = BurnSchedule {
+        total: amount,
+        burned: 0,
+        start,
+        end: start + BURN_VESTING,
+    };
+    env.storage().instance().set(&FeeKey::Burn, &schedule);
+}
+
+fn burn_vested(env: &Env, total: i128) {
+    let Some(mut s) = schedule(env) else {
+        return;
+    };
+    if s.burned >= s.total {
+        return;
+    }
+    let elapsed = env.ledger().timestamp().min(s.end) - s.start;
+    let vested = s.total * elapsed as i128 / (s.end - s.start) as i128;
+    let reserve = reserve_address(env);
+    let amount = (vested - s.burned).min(shares::balance(env, &reserve));
+    if amount <= 0 {
+        return;
+    }
+    shares::burn(env, &reserve, amount);
+    s.burned += amount;
+    env.storage().instance().set(&FeeKey::Burn, &s);
     let after = price(total, shares::total_supply(env));
     if after > hwm(env) {
         set_hwm(env, after);
     }
+    env.events()
+        .publish((symbol_short!("burn"), reserve), amount);
 }

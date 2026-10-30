@@ -38,9 +38,10 @@ pub enum Change {
     /// only if higher than the current fee; otherwise applied immediately.
     SetFee(u32),
     /// Burn this many of the reserve's shares, raising the share price for
-    /// every other holder. Always queued. Dropped at execution if the
-    /// reserve no longer holds that many shares (never clamped) or if any
-    /// adapter cannot be valued.
+    /// every other holder. Always queued. Executing starts a linear burn
+    /// over `fees::BURN_VESTING` (7 days). Only one schedule vests at a
+    /// time: execution drops the change if another is still vesting or the
+    /// reserve no longer holds that many shares (never clamped).
     BurnReserve(i128),
 }
 
@@ -309,7 +310,7 @@ fn still_valid(env: &Env, asset: &Address, change: &Change) -> bool {
         Change::SetTimelock(seconds) => timelock_valid(*seconds),
         Change::SetFee(bps) => *bps <= fees::MAX_FEE_BPS && fees::strict_total(env).is_some(),
         Change::BurnReserve(amount) => {
-            *amount > 0 && *amount <= reserve_shares(env) && fees::strict_total(env).is_some()
+            *amount > 0 && *amount <= reserve_shares(env) && !fees::burn_vesting(env)
         }
     }
 }
@@ -324,7 +325,7 @@ fn apply(env: &Env, asset: &Address, change: &Change) {
         }
         Change::SetTimelock(seconds) => set(env, &GovKey::Timelock, &seconds),
         Change::SetFee(bps) => fees::set_fee_bps(env, bps),
-        Change::BurnReserve(amount) => fees::burn_reserve(env, amount),
+        Change::BurnReserve(amount) => fees::start_burn(env, amount),
     }
 }
 

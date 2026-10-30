@@ -58,6 +58,15 @@ pub enum SavingsError {
     InvalidTimelock = 17,
     /// `MAX_PENDING` changes are already queued.
     QueueFull = 18,
+    /// The reserve is not a savings reserve bound to this core.
+    InvalidReserve = 19,
+}
+
+/// The one call the core makes on the reserve (`savings_reserve::core`).
+#[soroban_sdk::contractclient(name = "ReserveClient")]
+#[allow(dead_code)]
+trait Reserve {
+    fn core(env: Env) -> Address;
 }
 
 /// Data payload of the `deposit` and `withdraw` events.
@@ -82,6 +91,9 @@ pub struct SavingsCore;
 
 #[contractimpl]
 impl SavingsCore {
+    /// `reserve` must be a savings reserve already initialized with this
+    /// core's address. Deploy order: deploy core, deploy reserve,
+    /// `reserve.initialize(core)`, then `core.initialize(.., reserve, ..)`.
     pub fn initialize(
         env: Env,
         owner: Address,
@@ -103,6 +115,10 @@ impl SavingsCore {
         };
         governance::init(&env, &owner, timelock);
         fees::init(&env);
+        match ReserveClient::new(&env, &reserve).try_core() {
+            Ok(Ok(core)) if core == env.current_contract_address() => {}
+            _ => panic_with_error!(&env, SavingsError::InvalidReserve),
+        }
         store.set(&DataKey::Asset, &asset);
         store.set(&DataKey::Reserve, &reserve);
         store.set(&DataKey::Name, &name);
@@ -201,8 +217,9 @@ impl SavingsCore {
     /// Charge the performance fee on any gain above the high-water mark.
     /// Anyone may call. Returns the fee shares minted to the reserve; 0 if
     /// there is no new high or an adapter cannot be valued (accrual is then
-    /// skipped). Also runs at the start of deposit, withdraw, redeem,
-    /// allocate and deallocate. Views are not fee-adjusted until it runs.
+    /// skipped). Also burns any vested reserve shares. Runs at the start of
+    /// deposit, withdraw, redeem, allocate and deallocate. Views are not
+    /// fee- or burn-adjusted until it runs.
     pub fn accrue(env: Env) -> i128 {
         let minted = fees::accrue(&env);
         bump_instance(&env);
@@ -221,6 +238,12 @@ impl SavingsCore {
 
     pub fn reserve(env: Env) -> Address {
         reserve_address(&env)
+    }
+
+    /// `(total, burned, start, end)` of the latest reserve burn, which vests
+    /// linearly from `start` to `end`.
+    pub fn burn_schedule(env: Env) -> Option<(i128, i128, u64, u64)> {
+        fees::burn_schedule(&env)
     }
 
     /// Fee shares held by the reserve. They leave only by `BurnReserve`.
