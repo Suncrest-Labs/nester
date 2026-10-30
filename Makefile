@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check clippy build test test-short integration-test clean dev dev-external dev-down dev-reset dev-logs dev-db go-test go-test-short db-backup db-restore db-restore-drill
+.PHONY: fmt fmt-check clippy build test test-short integration-test clean dev dev-external dev-down dev-reset dev-logs dev-db go-test go-test-short db-backup db-restore db-restore-drill wasm-size
 
 CARGO := cargo
 CONTRACTS_DIR := packages/contracts
@@ -95,3 +95,7 @@ db-restore-drill:
 	@mkdir -p backups
 	@DATABASE_DSN="postgres://nester:nester_dev_password@localhost:5432/nester_dev?sslmode=disable" scripts/db-backup.sh
 	@scripts/db-restore-drill.sh
+
+wasm-size:
+	cd packages/contracts && cargo build --release --target wasm32-unknown-unknown
+	scripts/check-wasm-size.sh 102400 $(addprefix packages/contracts/target/wasm32-unknown-unknown/release/,savings_core.wasm savings_reserve.wasm adapter_blend.wasm adapter_defindex.wasm)

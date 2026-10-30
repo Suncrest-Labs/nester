@@ -467,6 +467,15 @@ jobs:
           } > wasm-hashes/wasm-hashes.txt
           cat wasm-hashes/wasm-hashes.txt
 
+      # Network limit is 131072 bytes; guard at 100 KB. The deprecated vault is
+      # excluded. Missing files are skipped until their contracts exist.
+      - name: Check optimized WASM size
+        if: steps.filter.outputs.contracts == 'true' || steps.filter.outputs.shared == 'true'
+        run: |
+          sudo apt-get install -y binaryen
+          dir=packages/contracts/target/wasm32-unknown-unknown/release
+          scripts/check-wasm-size.sh 102400             "$dir/savings_core.wasm"             "$dir/savings_reserve.wasm"             "$dir/adapter_blend.wasm"             "$dir/adapter_defindex.wasm"
+
       - name: Upload WASM hashes
         if: steps.filter.outputs.contracts == 'true' || steps.filter.outputs.shared == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
