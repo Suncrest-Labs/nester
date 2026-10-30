@@ -1,7 +1,7 @@
 import { MetadataRoute } from 'next';
 import { docsNav } from './docs/content';
 
-const BASE_URL = 'https://nester.finance';
+const BASE_URL = 'https://usenester.xyz';
 
 export default function sitemap(): MetadataRoute.Sitemap {
   // Static pages

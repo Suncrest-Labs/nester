@@ -162,7 +162,7 @@ function BrowserChrome({ activeIdx }: { activeIdx: number }) {
       <div className="flex-1 flex items-center justify-center">
         <div className="flex items-center gap-1.5 bg-black/[0.05] border border-black/[0.07] rounded-lg px-4 py-1.5">
           <span className="text-[9px] tracking-wider text-black/25 font-medium">
-            nester.com/app
+            app.usenester.xyz
           </span>
         </div>
       </div>

@@ -40,7 +40,7 @@ export function Analytics() {
     return (
         <Script
             strategy="afterInteractive"
-            data-domain="nester.finance"
+            data-domain="usenester.xyz"
             src="https://plausible.io/js/script.js"
         />
     );

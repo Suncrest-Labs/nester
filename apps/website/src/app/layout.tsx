@@ -10,13 +10,13 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const cormorant = Cormorant({ subsets: ["latin"], weight: ["300", "400"], style: ["normal", "italic"], variable: "--font-cormorant" });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://nester.finance"),
+  metadataBase: new URL("https://usenester.xyz"),
   title: {
-    default: "Nester | Decentralized Savings & Yield",
+    default: "Nester | The Savings Layer for Stellar",
     template: "%s | Nester",
   },
   description:
-    "Grow your crypto in non-custodial smart vaults with live portfolio tracking and on-chain auto-invest, built on Stellar.",
+    "Set savings goals, automate recurring deposits, and grow your stablecoins in non-custodial smart vaults on Stellar.",
   keywords: ["DeFi", "Stellar", "Soroban", "Savings", "Liquidity", "Crypto", "Smart Vaults", "Auto-Invest", "Yield Optimization"],
   authors: [{ name: "Nester Protocol" }],
   creator: "Nester Protocol",
@@ -29,21 +29,21 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     siteName: "Nester",
-    title: "Nester | Decentralized Savings & Yield",
-    description: "Grow your crypto in non-custodial smart vaults with live portfolio tracking and on-chain auto-invest, built on Stellar.",
+    title: "Nester | The Savings Layer for Stellar",
+    description: "Set savings goals, automate recurring deposits, and grow your stablecoins in non-custodial smart vaults on Stellar.",
     images: [
       {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: "Nester - Decentralized Savings & Yield",
+        alt: "Nester - The Savings Layer for Stellar",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Nester | Decentralized Savings & Yield",
-    description: "Grow your crypto in non-custodial smart vaults with live portfolio tracking and on-chain auto-invest, built on Stellar.",
+    title: "Nester | The Savings Layer for Stellar",
+    description: "Set savings goals, automate recurring deposits, and grow your stablecoins in non-custodial smart vaults on Stellar.",
     images: ["/og-image.png"],
     site: "@NesterProtocol",
   },
@@ -53,8 +53,8 @@ const jsonLd = {
   "@context": "https://schema.org",
   "@type": "Organization",
   "name": "Nester",
-  "url": "https://nester.finance",
-  "logo": "https://nester.finance/logo.png",
+  "url": "https://usenester.xyz",
+  "logo": "https://usenester.xyz/logo.png",
   "sameAs": [
     "https://twitter.com/NesterProtocol",
     "https://github.com/Suncrest-Labs/nester"
