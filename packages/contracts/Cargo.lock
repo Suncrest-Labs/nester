@@ -811,6 +811,8 @@ dependencies = [
 name = "nester-integration-tests"
 version = "0.1.0"
 dependencies = [
+ "adapter-blend-contract",
+ "adapter-defindex-contract",
  "adapter-pool-contract",
  "allocation-strategy-contract",
  "ed25519-dalek",
@@ -819,6 +821,8 @@ dependencies = [
  "nester-test-utils",
  "proptest",
  "rand 0.8.5",
+ "savings-core",
+ "savings-reserve",
  "soroban-sdk",
  "treasury-contract",
  "vault-contract",

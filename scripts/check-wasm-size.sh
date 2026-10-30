@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: check-wasm-size.sh <max_bytes> <wasm>...
 # Optimizes each WASM and fails if the optimized size exceeds <max_bytes>.
-# Missing files are skipped with a notice.
+# A missing file fails the check.
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
@@ -27,7 +27,8 @@ fi
 status=0
 for wasm in "$@"; do
   if [ ! -f "$wasm" ]; then
-    echo "SKIP $wasm (not built yet)"
+    echo "FAIL $wasm (not built)"
+    status=1
     continue
   fi
   out="$tmpdir/$(basename "$wasm")"

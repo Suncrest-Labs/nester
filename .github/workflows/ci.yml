@@ -468,7 +468,7 @@ jobs:
           cat wasm-hashes/wasm-hashes.txt
 
       # Network limit is 131072 bytes; guard at 100 KB. The deprecated vault is
-      # excluded. Missing files are skipped until their contracts exist.
+      # excluded. A missing WASM fails the check.
       - name: Check optimized WASM size
         if: steps.filter.outputs.contracts == 'true' || steps.filter.outputs.shared == 'true'
         run: |
