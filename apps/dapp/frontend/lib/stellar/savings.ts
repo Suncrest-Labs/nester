@@ -110,7 +110,11 @@ export async function executeSavingsRedeem(
   return submitTransaction(await buildSavingsRedeem(params));
 }
 
-async function simulateRead(wallet: string, method: string, arg: bigint): Promise<bigint> {
+async function simulateReadRaw(
+  wallet: string,
+  method: string,
+  args: ScVal[]
+): Promise<unknown> {
   const network = getCurrentNetwork();
   const contract = new Contract(requireContractId("savingsCore"));
   const server = getServer(network.rpcUrl);
@@ -119,7 +123,7 @@ async function simulateRead(wallet: string, method: string, arg: bigint): Promis
     fee: BASE_FEE,
     networkPassphrase: network.networkPassphrase,
   })
-    .addOperation(contract.call(method, i128(arg)))
+    .addOperation(contract.call(method, ...args))
     .setTimeout(TX_TIMEOUT_SECONDS)
     .build();
   const sim = await server.simulateTransaction(tx);
@@ -132,7 +136,16 @@ async function simulateRead(wallet: string, method: string, arg: bigint): Promis
   if (!result) {
     throw new Error(`Savings quote unavailable: ${method} simulation returned no result`);
   }
-  return BigInt(scValToNative(result.retval));
+  return scValToNative(result.retval);
+}
+
+async function simulateRead(wallet: string, method: string, arg: bigint): Promise<bigint> {
+  return BigInt((await simulateReadRaw(wallet, method, [i128(arg)])) as bigint);
+}
+
+/** Whether the guardian has paused new deposits (withdrawals are never paused). */
+export async function fetchDepositsPaused(wallet: string): Promise<boolean> {
+  return (await simulateReadRaw(wallet, "deposits_paused", [])) === true;
 }
 
 /** minShares for a deposit: convert_to_shares(assets) less the slippage tolerance. */
