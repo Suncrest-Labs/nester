@@ -58,7 +58,7 @@ beforeEach(() => {
   submitTransaction.mockClear();
   simulateTransaction.mockReset();
   simulateTransaction.mockResolvedValue({});
-  process.env.NEXT_PUBLIC_SAVINGS_CORE_ID = CORE_ID;
+  process.env.NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID = CORE_ID;
 });
 
 describe("savings api client", () => {
@@ -122,8 +122,8 @@ describe("savings transactions", () => {
 
   it("rejects zero amounts and a missing core id", async () => {
     await expect(buildSavingsDeposit({ wallet, amount: "0", minShares: BigInt(0) })).rejects.toThrow();
-    delete process.env.NEXT_PUBLIC_SAVINGS_CORE_ID;
-    await expect(buildSavingsDeposit({ wallet, amount: "1", minShares: BigInt(0) })).rejects.toThrow(/NEXT_PUBLIC_SAVINGS_CORE_ID/);
+    delete process.env.NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID;
+    await expect(buildSavingsDeposit({ wallet, amount: "1", minShares: BigInt(0) })).rejects.toThrow(/NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID/);
   });
 
   it("executeSavingsDeposit signs then submits", async () => {

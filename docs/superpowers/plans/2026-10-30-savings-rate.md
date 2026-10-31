@@ -225,7 +225,7 @@
 
 **Interfaces:**
 - Consumes: Tasks 2–7.
-- Produces: deploy script writing `NEXT_PUBLIC_SAVINGS_CORE_ID`, `NEXT_PUBLIC_SAVINGS_RESERVE_ID`, `NEXT_PUBLIC_ADAPTER_BLEND_ID`, `NEXT_PUBLIC_ADAPTER_DEFINDEX_ID` to `scripts/deployed-testnet.env` (keeps existing keys).
+- Produces: deploy script writing `NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID`, `NEXT_PUBLIC_SAVINGS_RESERVE_CONTRACT_ID`, `NEXT_PUBLIC_ADAPTER_BLEND_CONTRACT_ID`, `NEXT_PUBLIC_ADAPTER_DEFINDEX_CONTRACT_ID` to `scripts/deployed-testnet.env` (keeps existing keys).
 - [ ] **Step 1:** Test `test_savings_lifecycle`: two users deposit; allocator allocates 40% Blend mock / 40% DeFindex mock; yield accrues; `accrue` mints reserve shares; Blend mock loses 20%; share price drops; BurnReserve executes after timelock; both users redeem and receive ≥ their pro-rata share; `cargo test -p nester-integration-tests savings` PASS.
 - [ ] **Step 2:** Deploy script: build, optimize, `scripts/check-wasm-size.sh 102400 …`, `stellar contract deploy` each, `initialize` core (owner = deployer, asset = testnet USDC SAC from existing script), reserve, adapters; propose AddAdapter ×2 with abs_cap 1,000 USDC, rel_cap 5000 bps; print the pending-change ids (executing them needs the 3-day timelock, or deploy with `SetTimelock` at a short testnet value first — script flag `--testnet-timelock 600`).
 - [ ] **Step 3:** `bash -n scripts/deploy-savings-testnet.sh` passes. (Running it against testnet is a separate, user-approved action.)
@@ -292,7 +292,7 @@
 
 **Files:**
 - Create: `apps/dapp/frontend/lib/api/savings.ts`, `hooks/useSavings.ts`, `lib/stellar/savings.ts` (+ `__tests__/savings.test.ts`)
-- Modify: `.env.example` (+ `NEXT_PUBLIC_SAVINGS_CORE_ID`)
+- Modify: `.env.example` (+ `NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID`)
 
 **Interfaces:**
 - Produces:
@@ -325,7 +325,7 @@
 
 **Files:**
 - Modify: `app/dashboard/page.tsx` (compose RateHero, SavePanel, PositionCard, AllocationCard, ReserveCard, PendingChangesCard; keep savings goals + recurring-deposit entry points), `app/vaults/page.tsx` (redirect to `/dashboard`), `components/app-shell.tsx`, `components/bottom-nav.tsx`, `components/navbar.tsx` (nav: Savings Rate `/dashboard`, Goals `/savings`, Portfolio `/portfolio`, Settings; remove Markets/Vaults/Stocks), hide `components/vault/CreateVaultWizard.tsx` entry points
-- Modify: savings goals / recurring deposit flows to target `NEXT_PUBLIC_SAVINGS_CORE_ID` instead of tier vault IDs (`lib/vault-contracts.ts`)
+- Modify: savings goals / recurring deposit flows to target `NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID` instead of tier vault IDs (`lib/vault-contracts.ts`)
 
 - [ ] **Step 1:** Update/replace affected dashboard tests; add `dashboard renders savings rate layout` and `vaults route redirects`.
 - [ ] **Step 2–4:** FAIL → implement → `pnpm --filter @nester/dapp run test:coverage` PASS; `pnpm --filter @nester/dapp run lint:security` 0 errors; `npx tsc --noEmit -p apps/dapp/frontend` clean; `pnpm --filter @nester/dapp build` succeeds.

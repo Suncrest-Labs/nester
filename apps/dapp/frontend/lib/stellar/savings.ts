@@ -8,7 +8,7 @@ import {
   scValToNative,
 } from "@stellar/stellar-sdk";
 
-import { CONTRACT_ID_PATTERN } from "@/lib/contracts";
+import { requireContractId } from "@/lib/contracts";
 import { depositAmountToStroops } from "@/lib/decimal";
 import { applySlippage } from "@/lib/slippage";
 import {
@@ -45,17 +45,6 @@ function i128(value: bigint): ScVal {
   return nativeToScVal(value, { type: "i128" });
 }
 
-const SAVINGS_CORE_ENV = "NEXT_PUBLIC_SAVINGS_CORE_ID";
-
-function requireSavingsCoreId(): string {
-  // Literal access so Next.js inlines it in the browser bundle.
-  const id = process.env.NEXT_PUBLIC_SAVINGS_CORE_ID?.trim() ?? "";
-  if (!CONTRACT_ID_PATTERN.test(id)) {
-    throw new Error(`${SAVINGS_CORE_ENV} is not set to a valid savings core contract id`);
-  }
-  return id;
-}
-
 function getServer(): SorobanRpc.Server {
   return new SorobanRpc.Server(getCurrentNetwork().rpcUrl, {
     allowHttp: process.env.NODE_ENV !== "production",
@@ -68,7 +57,7 @@ async function buildCoreCall(
   args: ScVal[]
 ): Promise<BuiltTransaction> {
   const network = getCurrentNetwork();
-  const contract = new Contract(requireSavingsCoreId());
+  const contract = new Contract(requireContractId("savingsCore"));
   const server = getServer();
   const account = await server.getAccount(wallet);
 
@@ -126,7 +115,7 @@ export async function executeSavingsRedeem(
 
 async function simulateRead(wallet: string, method: string, arg: bigint): Promise<bigint> {
   const network = getCurrentNetwork();
-  const contract = new Contract(requireSavingsCoreId());
+  const contract = new Contract(requireContractId("savingsCore"));
   const server = getServer();
   const account = await server.getAccount(wallet);
   const tx = new TransactionBuilder(account, {
