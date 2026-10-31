@@ -1318,6 +1318,27 @@ fn test_burn_reserve_validated_at_propose_and_execute() {
     assert_eq!(err, SavingsError::InsufficientShares.into());
 }
 
+/// An idle vault: the first burn fully vests but nothing accrues it. Execute
+/// settles it before validating, so a second burn is not dropped as if the
+/// first were still vesting.
+#[test]
+fn test_execute_settles_an_elapsed_burn_before_a_new_one() {
+    let s = setup();
+    let (_, adapter) = invested(&s);
+    let fee_shares = reserve_after_loss(&s, &adapter);
+    let first = fee_shares / 2;
+    let second = fee_shares - first;
+
+    start_burn(&s, first);
+    s.advance(BURN_VESTING);
+    let id = s.core.propose(&s.owner, &Change::BurnReserve(second));
+    s.advance(TIMELOCK);
+
+    assert!(s.core.execute(&id));
+    assert_eq!(s.core.reserve_shares(), second);
+    assert_eq!(s.core.burn_schedule().unwrap().0, second);
+}
+
 #[test]
 fn test_initialize_rejects_unbound_reserve() {
     let s = setup();

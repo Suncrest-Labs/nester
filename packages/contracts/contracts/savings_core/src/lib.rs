@@ -313,8 +313,10 @@ impl SavingsCore {
 
     /// Apply a queued change once due. Anyone may call. Returns `false` (and
     /// drops the change) if it is no longer valid, e.g. its adapter was
-    /// already added or has been removed.
+    /// already added or has been removed. Accrues first, so a change is
+    /// validated against settled fees and burns.
     pub fn execute(env: Env, id: u32) -> bool {
+        fees::accrue(&env);
         let applied = governance::execute(&env, &asset_address(&env), id);
         bump_instance(&env);
         applied
