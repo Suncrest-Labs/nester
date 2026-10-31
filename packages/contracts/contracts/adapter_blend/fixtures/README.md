@@ -2,8 +2,23 @@
 
 Official, unmodified Blend Capital contract WASM, vendored so
 `real_pool_test.rs` exercises `adapter_blend` against Blend's real interface
-instead of a hand-written mock. All are open source (Apache-2.0/MIT, see
-each source repository) and pinned to v1.0.0 because that release matches
+instead of a hand-written mock. These are test-only fixtures: no contract in
+this repository links or ships them, and they are to be replaced at the
+soroban-sdk 22 upgrade (when the v2 pool can run here and the v1 set is no
+longer needed).
+
+Licenses differ by source:
+
+- `blend_pool.wasm`, `blend_pool_factory.wasm`, `blend_backstop.wasm` and
+  `blend_emitter.wasm` are built from
+  [blend-capital/blend-contracts](https://github.com/blend-capital/blend-contracts),
+  which is licensed **AGPL-3.0**, not Apache-2.0/MIT.
+- `blend_pool_v2.wasm` is built from
+  [blend-capital/blend-contracts-v2](https://github.com/blend-capital/blend-contracts-v2),
+  licensed **MIT**.
+- `blend_comet.wasm`: see its source repository (license not verified here).
+
+The v1 set is pinned to v1.0.0 because that release matches
 this workspace's `soroban-sdk = "=21.7.7"` / protocol 21 host. Blend's
 v2.0.0 pool WASM targets protocol 22 and fails `register_contract_wasm` here
 with `"contract protocol number is newer than host"` -- confirmed directly,
