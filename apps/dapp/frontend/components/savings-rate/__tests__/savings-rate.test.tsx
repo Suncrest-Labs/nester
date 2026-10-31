@@ -280,6 +280,21 @@ describe("describeSavingsError", () => {
     expect(describeSavingsError(e("4"))).toMatch(/not enough liquid/i);
   });
 
+  it("maps #1 ZeroAmount", () => {
+    expect(describeSavingsError(e("1"))).toMatch(/greater than zero/i);
+  });
+
+  it("anchors on the first contract error, not nested adapter errors in the log", () => {
+    const msg = [
+      "HostError: Error(Contract, #5)",
+      "Event log (newest first):",
+      "   0: [Diagnostic Event] data:[failing with contract error, HostError: Error(Contract, #2)]",
+    ].join(" | ");
+    expect(describeSavingsError(new Error(msg))).toMatch(/Deposits are paused/i);
+    const msg2 = ["HostError: Error(Contract, #1)", "  nested: Error(Contract, #4)"].join(" | ");
+    expect(describeSavingsError(new Error(msg2))).toMatch(/greater than zero/i);
+  });
+
   it("does not match two-digit codes", () => {
     expect(describeSavingsError(e("21"))).toContain("#21");
     expect(describeSavingsError(e("42"))).toContain("#42");
