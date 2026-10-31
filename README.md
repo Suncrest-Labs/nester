@@ -1,8 +1,10 @@
 # Nester
 
-**Decentralized Savings & Yield Investment Protocol**
+**The savings layer for Stellar**
 
-Nester is a crypto-first savings and investment app on Stellar. Deposits are diversified across multiple on-chain yield sources, tracked in a live portfolio, and grown with automated recurring deposits — self-custodial from end to end.
+Nester is a self-custodial savings app on Stellar. Set savings goals, automate recurring deposits with on-chain mandates, and hold stablecoins in smart vaults that route deposits to Stellar yield protocols — tracked in a live portfolio.
+
+> **Status:** live on Stellar testnet ([app.usenester.xyz](https://app.usenester.xyz)). The contracts have not been audited yet; an external audit is required before mainnet.
 
 > Your keys. Your yield. Your portfolio.
 
@@ -28,7 +30,7 @@ Nester turns that into one decision: pick a risk profile, deposit, and let the p
 
 ## Smart Vaults
 
-The yield engine. Deposits are automatically allocated across battle-tested DeFi protocols to generate consistent returns without manual management.
+The yield engine. Deposits are routed through adapter contracts to Stellar yield protocols, within per-protocol limits set by each vault's allocation strategy.
 
 **Smart Vaults** let users choose their risk profile:
 
@@ -38,7 +40,9 @@ The yield engine. Deposits are automatically allocated across battle-tested DeFi
 | Balanced     | Medium | 8-12%      | Mixed lending + staking   |
 | Growth       | Higher | 12-18%     | Aggressive multi-protocol |
 
-The protocol continuously monitors APYs and risk metrics — including signature-attested APY/TVL data on-chain — automatically rebalancing to maintain optimal performance while minimizing exposure to underperforming pools. A circuit breaker and emergency withdrawal queue protect deposits when a source degrades.
+Target APYs describe each vault's intended strategy, not a promise of returns.
+
+A keeper rebalances vaults using signature-attested APY/TVL data on-chain, within on-chain limits: at most 20% of a vault's assets per rebalance, with slippage checks on every leg. A circuit breaker and emergency withdrawal queue protect deposits when a source degrades.
 
 ---
 
@@ -66,9 +70,9 @@ Savings goals sit on top: set a target, attach a schedule, watch streaks and mil
 
 Nester is non-custodial. Users maintain full ownership of assets through smart contracts—the protocol cannot freeze, seize, or redirect funds.
 
-**Audit Status:** [Audit package and report](/audits)
+**Audit Status:** not yet audited. An external audit is a hard requirement before mainnet — see [docs/security/contract_audits.md](docs/security/contract_audits.md).
 
-**Risk Mitigations:** Multi-protocol diversification limits single-point-of-failure exposure. Real-time exploit monitoring with automatic pause mechanisms. Insurance fund for covered events. Rate limiting and withdrawal delays for large transactions.
+**Risk Mitigations:** Per-protocol allocation caps limit single-point-of-failure exposure. A staged circuit breaker throttles or halts a vault when share price, yield or withdrawal patterns look abnormal. Upgrades are timelocked, and a guardian role can pause the protocol but never increase risk. Deposits are **not** insured.
 
 **Automated Security Scanning (CI)**
 
@@ -273,17 +277,17 @@ Follow existing patterns and conventions in the codebase. Write tests for new fu
 ### Contact
 
 - **GitHub:** [github.com/suncrestlabs/nester](https://github.com/suncrestlabs/nester)
-- **Twitter:** [@TheNesterHQ](https://x.com/TheNesterHQ)
 
 ---
 
 ## Links
 
-- [Website](https://nesterhq.netlify.app/)
+- [Website](https://usenester.xyz)
+- [App (testnet)](https://app.usenester.xyz)
 - [GitHub](https://github.com/suncrestlabs/nester)
 
 ---
 
-**Built by [Suncrest Labs](https://suncrestlabs.com)**
+**Built by [Suncrest Labs](https://github.com/Suncrest-Labs)**
 
 _Nester is in active development. Features and specifications may change._

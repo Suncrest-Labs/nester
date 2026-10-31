@@ -20,7 +20,7 @@ export const docsNav: DocSection[] = [
         slug: "concepts",
         children: [
             { title: "Savings Layer", slug: "savings-layer" },
-            { title: "Yield Layer", slug: "yield-layer" },
+            { title: "Yield Sources", slug: "yield-layer" },
         ],
     },
     {
@@ -379,7 +379,7 @@ SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
         title: "Savings Layer",
         content: `# Stablecoin Savings Layer
 
-The Savings Layer is the core of Nester's MVP. Users deposit stablecoins (USDC, USDT, DAI) into protocol-managed vaults that auto-allocate across multiple yield sources.
+The Savings Layer is the core of Nester. Users deposit stablecoins (USDC; an XLM vault also runs on testnet) into vaults that route funds to Stellar yield protocols through adapter contracts. Nester is on testnet and unaudited today; the figures below are illustrative.
 
 ## How It Works
 
@@ -397,22 +397,23 @@ User deposits 1,000 USDC
 │  │ Blend    │                                 │
 │  │ 100%     │                                 │
 │  │ 1000 USDC│                                 │
-│  │ 8.5% APY │                                 │
+│  │ var. APY │                                 │
 │  └──────────┘                                 │
 │                                               │
-│  Blended APY: 9.08%                          │
-│  After 1 year: 1,000 → 1,090.80 USDC        │
+│  APY: whatever the integrated protocols pay  │
+│  (illustrative — not a rate quote)           │
 └───────────────────────────────────────────────┘
 \`\`\`
 
 ## Vault Types
 
-| Vault | Target APY | Risk Profile | Strategy |
+| Vault | Target APY (not guaranteed) | Risk Profile | Strategy |
 |-------|-----------|--------------|----------|
-| **Conservative** | 6–8% | Minimal | Battle-tested lending protocols only |
+| **Conservative** | 6–8% | Lowest | Established lending protocols only |
 | **Balanced** | 8–12% | Moderate | Lending + selected liquidity pools |
 | **Growth** | 12–18% | Higher | Newer strategies with strict risk controls |
-| **DeFi500** | Variable | Diversified | Index fund of top DeFi protocols, monthly rebalanced |
+
+Targets describe the intended strategy, not a promise; actual returns depend on the protocols each vault uses.
 
 ## Share Token Model
 
@@ -430,21 +431,14 @@ After yield accrual (vault now has 11,000 USDC, still 11,000 shares):
   User's 1,000 shares = 1,000 / 11,000 × 11,000 = 1,000 USDC + yield
 \`\`\`
 
-## Automated Rebalancing
+## Rebalancing
 
-The rebalancer runs continuously, monitoring:
+Rebalancing is triggered by a keeper, not run continuously. Each call is limited on-chain:
 
-- **APY drift** — if a protocol's APY drops below threshold, funds migrate
-- **Risk metrics** — TVL changes, exploit history, smart contract health
-- **Liquidity depth** — ensures withdrawals can be processed instantly
-
-\`\`\`
-Rebalance trigger conditions:
-  1. APY delta > 2% between current and optimal allocation
-  2. Protocol TVL drops > 20% in 24 hours
-  3. Security alert from monitoring systems
-  4. Scheduled rebalance (weekly for DeFi500)
-\`\`\`
+- **At most 20% of a vault's assets** move per rebalance call
+- **Slippage checks** apply to every leg of a move
+- **Per-protocol allocation limits** come from the vault's allocation strategy
+- **A circuit breaker** can throttle or halt the vault when share price, yield or withdrawal patterns look abnormal
 
 ## Maturity & Penalties
 
@@ -452,69 +446,33 @@ Vaults can optionally enforce time-locks:
 
 | Lock Period | Early Withdrawal Penalty |
 |-------------|-------------------------|
-| No lock     | 0% |
+| No lock     | 0.1% if withdrawn within 1 day of depositing |
 | 30 days     | 1% of withdrawn amount |
 | 90 days     | 2.5% |
 | 180 days    | 5% |
 
-Penalties are redistributed to remaining vault depositors, increasing their share value.
+Default vault fees are a 10% performance fee on yield and a 0.5% annual management fee. All fee parameters are stored on-chain.
 `,
     },
 
     "yield-layer": {
-        title: "Yield Layer",
-        content: `# Automated Yield Layer (Multi-Asset)
+        title: "Yield Sources",
+        content: `# Yield Sources
 
-Separate from the stablecoin savings, the Automated Yield Layer lets users earn on volatile assets like XLM, BTC, and ETH while maintaining full price exposure.
+Vaults earn yield by routing deposits to other Stellar protocols through **adapter contracts**. Each adapter speaks one protocol's interface, and the vault's allocation strategy caps how much each one can hold.
 
-## Key Difference from Savings
+## Status
 
-| | Savings Layer | Yield Layer |
-|---|---|---|
-| **Assets** | USDC, USDT, DAI | XLM, BTC, ETH, etc. |
-| **Price exposure** | None (stablecoins) | Full (up and down) |
-| **Yield source** | Lending protocols | Staking, LP, lending |
-| **Risk** | Low (capital preserved) | Medium-High (price volatility) |
-| **Use case** | Predictable savings | Growth + yield |
+| Adapter | Protocol | Status |
+|---------|----------|--------|
+| **Blend** | Blend lending pools | Implemented; not yet deployed |
+| **Soroswap** | Soroswap AMM liquidity | Implemented; testnet only — needs hardening before mainnet |
 
-## Per-Asset Strategies
+Nester is on testnet and has not been audited. No adapter is live on mainnet, and vault deposits do not earn live yield yet. Every adapter goes through an external audit before it can hold mainnet funds.
 
-\`\`\`
-XLM  → Auto-stake (8% base) + Liquidity provision (12% with IL risk)
-       Strategy engine allocates: 60% staking, 40% LP based on market conditions
+## How Adapters Report Value
 
-BTC  → Wrapped to Stellar-compatible token
-       Deployed to Bitcoin-backed lending protocols (4–6% APY)
-       100% BTC exposure maintained
-
-ETH  → Liquid staking derivatives (e.g., stETH)
-       3–5% staking yield + DeFi composability
-\`\`\`
-
-## Portfolio Allocation
-
-Users can select multiple tokens simultaneously:
-
-\`\`\`
-Portfolio example:
-  40% XLM  — auto-staked + liquidity provision
-  30% BTC  — wrapped and deployed to lending
-  20% ETH  — liquid staking derivatives
-  10% USDC — Balanced Vault (stability anchor)
-\`\`\`
-
-## Automated Rebalancing
-
-The rebalancer monitors drift from target allocations and surfaces alerts in your portfolio:
-
-\`\`\`
-Alert: "XLM now represents 45% of your portfolio (target: 30%).
-        XLM rallied 50% this month.
-        Consider rebalancing to reduce concentration risk.
-        Suggested action: Sell 30% of XLM position → Balanced Vault"
-
-[Approve]  [Dismiss]
-\`\`\`
+Each adapter exposes the value of the vault's position in its protocol, so the vault can track what it holds across integrations. Moving share-price accounting fully on-chain — reading positions directly instead of relying on reported yield — is part of the pre-mainnet roadmap.
 `,
     },
 
@@ -789,16 +747,6 @@ impl VaultToken {
 }
 \`\`\`
 
-## DeFi500 Token (nDEFI)
-
-The DeFi500 vault uses a special \`nDEFI\` token that represents diversified exposure to an index of top DeFi protocols. Monthly rebalancing adjusts the underlying allocation to track the best performers.
-
-\`\`\`
-nDEFI token value tracks:
-  Top 5 DeFi protocols by risk-adjusted yield
-  Monthly rebalance adjusts weights
-  User holds 1 token = exposure to entire index
-\`\`\`
 `,
     },
 
@@ -908,7 +856,7 @@ func main() {
     r.Use(middleware.Logger)
     r.Use(middleware.Recoverer)
     r.Use(cors.Handler(cors.Options{
-        AllowedOrigins:   []string{"https://nester.finance", "http://localhost:3001"},
+        AllowedOrigins:   []string{"https://usenester.xyz", "http://localhost:3001"},
         AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
         AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
         AllowCredentials: true,
@@ -974,7 +922,7 @@ type APIError struct {
 List all available vaults with current APY and TVL.
 
 \`\`\`bash
-curl https://api.nester.finance/api/v1/vaults
+curl https://api.usenester.xyz/api/v1/vaults
 \`\`\`
 
 \`\`\`json
@@ -1018,7 +966,7 @@ Get detailed allocation breakdown for a specific vault.
 Prepare and record a deposit to a vault.
 
 \`\`\`bash
-curl -X POST https://api.nester.finance/api/v1/vaults/vault_balanced_01/deposit \\
+curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/deposit \\
   -H "Content-Type: application/json" \\
   -d '{
     "amount": "1000.00",
@@ -1061,7 +1009,7 @@ curl -X POST https://api.nester.finance/api/v1/vaults/vault_balanced_01/deposit 
 Prepare and record a withdrawal from a vault.
 
 \`\`\`bash
-curl -X POST https://api.nester.finance/api/v1/vaults/vault_balanced_01/withdraw \\
+curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/withdraw \\
   -H "Content-Type: application/json" \\
   -d '{
     "amount": "500.00",
@@ -1099,7 +1047,7 @@ curl -X POST https://api.nester.finance/api/v1/vaults/vault_balanced_01/withdraw
 Get aggregated portfolio summary and positions for the authenticated user.
 
 \`\`\`bash
-curl https://api.nester.finance/api/v1/portfolio/summary \\
+curl https://api.usenester.xyz/api/v1/portfolio/summary \\
   -H "Authorization: Bearer <token>"
 \`\`\`
 
@@ -1129,7 +1077,7 @@ curl https://api.nester.finance/api/v1/portfolio/summary \\
 Get authenticated user's position in a specific vault.
 
 \`\`\`bash
-curl https://api.nester.finance/api/v1/vaults/vault_balanced_01/my-position \\
+curl https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/my-position \\
   -H "Authorization: Bearer <token>"
 \`\`\`
 
@@ -1138,7 +1086,7 @@ curl https://api.nester.finance/api/v1/vaults/vault_balanced_01/my-position \\
 Get historical performance and yield data for charting.
 
 \`\`\`bash
-curl "https://api.nester.finance/api/v1/vaults/vault_balanced_01/performance/history?period=30d"
+curl "https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/performance/history?period=30d"
 \`\`\`
 
 \`\`\`json

@@ -21,10 +21,7 @@
 
 **Do NOT open a public GitHub issue for security vulnerabilities.** Doing so exposes users before a fix is available.
 
-Instead, use one of the following:
-
-1. **GitHub Private Vulnerability Reporting** (preferred) — click **"Report a vulnerability"** under the Security tab of this repository.
-2. **Email** — send a report to **security@nester.dev** with the subject line `[SECURITY] <brief description>`.
+Instead, use **GitHub Private Vulnerability Reporting**: click **"Report a vulnerability"** under the Security tab of this repository.
 
 ### What to include in your report
 

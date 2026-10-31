@@ -13,16 +13,16 @@ const STEPS = [
     step: "01",
     label: "Deposit & Earn",
     headline: "Choose a vault.\nYour money goes\nto work instantly.",
-    body: "Select from four yield strategies. Deposit stablecoins and your funds are deployed to Blend, the lending protocol Nester integrates on Stellar.",
-    tab: "Deposit stablecoins and start earning in minutes.",
+    body: "Choose one of three vault tiers. Deposit stablecoins, and the vault routes them to integrated Stellar yield protocols through adapter contracts.",
+    tab: "Deposit stablecoins into a vault in minutes.",
   },
   {
     id: "optimize",
     step: "02",
     label: "Auto‑Optimize",
     headline: "Yields chase you —\nnot the other\nway around.",
-    body: "Nester's engine monitors every integrated protocol around the clock. When better APYs emerge, funds migrate automatically — capturing opportunity before you notice.",
-    tab: "Funds auto-rebalance across protocols 24/7.",
+    body: "Nester's keeper compares APYs across integrated protocols and rebalances within on-chain risk limits — at most 20% of a vault per rebalance, with slippage checks on every leg.",
+    tab: "Rebalancing stays within on-chain risk limits.",
   },
   {
     id: "autoinvest",
@@ -213,7 +213,7 @@ const NODES = [
     bg: "#c3812418",
   },
   {
-    id: "nester-right", label: "Nester", apy: "1.2× APY",
+    id: "nester-right", label: "Nester", apy: "Blended APY",
     cx: 280, cy: 192,
     left: 238, top: 158,
     logo: (
@@ -968,7 +968,7 @@ export function HowItWorks() {
             </div>
             <div className="flex-1 flex items-center justify-center">
               <div className="flex items-center gap-1.5 bg-black/[0.05] border border-black/[0.07] rounded-lg px-4 py-1.5">
-                <span className="text-[9px] tracking-wider text-black/25 uppercase font-medium">nester.finance</span>
+                <span className="text-[9px] tracking-wider text-black/25 uppercase font-medium">usenester.xyz</span>
               </div>
             </div>
             <AnimatePresence mode="wait">

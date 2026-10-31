@@ -8,10 +8,9 @@ export const metadata: Metadata = {
 };
 
 const REPO_URL = "https://github.com/Suncrest-Labs/nester";
-const THREAT_MODEL_URL = `${REPO_URL}/blob/main/AUDIT_THREAT_MODEL.md`;
-const SECURITY_POLICY_URL = `${REPO_URL}/blob/main/SECURITY.md`;
+const THREAT_MODEL_URL = `${REPO_URL}/blob/dev/docs/security/contract-invariant-threat-model.md`;
+const SECURITY_POLICY_URL = `${REPO_URL}/blob/dev/SECURITY.md`;
 const REPORT_VULN_URL = `${REPO_URL}/security/advisories/new`;
-const SECURITY_EMAIL = "security@nester.dev";
 
 // Contracts submitted for external review. Keep in sync with the audit package
 // and AUDIT_THREAT_MODEL.md.
@@ -45,9 +44,10 @@ export default function SecurityPage() {
             Audit status, scope, and responsible disclosure.
           </h1>
           <p className="mt-6 max-w-2xl text-base leading-7 text-slate-300 md:text-lg">
-            Nester&apos;s smart contracts move user funds on Stellar Mainnet, so we keep a
-            public record of the audit&apos;s status, the contracts under review, and a clear
-            path for security researchers to report issues.
+            Nester&apos;s smart contracts run on Stellar testnet today and have not yet been
+            audited. Before any mainnet launch they will go through an external audit; this
+            page keeps a public record of that status, the contracts in scope, and a clear path
+            for security researchers to report issues.
           </p>
         </div>
 
@@ -64,10 +64,10 @@ export default function SecurityPage() {
             </span>
           </div>
           <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-200">
-            <strong className="font-semibold text-white">Pending</strong> — an external smart
-            contract audit is being scheduled with{" "}
-            <span className="text-amber-200">[auditor name when confirmed]</span>. Findings will
-            be triaged by severity; critical and high issues block launch.
+            <strong className="font-semibold text-white">Not yet audited</strong> — no external
+            audit has been commissioned yet. A completed external audit is a hard requirement
+            before mainnet; its findings will be triaged by severity, and critical and high
+            issues block launch.
           </p>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
             {/*
@@ -136,7 +136,7 @@ export default function SecurityPage() {
             for a security report.
           </p>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <div className="mt-6 grid gap-4">
             <a
               href={REPORT_VULN_URL}
               target="_blank"
@@ -145,25 +145,10 @@ export default function SecurityPage() {
             >
               <h3 className="text-sm font-semibold text-white">GitHub Private Reporting</h3>
               <p className="mt-2 text-sm leading-6 text-slate-300">
-                Preferred. Open a private advisory under the repository&apos;s Security tab.
+                Open a private advisory under the repository&apos;s Security tab.
               </p>
               <span className="mt-3 inline-block text-xs font-medium text-emerald-300 group-hover:text-emerald-200">
                 Report a vulnerability ↗
-              </span>
-            </a>
-
-            <a
-              href={`mailto:${SECURITY_EMAIL}?subject=%5BSECURITY%5D%20`}
-              className="group rounded-2xl border border-white/10 bg-black/20 p-5 transition-colors hover:border-emerald-300/40"
-            >
-              <h3 className="text-sm font-semibold text-white">Email</h3>
-              <p className="mt-2 text-sm leading-6 text-slate-300">
-                Send a report to{" "}
-                <span className="font-mono text-emerald-300">{SECURITY_EMAIL}</span> with the
-                subject line <span className="font-mono">[SECURITY]</span>.
-              </p>
-              <span className="mt-3 inline-block text-xs font-medium text-emerald-300 group-hover:text-emerald-200">
-                Email the security team ↗
               </span>
             </a>
           </div>

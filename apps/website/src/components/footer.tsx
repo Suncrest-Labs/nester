@@ -5,41 +5,32 @@ import { motion, useInView } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
 
+const DAPP_URL = process.env.NEXT_PUBLIC_DAPP_URL ?? "http://localhost:3001";
+const REPO_URL = "https://github.com/Suncrest-Labs/nester";
+const RISK_DISCLOSURES_URL = `${REPO_URL}/blob/dev/docs/security/mainnet-risk-disclosures.md`;
+
 const NAV_COMMANDS = [
   {
     cmd: "ls ./protocol",
     items: [
-      { name: "Vaults", href: "#" },
-      { name: "Auto-Invest", href: "#" },
-      { name: "Governance", href: "#" },
-      { name: "Tokenomics", href: "#" },
+      { name: "Vaults", href: DAPP_URL },
+      { name: "Auto-Invest", href: "/docs" },
     ],
   },
   {
     cmd: "ls ./developers",
     items: [
-      { name: "Documentation", href: "#" },
-      { name: "GitHub", href: "#" },
-      { name: "API Reference", href: "#" },
+      { name: "Documentation", href: "/docs" },
+      { name: "GitHub", href: REPO_URL },
+      { name: "API Reference", href: "/docs" },
       { name: "Security", href: "/security" },
       { name: "Bug Bounty", href: "/security#bug-bounty" },
-    ],
-  },
-  {
-    cmd: "ls ./community",
-    items: [
-      { name: "Twitter / X", href: "#" },
-      { name: "Discord", href: "#" },
-      { name: "Blog", href: "#" },
-      { name: "Brand Kit", href: "#" },
     ],
   },
 ];
 
 const SOCIAL_COMMANDS = [
-  { cmd: "connect --twitter", label: "Twitter / X", href: "#" },
-  { cmd: "connect --discord", label: "Discord", href: "#" },
-  { cmd: "connect --github", label: "GitHub", href: "#" },
+  { cmd: "connect --github", label: "GitHub", href: REPO_URL },
 ];
 
 /* Typing animation hook */
@@ -196,7 +187,7 @@ export function Footer() {
             <div className="h-px bg-white/[0.04] mb-6" />
 
             {/* Command blocks — staggered on scroll */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
               {NAV_COMMANDS.map((group, gi) => (
                 <CommandBlock
                   key={group.cmd}
@@ -292,21 +283,14 @@ export function Footer() {
           </button>
           <span className="w-px h-3 bg-black/[0.12]" />
           <Link
-            href="#"
+            href={RISK_DISCLOSURES_URL}
             className="text-[11px] font-mono text-black/20 hover:text-black/50 transition-colors duration-200"
           >
             Terms
           </Link>
           <span className="w-px h-3 bg-black/[0.12]" />
           <Link
-            href="#"
-            className="text-[11px] font-mono text-black/20 hover:text-black/50 transition-colors duration-200"
-          >
-            Privacy
-          </Link>
-          <span className="w-px h-3 bg-black/[0.12]" />
-          <Link
-            href="#"
+            href={RISK_DISCLOSURES_URL}
             className="text-[11px] font-mono text-black/20 hover:text-black/50 transition-colors duration-200"
           >
             Risk

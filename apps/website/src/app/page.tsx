@@ -22,7 +22,7 @@ const jsonLd = {
     {
       "@type": "WebApplication",
       "name": "Nester",
-      "url": "https://nester.finance",
+      "url": "https://usenester.xyz",
       "applicationCategory": "FinanceApplication",
       "operatingSystem": "All",
       "description": "Decentralized savings and yield protocol built on Stellar/Soroban.",
@@ -40,7 +40,7 @@ const jsonLd = {
           "name": "What is Nester?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Nester is a DeFi savings and yield platform that lets you deposit stablecoins into non-custodial smart vaults and automatically earn optimized returns through Blend on Stellar."
+            "text": "Nester is a non-custodial savings app on Stellar. You set savings goals, automate recurring deposits, and hold stablecoins in smart vaults that route deposits to Stellar yield protocols. Nester is live on testnet today; mainnet follows an external security audit."
           }
         },
         {
@@ -48,7 +48,7 @@ const jsonLd = {
           "name": "How does Nester generate yield?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Your deposits are automatically allocated across battle-tested DeFi protocols. Nester's optimization engine continuously monitors APYs and rebalances your funds to capture the best risk-adjusted returns."
+            "text": "Vault deposits are routed through adapter contracts to integrated Stellar yield protocols, within per-protocol limits set by each vault's risk parameters. Rebalancing is triggered by a keeper and rate-limited on-chain. On testnet, the yield integrations are still being connected, so vaults do not earn live yield yet."
           }
         },
         {
@@ -56,7 +56,7 @@ const jsonLd = {
           "name": "How do withdrawals work?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Nester is fully non-custodial. You can withdraw at any time — your vault shares are burned on-chain and the underlying stablecoins are sent straight back to your own wallet."
+            "text": "You can withdraw at any time. Your vault shares are burned on-chain and the underlying stablecoins are paid from the vault's available liquidity straight back to your own wallet. Withdrawing within one day of depositing incurs a 0.1% early-withdrawal fee; locked positions charge a higher fee if exited early."
           }
         }
       ]

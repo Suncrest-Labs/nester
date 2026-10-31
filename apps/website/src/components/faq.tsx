@@ -9,28 +9,28 @@ const FAQ_ITEMS = [
     classification: "GENERAL",
     question: "What is Nester?",
     answer:
-      "Nester is a DeFi savings and yield platform that lets you deposit stablecoins into non-custodial smart vaults and automatically earn optimized returns through Blend — all on Stellar.",
+      "Nester is a non-custodial savings app on Stellar. You set savings goals, automate recurring deposits, and hold stablecoins in smart vaults that route deposits to Stellar yield protocols. Nester is live on testnet today; mainnet follows an external security audit.",
   },
   {
     id: "how-yield",
     classification: "VAULTS",
     question: "How does Nester generate yield?",
     answer:
-      "Your deposits are automatically allocated across battle-tested DeFi protocols. Nester's optimization engine continuously monitors APYs and rebalances your funds to capture the best risk-adjusted returns — 24/7, without any manual intervention.",
+      "Vault deposits are routed through adapter contracts to integrated Stellar yield protocols, within per-protocol limits set by each vault's risk parameters. Rebalancing is triggered by a keeper and rate-limited on-chain. On testnet, the yield integrations are still being connected, so vaults do not earn live yield yet.",
   },
   {
     id: "is-it-safe",
     classification: "SECURITY",
     question: "Is my money safe?",
     answer:
-      "Nester only integrates with audited, battle-tested protocols. Your funds are held in non-custodial smart contracts — Nester never has direct access to your deposits. All vault strategies undergo rigorous risk assessment before deployment.",
+      "Funds are held in non-custodial smart contracts — Nester never has direct access to your deposits. The contracts include a circuit breaker, timelocked upgrades, and a guardian role that can pause but never increase risk. They have not been audited yet and run on testnet only; an external audit is required before mainnet. Integrated protocols carry their own risks — see the Security & Audit page.",
   },
   {
     id: "withdrawals",
     classification: "WITHDRAWALS",
     question: "How do withdrawals work?",
     answer:
-      "You can withdraw at any time. Your vault shares are burned on-chain and the underlying stablecoins — deposit plus accrued yield — are sent straight back to your own wallet. No lockups on standard vaults, no approval queues, no intermediaries.",
+      "You can withdraw at any time. Your vault shares are burned on-chain and the underlying stablecoins are paid from the vault's available liquidity straight back to your own wallet. Withdrawing within one day of depositing incurs a 0.1% early-withdrawal fee; locked positions charge a higher fee if exited early.",
   },
   {
     id: "auto-invest",
@@ -44,21 +44,21 @@ const FAQ_ITEMS = [
     classification: "GENERAL",
     question: "Is there a minimum deposit?",
     answer:
-      "No. You can start with any amount of supported stablecoins. Nester is designed to be accessible whether you're depositing $10 or $100,000 — the optimization engine works the same regardless of size.",
+      "The minimum deposit is one unit of the vault's asset (for example, 1 USDC). Small, frequent deposits are practical because Stellar transaction fees are a fraction of a cent.",
   },
   {
     id: "fees",
     classification: "GENERAL",
     question: "What are the fees?",
     answer:
-      "Nester charges a small performance fee on yield earned — you only pay when you're making money. There are no deposit fees, no withdrawal fees, and no hidden charges.",
+      "By default, vaults charge a 10% performance fee on yield earned, a 0.5% annual management fee, and a 0.1% fee on withdrawals made within one day of depositing. Fee parameters are stored on-chain, and changes are logged publicly.",
   },
   {
     id: "supported",
     classification: "VAULTS",
     question: "Which assets and chains are supported?",
     answer:
-      "Nester currently supports USDC and USDT deposits on the Stellar network, with an active integration into the Blend protocol. Multi-chain expansion is on the roadmap — starting with Solana and Base.",
+      "Nester runs on Stellar only. On testnet, vaults accept USDC and XLM.",
   },
 ];
 
