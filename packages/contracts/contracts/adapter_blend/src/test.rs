@@ -295,3 +295,72 @@ fn initialize_needs_no_auth_from_the_vault() {
         .try_initialize(&vault, &pool, &underlying, &RESERVE_INDEX)
         .is_err());
 }
+
+/// No `mock_all_auths`: the vault authorizes only its own call into the
+/// adapter and the pull of its tokens, which is all the real flow provides.
+/// Blend v2's `submit` would pull the supply with a `transfer` from the
+/// adapter that the adapter never authorized; the supply must go through
+/// `submit_with_allowance`, which spends the allowance the adapter granted.
+#[test]
+fn deposit_and_withdraw_need_only_the_vaults_auth() {
+    use soroban_sdk::{
+        testutils::{MockAuth, MockAuthInvoke},
+        IntoVal,
+    };
+
+    let env = Env::default();
+    let vault = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token = TokenClient::new(&env, &token_id);
+    let pool_id = env.register_contract(None, MockBlendPool);
+    MockBlendPoolClient::new(&env, &pool_id).initialize(&token_id, &RESERVE_INDEX);
+    let adapter_id = env.register_contract(None, BlendAdapterContract);
+    let adapter = BlendAdapterContractClient::new(&env, &adapter_id);
+    adapter.initialize(&vault, &pool_id, &token_id, &RESERVE_INDEX);
+
+    let amount: i128 = 1_000;
+    env.mock_auths(&[MockAuth {
+        address: &token_admin,
+        invoke: &MockAuthInvoke {
+            contract: &token_id,
+            fn_name: "mint",
+            args: (&vault, amount).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    StellarAssetClient::new(&env, &token_id).mint(&vault, &amount);
+
+    env.mock_auths(&[MockAuth {
+        address: &vault,
+        invoke: &MockAuthInvoke {
+            contract: &adapter_id,
+            fn_name: "deposit",
+            args: (&vault, amount, 0i128).into_val(&env),
+            sub_invokes: &[MockAuthInvoke {
+                contract: &token_id,
+                fn_name: "transfer",
+                args: (&vault, &adapter_id, amount).into_val(&env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+    let units = adapter.deposit(&vault, &amount, &0);
+    assert_eq!(units, amount);
+    assert_eq!(token.balance(&pool_id), amount);
+
+    env.mock_auths(&[MockAuth {
+        address: &vault,
+        invoke: &MockAuthInvoke {
+            contract: &adapter_id,
+            fn_name: "withdraw",
+            args: (&vault, units, 0i128).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let assets = adapter.withdraw(&vault, &units, &0);
+    assert_eq!(assets, amount);
+    assert_eq!(token.balance(&vault), amount);
+}

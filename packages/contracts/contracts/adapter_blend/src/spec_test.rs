@@ -10,7 +10,9 @@ extern crate std;
 
 use std::{string::String, vec::Vec};
 
-use soroban_sdk::xdr::{Limits, ReadXdr, ScSpecEntry, ScSpecTypeDef, ScSpecUdtStructV0};
+use soroban_sdk::xdr::{
+    Limits, ReadXdr, ScSpecEntry, ScSpecFunctionV0, ScSpecTypeDef, ScSpecUdtStructV0,
+};
 
 use crate::{BlendPositions, BlendRequest, BlendReserve, BlendReserveConfig, BlendReserveData};
 use nester_test_utils::mocks::blend_pool as mock;
@@ -26,6 +28,51 @@ fn blend_struct(name: &str) -> ScSpecUdtStructV0 {
             _ => None,
         })
         .unwrap_or_else(|| panic!("v2 pool has no struct {name}"))
+}
+
+fn blend_function(name: &str) -> ScSpecFunctionV0 {
+    soroban_spec::read::from_wasm(BLEND_V2_POOL)
+        .expect("v2 pool spec")
+        .into_iter()
+        .find_map(|e| match e {
+            ScSpecEntry::FunctionV0(f) if f.name.0.to_utf8_string_lossy() == name => Some(f),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("v2 pool has no function {name}"))
+}
+
+fn type_name(t: &ScSpecTypeDef) -> String {
+    match t {
+        ScSpecTypeDef::Udt(u) => u.name.to_utf8_string_lossy(),
+        ScSpecTypeDef::Vec(v) => std::format!("Vec<{}>", type_name(&v.element_type)),
+        other => std::format!("{other:?}"),
+    }
+}
+
+/// `(name, type)` of each input, then the output type.
+fn signature(f: &ScSpecFunctionV0) -> (Vec<(String, String)>, Vec<String>) {
+    (
+        f.inputs
+            .iter()
+            .map(|i| (i.name.to_utf8_string_lossy(), type_name(&i.type_)))
+            .collect(),
+        f.outputs.iter().map(type_name).collect(),
+    )
+}
+
+fn assert_signature(name: &str, inputs: &[(&str, &str)], output: &str) {
+    let expected = (
+        inputs
+            .iter()
+            .map(|(n, t)| (String::from(*n), String::from(*t)))
+            .collect(),
+        std::vec![String::from(output)],
+    );
+    assert_eq!(
+        signature(&blend_function(name)),
+        expected,
+        "{name} does not match Blend v2's spec"
+    );
 }
 
 fn local_struct(xdr: &[u8]) -> ScSpecUdtStructV0 {
@@ -77,4 +124,20 @@ fn mock_pool_structs_match_blend_v2_spec() {
     assert_matches(&mock::ReserveData::spec_xdr(), "ReserveData");
     assert_matches(&mock::Request::spec_xdr(), "Request");
     assert_matches(&mock::Positions::spec_xdr(), "Positions");
+}
+
+/// The adapter supplies through `submit_with_allowance`, withdraws through
+/// `submit`, and prices through `get_reserve`; each must exist in v2 with the
+/// argument list the adapter passes.
+#[test]
+fn adapter_calls_match_blend_v2_function_signatures() {
+    let submit_args = [
+        ("from", "Address"),
+        ("spender", "Address"),
+        ("to", "Address"),
+        ("requests", "Vec<Request>"),
+    ];
+    assert_signature("submit", &submit_args, "Positions");
+    assert_signature("submit_with_allowance", &submit_args, "Positions");
+    assert_signature("get_reserve", &[("asset", "Address")], "Reserve");
 }

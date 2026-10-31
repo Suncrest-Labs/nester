@@ -10,7 +10,9 @@
 //!
 //! Fidelity is deliberately limited to what the adapter depends on: request
 //! dispatch, bToken accounting against an exchange index, the token pull on
-//! supply, the payout on withdraw, and Blend v2's `get_reserve` (whose
+//! supply (`transfer` from the spender under `submit`, `transfer_from`
+//! against an allowance under `submit_with_allowance`, as in Blend v2), the
+//! payout on withdraw, and Blend v2's `get_reserve` (whose
 //! `data.b_rate` is the same index at Blend's 1e12 scale). As in Blend, both
 //! supply and withdraw request amounts are in the underlying asset: supply
 //! mints bTokens rounded down, withdraw burns bTokens rounded up and caps at
@@ -155,7 +157,10 @@ impl MockBlendPool {
         Self::positions_for(&env, &address)
     }
 
-    /// Blend's single value-moving entry point.
+    /// Blend v2 `submit`. As in the real pool, a supply is pulled with
+    /// `token.transfer(spender -> pool)` invoked by the pool, so it needs the
+    /// spender's own authorization for that transfer; a contract spender that
+    /// only approved the pool cannot supply this way.
     pub fn submit(
         env: Env,
         from: Address,
@@ -163,9 +168,38 @@ impl MockBlendPool {
         to: Address,
         requests: Vec<Request>,
     ) -> Positions {
+        Self::execute(&env, from, spender, to, requests, false)
+    }
+
+    /// Blend v2 `submit_with_allowance`: identical, except a supply is pulled
+    /// with `token.transfer_from(pool, spender -> pool)` against an allowance
+    /// the spender granted the pool.
+    pub fn submit_with_allowance(
+        env: Env,
+        from: Address,
+        spender: Address,
+        to: Address,
+        requests: Vec<Request>,
+    ) -> Positions {
+        Self::execute(&env, from, spender, to, requests, true)
+    }
+
+    fn execute(
+        env: &Env,
+        from: Address,
+        spender: Address,
+        to: Address,
+        requests: Vec<Request>,
+        with_allowance: bool,
+    ) -> Positions {
+        spender.require_auth();
+        if from != spender {
+            from.require_auth();
+        }
         let token_addr: Address = env.storage().instance().get(&PoolKey::Token).unwrap();
         let index: i128 = env.storage().instance().get(&PoolKey::IndexBps).unwrap();
         let me = env.current_contract_address();
+        let token = token::Client::new(env, &token_addr);
 
         for request in requests.iter() {
             let held: i128 = env
@@ -175,14 +209,11 @@ impl MockBlendPool {
                 .unwrap_or(0);
 
             if request.request_type == REQUEST_TYPE_SUPPLY {
-                // The real pool pulls the tokens itself, which is why the
-                // adapter has to approve it first.
-                token::Client::new(&env, &token_addr).transfer_from(
-                    &me,
-                    &spender,
-                    &me,
-                    &request.amount,
-                );
+                if with_allowance {
+                    token.transfer_from(&me, &spender, &me, &request.amount);
+                } else {
+                    token.transfer(&spender, &me, &request.amount);
+                }
                 let units = request.amount * INDEX_ONE / index;
                 env.storage()
                     .instance()
@@ -199,11 +230,11 @@ impl MockBlendPool {
                 env.storage()
                     .instance()
                     .set(&PoolKey::Supply(from.clone()), &(held - units));
-                token::Client::new(&env, &token_addr).transfer(&me, &to, &assets);
+                token.transfer(&me, &to, &assets);
             }
         }
 
-        Self::positions_for(&env, &from)
+        Self::positions_for(env, &from)
     }
 
     fn positions_for(env: &Env, address: &Address) -> Positions {

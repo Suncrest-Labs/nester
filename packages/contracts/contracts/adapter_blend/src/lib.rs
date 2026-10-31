@@ -2,8 +2,9 @@
 
 //! Blend Capital lending-pool adapter.
 //!
-//! Blend does not expose `deposit`/`withdraw`. A pool takes a single
-//! `submit(from, spender, to, requests)` call carrying a batch of `Request`
+//! Blend does not expose `deposit`/`withdraw`. A pool takes a
+//! `submit(from, spender, to, requests)` call (or v2's
+//! `submit_with_allowance`, same arguments) carrying a batch of `Request`
 //! values, each tagged with a `request_type` — 0 supplies, 1 withdraws — and
 //! returns the caller's whole `Positions` afterwards. The generic adapter in
 //! `adapter_lending` invokes `deposit(address, amount)`, which no Blend pool
@@ -184,13 +185,14 @@ fn units_to_assets(units: i128, b_rate: i128) -> i128 {
     units * b_rate / B_RATE_SCALE
 }
 
-/// Calls `submit` with a single request and returns the resulting positions.
-fn submit_one(env: &Env, request: BlendRequest) -> BlendPositions {
+/// Calls the pool's `function` (`submit` or `submit_with_allowance`) with a
+/// single request and returns the resulting positions.
+fn submit_one(env: &Env, function: &str, request: BlendRequest) -> BlendPositions {
     let me = env.current_contract_address();
     let requests = soroban_sdk::vec![env, request];
     env.invoke_contract(
         &pool(env),
-        &Symbol::new(env, "submit"),
+        &Symbol::new(env, function),
         soroban_sdk::vec![
             env,
             me.into_val(env), // from: whose position changes
@@ -261,8 +263,11 @@ impl YieldAdapter for BlendAdapterContract {
         // funds at the adapter.
         token::Client::new(&env, &underlying).transfer(&from, &me, &amount);
 
-        // Blend pulls the tokens itself during `submit`, so the pool must be
-        // allowed to move exactly this amount from the adapter.
+        // Blend v2's `submit` pulls a supply with `transfer(adapter -> pool)`
+        // invoked by the pool, which needs an adapter authorization nothing
+        // here can give. `submit_with_allowance` pulls it with
+        // `transfer_from(pool, adapter -> pool)` instead, which this
+        // allowance covers without any further auth from the adapter.
         token::Client::new(&env, &underlying).approve(
             &me,
             &pool(&env),
@@ -278,6 +283,7 @@ impl YieldAdapter for BlendAdapterContract {
 
         let positions = submit_one(
             &env,
+            "submit_with_allowance",
             BlendRequest {
                 address: underlying,
                 amount,
@@ -340,8 +346,11 @@ impl YieldAdapter for BlendAdapterContract {
             amount += 1;
         }
 
+        // A withdraw only moves tokens out of the pool, so plain `submit`
+        // needs no auth beyond the adapter being the direct caller.
         let positions = submit_one(
             &env,
+            "submit",
             BlendRequest {
                 address: underlying.clone(),
                 amount,
