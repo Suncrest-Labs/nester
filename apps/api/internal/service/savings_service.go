@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/shopspring/decimal"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/savings"
 	stellarpkg "github.com/suncrestlabs/nester/apps/api/internal/stellar"
@@ -41,6 +43,21 @@ type SavingsService struct {
 	clock  func() time.Time
 	leader LeaderChecker
 	logger *slog.Logger
+
+	chainMu     sync.Mutex
+	chainCache  *chainView
+	chainFlight singleflight.Group
+}
+
+// savingsSummaryTTL bounds how stale the public summary's chain state can be.
+// The summary fans out to a dozen-plus RPC simulations, so it is cached and
+// concurrent misses share one read.
+const savingsSummaryTTL = 20 * time.Second
+
+type chainView struct {
+	state        savings.ChainState
+	reserveValue decimal.Decimal
+	expires      time.Time
 }
 
 // LeaderChecker gates the snapshot job so only one API instance writes.
@@ -125,17 +142,47 @@ func (s *SavingsService) rate(snaps []savings.Snapshot, window time.Duration, no
 	return &out
 }
 
+// chainView returns the cached chain state, reading it at most once per TTL
+// across concurrent callers. Errors are never cached.
+func (s *SavingsService) chainView(ctx context.Context) (*chainView, error) {
+	s.chainMu.Lock()
+	if c := s.chainCache; c != nil && s.clock().Before(c.expires) {
+		s.chainMu.Unlock()
+		return c, nil
+	}
+	s.chainMu.Unlock()
+
+	v, err, _ := s.chainFlight.Do("chain", func() (any, error) {
+		// A single caller's cancellation must not fail the callers sharing this read.
+		rctx := context.WithoutCancel(ctx)
+		st, err := s.chain.State(rctx)
+		if err != nil {
+			return nil, fmt.Errorf("read savings state: %w", err)
+		}
+		reserveValue, err := s.chain.ConvertToAssets(rctx, st.ReserveShares)
+		if err != nil {
+			return nil, fmt.Errorf("value reserve shares: %w", err)
+		}
+		c := &chainView{state: st, reserveValue: reserveValue, expires: s.clock().Add(savingsSummaryTTL)}
+		s.chainMu.Lock()
+		s.chainCache = c
+		s.chainMu.Unlock()
+		return c, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*chainView), nil
+}
+
 // Summary reads live contract state and derives the trailing rates from
 // stored snapshots.
 func (s *SavingsService) Summary(ctx context.Context) (SavingsSummary, error) {
-	st, err := s.chain.State(ctx)
+	view, err := s.chainView(ctx)
 	if err != nil {
-		return SavingsSummary{}, fmt.Errorf("read savings state: %w", err)
+		return SavingsSummary{}, err
 	}
-	reserveValue, err := s.chain.ConvertToAssets(ctx, st.ReserveShares)
-	if err != nil {
-		return SavingsSummary{}, fmt.Errorf("value reserve shares: %w", err)
-	}
+	st, reserveValue := view.state, view.reserveValue
 
 	now := s.clock()
 	snaps, err := s.repo.Since(ctx, now.Add(-savingsPeriods["30d"]))
