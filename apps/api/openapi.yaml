@@ -1,10 +1,108 @@
 openapi: 3.1.0
 info:
   description: 'Generated from Go source (issue #1058). Currently covers the vault
-    lifecycle routes only — see internal/openapi/spec.go for scope.'
+    lifecycle and savings-rate routes only — see internal/openapi/spec.go for scope.'
   title: Nester API
   version: 1.0.0
 paths:
+  /api/v1/savings:
+    get:
+      description: Public. Live savings core state plus trailing realized rates. Amounts
+        are decimal USDC strings (the contract's 7-decimal integers divided by 10^7),
+        matching the vault endpoints; sharePrice is USDC per share. Rates are annualized
+        realized percentages, null until at least two snapshots 24h apart exist in
+        the window. Answers 503 when the savings vault is not configured.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiSavingsSummaryResponse'
+          description: OK
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Service Unavailable
+      summary: Savings rate overview
+      tags:
+      - Savings
+  /api/v1/savings/history:
+    get:
+      description: Public. Hourly share-price snapshots over the period, ascending.
+        Amounts are decimal USDC strings (the contract's 7-decimal integers divided
+        by 10^7), matching the vault endpoints; sharePrice is USDC per share. Rates
+        are annualized realized percentages, null until at least two snapshots 24h
+        apart exist in the window.
+      parameters:
+      - in: query
+        name: period
+        required: true
+        schema:
+          enum:
+          - 7d
+          - 30d
+          - 90d
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiSavingsHistoryResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Bad Request
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Service Unavailable
+      summary: Savings share-price history
+      tags:
+      - Savings
+  /api/v1/savings/position:
+    get:
+      description: 'Share balance from the core contract and its current asset value.
+        deposited is always null: per-wallet deposit totals are not tracked for the
+        savings core. Amounts are decimal USDC strings (the contract''s 7-decimal
+        integers divided by 10^7), matching the vault endpoints; sharePrice is USDC
+        per share. Rates are annualized realized percentages, null until at least
+        two snapshots 24h apart exist in the window.'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiSavingsPositionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Unauthorized
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiErrorResponse'
+          description: Service Unavailable
+      summary: Savings position of the authenticated wallet
+      tags:
+      - Savings
   /api/v1/vaults:
     post:
       description: Registers a new vault for the authenticated user against a Soroban
@@ -243,6 +341,37 @@ components:
           - false
           type: boolean
       type: object
+    OpenapiSavingsHistoryResponse:
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/ServiceSavingsHistoryPoint'
+          type:
+          - array
+          - "null"
+        success:
+          examples:
+          - true
+          type: boolean
+      type: object
+    OpenapiSavingsPositionResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/ServiceSavingsPosition'
+        success:
+          examples:
+          - true
+          type: boolean
+      type: object
+    OpenapiSavingsSummaryResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/ServiceSavingsSummary'
+        success:
+          examples:
+          - true
+          type: boolean
+      type: object
     OpenapiVaultResponse:
       properties:
         data:
@@ -278,6 +407,96 @@ components:
           type: string
         retryable:
           type: boolean
+      type: object
+    ServiceSavingsAdapter:
+      properties:
+        absCap:
+          type: string
+        address:
+          type: string
+        name:
+          type: string
+        relCapBps:
+          minimum: 0
+          type: integer
+        share:
+          type: string
+        value:
+          type: string
+      type: object
+    ServiceSavingsHistoryPoint:
+      properties:
+        sharePrice:
+          type: string
+        takenAt:
+          format: date-time
+          type: string
+      type: object
+    ServiceSavingsPending:
+      properties:
+        eta:
+          format: int64
+          type: integer
+        id:
+          minimum: 0
+          type: integer
+        kind:
+          type: string
+      type: object
+    ServiceSavingsPosition:
+      properties:
+        deposited:
+          type:
+          - "null"
+          - string
+        shares:
+          type: string
+        value:
+          type: string
+      type: object
+    ServiceSavingsReserve:
+      properties:
+        shares:
+          type: string
+        value:
+          type: string
+      type: object
+    ServiceSavingsSummary:
+      properties:
+        adapters:
+          items:
+            $ref: '#/components/schemas/ServiceSavingsAdapter'
+          type:
+          - array
+          - "null"
+        feeBps:
+          minimum: 0
+          type: integer
+        idle:
+          type: string
+        pending:
+          items:
+            $ref: '#/components/schemas/ServiceSavingsPending'
+          type:
+          - array
+          - "null"
+        rate7d:
+          type:
+          - "null"
+          - string
+        rate30d:
+          type:
+          - "null"
+          - string
+        reserve:
+          $ref: '#/components/schemas/ServiceSavingsReserve'
+        sharePrice:
+          type: string
+        timelockSeconds:
+          format: int64
+          type: integer
+        totalAssets:
+          type: string
       type: object
     UuidUUID:
       examples:

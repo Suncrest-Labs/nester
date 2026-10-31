@@ -43,6 +43,8 @@ var varNotes = map[string]varNote{
 	"STELLAR_USDC_ISSUER": {
 		mainnet: "Default is the Circle mainnet USDC issuer. It must be overridden on testnet and must not be changed on mainnet without review.",
 	},
+	"SAVINGS_CORE_CONTRACT_ID": {mainnet: "Savings-rate core contract. Leave empty to disable the savings endpoints (503) and the hourly snapshot job."},
+	"SAVINGS_ADAPTER_NAMES":    {mainnet: "Comma-separated `adapter_contract=Display Name` pairs; unlisted adapters are shown unnamed."},
 	"YIELD_REGISTRY_CONTRACT":             {requiredWhen: "mainnet passphrase", mainnet: "Startup fails if blank on mainnet."},
 	"STELLAR_ALLOCATION_STRATEGY_ADDRESS": {requiredWhen: "mainnet passphrase", mainnet: "Startup fails if blank on mainnet."},
 	"STELLAR_MAINNET_VAULT_TVL_CAP": {

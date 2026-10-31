@@ -79,6 +79,8 @@ var routeCosts = []RouteCost{
 	{http.MethodGet, "/api/v1/vaults/{id}/share-price", CostChainRead},
 	{http.MethodGet, "/api/v1/vaults/{id}/my-position", CostChainRead},
 	{http.MethodGet, "/api/v1/vaults/{id}/harvest/preview", CostChainRead},
+	{http.MethodGet, "/api/v1/savings", CostChainRead},
+	{http.MethodGet, "/api/v1/savings/position", CostChainRead},
 
 	// ---- Multi-protocol APY comparison and TVL aggregation ----
 	{http.MethodGet, "/api/v1/yield-opportunities/compare", CostAggregation},

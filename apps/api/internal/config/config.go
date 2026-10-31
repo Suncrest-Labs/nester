@@ -333,6 +333,8 @@ type StellarConfig struct {
 	signerSocketPath          string
 	stellarUSDCIssuer         string
 	yieldRegistryContract     string
+	savingsCoreContract       string
+	savingsAdapterNames       string
 	allocationStrategyAddress string
 	withdrawalSlippageBps     int
 	harvestDefaultCompound    bool
@@ -478,6 +480,8 @@ func loadFrom(loader *envLoader) (*Config, error) {
 			stellarUSDCIssuer:                 loader.stringDefault("STELLAR_USDC_ISSUER", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
 			yieldRegistryContract:             loader.stringDefault("YIELD_REGISTRY_CONTRACT", ""),
 			allocationStrategyAddress:         loader.stringDefault("STELLAR_ALLOCATION_STRATEGY_ADDRESS", ""),
+			savingsCoreContract:               loader.stringDefault("SAVINGS_CORE_CONTRACT_ID", ""),
+			savingsAdapterNames:               loader.stringDefault("SAVINGS_ADAPTER_NAMES", ""),
 			withdrawalSlippageBps:             loader.intDefault("WITHDRAWAL_SLIPPAGE_BPS", 50),
 			harvestDefaultCompound:            loader.boolDefault("HARVEST_DEFAULT_COMPOUND", true),
 			mainnetVaultTVLCap:                loader.stringDefault("STELLAR_MAINNET_VAULT_TVL_CAP", "0"),
@@ -1714,6 +1718,26 @@ func (s StellarConfig) SignerSocketPath() string {
 // process. When true this process holds no operator key.
 func (s StellarConfig) SigningIsolated() bool {
 	return strings.TrimSpace(s.signerSocketPath) != ""
+}
+
+// SavingsCoreContract is the savings-rate core contract ID. Empty disables the
+// savings endpoints and the hourly snapshot job.
+func (s StellarConfig) SavingsCoreContract() string {
+	return strings.TrimSpace(s.savingsCoreContract)
+}
+
+// SavingsAdapterNames parses SAVINGS_ADAPTER_NAMES, a comma-separated list of
+// adapter-contract=display-name pairs, into a map. Malformed pairs are skipped.
+func (s StellarConfig) SavingsAdapterNames() map[string]string {
+	names := map[string]string{}
+	for _, pair := range strings.Split(s.savingsAdapterNames, ",") {
+		addr, name, ok := strings.Cut(pair, "=")
+		addr, name = strings.TrimSpace(addr), strings.TrimSpace(name)
+		if ok && addr != "" && name != "" {
+			names[addr] = name
+		}
+	}
+	return names
 }
 
 func (s StellarConfig) YieldRegistryContract() string {

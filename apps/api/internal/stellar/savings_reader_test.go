@@ -124,3 +124,29 @@ func TestSavingsReader_ParsesState(t *testing.T) {
 		t.Errorf("pending = %+v", st.Pending)
 	}
 }
+
+func TestSavingsReader_BalanceAndConvertToAssets(t *testing.T) {
+	chain := chaintest.New()
+	t.Cleanup(chain.Close)
+	_, coreStr := scContract(t, 1)
+	chain.SetSimulateReturn("balance", b64(t, scI128(25_000_000)))
+	chain.SetSimulateReturn("convert_to_assets", b64(t, scI128(25_025_000)))
+
+	sr := NewSavingsReader(NewContractReader(chain.SorobanURL, "Test SDF Network ; September 2015", ""), coreStr, nil)
+	wallet := "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
+
+	bal, err := sr.Balance(context.Background(), wallet)
+	if err != nil || !bal.Equal(decimal.NewFromInt(25_000_000)) {
+		t.Fatalf("Balance = %s, %v", bal, err)
+	}
+	assets, err := sr.ConvertToAssets(context.Background(), bal)
+	if err != nil || !assets.Equal(decimal.NewFromInt(25_025_000)) {
+		t.Fatalf("ConvertToAssets = %s, %v", assets, err)
+	}
+	if _, err := sr.Balance(context.Background(), "not-an-address"); err == nil {
+		t.Fatal("want error for invalid wallet")
+	}
+	if _, err := sr.ConvertToAssets(context.Background(), decimal.RequireFromString("1.5")); err == nil {
+		t.Fatal("want error for non-integer shares")
+	}
+}

@@ -37,6 +37,15 @@ func ProductionAuthRules() []RouteRule {
 		{Method: http.MethodGet, PathPrefix: "/api/v1/yields", Public: true},
 		{Method: http.MethodGet, PathPrefix: "/api/v1/yield-opportunities", Public: true},
 		{PathPrefix: "/api/v1/savings-goals/shared/", Public: true},
+		// The savings-rate vault overview and history are public (a visitor
+		// sees the realized rate before connecting a wallet); the position is
+		// per-wallet. "/api/v1/savings" is a string prefix of the private
+		// savings-goals, savings-schedules and savings-goal-templates routes,
+		// so those and the position are pinned private ahead of the public
+		// GET rule.
+		{PathPrefix: "/api/v1/savings-", Public: false},
+		{PathPrefix: "/api/v1/savings/position", Public: false},
+		{Method: http.MethodGet, PathPrefix: "/api/v1/savings", Public: true},
 		// Whether deposits or withdrawals are halted, and the operator's
 		// reason. Public because a signed-out visitor sees the same outage
 		// and the UI is required to explain it rather than fail generically

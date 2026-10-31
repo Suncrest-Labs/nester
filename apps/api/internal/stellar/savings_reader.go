@@ -52,6 +52,51 @@ func (s *ChainSavingsReader) i128(ctx context.Context, fn string) (decimal.Decim
 	return scValI128(v, fn)
 }
 
+// Balance returns the raw share balance of wallet (a G or C address).
+func (s *ChainSavingsReader) Balance(ctx context.Context, wallet string) (decimal.Decimal, error) {
+	addr, err := accountAddressToXDR(wallet)
+	if err != nil {
+		if addr, err = contractAddressToXDR(wallet); err != nil {
+			return decimal.Zero, fmt.Errorf("savings balance: invalid wallet address")
+		}
+	}
+	v, err := s.call(ctx, "balance", xdr.ScVal{Type: xdr.ScValTypeScvAddress, Address: &addr})
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return scValI128(v, "balance")
+}
+
+// ConvertToAssets returns the raw asset value of a raw share amount, using the
+// core's own capped conversion.
+func (s *ChainSavingsReader) ConvertToAssets(ctx context.Context, shares decimal.Decimal) (decimal.Decimal, error) {
+	arg, err := nonNegativeI128ScVal(shares)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("savings convert_to_assets: %w", err)
+	}
+	v, err := s.call(ctx, "convert_to_assets", arg)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return scValI128(v, "convert_to_assets")
+}
+
+func nonNegativeI128ScVal(d decimal.Decimal) (xdr.ScVal, error) {
+	if !d.IsInteger() || d.IsNegative() {
+		return xdr.ScVal{}, fmt.Errorf("amount %s is not a non-negative integer", d)
+	}
+	n := d.BigInt()
+	if n.BitLen() > 127 {
+		return xdr.ScVal{}, fmt.Errorf("amount %s overflows i128", d)
+	}
+	lo := new(big.Int).And(n, new(big.Int).SetUint64(^uint64(0)))
+	hi := new(big.Int).Rsh(n, 64)
+	return xdr.ScVal{
+		Type: xdr.ScValTypeScvI128,
+		I128: &xdr.Int128Parts{Hi: xdr.Int64(hi.Int64()), Lo: xdr.Uint64(lo.Uint64())},
+	}, nil
+}
+
 // State simulates every view and assembles a ChainState. Any failing view
 // fails the whole read: a partial state would misreport the vault.
 func (s *ChainSavingsReader) State(ctx context.Context) (savings.ChainState, error) {
