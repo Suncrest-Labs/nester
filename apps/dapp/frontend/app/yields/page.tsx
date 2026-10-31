@@ -15,9 +15,6 @@ import { AppShell } from "@/components/app-shell";
 import { LoadingRegion } from "@/components/ui/skeleton/skeleton";
 import { useWallet } from "@/components/wallet-provider";
 import { useYields } from "@/hooks/useYields";
-import { AllocationComposer } from "@/components/yields/AllocationComposer";
-import { DepositModal } from "@/components/vault/depositModal";
-import { useVaultFilters } from "@/hooks/use-vault-filters";
 import {
   addYieldBookmark,
   fetchYieldBookmarks,
@@ -78,12 +75,10 @@ function YieldCard({
   pool,
   bookmarked,
   onBookmark,
-  onDeposit,
 }: {
   pool: YieldPool;
   bookmarked: boolean;
   onBookmark: (pool: YieldPool) => void;
-  onDeposit: (pool: YieldPool) => void;
 }) {
   const risk = riskBadge(pool.riskScore);
 
@@ -140,13 +135,7 @@ function YieldCard({
         Asset: <span className="font-mono text-black/70 dark:text-white/70">{pool.symbol}</span>
       </p>
 
-      <button
-        type="button"
-        onClick={() => onDeposit(pool)}
-        className="mt-auto w-full rounded-xl bg-black dark:bg-blue-600 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-80"
-      >
-        Deposit
-      </button>
+      <p className="mt-auto text-[11px] text-black/40 dark:text-white/40">Market data</p>
     </motion.div>
   );
 }
@@ -156,11 +145,6 @@ export default function YieldsPage() {
   const { data, isLoading, isError, refetch, isFetching } = useYields();
   const [riskFilter, setRiskFilter] = useState<RiskTier>("all");
   const [bookmarks, setBookmarks] = useState<Set<string>>(new Set());
-  const [depositPool, setDepositPool] = useState<YieldPool | null>(null);
-  const [mode, setMode] = useState<"browse" | "allocate">("browse");
-  // The vault markets built from the same yield data /vaults renders; the
-  // deposit modal needs a full Vault, keyed by pool id.
-  const { filteredAndSorted: vaultMarkets } = useVaultFilters();
 
   useEffect(() => {
     if (!isConnected || !getStoredToken()) {
@@ -211,7 +195,7 @@ export default function YieldsPage() {
           <div>
             <h1 className="text-2xl font-semibold text-black dark:text-white tracking-tight">Yield Opportunities</h1>
             <p className="mt-1 text-sm text-black/55 dark:text-white/55">
-              Browse DeFi protocols on Stellar, or split a deposit across several of them.
+              Live market rates for DeFi protocols on Stellar.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -234,26 +218,28 @@ export default function YieldsPage() {
           </div>
         </div>
 
-        <div className="mb-5 inline-flex rounded-xl border border-black/10 dark:border-white/10 p-1">
-          {(["browse", "allocate"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
-              aria-pressed={mode === m}
-              className={cn(
-                "rounded-lg px-4 py-1.5 text-xs font-semibold transition-colors",
-                mode === m
-                  ? "bg-black dark:bg-blue-600 text-white"
-                  : "text-black/55 dark:text-white/55 hover:text-black dark:hover:text-white"
-              )}
-            >
-              {m === "browse" ? "Browse pools" : "Build allocation"}
-            </button>
-          ))}
-        </div>
+        <section
+          data-testid="savings-rate-cta"
+          className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5"
+        >
+          <div className="max-w-xl">
+            <h2 className="text-sm font-semibold text-black dark:text-white">
+              Earn with the Nester Savings Rate
+            </h2>
+            <p className="mt-1 text-xs text-black/55 dark:text-white/55">
+              The protocols below are market data, not where your deposit goes. The Nester
+              Savings Rate allocates to Blend and DeFindex, and you can see exactly where
+              your money sits on the dashboard.
+            </p>
+          </div>
+          <Link
+            href="/dashboard"
+            className="rounded-xl bg-black dark:bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-80"
+          >
+            Open the Savings Rate
+          </Link>
+        </section>
 
-        {mode === "browse" && (
         <div className="mb-6 flex flex-wrap items-center gap-2">
           {RISK_TABS.map((tab) => (
             <button
@@ -271,21 +257,8 @@ export default function YieldsPage() {
             </button>
           ))}
         </div>
-        )}
 
-        {mode === "allocate" ? (
-          <AllocationComposer
-            pools={pools}
-            onDeposit={(byAsset, chosen) => {
-              // A vault settles one currency, so the first asset is funded
-              // here and the composer has already told the user the split
-              // lands as one deposit per asset.
-              const firstAsset = Object.keys(byAsset)[0];
-              const pool = chosen.find((p) => p.symbol === firstAsset) ?? chosen[0];
-              if (pool) setDepositPool(pool);
-            }}
-          />
-        ) : isLoading ? (
+        {isLoading ? (
           <LoadingRegion
             label="Loading yield opportunities"
             className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
@@ -329,22 +302,11 @@ export default function YieldsPage() {
                 pool={pool}
                 bookmarked={bookmarks.has(protocolSlugFromProject(pool.project))}
                 onBookmark={handleBookmark}
-                onDeposit={setDepositPool}
               />
             ))}
           </div>
         )}
       </div>
-
-      <DepositModal
-        open={!!depositPool}
-        onClose={() => setDepositPool(null)}
-        vault={
-          depositPool
-            ? (vaultMarkets.find((v) => v.id === depositPool.pool) ?? null)
-            : null
-        }
-      />
     </AppShell>
   );
 }

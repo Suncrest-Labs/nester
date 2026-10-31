@@ -36,9 +36,10 @@ function expectNoRetiredLinks(root: HTMLElement) {
 }
 
 describe("app navigation", () => {
-  it("lists only Savings Rate, Goals and Settings", () => {
+  it("lists Savings Rate, Yields, Goals and Settings", () => {
     expect(APP_NAV.map(({ label, href }) => [label, href])).toEqual([
       ["Savings Rate", "/dashboard"],
+      ["Yields", "/yields"],
       ["Goals", "/savings"],
       ["Settings", "/settings"],
     ]);
@@ -59,6 +60,7 @@ describe("app navigation", () => {
   it("bottom nav doesn't render Portfolio or Stocks", () => {
     const { container } = render(<BottomNav />);
     expect(within(container).getByRole("link", { name: "Goals" })).toBeTruthy();
+    expect(within(container).getByRole("link", { name: "Yields" })).toBeTruthy();
     expectNoRetiredLinks(container);
   });
 

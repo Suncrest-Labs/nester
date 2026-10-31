@@ -87,7 +87,7 @@ export default function YieldHarvestHistoryPage() {
             <EmptyState
               icon={Calendar}
               title="No harvests yet"
-              description="Once you start harvesting yield from your vaults, they'll appear here."
+              description="Harvested yield will appear here once it has been recorded."
             />
           </div>
         ) : (

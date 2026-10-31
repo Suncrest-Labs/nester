@@ -79,6 +79,51 @@ function GoalsCard() {
     );
 }
 
+function MarketYieldsCard() {
+    return (
+        <div className={PANEL}>
+            <h3 className="text-sm font-medium text-muted-foreground">Market yields</h3>
+            <p className="mt-2 text-sm text-foreground/80">
+                See what DeFi protocols on Stellar are paying right now.
+            </p>
+            <Link
+                href="/yields"
+                className="mt-4 inline-flex rounded-full border px-4 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-foreground/5"
+            >
+                Browse yields
+            </Link>
+        </div>
+    );
+}
+
+function NotLive() {
+    return (
+        <div className={`mt-4 ${PANEL}`}>
+            <p className="text-sm text-foreground/80">
+                The Savings Rate isn&apos;t live on this network yet.
+            </p>
+            <p className="mt-2 max-w-[60ch] text-sm text-muted-foreground">
+                This is a testnet build waiting for the savings contract to be deployed. In the
+                meantime you can explore market yields or set a savings goal.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-3">
+                <Link
+                    href="/yields"
+                    className="inline-flex rounded-full bg-foreground px-4 py-2 text-[13px] font-medium text-background transition-opacity hover:opacity-80"
+                >
+                    Browse yields
+                </Link>
+                <Link
+                    href="/savings"
+                    className="inline-flex rounded-full border px-4 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-foreground/5"
+                >
+                    Set a goal
+                </Link>
+            </div>
+        </div>
+    );
+}
+
 function Rules({ summary }: { summary: SavingsSummary }) {
     const delay = formatDelay(summary.timelockSeconds);
     return (
@@ -141,7 +186,22 @@ export default function Dashboard() {
         signIn().catch(() => {});
     }, [isConnected, address, isAuthenticated, isSigningIn, signIn]);
 
-    if (!isConnected) return null;
+    if (!isConnected) {
+        return (
+            <main data-testid="dashboard-connect-prompt" className="mx-auto max-w-md px-5 py-24 text-center">
+                <h1 className="text-lg font-semibold text-foreground">Connect your wallet</h1>
+                <p className="mt-2 text-sm text-muted-foreground">
+                    Taking you to the connect screen to open the Nester Savings Rate.
+                </p>
+                <Link
+                    href="/"
+                    className="mt-5 inline-flex rounded-full bg-foreground px-4 py-2 text-[13px] font-medium text-background transition-opacity hover:opacity-80"
+                >
+                    Connect wallet
+                </Link>
+            </main>
+        );
+    }
 
     return (
         <AppShell>
@@ -151,9 +211,7 @@ export default function Dashboard() {
                 isLoading ? (
                     <LoadingState />
                 ) : error instanceof ApiError && error.status === 503 ? (
-                    <p className={`mt-4 ${PANEL} text-sm text-foreground/80`}>
-                        The Savings Rate isn&apos;t live on this network yet.
-                    </p>
+                    <NotLive />
                 ) : (
                     <p role="alert" className={`mt-4 ${PANEL} text-sm text-foreground/80`}>
                         Savings data couldn&apos;t be loaded. Check your connection and reload the page.
@@ -182,6 +240,7 @@ export default function Dashboard() {
                                 />
                             ) : null}
                             <GoalsCard />
+                            <MarketYieldsCard />
                         </div>
                     </div>
 

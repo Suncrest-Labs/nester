@@ -189,6 +189,16 @@ describe("Dashboard", () => {
     expect(screen.getByText("The Savings Rate isn't live on this network yet.")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText(/Check your connection/)).toBeNull();
+    expect(screen.getByText(/testnet build waiting for the savings contract/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Browse yields" }).getAttribute("href")).toBe("/yields");
+    expect(screen.getByRole("link", { name: "Set a goal" }).getAttribute("href")).toBe("/savings");
+  });
+
+  it("links to market yields from the populated dashboard", () => {
+    savings = { summary: populated, isLoading: false, error: null };
+    renderDashboard();
+
+    expect(screen.getByRole("link", { name: "Browse yields" }).getAttribute("href")).toBe("/yields");
   });
 
   it("keeps the generic error for non-503 API failures", () => {
@@ -203,6 +213,7 @@ describe("Dashboard", () => {
     const { container } = renderDashboard();
 
     expect(push).toHaveBeenCalledWith("/");
-    expect(container.textContent).toBe("");
+    expect(screen.getByTestId("dashboard-connect-prompt")).toBeTruthy();
+    expect(container.textContent).toMatch(/Connect your wallet/);
   });
 });
