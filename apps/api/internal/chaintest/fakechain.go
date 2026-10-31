@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/stellar/go/xdr"
 )
 
 // Fault is an injected chain-boundary failure.
@@ -96,6 +98,7 @@ type Chain struct {
 	horizonFault Fault
 	ledger       map[string]LedgerEntry
 	calls        map[string]int
+	simReturns   map[string]string
 
 	releaseOnce sync.Once
 	release     chan struct{}
@@ -117,6 +120,7 @@ func New() *Chain {
 	c := &Chain{
 		ledger:           make(map[string]LedgerEntry),
 		calls:            make(map[string]int),
+		simReturns:       make(map[string]string),
 		release:          make(chan struct{}),
 		SubmitHash:       "fakechaintxhash0000000000000000000000000000000000000000000000000",
 		OperatorSequence: "100",
@@ -284,11 +288,15 @@ func (c *Chain) serveSoroban(w http.ResponseWriter, r *http.Request) {
 	case "getLatestLedger":
 		c.writeResult(w, map[string]any{"sequence": 1000})
 	case "simulateTransaction":
-		c.writeResult(w, map[string]any{
+		result := map[string]any{
 			"latestLedger":    1000,
 			"minResourceFee":  "1000",
 			"transactionData": "",
-		})
+		}
+		if ret, ok := c.simulatedReturn(req.Params); ok {
+			result["returnValue"] = ret
+		}
+		c.writeResult(w, result)
 	case "sendTransaction":
 		c.Land(c.SubmitHash, true)
 		c.writeResult(w, map[string]any{"status": "PENDING", "hash": c.SubmitHash})
@@ -309,6 +317,39 @@ func (c *Chain) serveSoroban(w http.ResponseWriter, r *http.Request) {
 	default:
 		c.writeResult(w, map[string]any{})
 	}
+}
+
+// SetSimulateReturn makes simulateTransaction answer calls to the named
+// contract function with the given base64 XDR ScVal as the return value.
+func (c *Chain) SetSimulateReturn(function, scValBase64 string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.simReturns[function] = scValBase64
+}
+
+func (c *Chain) simulatedReturn(params json.RawMessage) (string, bool) {
+	var p struct {
+		Transaction string `json:"transaction"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return "", false
+	}
+	var env xdr.TransactionEnvelope
+	if xdr.SafeUnmarshalBase64(p.Transaction, &env) != nil {
+		return "", false
+	}
+	ops := env.Operations()
+	if len(ops) == 0 || ops[0].Body.InvokeHostFunctionOp == nil {
+		return "", false
+	}
+	inv := ops[0].Body.InvokeHostFunctionOp.HostFunction.InvokeContract
+	if inv == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ret, ok := c.simReturns[string(inv.FunctionName)]
+	return ret, ok
 }
 
 func (c *Chain) writeResult(w http.ResponseWriter, result any) {
