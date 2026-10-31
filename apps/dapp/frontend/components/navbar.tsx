@@ -11,13 +11,7 @@ import { LogOut, Copy, Check, ChevronDown, Menu, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNetwork } from "@/hooks/useNetwork";
 import { motion, AnimatePresence } from "framer-motion";
-
-const NAV_LINKS = [
-    { label: "Dashboard", href: "/dashboard" },
-    { label: "Vaults", href: "/vaults" },
-    { label: "Savings", href: "/savings" },
-    { label: "Portfolio", href: "/portfolio" },
-];
+import { APP_NAV as NAV_LINKS } from "@/lib/navigation";
 
 export function Navbar() {
     const pathname = usePathname();
@@ -169,14 +163,6 @@ export function Navbar() {
                                                         {copied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
                                                         {copied ? "Copied!" : "Copy Address"}
                                                     </button>
-                                                    <Link
-                                                        href="/portfolio"
-                                                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-foreground/70 hover:bg-secondary hover:text-foreground transition-colors"
-                                                        onClick={() => setShowMenu(false)}
-                                                    >
-                                                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><polyline points="7 10 10 13 13 10 17 14"/></svg>
-                                                        Portfolio
-                                                    </Link>
                                                     <button
                                                         onClick={() => { disconnect(); setShowMenu(false); }}
                                                         className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-destructive hover:bg-destructive/10 transition-colors"

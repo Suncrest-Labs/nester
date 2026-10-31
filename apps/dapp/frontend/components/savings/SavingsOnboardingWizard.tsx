@@ -248,14 +248,14 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
       ) : null}
 
       <a
-        href="/vaults"
+        href="/dashboard"
         className="flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-semibold text-black dark:text-white transition-colors hover:bg-black/5 dark:hover:bg-white/5"
       >
         <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-        Explore all yield opportunities
+        See where the Nester Savings Rate earns
       </a>
       <p className="mt-3 text-center text-[11px] text-black/40 dark:text-white/40">
-        You can always link a vault later.{" "}
+        Goal deposits go into the Nester Savings Rate.{" "}
         <button type="button" onClick={onSkip} className="underline hover:text-black dark:hover:text-white">
           Skip this step
         </button>
@@ -277,10 +277,10 @@ function StepDeposit({ currency, onSkip }: { currency: "USDC" | "XLM"; onSkip: (
         Kick-start your goal with an initial deposit in {currency}. You can deposit more at any time.
       </p>
       <a
-        href="/vaults"
+        href="/dashboard"
         className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3.5 text-sm font-semibold text-white transition-opacity hover:opacity-75"
       >
-        Go to Vaults to deposit
+        Deposit on the Savings Rate page
         <ArrowRight className="h-4 w-4" aria-hidden="true" />
       </a>
       <button

@@ -5,41 +5,22 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-    BarChart3,
-    CandlestickChart,
     ChevronDown,
     Copy,
     ExternalLink,
-    Globe,
-    LayoutDashboard,
     LogOut,
     Menu,
-    PiggyBank,
     Settings,
-    TrendingUp,
-    User,
-    Vault,
     X,
 } from "lucide-react";
 import { useWallet } from "@/components/wallet-provider";
 import { useNetwork } from "@/hooks/useNetwork";
 import { truncateAddress, cn } from "@/lib/utils";
+import { APP_NAV as SIDEBAR_NAV } from "@/lib/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { SiteFooter } from "@/components/site-footer";
 import { NotificationBell } from "@/components/notification-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
-
-// ── Nav items ────────────────────────────────────────────────────────────────
-
-const SIDEBAR_NAV = [
-    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { label: "Savings", href: "/savings", icon: PiggyBank },
-    { label: "Yields", href: "/yields", icon: TrendingUp },
-    { label: "Markets", href: "/vaults", icon: Vault },
-    { label: "Stocks", href: "/stocks", icon: CandlestickChart },
-    { label: "Portfolio", href: "/portfolio", icon: BarChart3 },
-    { label: "Settings", href: "/settings", icon: Settings },
-];
 
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -131,7 +112,7 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
         <>
             <header
                 className={cn(
-                    "sticky z-30 flex items-center justify-between gap-6 border-b border-black/[0.06] dark:border-white/10 bg-white/80 dark:bg-[#0A0A0A]/90 backdrop-blur-md px-6 py-4 lg:px-10",
+                    "sticky z-30 flex items-center justify-between gap-3 sm:gap-6 border-b border-black/[0.06] dark:border-white/10 bg-white/80 dark:bg-[#0A0A0A]/90 backdrop-blur-md px-4 py-4 sm:px-6 lg:px-10",
                     bannerOffset ? "top-10" : "top-0"
                 )}
             >
@@ -139,14 +120,14 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                 <div className="flex items-center gap-3 lg:hidden">
                     <Link href="/" className="flex items-center gap-2">
                         <Image src="/logo.png" alt="Nester" width={28} height={28} className="rounded-lg" />
-                        <span className="text-[14px] font-semibold text-black dark:text-white">Nester</span>
+                        <span className="hidden text-[14px] font-semibold sm:inline text-black dark:text-white">Nester</span>
                     </Link>
                 </div>
 
                 {/* Spacer so right-side items push to the end */}
                 <div className="hidden lg:block flex-1" />
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 sm:gap-3">
                     <ThemeToggle />
                     {/* Notification bell */}
                     <NotificationBell />
@@ -156,7 +137,7 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                         <div className="relative" onClick={(e) => e.stopPropagation()}>
                             <button
                                 onClick={() => setWalletMenuOpen((prev) => !prev)}
-                                className="flex items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/15 px-4 py-2 shrink-0 transition-colors hover:border-black/20 dark:hover:border-white/30"
+                                className="flex items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/15 px-3 py-2 shrink-0 sm:px-4 transition-colors hover:border-black/20 dark:hover:border-white/30"
                             >
                                 <div className="h-2 w-2 rounded-full bg-emerald-500" />
                                 <span className="text-[13px] font-medium text-black/60 dark:text-white/70 font-mono">
@@ -187,13 +168,6 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                                                 {copied ? "Copied!" : "Copy Address"}
                                             </button>
                                             <Link
-                                                href="/portfolio"
-                                                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-[13px] text-black/60 dark:text-white/70 transition-colors hover:bg-black/[0.03] hover:text-black dark:hover:bg-white/10 dark:hover:text-white"
-                                            >
-                                                <User className="h-3.5 w-3.5" />
-                                                Portfolio
-                                            </Link>
-                                            <Link
                                                 href="/settings"
                                                 className="flex w-full items-center gap-2.5 px-4 py-2.5 text-[13px] text-black/60 dark:text-white/70 transition-colors hover:bg-black/[0.03] hover:text-black dark:hover:bg-white/10 dark:hover:text-white"
                                             >
@@ -216,6 +190,8 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                     {/* Mobile hamburger */}
                     <button
                         onClick={() => setMobileOpen(!mobileOpen)}
+                        aria-label="Toggle navigation menu"
+                        aria-expanded={mobileOpen}
                         className="lg:hidden flex h-9 w-9 items-center justify-center rounded-xl border border-black/[0.08] dark:border-white/15 text-black/50 dark:text-white/60"
                     >
                         {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
@@ -280,7 +256,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Sidebar bannerOffset={bannerOffset} />
             <div className="flex min-h-screen flex-col lg:ml-[240px]">
                 <TopBar bannerOffset={bannerOffset} />
-                <main className="mx-auto w-full max-w-[1120px] flex-1 px-8 pt-10 pb-8 lg:px-16 lg:pt-14 lg:pb-12">
+                <main className="mx-auto w-full max-w-[1120px] flex-1 px-5 pt-10 sm:px-8 pb-8 lg:px-16 lg:pt-14 lg:pb-12">
                     {children}
                 </main>
                 <SiteFooter />
