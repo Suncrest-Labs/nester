@@ -182,7 +182,7 @@ export class TransactionExpiredError extends Error {
 
 // ── Soroban RPC client ────────────────────────────────────────────────────────
 
-function getServer(rpcUrl: string): SorobanRpc.Server {
+export function getServer(rpcUrl: string): SorobanRpc.Server {
   const isProd = process.env.NODE_ENV === "production";
 
   if (isProd && !rpcUrl.startsWith("https://")) {

@@ -7,14 +7,13 @@ import {
   fetchSavingsSummary,
   type SavingsPeriod,
 } from "@/lib/api/savings";
-import { getStoredToken } from "@/lib/api/client";
+import { getAccessToken } from "@/lib/auth/token-store";
 import { useWallet } from "@/components/wallet-provider";
 
 const STALE_TIME_MS = 60_000;
 
 export function useSavings(period: SavingsPeriod = "30d") {
-  const { isConnected } = useWallet();
-  const isAuthenticated = isConnected && !!getStoredToken();
+  const { address } = useWallet();
 
   const summary = useQuery({
     queryKey: ["savings", "summary"],
@@ -27,16 +26,16 @@ export function useSavings(period: SavingsPeriod = "30d") {
     staleTime: STALE_TIME_MS,
   });
   const position = useQuery({
-    queryKey: ["savings", "position"],
+    queryKey: ["savings", "position", address],
     queryFn: fetchSavingsPosition,
-    enabled: isAuthenticated,
+    enabled: !!address && !!getAccessToken(),
     staleTime: STALE_TIME_MS,
   });
 
   return {
     summary: summary.data,
     history: history.data,
-    position: position.data,
+    position: address ? position.data : undefined,
     isLoading: summary.isLoading || history.isLoading || position.isLoading,
     error: summary.error ?? history.error ?? position.error ?? null,
   };

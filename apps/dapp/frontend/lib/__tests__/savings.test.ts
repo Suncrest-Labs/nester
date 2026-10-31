@@ -40,7 +40,8 @@ vi.mock("@/lib/stellar/transaction", async (importOriginal) => {
 
 import { getCurrentNetwork } from "@/lib/stellar/transaction";
 import { fetchSavingsSummary, fetchSavingsHistory, fetchSavingsPosition } from "@/lib/api/savings";
-import { buildSavingsDeposit, buildSavingsRedeem, executeSavingsDeposit } from "@/lib/stellar/savings";
+import { nativeToScVal } from "@stellar/stellar-sdk";
+import { buildSavingsDeposit, buildSavingsRedeem, executeSavingsDeposit, quoteMinShares, quoteMinAssets } from "@/lib/stellar/savings";
 
 function decodeCall(xdr: string) {
   const tx = TransactionBuilder.fromXDR(xdr, getCurrentNetwork().networkPassphrase);
@@ -131,5 +132,33 @@ describe("savings transactions", () => {
     expect(signTransaction).toHaveBeenCalledTimes(1);
     expect(submitTransaction).toHaveBeenCalledTimes(1);
     expect(receipt.txHash).toBe("h");
+  });
+});
+
+describe("savings quotes", () => {
+  const ret = (v: bigint) => ({ result: { retval: nativeToScVal(v, { type: "i128" }) } });
+
+  it("quoteMinShares floors the simulated quote by the slippage tolerance", async () => {
+    simulateTransaction.mockResolvedValue(ret(BigInt(1_000_001)));
+    await expect(quoteMinShares(wallet, "0.1", 100)).resolves.toBe(BigInt(990_000));
+  });
+
+  it("quoteMinAssets floors the simulated quote by the slippage tolerance", async () => {
+    simulateTransaction.mockResolvedValue(ret(BigInt(2_000_000)));
+    await expect(quoteMinAssets(wallet, BigInt(5), 50)).resolves.toBe(BigInt(1_990_000));
+  });
+
+  it("throws instead of returning a zero minimum when the quote is missing or zero", async () => {
+    simulateTransaction.mockResolvedValue({});
+    await expect(quoteMinShares(wallet, "1", 50)).rejects.toThrow();
+    await expect(quoteMinAssets(wallet, BigInt(5), 50)).rejects.toThrow();
+    simulateTransaction.mockResolvedValue(ret(BigInt(0)));
+    await expect(quoteMinShares(wallet, "1", 50)).rejects.toThrow();
+    await expect(quoteMinAssets(wallet, BigInt(5), 50)).rejects.toThrow();
+  });
+
+  it("rejects negative minimums in the builders", async () => {
+    await expect(buildSavingsDeposit({ wallet, amount: "1", minShares: BigInt(-1) })).rejects.toThrow();
+    await expect(buildSavingsRedeem({ wallet, shares: BigInt(1), minAssets: BigInt(-1) })).rejects.toThrow();
   });
 });

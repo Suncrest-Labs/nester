@@ -16,6 +16,7 @@ import {
   TransactionFailedError,
   assertWalletOnDappNetwork,
   getCurrentNetwork,
+  getServer,
   signTransaction,
   signWithExpiryRebuild,
   submitTransaction,
@@ -45,12 +46,6 @@ function i128(value: bigint): ScVal {
   return nativeToScVal(value, { type: "i128" });
 }
 
-function getServer(): SorobanRpc.Server {
-  return new SorobanRpc.Server(getCurrentNetwork().rpcUrl, {
-    allowHttp: process.env.NODE_ENV !== "production",
-  });
-}
-
 async function buildCoreCall(
   wallet: string,
   method: string,
@@ -58,7 +53,7 @@ async function buildCoreCall(
 ): Promise<BuiltTransaction> {
   const network = getCurrentNetwork();
   const contract = new Contract(requireContractId("savingsCore"));
-  const server = getServer();
+  const server = getServer(network.rpcUrl);
   const account = await server.getAccount(wallet);
 
   const tx = new TransactionBuilder(account, {
@@ -80,12 +75,14 @@ async function buildCoreCall(
 }
 
 function depositTx({ wallet, amount, minShares }: SavingsDepositParams) {
+  if (minShares < BigInt(0)) throw new Error("minShares must not be negative");
   const stroops = depositAmountToStroops(amount);
   return buildCoreCall(wallet, "deposit", [i128(stroops), i128(minShares)]);
 }
 
 function redeemTx({ wallet, shares, minAssets }: SavingsRedeemParams) {
   if (shares <= BigInt(0)) throw new Error("Shares must be greater than zero");
+  if (minAssets < BigInt(0)) throw new Error("minAssets must not be negative");
   return buildCoreCall(wallet, "redeem", [i128(shares), i128(minAssets)]);
 }
 
@@ -116,14 +113,14 @@ export async function executeSavingsRedeem(
 async function simulateRead(wallet: string, method: string, arg: bigint): Promise<bigint> {
   const network = getCurrentNetwork();
   const contract = new Contract(requireContractId("savingsCore"));
-  const server = getServer();
+  const server = getServer(network.rpcUrl);
   const account = await server.getAccount(wallet);
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: network.networkPassphrase,
   })
     .addOperation(contract.call(method, i128(arg)))
-    .setTimeout(30)
+    .setTimeout(TX_TIMEOUT_SECONDS)
     .build();
   const sim = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(sim)) {
@@ -132,7 +129,10 @@ async function simulateRead(wallet: string, method: string, arg: bigint): Promis
     );
   }
   const result = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
-  return result ? BigInt(scValToNative(result.retval)) : BigInt(0);
+  if (!result) {
+    throw new Error(`Savings quote unavailable: ${method} simulation returned no result`);
+  }
+  return BigInt(scValToNative(result.retval));
 }
 
 /** minShares for a deposit: convert_to_shares(assets) less the slippage tolerance. */
@@ -142,6 +142,7 @@ export async function quoteMinShares(
   slippageBps: number
 ): Promise<bigint> {
   const expected = await simulateRead(wallet, "convert_to_shares", depositAmountToStroops(amount));
+  if (expected <= BigInt(0)) throw new Error("Savings quote unavailable: zero shares");
   return applySlippage(expected, slippageBps);
 }
 
@@ -152,5 +153,6 @@ export async function quoteMinAssets(
   slippageBps: number
 ): Promise<bigint> {
   const expected = await simulateRead(wallet, "convert_to_assets", shares);
+  if (expected <= BigInt(0)) throw new Error("Savings quote unavailable: zero assets");
   return applySlippage(expected, slippageBps);
 }
