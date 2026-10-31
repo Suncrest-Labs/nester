@@ -79,18 +79,21 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
   if (!address) blockReason = "Connect your wallet to continue.";
   else if (mode === "deposit" && depositsPaused) blockReason = DEPOSITS_PAUSED_MESSAGE;
   else if (mode === "withdraw" && !position) blockReason = "You have no savings to withdraw.";
+  else if (price.lte(0)) blockReason = "The share price is unavailable right now. Try again shortly.";
   else if (overBalance) blockReason = `You can withdraw up to ${formatUsdc(position?.value ?? "0")}.`;
 
   const working = status.kind === "working";
   const canSubmit = !!validAmount && !blockReason && !working;
 
   function switchMode(next: Mode) {
+    if (working) return;
     setMode(next);
     setStatus({ kind: "idle" });
     tabRefs.current[next]?.focus();
   }
 
   function onTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (working) return;
     const index = MODES.findIndex((m) => m.id === mode);
     let next = index;
     if (event.key === "ArrowRight") next = (index + 1) % MODES.length;
@@ -111,10 +114,9 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
         const minShares = await quoteMinShares(address, amount.trim(), bps);
         receipt = await executeSavingsDeposit({ wallet: address, amount: amount.trim(), minShares });
       } else {
-        const redeemShares =
-          position && validAmount.gte(maxValue)
-            ? toStroops(new Decimal(position.shares))
-            : toStroops(shares as Decimal);
+        const held = toStroops(new Decimal(position?.shares ?? "0"));
+        const computed = validAmount.gte(maxValue) ? held : toStroops(shares as Decimal);
+        const redeemShares = computed < held ? computed : held;
         const minAssets = await quoteMinAssets(address, redeemShares, bps);
         receipt = await executeSavingsRedeem({ wallet: address, shares: redeemShares, minAssets });
       }
@@ -141,6 +143,7 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
             type="button"
             role="tab"
             id={`${baseId}-tab-${m.id}`}
+            disabled={working}
             aria-selected={mode === m.id}
             aria-controls={`${baseId}-panel`}
             tabIndex={mode === m.id ? 0 : -1}
@@ -220,12 +223,15 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
         <SlippageControl bps={bps} onChange={setBps} disabled={working} />
 
         {blockReason && (
-          <p className="mt-4 text-sm text-foreground/80">{blockReason}</p>
+          <p id={`${baseId}-reason`} className="mt-4 text-sm text-foreground/80">
+            {blockReason}
+          </p>
         )}
 
         <button
           type="button"
           disabled={!canSubmit}
+          aria-describedby={blockReason ? `${baseId}-reason` : undefined}
           onClick={submit}
           className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 py-3 text-sm font-medium text-background transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >

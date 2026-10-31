@@ -8,6 +8,15 @@ export function describeSavingsError(err: unknown): string {
     if (err.name === "UserRejectedError") {
       return "You cancelled the transaction in your wallet. No funds were moved.";
     }
+    if (/Error\(Contract, #2\)|Slippage/.test(err.message)) {
+      return "The price moved while you were confirming. Try again, or raise your slippage tolerance.";
+    }
+    if (/Error\(Contract, #3\)|InsufficientShares/.test(err.message)) {
+      return "That is more shares than you hold. Lower the amount and try again.";
+    }
+    if (/Error\(Contract, #4\)|InsufficientLiquidity/.test(err.message)) {
+      return "There is not enough liquid USDC to pay that out right now. Try a smaller amount or try again later.";
+    }
     if (/Error\(Contract, #5\)|DepositsPaused/.test(err.message)) {
       return DEPOSITS_PAUSED;
     }

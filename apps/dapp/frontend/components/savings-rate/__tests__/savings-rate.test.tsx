@@ -21,6 +21,7 @@ vi.mock("@/lib/stellar/savings", () => ({
   executeSavingsRedeem: (...a: unknown[]) => executeSavingsRedeem(...a),
 }));
 
+import { describeSavingsError } from "../errors";
 import { RateHero } from "../RateHero";
 import { SavePanel } from "../SavePanel";
 import { PositionCard } from "../PositionCard";
@@ -210,6 +211,68 @@ describe("SavePanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Deposit USDC" }));
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText(/can't be read right now/)).toBeTruthy();
+  });
+});
+
+describe("SavePanel review fixes", () => {
+  const position = { shares: "100", value: "100.00", deposited: null };
+
+  it("ignores tab switches and disables tabs while a transaction is in flight", async () => {
+    quoteMinShares.mockResolvedValue(BigInt(1));
+    executeSavingsDeposit.mockReturnValue(new Promise(() => {}));
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    await userEvent.type(screen.getByLabelText("Amount in USDC"), "10");
+    await userEvent.click(screen.getByRole("button", { name: "Deposit USDC" }));
+    await screen.findByText("Confirm in your wallet");
+    const withdrawTab = screen.getByRole("tab", { name: "Withdraw" }) as HTMLButtonElement;
+    expect(withdrawTab.disabled).toBe(true);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Deposit" }), { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Deposit" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Confirm in your wallet")).toBeTruthy();
+  });
+
+  it("clamps partial withdraw shares to the position's shares", async () => {
+    quoteMinAssets.mockResolvedValue(BigInt(1));
+    executeSavingsRedeem.mockResolvedValue({ txHash: "a", explorerUrl: "https://x/a", ledger: 1 });
+    wrap(<SavePanel sharePrice="0.1" position={{ shares: "10", value: "100.00", deposited: null }} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Withdraw" }));
+    await userEvent.type(screen.getByLabelText("Amount in USDC"), "50");
+    await userEvent.click(screen.getByRole("button", { name: "Withdraw USDC" }));
+    await waitFor(() => expect(executeSavingsRedeem).toHaveBeenCalled());
+    expect(executeSavingsRedeem.mock.calls[0][0].shares).toBe(BigInt(100_000_000));
+  });
+
+  it("disables submit with a reason when the share price is zero", async () => {
+    wrap(<SavePanel sharePrice="0" position={position} />);
+    await userEvent.type(screen.getByLabelText("Amount in USDC"), "10");
+    const button = screen.getByRole("button", { name: "Deposit USDC" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/share price is unavailable/i)).toBeTruthy();
+  });
+
+  it("links the block reason to the disabled button", async () => {
+    fetchDepositsPaused.mockResolvedValue(true);
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    const reason = await screen.findByText(/Deposits are paused/);
+    const button = screen.getByRole("button", { name: "Deposit USDC" });
+    expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(reason.id).not.toBe("");
+  });
+});
+
+describe("describeSavingsError", () => {
+  const e = (code: string) => new Error(`HostError: Error(Contract, #${code})`);
+
+  it("maps slippage, insufficient shares and insufficient liquidity", () => {
+    expect(describeSavingsError(e("2"))).toMatch(/price moved/i);
+    expect(describeSavingsError(e("3"))).toMatch(/more shares than you hold/i);
+    expect(describeSavingsError(e("4"))).toMatch(/not enough liquid/i);
+  });
+
+  it("does not match two-digit codes", () => {
+    expect(describeSavingsError(e("21"))).toContain("#21");
+    expect(describeSavingsError(e("42"))).toContain("#42");
+    expect(describeSavingsError(e("52"))).toContain("#52");
   });
 });
 
