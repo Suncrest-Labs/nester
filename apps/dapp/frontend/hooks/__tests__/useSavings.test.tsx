@@ -14,6 +14,8 @@ vi.mock("@/lib/api/savings", () => ({
 }));
 
 import { useSavings } from "@/hooks/useSavings";
+import { ApiError } from "@/lib/api/client";
+import * as savingsApi from "@/lib/api/savings";
 
 describe("useSavings position", () => {
   beforeEach(() => {
@@ -61,5 +63,29 @@ describe("useSavings position status", () => {
     reject(new Error("position down"));
     await waitFor(() => expect(result.current.positionError?.message).toBe("position down"));
     expect(result.current.positionLoading).toBe(false);
+  });
+});
+
+describe("useSavings retries", () => {
+  beforeEach(() => {
+    address = "GA";
+    fetchPosition.mockReset();
+    fetchPosition.mockResolvedValue({ shares: "1", value: "1", deposited: null });
+    vi.mocked(savingsApi.fetchSavingsSummary).mockClear();
+    vi.mocked(savingsApi.fetchSavingsHistory).mockClear();
+  });
+
+  it("does not retry summary or history on 503 (savings unconfigured)", async () => {
+    const err = new ApiError(503, "SERVICE_UNAVAILABLE", "not configured");
+    vi.mocked(savingsApi.fetchSavingsSummary).mockRejectedValue(err);
+    vi.mocked(savingsApi.fetchSavingsHistory).mockRejectedValue(err);
+    const qc = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useSavings(), { wrapper });
+    await waitFor(() => expect(result.current.error).toBe(err));
+    expect(savingsApi.fetchSavingsSummary).toHaveBeenCalledTimes(1);
+    expect(savingsApi.fetchSavingsHistory).toHaveBeenCalledTimes(1);
   });
 });

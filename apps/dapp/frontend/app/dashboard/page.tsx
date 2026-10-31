@@ -8,6 +8,7 @@ import { AppShell } from "@/components/app-shell";
 import { useWallet } from "@/components/wallet-provider";
 import { useAuth } from "@/components/auth-provider";
 import { useSavings } from "@/hooks/useSavings";
+import { ApiError } from "@/lib/api/client";
 import type { SavingsSummary } from "@/lib/api/savings";
 import { RateHero } from "@/components/savings-rate/RateHero";
 import { SavePanel } from "@/components/savings-rate/SavePanel";
@@ -120,7 +121,7 @@ export default function Dashboard() {
     const { isConnected, address } = useWallet();
     const { isAuthenticated, isSigningIn, signIn } = useAuth();
     const router = useRouter();
-    const { summary, position, positionLoading, positionError, isLoading } = useSavings();
+    const { summary, position, positionLoading, positionError, isLoading, error } = useSavings();
 
     useEffect(() => {
         if (!isConnected) router.push("/");
@@ -149,6 +150,10 @@ export default function Dashboard() {
             {!summary ? (
                 isLoading ? (
                     <LoadingState />
+                ) : error instanceof ApiError && error.status === 503 ? (
+                    <p className={`mt-4 ${PANEL} text-sm text-foreground/80`}>
+                        The Savings Rate isn&apos;t live on this network yet.
+                    </p>
                 ) : (
                     <p role="alert" className={`mt-4 ${PANEL} text-sm text-foreground/80`}>
                         Savings data couldn&apos;t be loaded. Check your connection and reload the page.

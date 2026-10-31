@@ -38,6 +38,7 @@ vi.mock("@/lib/stellar/savings", () => ({
 }));
 
 import Dashboard from "@/app/dashboard/page";
+import { ApiError } from "@/lib/api/client";
 
 const populated: SavingsSummary = {
   rate7d: "5.35",
@@ -173,6 +174,25 @@ describe("Dashboard", () => {
 
   it("explains when savings data can't be loaded", () => {
     savings = { isLoading: false, error: new Error("boom") };
+    renderDashboard();
+
+    expect(screen.getByRole("alert").textContent).toMatch(/Savings data couldn't be loaded/);
+  });
+
+  it("shows a calm not-live state, not an alert, when the savings API is unconfigured (503)", () => {
+    savings = {
+      isLoading: false,
+      error: new ApiError(503, "SERVICE_UNAVAILABLE", "savings not configured"),
+    };
+    renderDashboard();
+
+    expect(screen.getByText("The Savings Rate isn't live on this network yet.")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/Check your connection/)).toBeNull();
+  });
+
+  it("keeps the generic error for non-503 API failures", () => {
+    savings = { isLoading: false, error: new ApiError(500, "INTERNAL", "boom") };
     renderDashboard();
 
     expect(screen.getByRole("alert").textContent).toMatch(/Savings data couldn't be loaded/);
