@@ -41,7 +41,7 @@ vi.mock("@/lib/stellar/transaction", async (importOriginal) => {
 import { getCurrentNetwork } from "@/lib/stellar/transaction";
 import { fetchSavingsSummary, fetchSavingsHistory, fetchSavingsPosition } from "@/lib/api/savings";
 import { nativeToScVal } from "@stellar/stellar-sdk";
-import { buildSavingsDeposit, buildSavingsRedeem, executeSavingsDeposit, quoteMinShares, quoteMinAssets } from "@/lib/stellar/savings";
+import { buildSavingsDeposit, buildSavingsRedeem, executeSavingsDeposit, executeSavingsRedeem, quoteMinShares, quoteMinAssets } from "@/lib/stellar/savings";
 
 function decodeCall(xdr: string) {
   const tx = TransactionBuilder.fromXDR(xdr, getCurrentNetwork().networkPassphrase);
@@ -57,6 +57,8 @@ beforeEach(() => {
   apiRequest.mockReset();
   signTransaction.mockClear();
   submitTransaction.mockClear();
+  assertWalletOnDappNetwork.mockReset();
+  assertWalletOnDappNetwork.mockResolvedValue(undefined);
   simulateTransaction.mockReset();
   simulateTransaction.mockResolvedValue({});
   process.env.NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID = CORE_ID;
@@ -116,6 +118,7 @@ describe("savings transactions", () => {
 
   it("buildSavingsRedeem calls core.redeem with min_assets", async () => {
     const xdr = await buildSavingsRedeem({ wallet, shares: BigInt(50_000_000), minAssets: BigInt(49_000_000) });
+    expect(assertWalletOnDappNetwork).toHaveBeenCalledTimes(1);
     const call = decodeCall(xdr);
     expect(call.fn).toBe("redeem");
     expect(call.args).toEqual([wallet, BigInt(50_000_000), BigInt(49_000_000)]);
@@ -132,6 +135,26 @@ describe("savings transactions", () => {
     expect(signTransaction).toHaveBeenCalledTimes(1);
     expect(submitTransaction).toHaveBeenCalledTimes(1);
     expect(receipt.txHash).toBe("h");
+  });
+});
+
+describe("savings network guard", () => {
+  it("executeSavingsRedeem stops before signing or submitting when the wallet is on the wrong network", async () => {
+    assertWalletOnDappNetwork.mockRejectedValue(new Error("Switch your wallet to Testnet"));
+    await expect(
+      executeSavingsRedeem({ wallet, shares: BigInt(1), minAssets: BigInt(1) })
+    ).rejects.toThrow("Switch your wallet to Testnet");
+    expect(signTransaction).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("executeSavingsDeposit stops before signing or submitting when the wallet is on the wrong network", async () => {
+    assertWalletOnDappNetwork.mockRejectedValue(new Error("Switch your wallet to Testnet"));
+    await expect(
+      executeSavingsDeposit({ wallet, amount: "1", minShares: BigInt(1) })
+    ).rejects.toThrow("Switch your wallet to Testnet");
+    expect(signTransaction).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
   });
 });
 

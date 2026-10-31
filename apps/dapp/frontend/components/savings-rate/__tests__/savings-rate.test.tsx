@@ -206,6 +206,18 @@ describe("SavePanel", () => {
     await waitFor(() => expect(screen.getByText(/Deposit confirmed/)).toBeTruthy());
   });
 
+  it("renders the user-facing message when the wallet is on the wrong network", async () => {
+    quoteMinShares.mockResolvedValue(BigInt(995_000_000));
+    const mismatch = new Error("Switch your wallet to Testnet");
+    mismatch.name = "WalletNetworkMismatchError";
+    executeSavingsDeposit.mockRejectedValue(mismatch);
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    await userEvent.type(screen.getByLabelText("Amount in USDC"), "10");
+    await userEvent.click(screen.getByRole("button", { name: "Deposit USDC" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(/Switch your wallet to Testnet/)).toBeTruthy();
+  });
+
   it("shows a readable message when the contract rejects with DepositsPaused", async () => {
     quoteMinShares.mockRejectedValue(new Error("HostError: Error(Contract, #5)"));
     wrap(<SavePanel sharePrice="1.0" position={position} />);
