@@ -21,6 +21,13 @@
 #   ASSET           savings asset (default: Blend's testnet USDC, the asset the
 #                   Blend testnet pools and the DeFindex testnet vault hold)
 #   DEFINDEX_VAULT  DeFindex vault (default: the testnet USDC vault)
+#   CURATOR         core curator   (default: the deployer address)
+#   GUARDIAN        core guardian  (default: the deployer address)
+#   ALLOCATOR       core allocator (default: the deployer address)
+#
+# Contract IDs are written into scripts/deployed-testnet.env, which is tracked
+# in git: existing keys are updated in place and other lines are kept. Review
+# `git diff` on it before committing.
 #
 # Prerequisites: stellar CLI, binaryen or the stellar CLI for wasm-opt,
 # rust target wasm32-unknown-unknown.
@@ -39,6 +46,9 @@ DEFAULT_DEFINDEX_VAULT="CBMVK2JK6NTOT2O4HNQAIQFJY232BHKGLIMXDVQVHIIZKDACXDFZDWHN
 
 ASSET="${ASSET:-$DEFAULT_ASSET}"
 DEFINDEX_VAULT="${DEFINDEX_VAULT:-$DEFAULT_DEFINDEX_VAULT}"
+CURATOR="${CURATOR:-}"
+GUARDIAN="${GUARDIAN:-}"
+ALLOCATOR="${ALLOCATOR:-}"
 BLEND_POOL="${BLEND_POOL:-}"
 BLEND_RESERVE_INDEX="${BLEND_RESERVE_INDEX:-}"
 
@@ -119,8 +129,11 @@ if [ -n "$DEPLOYER_KEY" ]; then
   SOURCE_ACCOUNT="$DEPLOYER_KEY"
 else
   IDENTITY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/stellar/identity"
+  IDENTITY_FILE="$IDENTITY_DIR/_nester_deploy.toml"
   mkdir -p "$IDENTITY_DIR"
-  printf 'secret_key = "%s"\n' "$DEPLOYER_SECRET" > "$IDENTITY_DIR/_nester_deploy.toml"
+  # The file holds the deployer secret; remove it however the script exits.
+  trap 'rm -f "$IDENTITY_FILE"' EXIT
+  (umask 077 && printf 'secret_key = "%s"\n' "$DEPLOYER_SECRET" > "$IDENTITY_FILE")
   SOURCE_ACCOUNT="_nester_deploy"
 fi
 DEPLOYER="$(stellar keys address "$SOURCE_ACCOUNT" 2>/dev/null || true)"
@@ -129,6 +142,9 @@ if [ -z "$DEPLOYER" ]; then
   exit 1
 fi
 echo "Deployer: $DEPLOYER"
+CURATOR="${CURATOR:-$DEPLOYER}"
+GUARDIAN="${GUARDIAN:-$DEPLOYER}"
+ALLOCATOR="${ALLOCATOR:-$DEPLOYER}"
 
 BALANCE="$(curl -sf "${HORIZON_URL}/accounts/${DEPLOYER}" | python3 -c "
 import sys,json
@@ -168,18 +184,22 @@ done
 # -- Helpers ------------------------------------------------------------------
 
 deploy_contract() {
-  local name="$1" wasm="$2" id
+  local name="$1" wasm="$2" id out
   echo "" >&2
   echo "Deploying $name..." >&2
-  id="$(stellar contract deploy \
+  # Capture first so a failed deploy (or no id in its output) reaches the
+  # error below instead of tripping pipefail inside the substitution.
+  out="$(stellar contract deploy \
     --wasm "$wasm" \
     --source-account "$SOURCE_ACCOUNT" \
     --network "$NETWORK" \
     --rpc-url "$RPC_URL" \
     --network-passphrase "$NETWORK_PASSPHRASE" \
-    2>&1 | grep -E '^C[A-Z2-7]{55}$' | tail -1)"
+    2>&1)" || true
+  id="$(printf '%s\n' "$out" | grep -E '^C[A-Z2-7]{55}$' | tail -1 || true)"
   if [ -z "$id" ]; then
-    echo "error: $name deployment failed" >&2
+    echo "error: $name deployment failed:" >&2
+    printf '%s\n' "$out" >&2
     exit 1
   fi
   echo "$name deployed: $id" >&2
@@ -238,6 +258,12 @@ invoke "$CORE_ID" initialize \
   --timelock "$TESTNET_TIMELOCK"
 
 echo ""
+echo "Assigning roles (curator $CURATOR, guardian $GUARDIAN, allocator $ALLOCATOR)..."
+invoke "$CORE_ID" set_curator --owner "$DEPLOYER" --curator "$CURATOR"
+invoke "$CORE_ID" set_guardian --owner "$DEPLOYER" --guardian "$GUARDIAN"
+invoke "$CORE_ID" set_allocator --owner "$DEPLOYER" --allocator "$ALLOCATOR"
+
+echo ""
 echo "Initializing AdapterBlend..."
 invoke "$BLEND_ADAPTER_ID" initialize \
   --vault "$CORE_ID" \
@@ -287,6 +313,10 @@ set_env NEXT_PUBLIC_SAVINGS_RESERVE_CONTRACT_ID "$RESERVE_ID"
 set_env NEXT_PUBLIC_ADAPTER_BLEND_CONTRACT_ID "$BLEND_ADAPTER_ID"
 set_env NEXT_PUBLIC_ADAPTER_DEFINDEX_CONTRACT_ID "$DEFINDEX_ADAPTER_ID"
 
+# The temporary identity is deleted on exit, so printed commands name the
+# caller's own key instead.
+PRINT_SOURCE="${DEPLOYER_KEY:-<your-key>}"
+
 echo ""
 echo "=========================================="
 echo "SAVINGS DEPLOYMENT COMPLETE"
@@ -297,11 +327,26 @@ echo "  Adapter (Blend):  $BLEND_ADAPTER_ID"
 echo "  Adapter (DeFindex): $DEFINDEX_ADAPTER_ID"
 echo "  Asset:            $ASSET"
 echo "  Timelock:         ${TESTNET_TIMELOCK}s"
+echo "  Curator:          $CURATOR"
+echo "  Guardian:         $GUARDIAN"
+echo "  Allocator:        $ALLOCATOR"
+echo ""
+echo "API environment (apps/api):"
+echo "SAVINGS_CORE_CONTRACT_ID=$CORE_ID"
+echo "SAVINGS_ADAPTER_NAMES=$BLEND_ADAPTER_ID=Blend,$DEFINDEX_ADAPTER_ID=DeFindex"
 echo ""
 echo "Pending changes: Blend=$BLEND_CHANGE_ID, DeFindex=$DEFINDEX_CHANGE_ID"
 echo "Earliest execute time (UTC): $EARLIEST_EXECUTE"
-echo "Anyone may execute after that time:"
-echo "  stellar contract invoke --id $CORE_ID --source-account $SOURCE_ACCOUNT --network $NETWORK -- execute --id $BLEND_CHANGE_ID"
-echo "  stellar contract invoke --id $CORE_ID --source-account $SOURCE_ACCOUNT --network $NETWORK -- execute --id $DEFINDEX_CHANGE_ID"
 echo ""
-echo "Contract IDs saved to: $OUTPUT_FILE"
+echo "Before executing AddAdapter, verify the adapter bindings:"
+echo "  stellar contract invoke --id $BLEND_ADAPTER_ID --source-account $PRINT_SOURCE --network $NETWORK -- get_vault           # expect $CORE_ID"
+echo "  stellar contract invoke --id $BLEND_ADAPTER_ID --source-account $PRINT_SOURCE --network $NETWORK -- get_pool            # expect $BLEND_POOL"
+echo "  stellar contract invoke --id $DEFINDEX_ADAPTER_ID --source-account $PRINT_SOURCE --network $NETWORK -- core              # expect $CORE_ID"
+echo "  stellar contract invoke --id $DEFINDEX_ADAPTER_ID --source-account $PRINT_SOURCE --network $NETWORK -- get_defindex_vault # expect $DEFINDEX_VAULT"
+echo "If any differs (an initialize was front-run), revoke that change and redeploy the adapter."
+echo ""
+echo "Anyone may execute after that time:"
+echo "  stellar contract invoke --id $CORE_ID --source-account $PRINT_SOURCE --network $NETWORK -- execute --id $BLEND_CHANGE_ID"
+echo "  stellar contract invoke --id $CORE_ID --source-account $PRINT_SOURCE --network $NETWORK -- execute --id $DEFINDEX_CHANGE_ID"
+echo ""
+echo "Contract IDs saved to: $OUTPUT_FILE (tracked in git; review the diff before committing)"
