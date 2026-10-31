@@ -204,9 +204,7 @@ See [SECURITY.md](/SECURITY.md) and the [deployment docs](/deploy) for productio
 | Phase  | Focus                                                           | Status      |
 | ------ | --------------------------------------------------------------- | ----------- |
 | **v1** | Nester Savings Rate (USDC) on Stellar testnet                   | In Progress |
-| **v2** | In-app swaps (DEX routing) and recurring token buys             | Planned     |
-| **v3** | Fiat onramp widget, MPC embedded wallets, curated asset baskets | Planned     |
-| **v4** | Multi-region expansion and deeper protocol integrations         | Future      |
+| **v2** | Mainnet launch after an external audit, deeper venue integrations | Planned   |
 
 ---
 

@@ -77,7 +77,7 @@ Most people who hold stablecoins face a frustrating dilemma:
 - Navigate the bewildering maze of DeFi protocols — learning about smart contracts, managing gas fees, tracking APYs across dozens of platforms
 - Manually rebalancing between protocols is tedious, error-prone, and easy to abandon
 
-For 99% of people, this complexity means their money sits idle, losing value to inflation.
+For many people, this complexity means their money sits idle, losing value to inflation.
 
 ## The Solution
 
@@ -92,15 +92,13 @@ Nester turns that into one decision: deposit USDC into the Nester Savings Rate.
 
 ## Non-Custodial by Design
 
-Nester never takes custody of user funds. Deposits sit in Soroban smart contracts, and users connect with their own Stellar wallets — **Freighter**, **LOBSTR**, or **xBull**. Withdrawals go straight back to the user's wallet at any time.
+Nester never takes custody of user funds. Deposits sit in Soroban smart contracts, and users connect with their own Stellar wallets — **Freighter**, **LOBSTR**, or **xBull**. Withdrawals go straight back to the user's wallet at any time while assets are liquid.
 
 ## Roadmap
 
 | Version | Scope |
 |---------|-------|
 | **v1** | Nester Savings Rate (USDC) on Stellar testnet |
-| **v2** | In-app swaps and recurring buys |
-| **v3** | Fiat onramp widget, MPC embedded wallets, curated baskets |
 
 ## Tech Stack
 
@@ -423,7 +421,7 @@ The Nester Savings Rate earns yield by routing deposits to other Stellar protoco
 | **Blend** | Blend lending pools | Testnet only |
 | **DeFindex** | DeFindex vaults | Testnet only |
 
-Nester is on testnet and has not been audited. Adding a venue or raising its cap goes through the public timelock. Every adapter goes through an external audit before it can hold mainnet funds.
+Nester is on testnet and has not been audited. Adding a venue or raising its cap goes through the public timelock. Adapters must pass an external audit before they can hold mainnet funds.
 
 ## How Adapters Report Value
 
@@ -721,73 +719,45 @@ impl VaultToken {
         title: "Yield Source Adapters",
         content: `# Yield Source Adapters
 
-Each yield source (currently Blend) has a standardized adapter contract that the vault uses to deposit, withdraw, and check balances.
+Each yield venue (Blend, DeFindex) has a small adapter contract that implements one common interface. The savings core talks only to this interface, and treats every adapter call as fallible.
 
 ## Adapter Interface
 
 \`\`\`rust
-/// Standard interface all yield adapters must implement
 pub trait YieldAdapter {
-    /// Deposit assets into the yield source
-    fn deposit(env: Env, amount: i128) -> i128;
+    /// Pull \`amount\` of the underlying from \`from\` and deposit it. Returns position units.
+    /// Reverts with SlippageExceeded below \`min_units_out\`.
+    fn deposit(env: Env, from: Address, amount: i128, min_units_out: i128) -> i128;
 
-    /// Withdraw assets from the yield source
-    fn withdraw(env: Env, amount: i128) -> i128;
+    /// Withdraw \`units\`, sending the underlying to \`to\`. Returns assets received.
+    /// Reverts with SlippageExceeded below \`min_out\`.
+    fn withdraw(env: Env, to: Address, units: i128, min_out: i128) -> i128;
 
-    /// Check current balance in the yield source
-    fn balance_of(env: Env) -> i128;
+    /// Asset-denominated value of the adapter's aggregate position.
+    fn position_value(env: Env, owner: Address) -> i128;
 
-    /// Get current APY (in basis points, e.g., 950 = 9.50%)
-    fn current_apy(env: Env) -> u32;
+    /// APY reading with a confidence indicator (informational only).
+    fn current_apy(env: Env) -> AdapterApy;
+
+    /// The underlying asset the adapter accepts and pays out.
+    fn underlying(env: Env) -> Address;
+
+    /// The one core contract allowed to move value through this adapter.
+    fn core(env: Env) -> Address;
+
+    /// Protocol-side deposit ceiling and withdrawable maximum right now.
+    fn max_deposit(env: Env) -> i128;
+    fn max_withdraw(env: Env) -> i128;
 }
 \`\`\`
 
-## Blend Adapter (Native Stellar)
+Adapters hold one aggregate position on behalf of the core and never track individual savers. The core registers an adapter only if its \`core()\` is the core itself and its \`underlying()\` is the savings asset.
 
-\`\`\`rust
-#[contract]
-pub struct BlendAdapter;
+## Valuation and Caps
 
-#[contractimpl]
-impl BlendAdapter {
-    pub fn deposit(env: Env, amount: i128) -> i128 {
-        let blend_pool = Self::get_pool_address(&env);
-        // Call Blend's lending pool deposit
-        blend_pool::supply(&env, &env.current_contract_address(), amount);
-        amount
-    }
+The core computes total assets as idle USDC plus the sum of every adapter's \`position_value()\`. If an adapter cannot be valued, deposits revert and withdrawals price that adapter at zero.
 
-    pub fn withdraw(env: Env, amount: i128) -> i128 {
-        let blend_pool = Self::get_pool_address(&env);
-        blend_pool::withdraw(&env, &env.current_contract_address(), amount);
-        amount
-    }
-
-    pub fn balance_of(env: Env) -> i128 {
-        let blend_pool = Self::get_pool_address(&env);
-        blend_pool::get_balance(&env, &env.current_contract_address())
-    }
-
-    pub fn current_apy(env: Env) -> u32 {
-        // Fetch from Blend's rate oracle
-        850 // 8.50% example
-    }
-}
-\`\`\`
-
-## Yield Source Registry
-
-The registry contract tracks which adapters are approved, their risk scores, and maximum allocation limits.
-
-\`\`\`rust
-pub struct YieldSource {
-    pub adapter: Address,     // Adapter contract address
-    pub name: String,         // "Blend", etc.
-    pub risk_score: u32,      // 1-10 (1 = lowest risk)
-    pub max_allocation: u32,  // Max % of vault this source can hold
-    pub is_active: bool,
-}
-\`\`\`
+Each registered adapter has two caps in the core: an absolute cap and a relative cap in basis points of total assets. Adding an adapter or raising a cap goes through the public timelock; lowering a cap is instant.
 `,
     },
 

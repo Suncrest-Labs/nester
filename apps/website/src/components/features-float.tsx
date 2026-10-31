@@ -15,8 +15,8 @@ const leftFeatures = [
 
 const rightFeatures = [
     { label: "DEX / AMMs",            icon: ArrowRightLeft,  color: "bg-pink-500",    rotate: -8  },
-    { label: "Emerging Markets",      icon: Globe,           color: "bg-cyan-500",    rotate: -11 },
-    { label: "Real World Assets",     icon: Building2,       color: "bg-amber-500",   rotate: 6   },
+    { label: "Stellar Native",        icon: Globe,           color: "bg-cyan-500",    rotate: -11 },
+    { label: "Non-custodial",        icon: Building2,       color: "bg-amber-500",   rotate: 6   },
 ]
 
 function Pill({ label, icon: Icon, color, rotate = 0 }: {
