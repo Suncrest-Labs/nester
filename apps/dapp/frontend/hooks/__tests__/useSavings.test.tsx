@@ -40,3 +40,26 @@ describe("useSavings position", () => {
     expect(result.current.position).toBeUndefined();
   });
 });
+
+describe("useSavings position status", () => {
+  beforeEach(() => {
+    address = "GA";
+    fetchPosition.mockReset();
+  });
+
+  it("reports position loading and errors separately from the summary", async () => {
+    let reject: (e: Error) => void = () => {};
+    fetchPosition.mockImplementation(() => new Promise((_, r) => (reject = r)));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useSavings(), { wrapper });
+    await waitFor(() => expect(result.current.positionLoading).toBe(true));
+    expect(result.current.positionError).toBeNull();
+
+    reject(new Error("position down"));
+    await waitFor(() => expect(result.current.positionError?.message).toBe("position down"));
+    expect(result.current.positionLoading).toBe(false);
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { SavingsPosition, SavingsSummary } from "@/lib/api/savings";
@@ -24,6 +24,8 @@ let savings: {
   position?: SavingsPosition;
   isLoading: boolean;
   error: Error | null;
+  positionLoading?: boolean;
+  positionError?: Error | null;
 };
 vi.mock("@/hooks/useSavings", () => ({ useSavings: () => savings }));
 
@@ -130,6 +132,35 @@ describe("Dashboard", () => {
     expect(screen.queryByText("Your savings")).toBeNull();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
     expect(screen.getByText("5.35%")).toBeTruthy();
+  });
+
+  it("shows a balance placeholder while a signed-in position loads", () => {
+    savings.position = undefined;
+    savings.positionLoading = true;
+    renderDashboard();
+
+    expect(screen.getByTestId("position-loading")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("says when a signed-in position can't be loaded", () => {
+    savings.position = undefined;
+    savings.positionError = new Error("down");
+    renderDashboard();
+
+    expect(screen.getByText("Couldn't load your balance. Reload the page to try again.")).toBeTruthy();
+  });
+
+  it("shows a message when sign-in fails from the sign-in card", async () => {
+    auth.isAuthenticated = false;
+    savings.position = undefined;
+    renderDashboard();
+    auth.signIn.mockImplementationOnce(() => Promise.reject(new Error("User declined")));
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toMatch(/Sign-in didn't complete/);
   });
 
   it("shows loading placeholders while the summary loads", () => {

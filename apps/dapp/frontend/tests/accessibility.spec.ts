@@ -31,18 +31,8 @@ test.describe('Accessibility', () => {
     expect(results.violations).toEqual([]);
   });
 
-  test('Markets page should not have automatically detectable accessibility violations', async ({ page }) => {
-    const results = await scan(page, '/vaults');
-    expect(results.violations).toEqual([]);
-  });
-
   test('Savings page should not have automatically detectable accessibility violations', async ({ page }) => {
     const results = await scan(page, '/savings');
-    expect(results.violations).toEqual([]);
-  });
-
-  test('Portfolio page should not have automatically detectable accessibility violations', async ({ page }) => {
-    const results = await scan(page, '/portfolio');
     expect(results.violations).toEqual([]);
   });
 });

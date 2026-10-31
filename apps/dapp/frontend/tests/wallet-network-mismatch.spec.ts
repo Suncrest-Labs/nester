@@ -59,6 +59,10 @@ async function openDepositModal(page: import("@playwright/test").Page, walletPas
 }
 
 test.describe("wallet network guard", () => {
+  test.skip(
+    true,
+    "Drives the retired /vaults/:id deposit modal. Porting to the dashboard SavePanel needs Soroban RPC stubs (getAccount, simulateTransaction quote) and NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID in the webServer env; the guard on the savings path is unit-tested in lib/__tests__/savings.test.ts"
+  );
   test.setTimeout(120_000);
 
   test("blocks the deposit with a switch-network prompt when the wallet is on testnet and the dapp on mainnet", async ({

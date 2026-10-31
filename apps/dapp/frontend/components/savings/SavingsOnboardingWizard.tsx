@@ -47,7 +47,7 @@ function todayPlus(days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-const STEPS = ["Template", "Goal details", "Choose yield", "First deposit"] as const;
+const STEPS = ["Template", "Goal details", "Earning", "Savings Rate"] as const;
 type StepIndex = 0 | 1 | 2 | 3;
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -218,7 +218,8 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
     <div>
       <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">Earn while you save</h2>
       <p className="mb-5 text-sm text-black/60 dark:text-white/60">
-        Link your goal to a yield protocol and watch your savings grow automatically.
+        Your goal tracks a target amount and date. Deposits into the Nester Savings Rate
+        don&apos;t add to its progress yet.
       </p>
 
       {isLoading ? (
@@ -252,10 +253,9 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
         className="flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-semibold text-black dark:text-white transition-colors hover:bg-black/5 dark:hover:bg-white/5"
       >
         <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-        See where the Nester Savings Rate earns
+        See the Nester Savings Rate
       </a>
       <p className="mt-3 text-center text-[11px] text-black/40 dark:text-white/40">
-        Goal deposits go into the Nester Savings Rate.{" "}
         <button type="button" onClick={onSkip} className="underline hover:text-black dark:hover:text-white">
           Skip this step
         </button>
@@ -264,31 +264,29 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
   );
 }
 
-// ── Step 4: First deposit ─────────────────────────────────────────────────────
+// ── Step 4: Savings rate (separate from the goal) ─────────────────────────────
 
-function StepDeposit({ currency, onSkip }: { currency: "USDC" | "XLM"; onSkip: () => void }) {
+function StepSavingsRate({ onDone }: { onDone: () => void }) {
   return (
     <div className="text-center">
-      <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5 text-3xl">
-        💰
-      </div>
-      <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">Make your first deposit</h2>
+      <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">Earn on the Savings Rate</h2>
       <p className="mb-6 text-sm text-black/60 dark:text-white/60">
-        Kick-start your goal with an initial deposit in {currency}. You can deposit more at any time.
+        The Nester Savings Rate earns a realized rate on USDC. It&apos;s separate from this goal:
+        deposits there don&apos;t count toward the goal yet.
       </p>
       <a
         href="/dashboard"
-        className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3.5 text-sm font-semibold text-white transition-opacity hover:opacity-75"
+        className="mb-4 flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 py-3.5 text-sm font-semibold text-black dark:text-white transition-colors hover:bg-black/5 dark:hover:bg-white/5"
       >
-        Deposit on the Savings Rate page
+        Open the Savings Rate
         <ArrowRight className="h-4 w-4" aria-hidden="true" />
       </a>
       <button
         type="button"
-        onClick={onSkip}
-        className="text-xs font-medium text-black/50 dark:text-white/50 underline hover:text-black dark:hover:text-white"
+        onClick={onDone}
+        className="w-full rounded-xl bg-black dark:bg-blue-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-75"
       >
-        Skip for now — I'll deposit later
+        Done
       </button>
     </div>
   );
@@ -438,10 +436,7 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
         )}
 
         {step === 3 && (
-          <StepDeposit
-            currency={details.currency}
-            onSkip={onComplete}
-          />
+          <StepSavingsRate onDone={onComplete} />
         )}
       </div>
     </>

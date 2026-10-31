@@ -36,6 +36,8 @@ export function useSavings(period: SavingsPeriod = "30d") {
     summary: summary.data,
     history: history.data,
     position: address ? position.data : undefined,
+    positionLoading: !!address && position.isLoading,
+    positionError: address ? position.error : null,
     isLoading: summary.isLoading || history.isLoading || position.isLoading,
     error: summary.error ?? history.error ?? position.error ?? null,
   };

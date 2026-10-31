@@ -122,6 +122,17 @@ describe("ReserveCard", () => {
       screen.getByText("Locked. Can only be used to cover saver losses, after a public timelock.")
     ).toBeTruthy();
   });
+
+  it.each([
+    ["4182.30", "1000000.00", "0.42% of total assets"],
+    ["0.01", "1000000.00", "<0.01% of total assets"],
+    ["0", "1000000.00", "0% of total assets"],
+    ["0", "0", "0% of total assets"],
+    ["150.00", "1000.00", "15% of total assets"],
+  ])("shows a small reserve share with enough precision (%s of %s)", (value, total, text) => {
+    render(<ReserveCard reserve={{ shares: "1", value }} totalAssets={total} />);
+    expect(screen.getByText(text)).toBeTruthy();
+  });
 });
 
 describe("PendingChangesCard", () => {

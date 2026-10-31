@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LogIn, RefreshCw } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { useWallet } from "@/components/wallet-provider";
@@ -29,16 +29,28 @@ function formatDelay(seconds: number) {
     return plural(Math.round(seconds / 60), "minute");
 }
 
-function SignInCard({ onSignIn, isLoading }: { onSignIn: () => void; isLoading: boolean }) {
+function SignInCard({ onSignIn, isLoading }: { onSignIn: () => Promise<unknown>; isLoading: boolean }) {
+    const [failed, setFailed] = useState(false);
+
+    function handleSignIn() {
+        setFailed(false);
+        onSignIn().catch(() => setFailed(true));
+    }
+
     return (
         <div className={PANEL}>
             <h3 className="text-sm font-medium text-muted-foreground">Your balance</h3>
             <p className="mt-2 text-sm text-foreground/80">
                 Sign in with your wallet to see what you hold.
             </p>
+            {failed && (
+                <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+                    Sign-in didn&apos;t complete. Approve the request in your wallet and try again.
+                </p>
+            )}
             <button
                 type="button"
-                onClick={onSignIn}
+                onClick={handleSignIn}
                 disabled={isLoading}
                 className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-foreground px-4 py-2 text-[13px] font-medium text-background transition-opacity hover:opacity-80 disabled:opacity-50"
             >
@@ -108,7 +120,7 @@ export default function Dashboard() {
     const { isConnected, address } = useWallet();
     const { isAuthenticated, isSigningIn, signIn } = useAuth();
     const router = useRouter();
-    const { summary, position, isLoading } = useSavings();
+    const { summary, position, positionLoading, positionError, isLoading } = useSavings();
 
     useEffect(() => {
         if (!isConnected) router.push("/");
@@ -152,9 +164,16 @@ export default function Dashboard() {
                             {position ? (
                                 <PositionCard position={position} />
                             ) : !isAuthenticated ? (
-                                <SignInCard
-                                    onSignIn={() => void signIn().catch(() => {})}
-                                    isLoading={isSigningIn}
+                                <SignInCard onSignIn={signIn} isLoading={isSigningIn} />
+                            ) : positionError ? (
+                                <p className={`${PANEL} text-sm text-foreground/80`}>
+                                    Couldn&apos;t load your balance. Reload the page to try again.
+                                </p>
+                            ) : positionLoading ? (
+                                <div
+                                    data-testid="position-loading"
+                                    aria-busy="true"
+                                    className="h-36 animate-pulse rounded-xl bg-foreground/[0.06]"
                                 />
                             ) : null}
                             <GoalsCard />
