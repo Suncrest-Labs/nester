@@ -215,7 +215,7 @@ export function ConnectWallet() {
                     transition={{ duration: 0.6, delay: 0.3 }}
                     className="mb-6 sm:mb-8 max-w-sm text-center text-sm sm:text-base text-muted-foreground leading-relaxed px-2"
                 >
-                    Deposit into a Smart Vault and earn optimized on-chain
+                    Save USDC in the Nester Savings Rate and earn on-chain
                     yield. Non-custodial — you keep your keys.
                 </motion.p>
 
