@@ -9,7 +9,7 @@ import {
 
 const leftFeatures = [
     { label: "Cross-border Payments", icon: Send,            color: "bg-blue-500",    rotate: 10  },
-    { label: "Smart Savings Vaults",  icon: Sparkles,        color: "bg-violet-500",  rotate: 6   },
+    { label: "USDC Savings Rate",    icon: Sparkles,        color: "bg-violet-500",  rotate: 6   },
     { label: "Yield Aggregator",      icon: TrendingUp,      color: "bg-emerald-500", rotate: -12 },
 ]
 

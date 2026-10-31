@@ -13,8 +13,7 @@ const NAV_COMMANDS = [
   {
     cmd: "ls ./protocol",
     items: [
-      { name: "Vaults", href: DAPP_URL },
-      { name: "Auto-Invest", href: "/docs" },
+      { name: "Savings Rate", href: DAPP_URL },
     ],
   },
   {

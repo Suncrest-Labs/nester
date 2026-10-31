@@ -12,12 +12,12 @@ const cormorant = Cormorant({ subsets: ["latin"], weight: ["300", "400"], style:
 export const metadata: Metadata = {
   metadataBase: new URL("https://usenester.xyz"),
   title: {
-    default: "Nester | The Savings Layer for Stellar",
+    default: "Nester | The USDC Savings Rate for Stellar",
     template: "%s | Nester",
   },
   description:
-    "Set savings goals, automate recurring deposits, and grow your stablecoins in non-custodial smart vaults on Stellar.",
-  keywords: ["DeFi", "Stellar", "Soroban", "Savings", "Liquidity", "Crypto", "Smart Vaults", "Auto-Invest", "Yield Optimization"],
+    "Deposit USDC into the Nester Savings Rate, a non-custodial savings product on Stellar. The rate is the realized 7-day rate paid by Blend and DeFindex; it is not guaranteed.",
+  keywords: ["DeFi", "Stellar", "Soroban", "Savings", "Liquidity", "Crypto", "USDC", "Savings Rate", "Blend", "DeFindex"],
   authors: [{ name: "Nester Protocol" }],
   creator: "Nester Protocol",
   publisher: "Nester Protocol",
@@ -29,21 +29,21 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     siteName: "Nester",
-    title: "Nester | The Savings Layer for Stellar",
-    description: "Set savings goals, automate recurring deposits, and grow your stablecoins in non-custodial smart vaults on Stellar.",
+    title: "Nester | The USDC Savings Rate for Stellar",
+    description: "Deposit USDC into the Nester Savings Rate, a non-custodial savings product on Stellar. The rate is the realized 7-day rate paid by Blend and DeFindex; it is not guaranteed.",
     images: [
       {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: "Nester - The Savings Layer for Stellar",
+        alt: "Nester - The USDC Savings Rate for Stellar",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Nester | The Savings Layer for Stellar",
-    description: "Set savings goals, automate recurring deposits, and grow your stablecoins in non-custodial smart vaults on Stellar.",
+    title: "Nester | The USDC Savings Rate for Stellar",
+    description: "Deposit USDC into the Nester Savings Rate, a non-custodial savings product on Stellar. The rate is the realized 7-day rate paid by Blend and DeFindex; it is not guaranteed.",
     images: ["/og-image.png"],
     site: "@NesterProtocol",
   },

@@ -11,42 +11,34 @@ const STEPS = [
   {
     id: "deposit",
     step: "01",
-    label: "Deposit & Earn",
-    headline: "Choose a vault.\nYour money goes\nto work instantly.",
-    body: "Choose one of three vault tiers. Deposit stablecoins, and the vault routes them to integrated Stellar yield protocols through adapter contracts.",
-    tab: "Deposit stablecoins into a vault in minutes.",
+    label: "Deposit USDC",
+    headline: "One product.\nDeposit USDC,\nreceive shares.",
+    body: "The Nester Savings Rate is a single USDC product. You deposit USDC and receive shares; the share price rises as the underlying Stellar yield venues, Blend and DeFindex, pay yield. There are no tiers to choose.",
+    tab: "Deposit USDC and receive savings shares.",
   },
   {
     id: "optimize",
     step: "02",
-    label: "Auto‑Optimize",
-    headline: "Yields chase you —\nnot the other\nway around.",
-    body: "Nester's keeper compares APYs across integrated protocols and rebalances within on-chain risk limits — at most 20% of a vault per rebalance, with slippage checks on every leg.",
-    tab: "Rebalancing stays within on-chain risk limits.",
+    label: "Earn a Realized Rate",
+    headline: "Earn what the\nvenues actually\npay.",
+    body: "The rate you see is the realized trailing 7-day rate of the share price. It is not guaranteed and it can go down. A 10% performance fee applies only to gains above the previous high-water mark.",
+    tab: "The rate shown is realized, never promised.",
   },
   {
-    id: "autoinvest",
+    id: "safeguards",
     step: "03",
-    label: "Auto‑Invest",
-    headline: "Set it once.\nYour deposits\nrun themselves.",
-    body: "Authorize an on-chain recurring deposit mandate — an amount and a cadence — and Nester executes each deposit automatically, straight from your wallet into your chosen vault.",
-    tab: "Recurring deposits execute on-chain, automatically.",
-  },
-  {
-    id: "portfolio",
-    step: "04",
-    label: "Track Live",
-    headline: "Every position.\nEvery dollar.\nIn real time.",
-    body: "Your live portfolio tracks positions, P&L and performance across every vault — and because Nester is non-custodial, you can withdraw to your own wallet at any time.",
-    tab: "Live positions, P&L and performance, always on.",
+    label: "Safeguards",
+    headline: "Caps, a reserve,\nand a public\ntimelock.",
+    body: "Each venue has an absolute cap and a percentage cap. Changes that add risk wait behind a public timelock (3 days by default), and a guardian can only reduce risk instantly. If a venue loses funds, all savers share the loss pro-rata, partially offset by the fee reserve.",
+    tab: "Venue caps, a locked reserve and a public timelock.",
   },
   {
     id: "architecture",
-    step: "05",
+    step: "04",
     label: "The Stack",
-    headline: "Four layers.\nOne seamless\ninfrastructure.",
-    body: "From deposit to yield to auto-invest — Nester\u2019s layered stack handles every step, while the live portfolio layer tracks positions, P&L, and performance in real time.",
-    tab: "The complete architecture, end to end.",
+    headline: "Three layers.\nOne savings\nrate.",
+    body: "Savings shares, yield venues and on-chain safeguards. Nester is non-custodial: you can withdraw to your own wallet at any time while assets are liquid. Live on Stellar testnet and not yet audited.",
+    tab: "The architecture, end to end.",
   },
 ];
 
@@ -78,16 +70,16 @@ function Cursor({ x, y, clicking }: { x: number; y: number; clicking: boolean })
 
 
 /* ─────────────────────────────────────────────────────────────────
-   PANEL 1 — DEPOSIT  (cursor clicks vault → bars fill → confirm)
+   PANEL 1 — DEPOSIT  (cursor clicks product → venue bars fill → confirm)
 ───────────────────────────────────────────────────────────────── */
 const vaultRows = [
-  { name: "Conservative", apy: "6–8%",   bar: 38 },
-  { name: "Balanced",     apy: "8–12%",  bar: 62 },
-  { name: "Growth",       apy: "12–18%", bar: 84 },
+  { name: "Nester Savings Rate", apy: "USDC",  bar: 100 },
+  { name: "Blend",               apy: "venue", bar: 55 },
+  { name: "DeFindex",            apy: "venue", bar: 45 },
 ];
 
 function DepositScene({ playing }: { playing: boolean }) {
-  // sequence: 0=idle, 1=cursor moves to Balanced, 2=click, 3=bars animate, 4=confirm button
+  // sequence: 0=idle, 1=cursor moves to the product, 2=click, 3=bars animate, 4=confirm button
   const [seq, setSeq] = useState(0);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const [barsVisible, setBarsVisible] = useState(false);
@@ -95,7 +87,7 @@ function DepositScene({ playing }: { playing: boolean }) {
 
   useEffect(() => {
     if (!playing) { setSeq(0); setSelectedIdx(-1); setBarsVisible(false); setConfirmed(false); return; }    setSeq(0); setSelectedIdx(-1); setBarsVisible(false); setConfirmed(false);    const t1 = setTimeout(() => setSeq(1), 600);
-    const t2 = setTimeout(() => { setSeq(2); setSelectedIdx(1); }, 1400);
+    const t2 = setTimeout(() => { setSeq(2); setSelectedIdx(0); }, 1400);
     const t3 = setTimeout(() => { setSeq(3); setBarsVisible(true); }, 1900);
     const t4 = setTimeout(() => setSeq(4), 3200);
     const t5 = setTimeout(() => { setSeq(5); setConfirmed(true); }, 3900);
@@ -105,9 +97,9 @@ function DepositScene({ playing }: { playing: boolean }) {
   // Cursor targets (relative to panel)
   const cursorPos = [
     { x: 280, y: 30  },   // 0 idle top-right
-    { x: 120, y: 118 },   // 1 hover balanced row
-    { x: 120, y: 118 },   // 2 click
-    { x: 120, y: 118 },   // 3 still
+    { x: 120, y: 52 },    // 1 hover product row
+    { x: 120, y: 52 },    // 2 click
+    { x: 120, y: 52 },    // 3 still
     { x: 178, y: 222 },  // 4 hover button
     { x: 178, y: 222 },  // 5 click button
   ];
@@ -118,7 +110,7 @@ function DepositScene({ playing }: { playing: boolean }) {
     <div className="relative w-full select-none" style={{ height: 310 }}>
       <Cursor x={pos.x} y={pos.y} clicking={seq === 2 || seq === 5} />
 
-      {/* Vault rows */}
+      {/* Product and venue rows */}
       <div className="flex flex-col gap-2 pt-2">
         {vaultRows.map((v, i) => {
           const isSelected = selectedIdx === i;
@@ -202,7 +194,7 @@ function DepositScene({ playing }: { playing: boolean }) {
 const HUB = { cx: 195, cy: 52, r: 36 };  // bottom of hub = 88
 const NODES = [
   {
-    id: "blend", label: "Blend", apy: "11.2%",
+    id: "blend", label: "Blend", apy: "USDC lending",
     cx: 110, cy: 192,    // center of node card
     left: 68, top: 158,  // card top-left (card ~68px tall, center at +34)
     logo: (
@@ -213,12 +205,12 @@ const NODES = [
     bg: "#c3812418",
   },
   {
-    id: "nester-right", label: "Nester", apy: "Blended APY",
+    id: "defindex", label: "DeFindex", apy: "USDC vault",
     cx: 280, cy: 192,
     left: 238, top: 158,
     logo: (
-      <div className="w-5 h-5 overflow-hidden rounded-sm bg-black flex items-center justify-center">
-        <Image src="/logo.png" alt="Nester" width={20} height={20} className="object-cover" />
+      <div className="w-5 h-5 overflow-hidden rounded-sm bg-black flex items-center justify-center text-white text-[9px] font-bold">
+        D
       </div>
     ),
     bg: "#11111118",
@@ -235,7 +227,7 @@ function OptimizeScene({ playing }: { playing: boolean }) {
   const [seq, setSeq] = useState(0);
   const [apyIdx, setApyIdx] = useState(0);
 
-  const blendApy = ["11.2%", "11.8%", "12.1%", "11.9%"];
+  const blendApy = ["USDC lending", "USDC lending"];
 
   useEffect(() => {
     if (!playing) { setSeq(0); setApyIdx(0); return; }
@@ -315,7 +307,7 @@ function OptimizeScene({ playing }: { playing: boolean }) {
             transition={{ duration: 1.4, repeat: Infinity }}
             className="text-white/50 text-[7px] tracking-widest mt-0.5"
           >
-            LIVE
+            TESTNET
           </motion.span>
         </div>
       </motion.div>
@@ -359,13 +351,13 @@ function OptimizeScene({ playing }: { playing: boolean }) {
         transition={{ duration: 0.45 }}
         className="absolute bottom-0 left-0 right-0 flex items-center justify-between rounded-xl border border-black/10 bg-black/[0.03] px-4 py-3"
       >
-        <span className="text-[9px] tracking-[0.18em] uppercase text-black/30 font-semibold">Blended APY</span>
+        <span className="text-[9px] tracking-[0.18em] uppercase text-black/30 font-semibold">Realized 7-day rate</span>
         <motion.span
           animate={{ opacity: [0.7, 1, 0.7] }}
           transition={{ duration: 1.2, repeat: Infinity }}
           className="text-[18px] font-bold text-black tabular-nums"
         >
-          9.8%
+          Varies
         </motion.span>
       </motion.div>
     </div>
@@ -373,20 +365,20 @@ function OptimizeScene({ playing }: { playing: boolean }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   PANEL 3 — AUTO-INVEST
+   PANEL 3 — SAFEGUARDS
    Uses inline JSX connectors between boxes — no broken SVG % paths.
 ───────────────────────────────────────────────────────────────── */
-const AUTOINVEST_STEPS = [
+const SAFEGUARD_STEPS = [
   {
-    label: "Your Wallet", sub: "Weekly mandate authorized", value: "$200",
+    label: "Venue Caps", sub: "Absolute and percentage cap per venue", value: "Capped",
     logoSlot: null as React.ReactNode,
   },
   {
-    label: "On-Chain Mandate", sub: "Recurring deposit executed", value: "Weekly",
+    label: "Public Timelock", sub: "Risk-adding changes wait · 3 days by default", value: "Timelocked",
     logoSlot: null as React.ReactNode,
   },
   {
-    label: "Balanced Vault", sub: "Position updated · earning", value: "+$200",
+    label: "Locked Reserve", sub: "Covers saver losses only, via governance", value: "Reserve",
     logoSlot: null as React.ReactNode,
   },
 ];
@@ -429,7 +421,7 @@ function PipeConnector({ active, label }: { active: boolean; label?: string }) {
   );
 }
 
-function AutoInvestScene({ playing }: { playing: boolean }) {
+function SafeguardsScene({ playing }: { playing: boolean }) {
   const [step, setStep] = useState(-1);
   const [done, setDone] = useState(false);
 
@@ -444,7 +436,7 @@ function AutoInvestScene({ playing }: { playing: boolean }) {
   return (
     <div className="w-full select-none flex flex-col">
       {/* Pipeline: box → connector → box → connector → box */}
-      {AUTOINVEST_STEPS.map((s, i) => (
+      {SAFEGUARD_STEPS.map((s, i) => (
         <React.Fragment key={s.label}>
           <motion.div
             initial={{ opacity: 0, x: -16 }}
@@ -492,7 +484,7 @@ function AutoInvestScene({ playing }: { playing: boolean }) {
           </motion.div>
 
           {/* Connector between boxes — ONLY between, not after last */}
-          {i < AUTOINVEST_STEPS.length - 1 && (
+          {i < SAFEGUARD_STEPS.length - 1 && (
             <PipeConnector
               active={step > i}
               label={i === 0 ? "on-chain" : undefined}
@@ -509,8 +501,8 @@ function AutoInvestScene({ playing }: { playing: boolean }) {
           transition={{ duration: 0.35 }}
           className="mt-2 flex items-center justify-between rounded-xl border border-black/[0.08] bg-white/50 px-4 py-2.5"
         >
-          <span className="text-[9px] tracking-[0.15em] uppercase text-black/30 font-semibold">Next deposit</span>
-          <span className="text-[11px] font-bold text-black/60 tabular-nums">in 7 days · automatic</span>
+          <span className="text-[9px] tracking-[0.15em] uppercase text-black/30 font-semibold">Guardian</span>
+          <span className="text-[11px] font-bold text-black/60">can only reduce risk</span>
         </motion.div>
       )}
     </div>
@@ -518,155 +510,13 @@ function AutoInvestScene({ playing }: { playing: boolean }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   PANEL 4 — PORTFOLIO  (typewriter activity feed + live metrics)
-───────────────────────────────────────────────────────────────── */
-const ACTIVITY_FEED = [
-  { role: "ai", text: "Auto-invest executed: $200 USDC deposited into Balanced Vault." },
-  { role: "ai", text: "Yield accrued: +$4.12 across your Blend position." },
-  { role: "ai", text: "Balanced Vault APY updated: 9.2% → 9.5%." },
-  { role: "ai", text: "Monthly P&L: +$38.40 (+0.6%) across all positions." },
-];
-
-function TypedText({ text, active }: { text: string; active: boolean }) {
-  const [displayed, setDisplayed] = useState("");
-  useEffect(() => {
-    if (!active) { setDisplayed(""); return; }
-    let i = 0;
-    setDisplayed("");
-    const iv = setInterval(() => {
-      i++;
-      setDisplayed(text.slice(0, i));
-      if (i >= text.length) clearInterval(iv);
-    }, 22);
-    return () => clearInterval(iv);
-  }, [active, text]);
-  return <>{displayed}</>;
-}
-
-function PortfolioScene({ playing }: { playing: boolean }) {
-  const [visibleMsgs, setVisibleMsgs] = useState(0);
-  const [typing, setTyping] = useState(false);
-
-  // metrics that "update"
-  const [pnl, setPnl] = useState(34.28);
-
-  useEffect(() => {
-    if (!playing) { setVisibleMsgs(0); setTyping(false); setPnl(34.28); return; }    setVisibleMsgs(0); setTyping(false); setPnl(34.28);    const timings = [400, 1800, 3400, 4800];
-    const handles = timings.map((t, i) =>
-      setTimeout(() => {
-        setVisibleMsgs(i + 1);
-        if (i % 2 === 0) setTyping(true);
-        else setTyping(false);
-      }, t)
-    );
-    // P&L tick
-    const r1 = setTimeout(() => setPnl(38.4), 5200);
-    return () => [...handles, r1].forEach(clearTimeout);
-  }, [playing]);
-
-  const metrics = [
-    { label: "P&L (30d)",  value: "+$" + pnl.toFixed(2) },
-    { label: "APY",        value: "9.5%" },
-    { label: "Balance",    value: "$6,420" },
-  ];
-
-  return (
-    <div className="w-full flex flex-col gap-3 select-none">
-      {/* Metrics bar */}
-      <div className="grid grid-cols-3 gap-2">
-        {metrics.map((m, i) => (
-          <motion.div
-            key={m.label}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.07 }}
-            className="rounded-xl border border-black/[0.08] bg-white/70 px-3 py-2.5"
-          >
-            <p className="text-[8px] font-bold tracking-[0.15em] uppercase text-black/25 mb-1">{m.label}</p>
-            <AnimatePresence mode="wait">
-              <motion.p
-                key={m.value}
-                initial={{ opacity: 0, y: -3 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 3 }}
-                className="text-[14px] font-bold text-black tabular-nums"
-              >
-                {m.value}
-              </motion.p>
-            </AnimatePresence>
-          </motion.div>
-        ))}
-      </div>
-
-      {/* Chat */}
-      <div className="rounded-xl border border-black/[0.08] bg-white/70 flex flex-col overflow-hidden">
-        {/* Top bar */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-black/[0.06]">
-          <motion.span
-            animate={{ opacity: [0.4, 1, 0.4] }}
-            transition={{ duration: 1.6, repeat: Infinity }}
-            className="w-1.5 h-1.5 rounded-full bg-black inline-block"
-          />
-          <span className="text-[10px] font-bold tracking-[0.15em] uppercase text-black/40">Portfolio Activity</span>
-        </div>
-
-        {/* Messages */}
-        <div className="flex flex-col gap-2.5 px-4 py-3" style={{ minHeight: 148 }}>
-          {ACTIVITY_FEED.slice(0, visibleMsgs).map((msg, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 8, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: 0.35, ease: [0.23, 1, 0.32, 1] }}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[85%] rounded-xl px-3.5 py-2 text-[11.5px] leading-[1.6] ${
-                  msg.role === "user"
-                    ? "bg-black text-white rounded-tr-sm"
-                    : "border border-black/[0.08] bg-white/80 text-black/70 rounded-tl-sm"
-                }`}
-              >
-                {msg.role === "ai" && i === visibleMsgs - 1 ? (
-                  <TypedText text={msg.text} active={true} />
-                ) : (
-                  msg.text
-                )}
-              </div>
-            </motion.div>
-          ))}
-          {/* Typing indicator */}
-          {typing && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="flex gap-1 pl-1 pb-1"
-            >
-              {[0, 1, 2].map((dot) => (
-                <motion.span
-                  key={dot}
-                  animate={{ y: [0, -4, 0] }}
-                  transition={{ duration: 0.55, repeat: Infinity, delay: dot * 0.16 }}
-                  className="w-1.5 h-1.5 rounded-full bg-black/25 inline-block"
-                />
-              ))}
-            </motion.div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   PANEL 5 — ARCHITECTURE  (layered infrastructure stack)
+   PANEL 4 — ARCHITECTURE  (layered infrastructure stack)
 ───────────────────────────────────────────────────────────────── */
 const ARCH_LAYERS = [
   {
-    label: "SAVINGS LAYER",
-    desc: "Stablecoins deposited into smart vaults",
-    detail: "$5,000 USDC",
+    label: "SHARES LAYER",
+    desc: "USDC deposited for savings shares",
+    detail: "USDC",
     color: "#6025f5",
     icon: (
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
@@ -677,8 +527,8 @@ const ARCH_LAYERS = [
   },
   {
     label: "YIELD LAYER",
-    desc: "Deployed to Blend lending pools on Stellar",
-    detail: "9.8% APY",
+    desc: "Routed to Blend and DeFindex on Stellar",
+    detail: "Realized",
     color: "#ff5555",
     icon: (
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
@@ -687,32 +537,19 @@ const ARCH_LAYERS = [
     ),
   },
   {
-    label: "AUTO-INVEST LAYER",
-    desc: "On-chain mandates execute recurring deposits",
-    detail: "Weekly",
+    label: "SAFEGUARD LAYER",
+    desc: "Caps, locked reserve and public timelock",
+    detail: "Timelocked",
     color: "#facc15",
     icon: (
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-        <rect x="1" y="4" width="14" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
-        <path d="M1 7.5h14" stroke="currentColor" strokeWidth="1.3"/>
-      </svg>
-    ),
-  },
-  {
-    label: "PORTFOLIO LAYER",
-    desc: "Live positions, P&L and performance tracking",
-    detail: "24/7",
-    color: "#6025f5",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-        <circle cx="8" cy="8" r="3" stroke="currentColor" strokeWidth="1.3"/>
-        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.8 3.8l1.4 1.4M10.8 10.8l1.4 1.4M3.8 12.2l1.4-1.4M10.8 5.2l1.4-1.4" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/>
+        <path d="M8 1.5l5.5 2v4c0 3.2-2.3 5.6-5.5 7-3.2-1.4-5.5-3.8-5.5-7v-4L8 1.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
       </svg>
     ),
   },
 ];
 
-const CONNECTOR_LABELS = ["funds diversify", "yield accrues", "positions update"];
+const CONNECTOR_LABELS = ["funds allocate", "risk is bounded"];
 
 function ArchitectureScene({ playing }: { playing: boolean }) {
   const [activeLayer, setActiveLayer] = useState(-1);
@@ -722,9 +559,8 @@ function ArchitectureScene({ playing }: { playing: boolean }) {
     if (!playing) { setActiveLayer(-1); setFlowActive(false); return; }    setActiveLayer(-1); setFlowActive(false);    const t0 = setTimeout(() => setActiveLayer(0), 500);
     const t1 = setTimeout(() => setActiveLayer(1), 1400);
     const t2 = setTimeout(() => setActiveLayer(2), 2300);
-    const t3 = setTimeout(() => setActiveLayer(3), 3200);
-    const t4 = setTimeout(() => setFlowActive(true), 4000);
-    return () => [t0, t1, t2, t3, t4].forEach(clearTimeout);
+    const t3 = setTimeout(() => setFlowActive(true), 3200);
+    return () => [t0, t1, t2, t3].forEach(clearTimeout);
   }, [playing]);
 
   return (
@@ -763,21 +599,6 @@ function ArchitectureScene({ playing }: { playing: boolean }) {
                 }`}>
                   {layer.label}
                 </span>
-                {i === 3 && flowActive && (
-                  <motion.span
-                    initial={{ opacity: 0, scale: 0.5 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="flex items-center gap-1"
-                  >
-                    <motion.span
-                      animate={{ opacity: [0.4, 1, 0.4] }}
-                      transition={{ duration: 1.4, repeat: Infinity }}
-                      className="w-1.5 h-1.5 rounded-full inline-block"
-                      style={{ backgroundColor: layer.color }}
-                    />
-                    <span className="text-[7px] tracking-wider uppercase font-bold" style={{ color: layer.color, opacity: 0.7 }}>LIVE</span>
-                  </motion.span>
-                )}
               </div>
               <p className={`text-[10.5px] leading-tight transition-colors duration-300 m-0 ${
                 activeLayer >= i ? "text-black/55" : "text-black/12"
@@ -836,7 +657,7 @@ function ArchitectureScene({ playing }: { playing: boolean }) {
         </React.Fragment>
       ))}
 
-      {/* Portfolio monitoring strip — appears after all layers active */}
+      {/* Risk controls strip — appears after all layers active */}
       {flowActive && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
@@ -851,12 +672,12 @@ function ArchitectureScene({ playing }: { playing: boolean }) {
               className="text-[8px] tracking-[0.2em] uppercase font-bold"
               style={{ color: "#6025f5", opacity: 0.6 }}
             >
-              Portfolio Monitoring
+              Risk Controls
             </motion.span>
             <span className="text-[8px] text-black/25 font-mono">all layers</span>
           </div>
           <div className="flex gap-1.5">
-            {["Savings", "Yield", "Auto-Invest"].map((name, i) => (
+            {["Savings", "Yield", "Safeguards"].map((name, i) => (
               <motion.div
                 key={name}
                 initial={{ scaleX: 0 }}
@@ -886,8 +707,7 @@ function ScenePanel({ stepId, playing }: { stepId: string; playing: boolean }) {
   switch (stepId) {
     case "deposit":       return <DepositScene       playing={playing} />;
     case "optimize":      return <OptimizeScene      playing={playing} />;
-    case "autoinvest":    return <AutoInvestScene    playing={playing} />;
-    case "portfolio":     return <PortfolioScene     playing={playing} />;
+    case "safeguards":    return <SafeguardsScene    playing={playing} />;
     case "architecture":  return <ArchitectureScene  playing={playing} />;
     default:              return null;
   }

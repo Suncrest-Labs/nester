@@ -93,7 +93,7 @@ const projects = [
 const features = [
     {
         label: "Diversified Yield Strategies",
-        desc: "We dynamically route your assets across top-tier lending pools and AMMs on Stellar to safely optimize your returns.",
+        desc: "Deposits are routed to Blend and DeFindex on Stellar, within per-venue caps. Returns are whatever those venues actually pay.",
         icon: TrendingUp
     },
     {

@@ -54,7 +54,7 @@ export function Hero() {
                     transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
                     className="text-muted-foreground text-sm sm:text-base md:text-lg lg:text-xl max-w-sm sm:max-w-lg md:max-w-2xl leading-relaxed font-sans"
                 >
-                    Set savings goals, automate recurring deposits, and grow your stablecoins in non-custodial smart vaults on Stellar. Live on testnet.
+                    Deposit USDC into the Nester Savings Rate and earn the realized yield paid by Stellar lending venues, non-custodially. Live on testnet.
                 </motion.p>
 
                 <motion.div

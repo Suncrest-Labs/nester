@@ -9,56 +9,56 @@ const FAQ_ITEMS = [
     classification: "GENERAL",
     question: "What is Nester?",
     answer:
-      "Nester is a non-custodial savings app on Stellar. You set savings goals, automate recurring deposits, and hold stablecoins in smart vaults that route deposits to Stellar yield protocols. Nester is live on testnet today; mainnet follows an external security audit.",
+      "Nester is a non-custodial savings app on Stellar with one product, the Nester Savings Rate. You deposit USDC, receive shares, and the share price rises as Blend and DeFindex pay yield. Nester is live on testnet today; mainnet follows an external security audit.",
   },
   {
     id: "how-yield",
-    classification: "VAULTS",
+    classification: "SAVINGS RATE",
     question: "How does Nester generate yield?",
     answer:
-      "Vault deposits are routed through adapter contracts to integrated Stellar yield protocols, within per-protocol limits set by each vault's risk parameters. Rebalancing is triggered by a keeper and rate-limited on-chain. On testnet, the yield integrations are still being connected, so vaults do not earn live yield yet.",
+      "Deposits are routed through adapter contracts to Blend and DeFindex, within an absolute cap and a percentage cap for each venue. The rate shown is the realized trailing 7-day rate of the share price. It is not guaranteed and it can go down. On testnet, balances and yield have no real value.",
   },
   {
     id: "is-it-safe",
     classification: "SECURITY",
     question: "Is my money safe?",
     answer:
-      "Funds are held in non-custodial smart contracts — Nester never has direct access to your deposits. The contracts include a circuit breaker, timelocked upgrades, and a guardian role that can pause but never increase risk. They have not been audited yet and run on testnet only; an external audit is required before mainnet. Integrated protocols carry their own risks — see the Security & Audit page.",
+      "Funds are held in non-custodial smart contracts; Nester never has direct access to your deposits. Changes that add risk (a new venue, higher caps, a shorter timelock, a fee change) wait behind a public timelock, 3 days by default, and a guardian can only reduce risk instantly. Savers can still lose money: if a venue fails, the loss is shared by all savers pro-rata. The contracts have not been audited yet and run on testnet only; an external audit is required before mainnet. See the Security & Audit page.",
   },
   {
     id: "withdrawals",
     classification: "WITHDRAWALS",
     question: "How do withdrawals work?",
     answer:
-      "You can withdraw at any time. Your vault shares are burned on-chain and the underlying stablecoins are paid from the vault's available liquidity straight back to your own wallet. Withdrawing within one day of depositing incurs a 0.1% early-withdrawal fee; locked positions charge a higher fee if exited early.",
+      "You can withdraw at any time while assets are liquid. Your shares are burned on-chain and USDC is paid at the current share price straight back to your own wallet. No role can block withdrawals; a guardian can only pause new deposits. If a venue loses funds, all savers share the loss pro-rata, partially offset by the fee reserve.",
   },
   {
-    id: "auto-invest",
-    classification: "AUTO-INVEST",
-    question: "What is auto-invest?",
+    id: "rate",
+    classification: "SAVINGS RATE",
+    question: "What is the rate shown, and is it guaranteed?",
     answer:
-      "Auto-invest lets you set up an on-chain recurring deposit mandate — for example, $200 USDC into the Balanced Vault every week. Once you authorize the mandate, deposits execute automatically on schedule, straight from your wallet into your chosen vault. You can pause or cancel it at any time.",
+      "The rate is the realized trailing 7-day rate of the share price, not a target. It is not guaranteed and it can go down, including below zero if a venue takes a loss.",
+  },
+  {
+    id: "fees",
+    classification: "FEES",
+    question: "What are the fees?",
+    answer:
+      "Nester charges a 10% performance fee on gains above the previous high-water mark, with a hard maximum of 20%. It is paid as shares into a locked reserve. The reserve can only be used to cover saver losses, through a public timelocked governance action that vests over 7 days. There is no deposit or withdrawal fee from Nester.",
   },
   {
     id: "minimum",
     classification: "GENERAL",
     question: "Is there a minimum deposit?",
     answer:
-      "The minimum deposit is one unit of the vault's asset (for example, 1 USDC). Small, frequent deposits are practical because Stellar transaction fees are a fraction of a cent.",
-  },
-  {
-    id: "fees",
-    classification: "GENERAL",
-    question: "What are the fees?",
-    answer:
-      "By default, vaults charge a 10% performance fee on yield earned, a 0.5% annual management fee, and a 0.1% fee on withdrawals made within one day of depositing. Fee parameters are stored on-chain, and changes are logged publicly.",
+      "There is no minimum beyond a positive amount of USDC. Small, frequent deposits are practical because Stellar transaction fees are a fraction of a cent.",
   },
   {
     id: "supported",
-    classification: "VAULTS",
+    classification: "GENERAL",
     question: "Which assets and chains are supported?",
     answer:
-      "Nester runs on Stellar only. On testnet, vaults accept USDC and XLM.",
+      "Nester runs on Stellar only and accepts USDC only.",
   },
 ];
 

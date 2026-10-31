@@ -19,7 +19,7 @@ export const docsNav: DocSection[] = [
         title: "CORE CONCEPTS",
         slug: "concepts",
         children: [
-            { title: "Savings Layer", slug: "savings-layer" },
+            { title: "Nester Savings Rate", slug: "savings-layer" },
             { title: "Yield Sources", slug: "yield-layer" },
         ],
     },
@@ -28,8 +28,8 @@ export const docsNav: DocSection[] = [
         slug: "contracts",
         children: [
             { title: "Overview", slug: "contracts-overview" },
-            { title: "Vault Contract", slug: "vault-contract" },
-            { title: "Vault Share Token", slug: "vault-token" },
+            { title: "Vault Contract (legacy)", slug: "vault-contract" },
+            { title: "Vault Share Token (legacy)", slug: "vault-token" },
             { title: "Yield Adapters", slug: "yield-adapters" },
         ],
     },
@@ -38,8 +38,8 @@ export const docsNav: DocSection[] = [
         slug: "api",
         children: [
             { title: "Overview", slug: "api-overview" },
-            { title: "Vault Endpoints", slug: "vault-api" },
-            { title: "Position Endpoints", slug: "position-api" },
+            { title: "Vault Endpoints (legacy)", slug: "vault-api" },
+            { title: "Position Endpoints (legacy)", slug: "position-api" },
         ],
     },
     {
@@ -65,9 +65,9 @@ export const docsContent: Record<string, { title: string; content: string }> = {
         title: "Introduction",
         content: `# What is Nester?
 
-Nester is a **decentralized, crypto-first savings and yield investment protocol** built on Stellar/Soroban. It automates crypto savings by diversifying vault deposits across multiple yield sources, with a live portfolio view and on-chain auto-invest.
+Nester is a **non-custodial savings protocol** built on Stellar/Soroban. It offers one product, the **Nester Savings Rate**: you deposit USDC, receive shares, and the share price rises as the underlying Stellar yield venues (Blend and DeFindex) pay yield. Nester is live on testnet and has not been audited.
 
-> A decentralized protocol that optimizes user deposits through diversified yield strategies — giving everyday savers institutional-grade returns without ever giving up custody of their funds.
+> A savings rate that is realized, not promised: the rate you see is what the share price actually earned over the trailing 7 days. It is not guaranteed and it can go down.
 
 ## The Problem
 
@@ -81,13 +81,14 @@ For 99% of people, this complexity means their money sits idle, losing value to 
 
 ## The Solution
 
-Nester rests on **three integrated pillars**:
+Nester turns that into one decision: deposit USDC into the Nester Savings Rate.
 
-| Pillar | Purpose | Status |
-|--------|---------|--------|
-| **Smart Vaults** | Tiered, vault-based yield on stablecoins: Conservative (6–8% APY), Balanced (8–12%), Growth (12–18%) | v1 |
-| **Live Portfolio** | Positions, P&L, and performance tracking in real time | v1 |
-| **Auto-Invest** | On-chain recurring deposit mandates that execute automatically | v1 |
+| Property | How it works |
+|----------|--------------|
+| **One product** | A single USDC savings product; there are no risk tiers to choose |
+| **Realized rate** | The rate shown is the trailing 7-day change in the share price, not a target |
+| **Performance fee** | 10% of gains above the previous high-water mark (hard maximum 20%), paid as shares into a locked reserve |
+| **Safeguards** | Per-venue caps, a public timelock on risk-adding changes, and a guardian that can only reduce risk |
 
 ## Non-Custodial by Design
 
@@ -97,7 +98,7 @@ Nester never takes custody of user funds. Deposits sit in Soroban smart contract
 
 | Version | Scope |
 |---------|-------|
-| **v1** | Smart Vaults, live portfolio, auto-invest mandates |
+| **v1** | Nester Savings Rate (USDC) on Stellar testnet |
 | **v2** | In-app swaps and recurring buys |
 | **v3** | Fiat onramp widget, MPC embedded wallets, curated baskets |
 
@@ -136,23 +137,19 @@ Nester follows a layered architecture separating concerns across clients, backen
 │  │           API Gateway (Go + Chi Router)                │  │
 │  │                                                       │  │
 │  │  ┌─────────────┐ ┌──────────────┐ ┌───────────────┐  │  │
-│  │  │ Vault       │ │ Portfolio    │ │ User / Auth   │  │  │
-│  │  │ Manager     │ │ Service      │ │ Service       │  │  │
+│  │  │ Savings     │ │ Position     │ │ User / Auth   │  │  │
+│  │  │ Service     │ │ Service      │ │ Service       │  │  │
 │  │  └─────────────┘ └──────────────┘ └───────────────┘  │  │
 │  │  ┌─────────────┐ ┌──────────────┐ ┌───────────────┐  │  │
-│  │  │ Yield       │ │ Auto-Invest  │ │ Event         │  │  │
-│  │  │ Router      │ │ Scheduler    │ │ Listener      │  │  │
-│  │  └─────────────┘ └──────────────┘ └───────────────┘  │  │
-│  │  ┌─────────────┐                                     │  │
-│  │  │ Rebalancer  │                                     │  │
-│  │  │ Service     │                                     │  │
-│  │  └─────────────┘                                     │  │
+│  │  │ Rate        │ │ Event        │                  │  │
+│  │  │ Monitor     │ │ Listener     │                  │  │
+│  │  └─────────────┘ └──────────────┘                  │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                              │                              │
 │  ┌───────────────────────────▼───────────────────────────┐  │
 │  │              PostgreSQL (Supabase)                     │  │
-│  │  users │ vaults │ positions │ shares │ yield_snapshots │  │
-│  │  transactions │ events │ auto_invest_mandates          │  │
+│  │  users │ positions │ shares │ yield_snapshots          │  │
+│  │  transactions │ events                                 │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                                │
@@ -162,13 +159,12 @@ Nester follows a layered architecture separating concerns across clients, backen
 │  ┌───────────────────────────▼───────────────────────────┐  │
 │  │  Smart Contracts (Rust / Soroban SDK)                  │  │
 │  │                                                       │  │
-│  │  VaultFactory          Vault Contracts                 │  │
-│  │  Deploy/manage         deposit / withdraw / position   │  │
-│  │  vault instances       nVault share token mint/burn    │  │
-│  │                        maturity & penalty logic        │  │
-│  │  Auto-Invest Mandates  Yield Source Adapters           │  │
-│  │  recurring deposit     Blend                           │  │
-│  │  authorization         deposit / withdraw / balanceOf  │  │
+│  │  Savings Core          Reserve                         │  │
+│  │  deposit / withdraw    locked fee shares               │  │
+│  │  share price, caps     timelocked burn only            │  │
+│  │  timelocked changes                                    │  │
+│  │  Yield Adapters        Blend, DeFindex                 │  │
+│  │  deposit / withdraw / position_value                   │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  Stellar Network: Horizon API / Soroban RPC                 │
@@ -178,7 +174,7 @@ Nester follows a layered architecture separating concerns across clients, backen
 ## Data Flow: Deposit
 
 \`\`\`
-User clicks "Deposit 1000 USDC into Balanced Vault"
+User clicks "Deposit 1000 USDC" into the Nester Savings Rate
     │
     ▼
 ┌─────────────────┐     ┌──────────────────┐
@@ -196,34 +192,8 @@ User clicks "Deposit 1000 USDC into Balanced Vault"
 ┌─────────────────┐     ┌──────────────────┐
 │ Stellar Network  │────▶│ Event Listener   │
 │ Execute TX       │     │ Index deposit    │
-│ Vault.deposit()  │     │ Update positions │
+│ Core.deposit()   │     │ Update positions │
 └─────────────────┘     └──────────────────┘
-\`\`\`
-
-## Data Flow: Auto-Invest
-
-\`\`\`
-User authorizes "Deposit 200 USDC into Balanced Vault weekly"
-    │
-    ▼
-┌──────────────┐    ┌────────────────┐    ┌─────────────┐
-│ Frontend     │───▶│ Go Backend     │───▶│ Scheduler   │
-│ POST         │    │ Validate +     │    │ Registers   │
-│ /mandates    │    │ store mandate  │    │ next run    │
-└──────────────┘    └───────┬────────┘    └──────┬──────┘
-                            │                     │ every cycle
-                            ▼                     ▼
-                   ┌────────────────┐    ┌─────────────┐
-                   │ Soroban        │───▶│ Vault       │
-                   │ Mandate        │    │ deposit()   │
-                   │ authorization  │    │ shares mint │
-                   └────────────────┘    └──────┬──────┘
-                                                │
-                   ┌────────────────┐           │
-                   │ Event Listener │◀──────────┘
-                   │ Index deposit  │
-                   │ Update position│
-                   └────────────────┘
 \`\`\`
 
 ## Project Structure
@@ -253,8 +223,8 @@ CREATE TABLE users (
 
 CREATE TABLE vaults (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name         TEXT NOT NULL,         -- "Conservative", "Balanced", etc.
-    vault_type   TEXT NOT NULL,         -- conservative | balanced | growth
+    name         TEXT NOT NULL,         -- legacy vault name
+    vault_type   TEXT NOT NULL,         -- legacy vault type
     contract_id  TEXT NOT NULL,         -- Soroban contract address
     total_shares NUMERIC DEFAULT 0,
     total_assets NUMERIC DEFAULT 0,
@@ -376,82 +346,67 @@ SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
     },
 
     "savings-layer": {
-        title: "Savings Layer",
-        content: `# Stablecoin Savings Layer
+        title: "Nester Savings Rate",
+        content: `# Nester Savings Rate
 
-The Savings Layer is the core of Nester. Users deposit stablecoins (USDC; an XLM vault also runs on testnet) into vaults that route funds to Stellar yield protocols through adapter contracts. Nester is on testnet and unaudited today; the figures below are illustrative.
+The Nester Savings Rate is the core of Nester: one USDC savings product. You deposit USDC and receive shares; the share price rises as the yield venues pay yield, and withdrawals return USDC at the current share price. Nester is on testnet and unaudited today.
 
 ## How It Works
 
 \`\`\`
-User deposits 1,000 USDC
+User deposits USDC
         │
         ▼
 ┌───────────────────────────────────────────────┐
-│            Balanced Vault Contract             │
+│               Savings Core Contract            │
 │                                               │
-│  User receives 1,000 nVault share tokens      │
+│  User receives savings shares                 │
 │                                               │
-│  Allocation strategy:                         │
-│  ┌──────────┐                                 │
-│  │ Blend    │                                 │
-│  │ 100%     │                                 │
-│  │ 1000 USDC│                                 │
-│  │ var. APY │                                 │
-│  └──────────┘                                 │
+│  Venues (each with an absolute and % cap):    │
+│  ┌──────────┐   ┌──────────┐                  │
+│  │ Blend    │   │ DeFindex │                  │
+│  └──────────┘   └──────────┘                  │
 │                                               │
-│  APY: whatever the integrated protocols pay  │
-│  (illustrative — not a rate quote)           │
+│  Total assets = idle USDC + venue positions,  │
+│  read on-chain. No role can set the price.    │
 └───────────────────────────────────────────────┘
 \`\`\`
 
-## Vault Types
+## The Rate
 
-| Vault | Target APY (not guaranteed) | Risk Profile | Strategy |
-|-------|-----------|--------------|----------|
-| **Conservative** | 6–8% | Lowest | Established lending protocols only |
-| **Balanced** | 8–12% | Moderate | Lending + selected liquidity pools |
-| **Growth** | 12–18% | Higher | Newer strategies with strict risk controls |
+The rate shown is the **realized trailing 7-day rate** of the share price. It is not guaranteed, it is not a target, and it can go down. If a venue takes a loss, the share price can fall.
 
-Targets describe the intended strategy, not a promise; actual returns depend on the protocols each vault uses.
-
-## Share Token Model
-
-When you deposit into a vault, you receive **nVault** tokens proportional to your share:
+## Share Accounting
 
 \`\`\`
-shares_minted = deposit_amount × total_shares / total_assets
-
-Example:
-  Vault has 10,000 USDC (total_assets) and 10,000 shares (total_shares)
-  User deposits 1,000 USDC
-  shares = 1,000 × 10,000 / 10,000 = 1,000 nVault tokens
-
-After yield accrual (vault now has 11,000 USDC, still 11,000 shares):
-  User's 1,000 shares = 1,000 / 11,000 × 11,000 = 1,000 USDC + yield
+Deposit 1,000 USDC when the share price is 1.00 -> 1,000 shares
+Venues pay yield, share price rises to 1.05
+Your 1,000 shares are now worth 1,050 USDC (before fees)
 \`\`\`
 
-## Rebalancing
+## Fees and the Reserve
 
-Rebalancing is triggered by a keeper, not run continuously. Each call is limited on-chain:
+- **Performance fee:** 10% of gains above the previous high-water mark, with a hard maximum of 20% in the contract. No fee is charged on gains that only recover a previous loss.
+- **Paid as shares into a locked reserve.** The reserve is a loss buffer, not revenue. Its shares can only leave through a public, timelocked governance action that vests over 7 days, and the reserve can only be used to cover saver losses.
 
-- **At most 20% of a vault's assets** move per rebalance call
-- **Slippage checks** apply to every leg of a move
-- **Per-protocol allocation limits** come from the vault's allocation strategy
-- **A circuit breaker** can throttle or halt the vault when share price, yield or withdrawal patterns look abnormal
+## Caps
 
-## Maturity & Penalties
+Every venue has an absolute cap and a cap as a percentage of total assets, so no single venue can hold an unbounded share of deposits.
 
-Vaults can optionally enforce time-locks:
+## Governance and the Timelock
 
-| Lock Period | Early Withdrawal Penalty |
-|-------------|-------------------------|
-| No lock     | 0.1% if withdrawn within 1 day of depositing |
-| 30 days     | 1% of withdrawn amount |
-| 90 days     | 2.5% |
-| 180 days    | 5% |
+| Action | Speed |
+|--------|-------|
+| Add a venue, raise a cap, raise the fee, shorten the timelock, use reserve shares | Public timelock: 3 days by default (1 hour on testnet). After the delay, anyone can execute it. |
+| Lower a cap or the fee, lengthen the timelock, remove an empty venue, pause deposits, revoke a pending change | Instant |
 
-Default vault fees are a 10% performance fee on yield and a 0.5% annual management fee. All fee parameters are stored on-chain.
+A guardian can pause deposits, revoke a pending change and zero a venue's cap, but can only reduce risk. No role can block withdrawals while assets are liquid.
+
+## Risks
+
+- **Losses are shared.** If a venue loses funds, all savers bear the loss pro-rata through the share price, partially offset by the reserve.
+- If a venue's position cannot be valued, deposits revert and withdrawals price that venue at zero.
+- Nester has not been audited and runs on testnet only. Deposits are not insured.
 `,
     },
 
@@ -459,20 +414,20 @@ Default vault fees are a 10% performance fee on yield and a 0.5% annual manageme
         title: "Yield Sources",
         content: `# Yield Sources
 
-Vaults earn yield by routing deposits to other Stellar protocols through **adapter contracts**. Each adapter speaks one protocol's interface, and the vault's allocation strategy caps how much each one can hold.
+The Nester Savings Rate earns yield by routing deposits to other Stellar protocols through **adapter contracts**. Each adapter speaks one protocol's interface, reports the value of its position on-chain, and is bounded by an absolute cap and a percentage cap in the savings core.
 
-## Status
+## Venues
 
 | Adapter | Protocol | Status |
 |---------|----------|--------|
-| **Blend** | Blend lending pools | Implemented; not yet deployed |
-| **Soroswap** | Soroswap AMM liquidity | Implemented; testnet only — needs hardening before mainnet |
+| **Blend** | Blend lending pools | Testnet only |
+| **DeFindex** | DeFindex vaults | Testnet only |
 
-Nester is on testnet and has not been audited. No adapter is live on mainnet, and vault deposits do not earn live yield yet. Every adapter goes through an external audit before it can hold mainnet funds.
+Nester is on testnet and has not been audited. Adding a venue or raising its cap goes through the public timelock. Every adapter goes through an external audit before it can hold mainnet funds.
 
 ## How Adapters Report Value
 
-Each adapter exposes the value of the vault's position in its protocol, so the vault can track what it holds across integrations. Moving share-price accounting fully on-chain — reading positions directly instead of relying on reported yield — is part of the pre-mainnet roadmap.
+Each adapter exposes the value of the core's position in its protocol, and the core reads it on-chain; no one reports yield. The share price is derived from idle USDC plus these positions.
 `,
     },
 
@@ -481,6 +436,14 @@ Each adapter exposes the value of the vault's position in its protocol, so the v
         content: `# Smart Contracts Overview
 
 Nester's on-chain logic runs on **Stellar's Soroban** platform using Rust smart contracts.
+
+## Nester Savings Rate Contracts
+
+The Nester Savings Rate is built from a savings core (shares, share price, caps and timelocked governance), a locked fee reserve, and one adapter per yield venue (Blend, DeFindex). See the Nester Savings Rate page.
+
+## Legacy Vault Contracts
+
+The diagram and pages below describe the earlier tiered vault contracts. They are deprecated and kept for reference.
 
 ## Contract Architecture
 
@@ -495,8 +458,8 @@ Nester's on-chain logic runs on **Stellar's Soroban** platform using Rust smart 
          ┌───────────────┼───────────────┐
          ▼               ▼               ▼
 ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│ Conservative │ │   Balanced   │ │    Growth    │
-│    Vault     │ │    Vault     │ │    Vault     │
+│    Vault A   │ │    Vault B   │ │    Vault C   │
+│   (legacy)   │ │   (legacy)   │ │   (legacy)   │
 │              │ │              │ │              │
 │ deposit()    │ │ deposit()    │ │ deposit()    │
 │ withdraw()   │ │ withdraw()   │ │ withdraw()   │
@@ -547,9 +510,11 @@ packages/contracts/
 
     "vault-contract": {
         title: "Vault Contract",
-        content: `# Vault Contract
+        content: `# Vault Contract (legacy)
 
-The Vault contract is the core primitive of Nester's savings layer. It accepts stablecoin deposits, tracks share ownership, and manages yield source allocations.
+> **Legacy.** This page documents the earlier tiered vault contracts, which are deprecated and not part of the Nester Savings Rate. It is kept for reference only.
+
+The Vault contract was the core primitive of the earlier tiered vaults. It accepts stablecoin deposits, tracks share ownership, and manages yield source allocations.
 
 ## Interface
 
@@ -709,7 +674,9 @@ enum DataKey {
 
     "vault-token": {
         title: "Vault Share Token (nVault)",
-        content: `# Vault Share Token (nVault)
+        content: `# Vault Share Token (nVault, legacy)
+
+> **Legacy.** This page documents the earlier tiered vault contracts, which are deprecated and not part of the Nester Savings Rate. It is kept for reference only.
 
 The nVault token is a Soroban token contract (SEP-41 compliant) that represents a user's proportional ownership of a vault's total assets.
 
@@ -915,7 +882,9 @@ type APIError struct {
 
     "vault-api": {
         title: "Vault Endpoints",
-        content: `# Vault API Endpoints
+        content: `# Vault API Endpoints (legacy)
+
+> **Legacy.** This page documents the earlier tiered vault contracts, which are deprecated and not part of the Nester Savings Rate. It is kept for reference only.
 
 ## GET /api/v1/vaults
 
@@ -930,9 +899,9 @@ curl https://api.usenester.xyz/api/v1/vaults
     "success": true,
     "data": [
         {
-            "id": "vault_conservative_01",
-            "name": "Conservative",
-            "type": "conservative",
+            "id": "vault_a_01",
+            "name": "Vault A",
+            "type": "a",
             "apy": 7.2,
             "tvl": 250000,
             "total_depositors": 45,
@@ -942,9 +911,9 @@ curl https://api.usenester.xyz/api/v1/vaults
             ]
         },
         {
-            "id": "vault_balanced_01",
-            "name": "Balanced",
-            "type": "balanced",
+            "id": "vault_b_01",
+            "name": "Vault B",
+            "type": "b",
             "apy": 9.5,
             "tvl": 580000,
             "total_depositors": 120,
@@ -966,7 +935,7 @@ Get detailed allocation breakdown for a specific vault.
 Prepare and record a deposit to a vault.
 
 \`\`\`bash
-curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/deposit \\
+curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_b_01/deposit \\
   -H "Content-Type: application/json" \\
   -d '{
     "amount": "1000.00",
@@ -978,7 +947,7 @@ curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/deposit \
 {
     "success": true,
     "data": {
-        "id": "vault_balanced_01",
+        "id": "vault_b_01",
         "user_id": "8c7d86f0-0b73-45cd-95f3-c5b9bf10e4a7",
         "contract_address": "CB...",
         "total_deposited": "6000.000000",
@@ -990,7 +959,7 @@ curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/deposit \
         "allocations": [
             {
                 "id": "alloc_01_uuid",
-                "vault_id": "vault_balanced_01",
+                "vault_id": "vault_b_01",
                 "protocol": "Blend",
                 "amount": "2400.00",
                 "apy": "8.5",
@@ -1009,7 +978,7 @@ curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/deposit \
 Prepare and record a withdrawal from a vault.
 
 \`\`\`bash
-curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/withdraw \\
+curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_b_01/withdraw \\
   -H "Content-Type: application/json" \\
   -d '{
     "amount": "500.00",
@@ -1021,7 +990,7 @@ curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/withdraw 
 {
     "success": true,
     "data": {
-        "id": "vault_balanced_01",
+        "id": "vault_b_01",
         "user_id": "8c7d86f0-0b73-45cd-95f3-c5b9bf10e4a7",
         "contract_address": "CB...",
         "total_deposited": "5500.000000",
@@ -1040,7 +1009,9 @@ curl -X POST https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/withdraw 
 
     "position-api": {
         title: "Position Endpoints",
-        content: `# Position & Portfolio API Endpoints
+        content: `# Position & Portfolio API Endpoints (legacy)
+
+> **Legacy.** This page documents the earlier tiered vault contracts, which are deprecated and not part of the Nester Savings Rate. It is kept for reference only.
 
 ## GET /api/v1/portfolio/summary
 
@@ -1060,8 +1031,8 @@ curl https://api.usenester.xyz/api/v1/portfolio/summary \\
         "total_yield_earned_usdc": "250.500000",
         "positions": [
             {
-                "vault_id": "vault_balanced_01",
-                "vault_name": "Balanced",
+                "vault_id": "vault_b_01",
+                "vault_name": "Vault B",
                 "deposited": "5000.000000",
                 "current_value": "5250.500000",
                 "shares": "0.000000",
@@ -1077,7 +1048,7 @@ curl https://api.usenester.xyz/api/v1/portfolio/summary \\
 Get authenticated user's position in a specific vault.
 
 \`\`\`bash
-curl https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/my-position \\
+curl https://api.usenester.xyz/api/v1/vaults/vault_b_01/my-position \\
   -H "Authorization: Bearer <token>"
 \`\`\`
 
@@ -1086,7 +1057,7 @@ curl https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/my-position \\
 Get historical performance and yield data for charting.
 
 \`\`\`bash
-curl "https://api.usenester.xyz/api/v1/vaults/vault_balanced_01/performance/history?period=30d"
+curl "https://api.usenester.xyz/api/v1/vaults/vault_b_01/performance/history?period=30d"
 \`\`\`
 
 \`\`\`json
@@ -1303,8 +1274,8 @@ soroban contract invoke \\
   --source alice \\
   --network testnet \\
   -- deploy_vault \\
-  --name "Balanced" \\
-  --vault-type balanced \\
+  --name "Vault B" \\
+  --vault-type b \\
   --asset USDC_TOKEN_ID
 \`\`\`
 

@@ -2,11 +2,11 @@
 
 **The savings layer for Stellar**
 
-Nester is a self-custodial savings app on Stellar. Set savings goals, automate recurring deposits with on-chain mandates, and hold stablecoins in smart vaults that route deposits to Stellar yield protocols — tracked in a live portfolio.
+Nester is a self-custodial savings app on Stellar. Deposit USDC into one product, the Nester Savings Rate, and earn what the underlying Stellar yield venues (Blend and DeFindex) actually pay.
 
 > **Status:** live on Stellar testnet ([app.usenester.xyz](https://app.usenester.xyz)). The contracts have not been audited yet; an external audit is required before mainnet.
 
-> Your keys. Your yield. Your portfolio.
+> Your keys. Your yield.
 
 ---
 
@@ -14,43 +14,20 @@ Nester is a self-custodial savings app on Stellar. Set savings goals, automate r
 
 Holding stablecoins today means choosing between two bad options: let your money sit idle losing value to inflation, or navigate the complex world of DeFi protocols yourself — juggling pools, APYs, and rebalancing by hand.
 
-Nester turns that into one decision: pick a risk profile, deposit, and let the protocol do the work.
+Nester turns that into one decision: deposit USDC, receive shares, and let the share price rise as the venues pay yield.
 
 ---
 
-## How It Works
+## Nester Savings Rate
 
-| Piece | Function | Outcome |
-| ----- | -------- | ------- |
-| **Smart Vaults** | Diversify deposits across lending & staking protocols | Optimized yields, one deposit |
-| **Portfolio** | Live positions, P&L, performance history | Full visibility, on-chain truth |
-| **Auto-invest** | Recurring on-chain deposit mandates | Dollar-cost averaging into yield |
+One USDC savings product. You deposit USDC and receive shares; the share price rises as Blend and DeFindex pay yield, and withdrawals return USDC at the current share price. There are no risk tiers to pick.
 
----
-
-## Smart Vaults
-
-The yield engine. Deposits are routed through adapter contracts to Stellar yield protocols, within per-protocol limits set by each vault's allocation strategy.
-
-**Smart Vaults** let users choose their risk profile:
-
-| Vault        | Risk   | Target APY | Strategy                  |
-| ------------ | ------ | ---------- | ------------------------- |
-| Conservative | Low    | 6-8%       | Stablecoin lending only   |
-| Balanced     | Medium | 8-12%      | Mixed lending + staking   |
-| Growth       | Higher | 12-18%     | Aggressive multi-protocol |
-
-Target APYs describe each vault's intended strategy, not a promise of returns.
-
-A keeper rebalances vaults using signature-attested APY/TVL data on-chain, within on-chain limits: at most 20% of a vault's assets per rebalance, with slippage checks on every leg. A circuit breaker and emergency withdrawal queue protect deposits when a source degrades.
-
----
-
-## Portfolio & Auto-invest
-
-Every position is visible in a live portfolio: holdings, realized yield, performance charts, and a unified activity feed. Recurring deposit mandates run on-chain, so auto-invest schedules execute without trusting a server with your funds.
-
-Savings goals sit on top: set a target, attach a schedule, watch streaks and milestones — all backed by the same vault engine.
+- **The rate is realized, not promised.** The rate shown is the trailing 7-day rate actually earned by the share price. It is not guaranteed and it can go down.
+- **Performance fee.** 10% of gains above the previous high-water mark (hard maximum 20%), paid as shares into a locked reserve. No fee is charged on gains that only recover a previous loss.
+- **Reserve.** The reserve can only be used to cover saver losses, through a public, timelocked governance action that vests over 7 days.
+- **Timelocked risk.** Changes that add risk (a new venue, higher caps, a shorter timelock, a fee change) wait behind a public timelock: 3 days by default, 1 hour on testnet. A guardian can only reduce risk instantly, and can pause deposits but never withdrawals.
+- **Caps.** Each venue has an absolute cap and a cap as a percentage of the total.
+- **Losses are shared.** If a venue loses funds, all savers bear the loss pro-rata (the share price can drop), partially offset by the reserve.
 
 ---
 
@@ -58,9 +35,9 @@ Savings goals sit on top: set a target, attach a schedule, watch streaks and mil
 
 ![System Architecture]
 
-**Smart Contracts (Soroban/Stellar)** — Vault management, deposit routing, yield distribution, rebalancing logic, recurring deposit mandates, and savings goals.
+**Smart Contracts (Soroban/Stellar)** — The savings core (shares, share price, caps, timelocked governance), the fee reserve, and one adapter per yield venue (Blend, DeFindex).
 
-**Backend Services (Go)** — Real-time APY/TVL monitoring, a reorg-safe event indexer, a double-entry ledger, and portfolio valuation.
+**Backend Services (Go)** — Real-time APY/TVL monitoring, a reorg-safe event indexer, and a double-entry ledger.
 
 **Client Applications** — Web app (Next.js) and API for integrations.
 
@@ -72,7 +49,7 @@ Nester is non-custodial. Users maintain full ownership of assets through smart c
 
 **Audit Status:** not yet audited. An external audit is a hard requirement before mainnet — see [docs/security/contract_audits.md](docs/security/contract_audits.md).
 
-**Risk Mitigations:** Per-protocol allocation caps limit single-point-of-failure exposure. A staged circuit breaker throttles or halts a vault when share price, yield or withdrawal patterns look abnormal. Upgrades are timelocked, and a guardian role can pause the protocol but never increase risk. Deposits are **not** insured.
+**Risk Mitigations:** Per-venue caps limit single-point-of-failure exposure. Risk-adding changes are timelocked and public, and a guardian role can reduce risk but never increase it. No role can set the share price or block withdrawals while assets are liquid. Savers can lose money if a venue fails, and deposits are **not** insured.
 
 **Automated Security Scanning (CI)**
 
@@ -226,7 +203,7 @@ See [SECURITY.md](/SECURITY.md) and the [deployment docs](/deploy) for productio
 
 | Phase  | Focus                                                           | Status      |
 | ------ | --------------------------------------------------------------- | ----------- |
-| **v1** | Yield vaults, portfolio dashboard, recurring on-chain deposits  | In Progress |
+| **v1** | Nester Savings Rate (USDC) on Stellar testnet                   | In Progress |
 | **v2** | In-app swaps (DEX routing) and recurring token buys             | Planned     |
 | **v3** | Fiat onramp widget, MPC embedded wallets, curated asset baskets | Planned     |
 | **v4** | Multi-region expansion and deeper protocol integrations         | Future      |
