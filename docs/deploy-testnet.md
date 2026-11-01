@@ -11,7 +11,18 @@ Anyone can test Nester on Stellar testnet at https://app.usenester.xyz. It costs
 
 Redis is optional and isn't used.
 
-## One-time setup
+## Automated deploy
+
+Put one token per service in `~/.nester/deploy.env` (`NEON_API_KEY`, `RENDER_API_KEY`, `VERCEL_TOKEN`, `UPTIMEROBOT_API_KEY`), then run:
+
+```
+node scripts/deploy-testnet.mjs            # everything, safe to re-run
+node scripts/deploy-testnet.mjs --only=verify
+```
+
+It creates or reuses the Neon project, the Render service and its `api` domain, the Vercel env vars and DNS record, a production deploy of `DEPLOY_BRANCH` (default `feat/savings-rate`, which must be pushed), and the UptimeRobot monitor, then checks the live API and dapp. The manual steps below describe the same thing.
+
+## One-time setup (manual equivalent)
 
 ### 1. Database (Neon)
 
