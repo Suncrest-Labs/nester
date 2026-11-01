@@ -25,7 +25,7 @@ import { AppShell } from "@/components/app-shell";
 import { BottomNav } from "@/components/bottom-nav";
 import { Navbar } from "@/components/navbar";
 
-const RETIRED_LABELS = /^(portfolio|stocks|markets|vaults|history)$/i;
+const RETIRED_LABELS = /^(portfolio|stocks|vaults)$/i;
 const RETIRED_HREF = /^\/(portfolio|stocks|vaults)(\/|$)/;
 
 function expectNoRetiredLinks(root: HTMLElement) {
@@ -36,18 +36,18 @@ function expectNoRetiredLinks(root: HTMLElement) {
 }
 
 describe("app navigation", () => {
-  it("lists Savings Rate, Yields, Goals and Settings", () => {
+  it("lists Savings, Activity, Markets and Goals", () => {
     expect(APP_NAV.map(({ label, href }) => [label, href])).toEqual([
-      ["Savings Rate", "/dashboard"],
-      ["Yields", "/yields"],
+      ["Savings", "/dashboard"],
+      ["Activity", "/activity"],
+      ["Markets", "/yields"],
       ["Goals", "/savings"],
-      ["Settings", "/settings"],
     ]);
   });
 
   it("app shell nav doesn't render Portfolio or Stocks", () => {
     const { container } = render(<AppShell>content</AppShell>);
-    expect(screen.getAllByRole("link", { name: "Savings Rate" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: "Savings" }).length).toBeGreaterThan(0);
     expectNoRetiredLinks(container);
 
     fireEvent.click(screen.getByRole("button", { name: /GAWAL/ }));
@@ -60,13 +60,13 @@ describe("app navigation", () => {
   it("bottom nav doesn't render Portfolio or Stocks", () => {
     const { container } = render(<BottomNav />);
     expect(within(container).getByRole("link", { name: "Goals" })).toBeTruthy();
-    expect(within(container).getByRole("link", { name: "Yields" })).toBeTruthy();
+    expect(within(container).getByRole("link", { name: "Markets" })).toBeTruthy();
     expectNoRetiredLinks(container);
   });
 
   it("navbar doesn't render Portfolio or Stocks", () => {
     const { container } = render(<Navbar />);
-    expect(screen.getAllByRole("link", { name: "Savings Rate" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: "Savings" }).length).toBeGreaterThan(0);
     expectNoRetiredLinks(container);
 
     fireEvent.click(screen.getByRole("button", { name: /GAWAL/ }));

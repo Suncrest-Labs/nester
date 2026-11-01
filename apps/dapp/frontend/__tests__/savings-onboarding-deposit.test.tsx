@@ -19,7 +19,7 @@ async function reachYieldStep(currency?: "XLM") {
       <SavingsOnboardingWizard onComplete={onComplete} onDismiss={vi.fn()} />
     </QueryClientProvider>
   );
-  fireEvent.click(screen.getByText("Emergency Fund"));
+  fireEvent.click(screen.getByText("Emergency fund"));
   fireEvent.change(screen.getByLabelText(/target amount/i), { target: { value: "500" } });
   if (currency) fireEvent.click(screen.getByRole("button", { name: currency }));
   fireEvent.click(screen.getByRole("button", { name: /Create goal & continue/ }));

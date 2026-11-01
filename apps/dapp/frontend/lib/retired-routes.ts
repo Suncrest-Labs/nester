@@ -5,7 +5,16 @@
  */
 const RETIRED_PATHS = ["/vaults", "/dashboard/vaults", "/portfolio", "/stocks"];
 
-export const retiredRouteRedirects = RETIRED_PATHS.flatMap((path) => [
-  { source: path, destination: "/dashboard", permanent: false },
-  { source: `${path}/:path*`, destination: "/dashboard", permanent: false },
-]);
+/** Former dashboard sub-pages whose content now lives elsewhere. */
+const MOVED_PATHS = [
+  { source: "/dashboard/history", destination: "/activity" },
+  { source: "/dashboard/analytics", destination: "/dashboard" },
+];
+
+export const retiredRouteRedirects = [
+  ...RETIRED_PATHS.flatMap((path) => [
+    { source: path, destination: "/dashboard", permanent: false },
+    { source: `${path}/:path*`, destination: "/dashboard", permanent: false },
+  ]),
+  ...MOVED_PATHS.map((r) => ({ ...r, permanent: false })),
+];

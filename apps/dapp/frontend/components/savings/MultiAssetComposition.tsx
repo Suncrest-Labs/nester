@@ -13,6 +13,12 @@ import type { AssetComposition } from "@/lib/types/progress";
 
 type TooltipNameType = number | string;
 
+const TONES = [1, 0.55, 0.3, 0.15];
+
+function tone(index: number): number {
+  return TONES[index % TONES.length];
+}
+
 function CompositionTooltip({
   active,
   payload,
@@ -20,9 +26,9 @@ function CompositionTooltip({
   if (!active || !payload?.length) return null;
   const d = payload[0].payload as AssetComposition;
   return (
-    <div className="rounded-xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-2.5 shadow-sm text-xs">
-      <p className="font-medium text-black dark:text-white">{d.asset}</p>
-      <p className="text-black/60 dark:text-white/60">{d.percentage}% of vault</p>
+    <div className="rounded-lg border bg-card px-3 py-2 text-xs">
+      <p className="text-foreground">{d.asset}</p>
+      <p className="tabular-nums text-muted-foreground">{d.percentage}% of the balance</p>
     </div>
   );
 }
@@ -36,11 +42,9 @@ export function MultiAssetComposition({
 
   return (
     <div data-testid="multi-asset-composition">
-      <h3 className="text-xs font-semibold text-black/60 dark:text-white/60 uppercase tracking-wider mb-3">
-        Asset Composition
-      </h3>
-      <div className="flex items-center gap-4">
-        <div className="h-24 w-24 shrink-0">
+      <h3 className="text-sm font-medium text-muted-foreground">Asset composition</h3>
+      <div className="mt-3 flex items-center gap-4">
+        <div className="h-24 w-24 shrink-0 text-foreground">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
@@ -55,30 +59,28 @@ export function MultiAssetComposition({
                 strokeWidth={0}
               >
                 {composition.map((entry, index) => (
-                  <Cell key={index} fill={entry.color} />
+                  <Cell key={entry.asset} fill="currentColor" fillOpacity={tone(index)} />
                 ))}
               </Pie>
               <Tooltip content={CompositionTooltip} />
             </PieChart>
           </ResponsiveContainer>
         </div>
-        <div className="flex-1 space-y-1.5">
-          {composition.map((a) => (
-            <div key={a.asset} className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
+        <ul className="flex-1 space-y-1.5">
+          {composition.map((a, index) => (
+            <li key={a.asset} className="flex items-center justify-between gap-2 text-sm">
+              <span className="flex min-w-0 items-center gap-2">
                 <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ background: a.color }}
+                  className="h-2 w-2 shrink-0 rounded-full bg-foreground"
+                  style={{ opacity: tone(index) }}
                   aria-hidden="true"
                 />
-                <span className="text-xs text-black/70 dark:text-white/70 truncate">{a.asset}</span>
-              </div>
-              <span className="shrink-0 text-xs font-medium text-black dark:text-white">
-                {a.percentage}%
+                <span className="truncate text-foreground/80">{a.asset}</span>
               </span>
-            </div>
+              <span className="shrink-0 tabular-nums text-foreground">{a.percentage}%</span>
+            </li>
           ))}
-        </div>
+        </ul>
       </div>
     </div>
   );

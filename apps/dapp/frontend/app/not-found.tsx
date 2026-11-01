@@ -1,61 +1,34 @@
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowLeft, Home } from "lucide-react";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY } from "@/components/ui/page-kit";
 
 export default function NotFound() {
     return (
-        <div className="min-h-screen bg-white dark:bg-[#100F0F] flex flex-col items-center justify-center px-4">
-            {/* Logo */}
-            <Link href="/" className="flex items-center gap-2.5 mb-16">
-                <Image
-                    src="/logo.png"
-                    alt="Nester"
-                    width={36}
-                    height={36}
-                    className="rounded-xl"
-                />
-                <span className="font-heading text-[15px] font-medium text-black dark:text-white">
-                    Nester
-                </span>
+        <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
+            <Link href="/" className="mb-16 flex items-center gap-2.5">
+                <Image src="/logo.png" alt="Nester" width={32} height={32} className="rounded-lg" />
+                <span className="text-[15px] font-semibold text-foreground">Nester</span>
             </Link>
 
-            {/* Error code */}
-            <p className="font-mono text-[120px] sm:text-[160px] leading-none font-bold text-black/[0.04] dark:text-white/[0.04] select-none">
-                404
-            </p>
-
-            <div className="-mt-4 sm:-mt-6 text-center">
-                <h1 className="text-xl sm:text-2xl text-black dark:text-white mb-3">
-                    Page not found
+            <div className="w-full max-w-md text-center">
+                <p className="text-[13px] font-medium text-muted-foreground">Page not found</p>
+                <p className="mt-3 font-heading text-6xl font-light tabular-nums text-foreground">404</p>
+                <h1 className="mt-6 text-[16px] font-semibold text-foreground">
+                    This page doesn&apos;t exist
                 </h1>
-                <p className="text-sm text-black/40 dark:text-white/40 max-w-sm leading-relaxed">
-                    The page you&apos;re looking for doesn&apos;t exist or has
-                    been moved.
+                <p className="mt-2 text-sm text-muted-foreground">
+                    The link may be old or mistyped. Head back to your savings to carry on.
                 </p>
-            </div>
 
-            {/* Actions */}
-            <div className="mt-10 flex items-center gap-3">
-                <Link
-                    href="/"
-                    className="inline-flex items-center gap-2 rounded-full bg-black dark:bg-blue-600 px-5 py-2.5 text-sm text-white transition-opacity hover:opacity-75"
-                >
-                    <Home className="h-3.5 w-3.5" />
-                    Go home
-                </Link>
-                <Link
-                    href="/dashboard"
-                    className="inline-flex items-center gap-2 rounded-full border border-black/10 dark:border-white/10 px-5 py-2.5 text-sm text-black/60 dark:text-white/60 transition-colors hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white"
-                >
-                    <ArrowLeft className="h-3.5 w-3.5" />
-                    Dashboard
-                </Link>
+                <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+                    <Link href="/dashboard" className={BUTTON_PRIMARY}>
+                        Go to savings
+                    </Link>
+                    <Link href="/" className={BUTTON_SECONDARY}>
+                        Home
+                    </Link>
+                </div>
             </div>
-
-            {/* Footer note */}
-            <p className="mt-16 font-mono text-[11px] text-black/20 dark:text-white/20">
-                nester.finance
-            </p>
         </div>
     );
 }

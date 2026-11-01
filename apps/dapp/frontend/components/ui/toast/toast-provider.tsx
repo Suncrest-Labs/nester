@@ -189,7 +189,7 @@ function ToastItem({
       case "warning":
         return <AlertTriangle className="h-5 w-5 text-amber-600" />;
       case "info":
-        return <Info className="h-5 w-5 text-blue-600" />;
+        return <Info className="h-5 w-5 text-foreground" />;
     }
   };
 
@@ -202,7 +202,7 @@ function ToastItem({
       case "warning":
         return "border-amber-200";
       case "info":
-        return "border-blue-200";
+        return "border-border";
     }
   };
 

@@ -1,15 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { format } from "date-fns";
-import { Target } from "lucide-react";
 import { savingsGoals, type SharedGoalView } from "@/lib/api/savings-goals";
-import { cn } from "@/lib/utils";
+import { BigNumber, PANEL, SKELETON } from "@/components/ui/page-kit";
+import { GoalProgressBar, formatGoalAmount } from "@/components/savings/GoalProgressBar";
 
 function toNumber(value: string | number | undefined): number {
   if (value === undefined) return 0;
   return typeof value === "number" ? value : parseFloat(value) || 0;
+}
+
+function Frame({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="w-full max-w-md">{children}</div>
+    </main>
+  );
 }
 
 export default function SharedGoalPage() {
@@ -23,128 +32,92 @@ export default function SharedGoalPage() {
     savingsGoals
       .getShared(token)
       .then(setGoal)
-      .catch(() => setError("This savings goal link is invalid or has been revoked."))
+      .catch(() =>
+        setError("This goal link doesn't work. It may have been turned off by its owner.")
+      )
       .finally(() => setLoading(false));
   }, [token]);
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-black dark:border-white border-t-transparent" />
-      </div>
+      <Frame>
+        <div aria-busy="true" className={`h-56 ${SKELETON}`} />
+      </Frame>
     );
   }
 
   if (error || !goal) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
-        <div className="rounded-3xl border border-red-100 bg-white dark:bg-[#100F0F] p-10 text-center shadow-sm">
-          <p className="text-sm font-semibold text-red-700">{error || "Goal not found."}</p>
+      <Frame>
+        <div className={PANEL}>
+          <p role="alert" className="text-sm text-foreground">
+            {error || "This goal couldn't be found."}
+          </p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Ask the person who shared it for a new link.
+          </p>
         </div>
-      </div>
+      </Frame>
     );
   }
 
   const current = toNumber(goal.current_amount);
   const target = toNumber(goal.target_amount);
   const progress = Math.min(100, Math.max(0, goal.progress_pct ?? 0));
-  const deadline = goal.deadline ? format(new Date(goal.deadline), "MMMM d, yyyy") : "—";
-  const displayName = goal.name || (goal.category ?? "Savings Goal");
+  const deadline = goal.deadline ? format(new Date(goal.deadline), "MMMM d, yyyy") : "No date set";
+  const displayName =
+    goal.name || (goal.category ? goal.category.replace(/_/g, " ") : "Savings goal");
   const isCompleted = goal.status === "completed";
+  const status = isCompleted
+    ? "Reached"
+    : !goal.status || goal.status === "active"
+      ? "In progress"
+      : goal.status.charAt(0).toUpperCase() + goal.status.slice(1);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
-      <div className="w-full max-w-md">
-        <div className="mb-6 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-black/40 dark:text-white/40">
-            Shared Savings Goal
-          </p>
-        </div>
-
-        <div
-          className={cn(
-            "rounded-3xl border bg-white dark:bg-[#100F0F] p-8 shadow-sm",
-            isCompleted ? "border-emerald-200" : "border-black/8 dark:border-white/8"
+    <Frame>
+      <p className="mb-4 text-[13px] font-medium text-muted-foreground">Shared goal</p>
+      <div className={PANEL}>
+        <h1 className="text-sm font-medium capitalize text-foreground">
+          {goal.emoji && (
+            <span className="mr-2" aria-hidden="true">
+              {goal.emoji}
+            </span>
           )}
-        >
-          <div className="mb-6 flex items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5 text-3xl">
-              {goal.emoji ? <span aria-hidden="true">{goal.emoji}</span> : <Target className="h-7 w-7 text-black/40 dark:text-white/40" />}
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-black dark:text-white">{displayName}</h1>
-              {goal.category && (
-                <p className="text-sm text-black/50 dark:text-white/50 capitalize">
-                  {goal.category.replace(/_/g, " ")}
-                </p>
-              )}
-            </div>
-          </div>
+          {displayName}
+        </h1>
 
-          <div className="mb-6">
-            <div className="mb-2 flex items-end justify-between">
-              <div>
-                <p className="font-mono text-2xl font-bold text-black dark:text-white">
-                  {current.toLocaleString()}
-                </p>
-                <p className="text-xs text-black/50 dark:text-white/50">
-                  of {target.toLocaleString()} {goal.currency}
-                </p>
-              </div>
-              <div className="text-right">
-                <p
-                  className={cn(
-                    "text-2xl font-bold",
-                    isCompleted ? "text-emerald-600" : "text-black dark:text-white"
-                  )}
-                >
-                  {progress.toFixed(0)}%
-                </p>
-                <p className="text-xs text-black/50 dark:text-white/50">progress</p>
-              </div>
-            </div>
-            <div className="h-3 overflow-hidden rounded-full bg-black/8 dark:bg-white/8">
-              <div
-                className={cn(
-                  "h-full rounded-full transition-all duration-500",
-                  isCompleted ? "bg-emerald-500" : "bg-black dark:bg-white"
-                )}
-                style={{ width: `${progress}%` }}
-                role="progressbar"
-                aria-valuenow={progress}
-                aria-valuemin={0}
-                aria-valuemax={100}
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] px-4 py-3">
-            <div className="text-center">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-black/40 dark:text-white/40">Deadline</p>
-              <p className="mt-0.5 text-sm font-semibold text-black dark:text-white">{deadline}</p>
-            </div>
-            <div className="text-center">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-black/40 dark:text-white/40">Status</p>
-              <p className={cn("mt-0.5 text-sm font-semibold capitalize", isCompleted ? "text-emerald-600" : "text-black dark:text-white")}>
-                {goal.status ?? "active"}
-              </p>
-            </div>
-          </div>
-
-          {isCompleted && (
-            <div className="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-center">
-              <p className="text-sm font-semibold text-emerald-700">🎉 Goal achieved!</p>
-            </div>
-          )}
-        </div>
-
-        <p className="mt-6 text-center text-xs text-black/30 dark:text-white/30">
-          Powered by{" "}
-          <a href="/" className="underline hover:text-black dark:hover:text-white">
-            Nester
-          </a>
+        <BigNumber className="mt-4">{formatGoalAmount(current)}</BigNumber>
+        <p className="mt-1 text-sm text-muted-foreground">
+          of <span className="tabular-nums">{formatGoalAmount(target, goal.currency)}</span>
         </p>
+
+        <GoalProgressBar percent={progress} className="mt-5" />
+
+        <dl className="mt-5 space-y-2 text-sm">
+          <div className="flex justify-between">
+            <dt className="text-muted-foreground">Progress</dt>
+            <dd className="tabular-nums text-foreground">{progress.toFixed(0)}%</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-muted-foreground">Target date</dt>
+            <dd className="text-foreground">{deadline}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-muted-foreground">Status</dt>
+            <dd className="text-foreground">{status}</dd>
+          </div>
+        </dl>
+
+        {isCompleted && <p className="mt-5 text-sm text-foreground">This goal has been reached.</p>}
       </div>
-    </div>
+
+      <p className="mt-6 text-center text-[13px] text-muted-foreground">
+        Tracked with{" "}
+        <Link href="/" className="underline underline-offset-4 hover:text-foreground">
+          Nester
+        </Link>
+      </p>
+    </Frame>
   );
 }

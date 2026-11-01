@@ -16,6 +16,7 @@ import { PositionCard } from "@/components/savings-rate/PositionCard";
 import { AllocationCard } from "@/components/savings-rate/AllocationCard";
 import { ReserveCard } from "@/components/savings-rate/ReserveCard";
 import { PendingChangesCard } from "@/components/savings-rate/PendingChangesCard";
+import { SharePriceChart } from "@/components/savings-rate/SharePriceChart";
 
 const PANEL = "rounded-xl border bg-card p-6";
 const COLUMNS = "grid items-start gap-6 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]";
@@ -242,6 +243,10 @@ export default function Dashboard() {
                             <GoalsCard />
                             <MarketYieldsCard />
                         </div>
+                    </div>
+
+                    <div className="mt-6">
+                        <SharePriceChart />
                     </div>
 
                     <section aria-labelledby="transparency-heading" className="mt-14">

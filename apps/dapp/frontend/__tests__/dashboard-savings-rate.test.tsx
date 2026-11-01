@@ -37,6 +37,10 @@ vi.mock("@/lib/stellar/savings", () => ({
   executeSavingsRedeem: vi.fn(),
 }));
 
+vi.mock("@/lib/api/savings", () => ({
+  fetchSavingsHistory: vi.fn(() => Promise.resolve([])),
+}));
+
 import Dashboard from "@/app/dashboard/page";
 import { ApiError } from "@/lib/api/client";
 

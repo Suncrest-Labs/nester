@@ -416,16 +416,16 @@ describe("Notification Center & Preferences Suite (#870)", () => {
             );
 
             await waitFor(() => {
-                expect(screen.getByText(/Notification Center/i)).toBeDefined();
+                expect(screen.getByRole("heading", { level: 1, name: "Notifications" })).toBeDefined();
             });
 
-            expect(screen.getByRole("tab", { name: /Notifications Stream/i })).toBeDefined();
+            expect(screen.getByRole("tab", { name: /All notifications/i })).toBeDefined();
 
-            const prefTab = screen.getByRole("tab", { name: /Preferences & Delivery/i });
+            const prefTab = screen.getByRole("tab", { name: /Delivery preferences/i });
             fireEvent.click(prefTab);
 
             await waitFor(() => {
-                expect(screen.getByText(/Notification Channel Preferences/i)).toBeDefined();
+                expect(screen.getByText(/Channel preferences/i)).toBeDefined();
                 expect(screen.getByText(/Safety alerts cannot be suppressed/i)).toBeDefined();
             });
         });
@@ -441,7 +441,7 @@ describe("Notification Center & Preferences Suite (#870)", () => {
                 expect(screen.getByRole("group", { name: /Category filters/i })).toBeDefined();
             });
 
-            const safetyBtn = screen.getByRole("button", { name: /Safety & Security/i });
+            const safetyBtn = screen.getByRole("button", { name: /Safety and security/i });
             fireEvent.click(safetyBtn);
 
             await waitFor(() => {

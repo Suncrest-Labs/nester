@@ -53,6 +53,8 @@ export function Navbar() {
         if (mobileOpen) setMobileOpen(false);
     }
 
+    const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
+
     const copyAddress = (e: React.MouseEvent) => {
         e.stopPropagation();
         if (address) {
@@ -69,8 +71,8 @@ export function Navbar() {
                     "fixed left-0 right-0 z-50 transition-all duration-300 border-b",
                     currentNetwork.id === 'testnet' ? "top-10" : "top-0",
                     isScrolled
-                        ? "bg-white/90 backdrop-blur-md border-border shadow-sm py-3"
-                        : "bg-white/70 backdrop-blur-sm border-transparent py-4"
+                        ? "bg-background/90 backdrop-blur-md border-border py-3"
+                        : "bg-background/70 backdrop-blur-sm border-transparent py-4"
                 )}
             >
                 <div className="mx-auto max-w-7xl px-4 md:px-8 lg:px-12 xl:px-16">
@@ -99,14 +101,14 @@ export function Navbar() {
                                         data-tour={undefined}
                                         className={cn(
                                             "text-[15px] font-medium transition-colors relative py-2",
-                                            pathname === item.href
+                                            isActive(item.href)
                                                 ? "text-foreground"
-                                                : "text-foreground/50 hover:text-foreground/80"
+                                                : "text-muted-foreground hover:text-foreground"
                                         )}
                                     >
                                         {item.label}
-                                        {pathname === item.href && (
-                                            <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full bg-foreground/80" />
+                                        {isActive(item.href) && (
+                                            <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full bg-foreground" />
                                         )}
                                     </Link>
                                 ))}
@@ -127,10 +129,10 @@ export function Navbar() {
                                     >
                                         <button
                                             onClick={() => setShowMenu(!showMenu)}
-                                            className="flex items-center gap-2 rounded-full border border-border bg-white dark:bg-[#100F0F] px-4 py-2 transition-all hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm"
+                                            className="flex items-center gap-2 rounded-full border px-4 py-2 transition-colors hover:bg-foreground/5"
                                         >
                                             <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                                            <span className="text-sm font-medium text-foreground font-mono">
+                                            <span className="text-sm font-medium text-foreground">
                                                 {truncateAddress(address, 5)}
                                             </span>
                                             <ChevronDown
@@ -148,24 +150,24 @@ export function Navbar() {
                                                     animate={{ opacity: 1, y: 0, scale: 1 }}
                                                     exit={{ opacity: 0, y: 8, scale: 0.96 }}
                                                     transition={{ duration: 0.15 }}
-                                                    className="absolute right-0 top-full mt-2 w-64 rounded-2xl border border-border bg-white dark:bg-[#100F0F] p-2 shadow-xl shadow-black/8"
+                                                    className="absolute right-0 top-full mt-2 w-64 rounded-xl border bg-card p-2"
                                                 >
                                                     <div className="px-3 py-2 mb-1">
-                                                        <p className="text-xs text-muted-foreground mb-1">Connected Wallet</p>
-                                                        <p className="text-sm font-mono text-foreground/70 break-all">
+                                                        <p className="text-xs text-muted-foreground mb-1">Connected wallet</p>
+                                                        <p className="text-sm text-foreground break-all">
                                                             {truncateAddress(address, 10)}
                                                         </p>
                                                     </div>
                                                     <button
                                                         onClick={copyAddress}
-                                                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-foreground/70 hover:bg-secondary hover:text-foreground transition-colors"
+                                                        className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors"
                                                     >
-                                                        {copied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
-                                                        {copied ? "Copied!" : "Copy Address"}
+                                                        {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                                        {copied ? "Copied" : "Copy address"}
                                                     </button>
                                                     <button
                                                         onClick={() => { disconnect(); setShowMenu(false); }}
-                                                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-destructive hover:bg-destructive/10 transition-colors"
+                                                        className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-foreground/5 transition-colors"
                                                     >
                                                         <LogOut className="h-4 w-4" />
                                                         Disconnect
@@ -178,19 +180,18 @@ export function Navbar() {
                                     {/* Mobile hamburger */}
                                     <button
                                         onClick={() => setMobileOpen(!mobileOpen)}
-                                        className="md:hidden flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-white dark:bg-[#100F0F] text-foreground/70 transition-colors hover:text-foreground"
+                                        className="md:hidden flex h-9 w-9 items-center justify-center rounded-full border text-muted-foreground transition-colors hover:text-foreground"
                                         aria-label="Toggle menu"
                                     >
                                         {mobileOpen ? <X className="h-4.5 w-4.5" /> : <Menu className="h-4.5 w-4.5" />}
                                     </button>
                                 </>
                             ) : (
-                                <Link href="/">
-                                    <div className="p-0.5 rounded-full border border-black/15 dark:border-white/15">
-                                        <button className="rounded-full bg-brand-dark hover:bg-brand-dark/90 px-5 py-2 text-sm font-medium text-white transition-all">
-                                            Connect Wallet
-                                        </button>
-                                    </div>
+                                <Link
+                                    href="/"
+                                    className="inline-flex items-center justify-center rounded-full bg-foreground px-4 py-2 text-[13px] font-medium text-background transition-opacity hover:opacity-80"
+                                >
+                                    Connect wallet
                                 </Link>
                             )}
                         </div>
@@ -208,7 +209,7 @@ export function Navbar() {
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             transition={{ duration: 0.2 }}
-                            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm md:hidden"
+                            className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm md:hidden"
                             onClick={() => setMobileOpen(false)}
                         />
 
@@ -218,20 +219,20 @@ export function Navbar() {
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -12 }}
                             transition={{ duration: 0.2, ease: "easeOut" }}
-                            className="fixed left-4 right-4 top-26 z-50 md:hidden rounded-2xl border border-border bg-white dark:bg-[#100F0F] shadow-2xl shadow-black/10 overflow-hidden"
+                            className="fixed left-4 right-4 top-26 z-50 md:hidden rounded-xl border bg-card overflow-hidden"
                         >
                             {/* Address */}
-                            <div className="px-5 py-4 border-b border-border">
-                                <p className="text-[10px] uppercase tracking-widest text-black/40 dark:text-white/40 mb-1">Wallet</p>
+                            <div className="px-5 py-4 border-b">
+                                <p className="text-xs text-muted-foreground mb-1">Wallet</p>
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                         <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                                        <span className="font-mono text-sm text-black/70 dark:text-white/70">
+                                        <span className="text-sm text-foreground">
                                             {address ? truncateAddress(address, 8) : ""}
                                         </span>
                                     </div>
-                                    <button onClick={copyAddress} className="text-black/30 dark:text-white/30 hover:text-black/60 dark:hover:text-white/60 transition-colors">
-                                        {copied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                                    <button onClick={copyAddress} aria-label="Copy address" className="text-muted-foreground hover:text-foreground transition-colors">
+                                        {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                                     </button>
                                 </div>
                             </div>
@@ -244,24 +245,21 @@ export function Navbar() {
                                         href={item.href}
                                         className={cn(
                                             "flex items-center justify-between rounded-xl px-4 py-3 text-sm font-medium transition-colors",
-                                            pathname === item.href
-                                                ? "bg-black dark:bg-blue-600 text-white"
-                                                : "text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5 hover:text-black dark:hover:text-white"
+                                            isActive(item.href)
+                                                ? "bg-foreground text-background"
+                                                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                                         )}
                                     >
                                         {item.label}
-                                        {pathname === item.href && (
-                                            <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
-                                        )}
                                     </Link>
                                 ))}
                             </div>
 
                             {/* Disconnect */}
-                            <div className="px-3 pb-3 pt-1 border-t border-border mt-1">
+                            <div className="px-3 pb-3 pt-1 border-t mt-1">
                                 <button
                                     onClick={() => { disconnect(); setMobileOpen(false); }}
-                                    className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-500 hover:bg-red-50 transition-colors"
+                                    className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-foreground/5 transition-colors"
                                 >
                                     <LogOut className="h-4 w-4" />
                                     Disconnect

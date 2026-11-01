@@ -1,20 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
 import Link from "next/link";
-import {
-  AlertTriangle,
-  Bookmark,
-  BookmarkCheck,
-  Clock,
-  RefreshCw,
-  TrendingUp,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, Bookmark, BookmarkCheck, RefreshCw } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { LoadingRegion } from "@/components/ui/skeleton/skeleton";
+import {
+  BigNumber,
+  BUTTON_PRIMARY,
+  BUTTON_SECONDARY,
+  EmptyPanel,
+  PageHeader,
+  PANEL,
+  Panel,
+  Section,
+  SegmentedControl,
+  SKELETON,
+} from "@/components/ui/page-kit";
 import { useWallet } from "@/components/wallet-provider";
 import { useYields } from "@/hooks/useYields";
+import { useSavings } from "@/hooks/useSavings";
+import { formatPercent } from "@/components/savings-rate/format";
 import {
   addYieldBookmark,
   fetchYieldBookmarks,
@@ -26,6 +32,9 @@ import { getStoredToken } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
 type RiskTier = "all" | "low" | "medium" | "high";
+type SortKey = "apy" | "tvl";
+type SortDir = "asc" | "desc";
+type SortState = { key: SortKey; dir: SortDir };
 
 const RISK_TABS: { id: RiskTier; label: string }[] = [
   { id: "all", label: "All" },
@@ -34,17 +43,21 @@ const RISK_TABS: { id: RiskTier; label: string }[] = [
   { id: "high", label: "High" },
 ];
 
+const RISK_STYLE: Record<Exclude<RiskTier, "all">, { label: string; dot: string }> = {
+  low: { label: "Low", dot: "bg-emerald-500" },
+  medium: { label: "Medium", dot: "bg-amber-500" },
+  high: { label: "High", dot: "bg-red-500" },
+};
+
+const ROW_GRID =
+  "grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2rem] md:items-center md:gap-y-0";
+const NO_BOOKMARKS: ReadonlySet<string> = new Set();
+const MOBILE_LABEL = "block text-xs text-muted-foreground md:hidden";
+
 function riskTier(score: number): Exclude<RiskTier, "all"> {
   if (score <= 25) return "low";
   if (score <= 55) return "medium";
   return "high";
-}
-
-function riskBadge(score: number): { label: string; className: string } {
-  const tier = riskTier(score);
-  if (tier === "low") return { label: "Low", className: "bg-emerald-50 text-emerald-700" };
-  if (tier === "medium") return { label: "Medium", className: "bg-amber-50 text-amber-700" };
-  return { label: "High", className: "bg-red-50 text-red-700" };
 }
 
 function fmtTVL(usd: number): string {
@@ -54,24 +67,91 @@ function fmtTVL(usd: number): string {
   return `$${usd.toFixed(0)}`;
 }
 
-function CardSkeleton() {
+function SavingsComparison() {
+  const { summary, isLoading } = useSavings();
+
   return (
-    <div className="animate-pulse rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5">
-      <div className="mb-4 flex justify-between">
-        <div className="h-10 w-10 rounded-xl bg-black/8 dark:bg-white/8" />
-        <div className="h-6 w-16 rounded-full bg-black/8 dark:bg-white/8" />
+    <section
+      data-testid="savings-rate-cta"
+      aria-labelledby="savings-rate-compare"
+      className={cn(PANEL, "mt-8 flex flex-wrap items-end justify-between gap-6")}
+    >
+      <div className="max-w-[60ch]">
+        <h2 id="savings-rate-compare" className="text-sm font-medium text-muted-foreground">
+          Nester Savings Rate
+        </h2>
+        {summary ? (
+          summary.rate7d === null ? (
+            <p className="mt-3 font-heading text-3xl font-light text-muted-foreground">
+              Not enough history yet
+            </p>
+          ) : (
+            <>
+              <BigNumber className="mt-3 text-5xl">{formatPercent(summary.rate7d, 2)}</BigNumber>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Realized rate, last 7 days. Not guaranteed.
+              </p>
+            </>
+          )
+        ) : (
+          isLoading && <div className={cn(SKELETON, "mt-3 h-12 w-40")} aria-hidden="true" />
+        )}
+        <p className="mt-4 text-sm text-foreground/80">
+          The markets below are for comparison, not where your deposit goes. The Savings Rate
+          allocates to Blend and DeFindex, and the dashboard shows exactly where your money sits.
+        </p>
       </div>
-      <div className="mb-2 h-4 w-32 rounded bg-black/8 dark:bg-white/8" />
-      <div className="mb-4 h-3 w-24 rounded bg-black/6 dark:bg-white/6" />
-      <div className="grid grid-cols-2 gap-3">
-        <div className="h-12 rounded-xl bg-black/6 dark:bg-white/6" />
-        <div className="h-12 rounded-xl bg-black/6 dark:bg-white/6" />
-      </div>
+      <Link href="/dashboard" className={BUTTON_PRIMARY}>
+        Save with Nester
+      </Link>
+    </section>
+  );
+}
+
+function RiskLabel({ score }: { score: number }) {
+  const risk = RISK_STYLE[riskTier(score)];
+  return (
+    <span className="inline-flex items-center gap-2 text-sm text-foreground">
+      <span className={cn("h-1.5 w-1.5 rounded-full", risk.dot)} aria-hidden="true" />
+      {risk.label}
+    </span>
+  );
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: SortState;
+  onSort: (key: SortKey) => void;
+}) {
+  const active = sort.key === sortKey;
+  const Icon = sort.dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <div
+      role="columnheader"
+      aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cn(
+          "inline-flex items-center gap-1 rounded transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground",
+          active && "text-foreground"
+        )}
+      >
+        {label}
+        {active && <Icon className="h-3 w-3" aria-hidden="true" />}
+      </button>
     </div>
   );
 }
 
-function YieldCard({
+function MarketRow({
   pool,
   bookmarked,
   onBookmark,
@@ -80,63 +160,50 @@ function YieldCard({
   bookmarked: boolean;
   onBookmark: (pool: YieldPool) => void;
 }) {
-  const risk = riskBadge(pool.riskScore);
-
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5 transition-all hover:border-black/18 dark:hover:border-white/18 hover:shadow-sm"
+    <div
+      role="row"
       data-testid="yield-card"
+      className={cn(ROW_GRID, "px-6 py-4 transition-colors hover:bg-foreground/5")}
     >
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-black/[0.04] dark:bg-white/[0.04]">
-            <span className="text-xs font-semibold uppercase text-black/60 dark:text-white/60">
-              {pool.symbol.slice(0, 2)}
-            </span>
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold capitalize text-black dark:text-white">{pool.project}</p>
-            <p className="text-[11px] font-mono text-black/45 dark:text-white/45">{pool.symbol}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className={cn("rounded-full px-2.5 py-1 text-[10px] font-bold uppercase", risk.className)}>
-            {risk.label}
-          </span>
-          <button
-            type="button"
-            onClick={() => onBookmark(pool)}
-            aria-label={bookmarked ? "Remove bookmark" : "Bookmark protocol"}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/8 dark:border-white/8 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors"
-          >
-            {bookmarked ? (
-              <BookmarkCheck className="h-4 w-4 text-black dark:text-white" />
-            ) : (
-              <Bookmark className="h-4 w-4" />
-            )}
-          </button>
-        </div>
+      <div role="cell" className="order-1 min-w-0 md:order-none">
+        <span className="block truncate text-sm font-medium capitalize text-foreground">
+          {pool.project}
+        </span>
       </div>
-
-      <div className="mb-4 grid grid-cols-2 gap-3">
-        <div className="rounded-xl bg-black/[0.025] dark:bg-white/[0.025] px-3 py-3 text-center">
-          <p className="font-mono text-lg text-black dark:text-white">{pool.apy.toFixed(2)}%</p>
-          <p className="mt-0.5 text-[10px] font-medium uppercase text-black/45 dark:text-white/45">APY</p>
-        </div>
-        <div className="rounded-xl bg-black/[0.025] dark:bg-white/[0.025] px-3 py-3 text-center">
-          <p className="font-mono text-lg text-black dark:text-white">{fmtTVL(pool.tvlUsd)}</p>
-          <p className="mt-0.5 text-[10px] font-medium uppercase text-black/45 dark:text-white/45">TVL</p>
-        </div>
+      <div role="cell" className="order-3 md:order-none">
+        <span className={MOBILE_LABEL}>Asset</span>
+        <span className="text-sm text-foreground">{pool.symbol}</span>
       </div>
-
-      <p className="mb-4 text-xs text-black/50 dark:text-white/50">
-        Asset: <span className="font-mono text-black/70 dark:text-white/70">{pool.symbol}</span>
-      </p>
-
-      <p className="mt-auto text-[11px] text-black/40 dark:text-white/40">Market data</p>
-    </motion.div>
+      <div role="cell" className="order-4 md:order-none">
+        <span className={MOBILE_LABEL}>APY</span>
+        <span className="text-sm font-medium tabular-nums text-foreground">
+          {pool.apy.toFixed(2)}%
+        </span>
+      </div>
+      <div role="cell" className="order-5 md:order-none">
+        <span className={MOBILE_LABEL}>TVL</span>
+        <span className="text-sm tabular-nums text-foreground">{fmtTVL(pool.tvlUsd)}</span>
+      </div>
+      <div role="cell" className="order-6 md:order-none">
+        <span className={MOBILE_LABEL}>Risk</span>
+        <RiskLabel score={pool.riskScore} />
+      </div>
+      <div role="cell" className="order-2 justify-self-end md:order-none">
+        <button
+          type="button"
+          onClick={() => onBookmark(pool)}
+          aria-label={bookmarked ? "Remove bookmark" : "Bookmark protocol"}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground"
+        >
+          {bookmarked ? (
+            <BookmarkCheck className="h-4 w-4 text-foreground" />
+          ) : (
+            <Bookmark className="h-4 w-4" />
+          )}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -144,31 +211,41 @@ export default function YieldsPage() {
   const { isConnected } = useWallet();
   const { data, isLoading, isError, refetch, isFetching } = useYields();
   const [riskFilter, setRiskFilter] = useState<RiskTier>("all");
+  const [sort, setSort] = useState<SortState>({ key: "apy", dir: "desc" });
   const [bookmarks, setBookmarks] = useState<Set<string>>(new Set());
 
+  const signedIn = isConnected && !!getStoredToken();
+  const savedSlugs = signedIn ? bookmarks : NO_BOOKMARKS;
+
   useEffect(() => {
-    if (!isConnected || !getStoredToken()) {
-      setBookmarks(new Set());
-      return;
-    }
+    if (!signedIn) return;
     fetchYieldBookmarks()
       .then((items) => setBookmarks(new Set(items.map((b) => b.protocol_slug))))
       .catch(() => setBookmarks(new Set()));
-  }, [isConnected]);
+  }, [signedIn]);
 
-  const pools = data?.data ?? [];
+  const pools = useMemo(() => data?.data ?? [], [data]);
   const isStale = data?.meta?.stale ?? false;
 
-  const filtered = useMemo(() => {
-    if (riskFilter === "all") return pools;
-    return pools.filter((p) => riskTier(p.riskScore) === riskFilter);
-  }, [pools, riskFilter]);
+  const rows = useMemo(() => {
+    const filtered =
+      riskFilter === "all" ? pools : pools.filter((p) => riskTier(p.riskScore) === riskFilter);
+    const value = (p: YieldPool) => (sort.key === "apy" ? p.apy : p.tvlUsd);
+    const sign = sort.dir === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => (value(a) - value(b)) * sign);
+  }, [pools, riskFilter, sort]);
+
+  const handleSort = useCallback((key: SortKey) => {
+    setSort((prev) =>
+      prev.key === key ? { key, dir: prev.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }
+    );
+  }, []);
 
   const handleBookmark = useCallback(
     async (pool: YieldPool) => {
-      if (!isConnected || !getStoredToken()) return;
+      if (!signedIn) return;
       const slug = protocolSlugFromProject(pool.project);
-      const isSaved = bookmarks.has(slug);
+      const isSaved = savedSlugs.has(slug);
       try {
         if (isSaved) {
           await removeYieldBookmark(slug);
@@ -185,128 +262,115 @@ export default function YieldsPage() {
         // silently ignore bookmark errors
       }
     },
-    [bookmarks, isConnected]
+    [savedSlugs, signedIn]
   );
 
   return (
     <AppShell>
-      <div className="mx-auto max-w-5xl px-5 py-8 sm:px-8">
-        <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold text-black dark:text-white tracking-tight">Yield Opportunities</h1>
-            <p className="mt-1 text-sm text-black/55 dark:text-white/55">
-              Live market rates for DeFi protocols on Stellar.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            {isConnected && getStoredToken() && (
-              <Link href="/yields/history">
-                <button className="text-xs font-semibold text-black dark:text-white hover:underline transition-colors">
-                  Harvest History
-                </button>
-              </Link>
-            )}
-            {isStale && (
-              <div
-                className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
-                data-testid="yield-stale-indicator"
-              >
-                <Clock className="h-3.5 w-3.5 shrink-0" />
-                Cached data — live rates may differ
-              </div>
-            )}
-          </div>
-        </div>
+      <PageHeader
+        title="Markets"
+        lede={
+          <p className="text-sm text-muted-foreground">
+            Live DeFi rates on Stellar, shown so you can compare them with the Nester Savings Rate.
+          </p>
+        }
+        actions={
+          signedIn ? (
+            <Link href="/yields/history" className={BUTTON_SECONDARY}>
+              Harvest history
+            </Link>
+          ) : undefined
+        }
+      />
 
-        <section
-          data-testid="savings-rate-cta"
-          className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5"
-        >
-          <div className="max-w-xl">
-            <h2 className="text-sm font-semibold text-black dark:text-white">
-              Earn with the Nester Savings Rate
-            </h2>
-            <p className="mt-1 text-xs text-black/55 dark:text-white/55">
-              The protocols below are market data, not where your deposit goes. The Nester
-              Savings Rate allocates to Blend and DeFindex, and you can see exactly where
-              your money sits on the dashboard.
-            </p>
-          </div>
-          <Link
-            href="/dashboard"
-            className="rounded-xl bg-black dark:bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-80"
-          >
-            Open the Savings Rate
-          </Link>
-        </section>
+      <SavingsComparison />
 
-        <div className="mb-6 flex flex-wrap items-center gap-2">
-          {RISK_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setRiskFilter(tab.id)}
-              className={cn(
-                "rounded-full px-4 py-2 text-xs font-semibold transition-colors",
-                riskFilter === tab.id
-                  ? "bg-black dark:bg-blue-600 text-white"
-                  : "border border-black/10 dark:border-white/10 text-black/55 dark:text-white/55 hover:text-black dark:hover:text-white"
-              )}
+      <Section id="markets-heading" title="Stellar markets">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <SegmentedControl
+            label="Filter by risk"
+            options={RISK_TABS}
+            value={riskFilter}
+            onChange={setRiskFilter}
+          />
+          {isStale && (
+            <p
+              className="text-sm text-amber-700 dark:text-amber-400"
+              data-testid="yield-stale-indicator"
             >
-              {tab.label}
-            </button>
-          ))}
+              Showing cached data. Live rates may differ.
+            </p>
+          )}
         </div>
 
         {isLoading ? (
-          <LoadingRegion
-            label="Loading yield opportunities"
-            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-          >
-            {Array.from({ length: 6 }).map((_, i) => (
-              <CardSkeleton key={i} />
-            ))}
-          </LoadingRegion>
+          <Panel>
+            <LoadingRegion label="Loading markets" className="space-y-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className={cn(SKELETON, "h-12")} />
+              ))}
+            </LoadingRegion>
+          </Panel>
         ) : isError ? (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16 text-center">
-            <AlertTriangle className="h-6 w-6 text-black/25 dark:text-white/25" />
-            <p className="text-sm text-black/50 dark:text-white/50">Yield data unavailable right now.</p>
-            <button
-              type="button"
-              onClick={() => refetch()}
-              disabled={isFetching}
-              className="flex items-center gap-1.5 rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white"
-            >
-              <RefreshCw className={cn("h-3 w-3", isFetching && "animate-spin")} />
-              Retry
-            </button>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div
-            className="flex flex-col items-center justify-center rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16 text-center px-6"
-            data-testid="yields-empty-state"
+          <EmptyPanel
+            title="Market rates didn't load."
+            action={
+              <button
+                type="button"
+                onClick={() => refetch()}
+                disabled={isFetching}
+                className={BUTTON_SECONDARY}
+              >
+                <RefreshCw
+                  className={cn("h-3 w-3", isFetching && "animate-spin")}
+                  aria-hidden="true"
+                />
+                Retry
+              </button>
+            }
           >
-            <TrendingUp className="mb-3 h-8 w-8 text-black/25 dark:text-white/25" />
-            <p className="text-sm font-medium text-black dark:text-white">No protocols available</p>
-            <p className="mt-1 max-w-sm text-xs text-black/50 dark:text-white/50">
+            We couldn&apos;t reach the rates service. Try again in a moment.
+          </EmptyPanel>
+        ) : rows.length === 0 ? (
+          <div data-testid="yields-empty-state">
+            <EmptyPanel title="No markets to show.">
               {pools.length === 0
-                ? "Protocols below the minimum TVL threshold are hidden. Check back later as liquidity grows."
-                : "No protocols match the selected risk tier. Try a different filter."}
-            </p>
+                ? "Markets below the minimum TVL threshold are hidden. Check back as liquidity grows."
+                : "No markets match this risk level. Try a different filter."}
+            </EmptyPanel>
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((pool) => (
-              <YieldCard
-                key={pool.pool}
-                pool={pool}
-                bookmarked={bookmarks.has(protocolSlugFromProject(pool.project))}
-                onBookmark={handleBookmark}
-              />
-            ))}
-          </div>
+          <Panel className="overflow-hidden p-0">
+            <div role="table" aria-labelledby="markets-heading">
+              <div role="rowgroup" className="hidden border-b md:block">
+                <div
+                  role="row"
+                  className={cn(ROW_GRID, "px-6 py-3 text-[13px] font-medium text-muted-foreground")}
+                >
+                  <div role="columnheader">Protocol</div>
+                  <div role="columnheader">Asset</div>
+                  <SortHeader label="APY" sortKey="apy" sort={sort} onSort={handleSort} />
+                  <SortHeader label="TVL" sortKey="tvl" sort={sort} onSort={handleSort} />
+                  <div role="columnheader">Risk</div>
+                  <div role="columnheader">
+                    <span className="sr-only">Bookmark</span>
+                  </div>
+                </div>
+              </div>
+              <div role="rowgroup" className="divide-y">
+                {rows.map((pool) => (
+                  <MarketRow
+                    key={pool.pool}
+                    pool={pool}
+                    bookmarked={savedSlugs.has(protocolSlugFromProject(pool.project))}
+                    onBookmark={handleBookmark}
+                  />
+                ))}
+              </div>
+            </div>
+          </Panel>
         )}
-      </div>
+      </Section>
     </AppShell>
   );
 }

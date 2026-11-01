@@ -22,6 +22,15 @@ import { SiteFooter } from "@/components/site-footer";
 import { NotificationBell } from "@/components/notification-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
 
+const MENU_ITEM =
+    "flex w-full items-center gap-2.5 px-4 py-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground";
+const QUIET_LINK =
+    "flex items-center gap-3 rounded-xl px-4 py-3 text-[14px] font-medium text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground";
+
+function isActive(pathname: string, href: string) {
+    return pathname === href || pathname.startsWith(href + "/");
+}
+
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 
 function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
@@ -30,7 +39,7 @@ function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
     return (
         <aside
             className={cn(
-                "fixed left-0 bottom-0 z-40 hidden w-[240px] flex-col border-r border-black/[0.06] dark:border-white/10 bg-white dark:bg-[#0A0A0A] lg:flex",
+                "fixed left-0 bottom-0 z-40 hidden w-[240px] flex-col border-r bg-background lg:flex",
                 bannerOffset ? "top-10" : "top-0"
             )}
         >
@@ -43,7 +52,7 @@ function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
                     height={30}
                     className="rounded-lg"
                 />
-                <span className="text-[15px] font-semibold text-black dark:text-white tracking-[-0.01em]">
+                <span className="text-[15px] font-semibold text-foreground">
                     Nester
                 </span>
             </Link>
@@ -51,16 +60,17 @@ function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
             {/* Nav links */}
             <nav className="flex-1 px-4 space-y-1">
                 {SIDEBAR_NAV.map((item) => {
-                    const active = pathname === item.href || pathname.startsWith(item.href + "/");
+                    const active = isActive(pathname, item.href);
                     return (
                         <Link
                             key={item.href}
                             href={item.href}
+                            aria-current={active ? "page" : undefined}
                             className={cn(
                                 "flex items-center gap-3 rounded-xl px-4 py-3 text-[14px] font-medium transition-colors",
                                 active
-                                    ? "bg-black/[0.04] text-black dark:bg-white/10 dark:text-white"
-                                    : "text-black/60 hover:bg-black/[0.02] hover:text-black/80 dark:text-white/60 dark:hover:bg-white/5 dark:hover:text-white/80"
+                                    ? "bg-foreground/5 text-foreground"
+                                    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                             )}
                         >
                             <item.icon className="h-[18px] w-[18px] shrink-0" />
@@ -71,11 +81,23 @@ function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
             </nav>
 
             {/* Bottom links */}
-            <div className="border-t border-black/[0.06] dark:border-white/10 px-4 py-5 space-y-1">
+            <div className="border-t px-4 py-5 space-y-1">
+                <Link
+                    href="/settings"
+                    aria-current={isActive(pathname, "/settings") ? "page" : undefined}
+                    className={cn(
+                        QUIET_LINK,
+                        isActive(pathname, "/settings") && "bg-foreground/5 text-foreground"
+                    )}
+                >
+                    <Settings className="h-[18px] w-[18px] shrink-0" />
+                    Settings
+                </Link>
                 <Link
                     href="https://docs.nester.finance"
                     target="_blank"
-                    className="flex items-center gap-3 rounded-xl px-4 py-3 text-[14px] font-medium text-black/60 hover:bg-black/[0.02] hover:text-black/80 dark:text-white/60 dark:hover:bg-white/5 dark:hover:text-white/80 transition-colors"
+                    rel="noopener noreferrer"
+                    className={QUIET_LINK}
                 >
                     <ExternalLink className="h-[18px] w-[18px] shrink-0" />
                     Developer Docs
@@ -112,7 +134,7 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
         <>
             <header
                 className={cn(
-                    "sticky z-30 flex items-center justify-between gap-3 sm:gap-6 border-b border-black/[0.06] dark:border-white/10 bg-white/80 dark:bg-[#0A0A0A]/90 backdrop-blur-md px-4 py-4 sm:px-6 lg:px-10",
+                    "sticky z-30 flex items-center justify-between gap-3 sm:gap-6 border-b bg-background/90 backdrop-blur-md px-4 py-4 sm:px-6 lg:px-10",
                     bannerOffset ? "top-10" : "top-0"
                 )}
             >
@@ -120,7 +142,7 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                 <div className="flex items-center gap-3 lg:hidden">
                     <Link href="/" className="flex items-center gap-2">
                         <Image src="/logo.png" alt="Nester" width={28} height={28} className="rounded-lg" />
-                        <span className="hidden text-[14px] font-semibold sm:inline text-black dark:text-white">Nester</span>
+                        <span className="hidden text-[14px] font-semibold sm:inline text-foreground">Nester</span>
                     </Link>
                 </div>
 
@@ -137,13 +159,13 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                         <div className="relative" onClick={(e) => e.stopPropagation()}>
                             <button
                                 onClick={() => setWalletMenuOpen((prev) => !prev)}
-                                className="flex items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/15 px-3 py-2 shrink-0 sm:px-4 transition-colors hover:border-black/20 dark:hover:border-white/30"
+                                className="flex items-center gap-2 rounded-full border px-3 py-2 shrink-0 sm:px-4 transition-colors hover:bg-foreground/5"
                             >
                                 <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                                <span className="text-[13px] font-medium text-black/60 dark:text-white/70 font-mono">
+                                <span className="text-[13px] font-medium text-foreground">
                                     {truncateAddress(address, 5)}
                                 </span>
-                                <ChevronDown className={cn("h-3 w-3 text-black/30 dark:text-white/40 transition-transform", walletMenuOpen && "rotate-180")} />
+                                <ChevronDown className={cn("h-3 w-3 text-muted-foreground transition-transform", walletMenuOpen && "rotate-180")} />
                             </button>
 
                             <AnimatePresence>
@@ -153,30 +175,30 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                                         animate={{ opacity: 1, y: 0, scale: 1 }}
                                         exit={{ opacity: 0, y: 6, scale: 0.97 }}
                                         transition={{ duration: 0.12 }}
-                                        className="absolute right-0 top-full mt-2 w-56 overflow-hidden rounded-xl border border-black/[0.08] dark:border-white/15 bg-white dark:bg-[#0A0A0A] shadow-lg z-50"
+                                        className="absolute right-0 top-full mt-2 w-60 overflow-hidden rounded-xl border bg-card z-50"
                                     >
-                                        <div className="px-4 py-3 border-b border-black/[0.06] dark:border-white/10">
-                                            <p className="text-[11px] text-black/35 dark:text-white/40">Connected Wallet</p>
-                                            <p className="mt-0.5 text-[12px] font-mono text-black/60 dark:text-white/70 truncate">{address}</p>
+                                        <div className="px-4 py-3 border-b">
+                                            <p className="text-[12px] text-muted-foreground">Connected wallet</p>
+                                            <p className="mt-0.5 text-[12px] text-foreground truncate">{address}</p>
                                         </div>
                                         <div className="py-1">
                                             <button
                                                 onClick={copyAddress}
-                                                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-[13px] text-black/60 dark:text-white/70 transition-colors hover:bg-black/[0.03] hover:text-black dark:hover:bg-white/10 dark:hover:text-white"
+                                                className={MENU_ITEM}
                                             >
                                                 <Copy className="h-3.5 w-3.5" />
-                                                {copied ? "Copied!" : "Copy Address"}
+                                                {copied ? "Copied" : "Copy address"}
                                             </button>
                                             <Link
                                                 href="/settings"
-                                                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-[13px] text-black/60 dark:text-white/70 transition-colors hover:bg-black/[0.03] hover:text-black dark:hover:bg-white/10 dark:hover:text-white"
+                                                className={MENU_ITEM}
                                             >
                                                 <Settings className="h-3.5 w-3.5" />
                                                 Settings
                                             </Link>
                                             <button
                                                 onClick={() => disconnect()}
-                                                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-[13px] text-red-500/70 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+                                                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-[13px] text-red-600 transition-colors hover:bg-foreground/5 dark:text-red-400"
                                             >
                                                 <LogOut className="h-3.5 w-3.5" />
                                                 Disconnect
@@ -192,7 +214,7 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                         onClick={() => setMobileOpen(!mobileOpen)}
                         aria-label="Toggle navigation menu"
                         aria-expanded={mobileOpen}
-                        className="lg:hidden flex h-9 w-9 items-center justify-center rounded-xl border border-black/[0.08] dark:border-white/15 text-black/50 dark:text-white/60"
+                        className="lg:hidden flex h-9 w-9 items-center justify-center rounded-full border text-muted-foreground transition-colors hover:text-foreground"
                     >
                         {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
                     </button>
@@ -207,28 +229,29 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
-                            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden"
+                            className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm lg:hidden"
                             onClick={() => setMobileOpen(false)}
                         />
                         <motion.div
                             initial={{ opacity: 0, y: -8 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -8 }}
-                            className="fixed left-4 right-4 top-24 z-50 rounded-2xl border border-black/[0.06] dark:border-white/10 bg-white dark:bg-[#0A0A0A] shadow-xl lg:hidden"
+                            className="fixed left-4 right-4 top-24 z-50 rounded-xl border bg-card lg:hidden"
                         >
                             <nav className="p-3 space-y-0.5">
                                 {SIDEBAR_NAV.map((item) => {
-                                    const active = pathname === item.href;
+                                    const active = isActive(pathname, item.href);
                                     return (
                                         <Link
                                             key={item.href}
                                             href={item.href}
+                                            aria-current={active ? "page" : undefined}
                                             onClick={() => setMobileOpen(false)}
                                             className={cn(
                                                 "flex items-center gap-3 rounded-xl px-4 py-3 text-[14px] font-medium transition-colors",
                                                 active
-                                                    ? "bg-black text-white dark:bg-blue-600"
-                                                    : "text-black/60 hover:bg-black/5 dark:text-white/60 dark:hover:bg-white/10"
+                                                    ? "bg-foreground text-background"
+                                                    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                                             )}
                                         >
                                             <item.icon className="h-[18px] w-[18px]" />
@@ -252,7 +275,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const bannerOffset = currentNetwork.id === "testnet";
 
     return (
-        <div className="min-h-screen bg-[#fafafa] dark:bg-[#0A0A0A]">
+        <div className="min-h-screen bg-background">
             <Sidebar bannerOffset={bannerOffset} />
             <div className="flex min-h-screen flex-col lg:ml-[240px]">
                 <TopBar bannerOffset={bannerOffset} />

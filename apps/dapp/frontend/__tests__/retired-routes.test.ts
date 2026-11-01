@@ -31,4 +31,12 @@ describe("retired routes", () => {
       expect(r).toMatchObject({ destination: "/dashboard", permanent: false });
     }
   );
+
+  it.each([
+    ["/dashboard/history", "/activity"],
+    ["/dashboard/analytics", "/dashboard"],
+  ])("moved route redirects: %s -> %s", async (source, destination) => {
+    const r = await redirectFor(source);
+    expect(r).toMatchObject({ destination, permanent: false });
+  });
 });

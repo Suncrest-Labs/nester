@@ -2,11 +2,7 @@
 
 import { useState } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
   Briefcase,
-  Check,
-  ExternalLink,
   GraduationCap,
   Heart,
   Home,
@@ -16,29 +12,30 @@ import {
   X,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { cn } from "@/lib/utils";
 import { savingsGoals, type CreateSavingsGoalInput } from "@/lib/api/savings-goals";
 import { useYieldOpportunities } from "@/hooks/useYieldOpportunities";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT, SegmentedControl } from "@/components/ui/page-kit";
+import { GoalProgressBar } from "./GoalProgressBar";
+import { FIELD_LABEL, MODAL_BACKDROP, MODAL_PANEL, NUMBER_INPUT } from "./modal-styles";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface GoalTemplate {
   id: string;
   label: string;
-  emoji: string;
   category: string;
   descriptionPlaceholder: string;
   Icon: React.ElementType;
 }
 
 const GOAL_TEMPLATES: GoalTemplate[] = [
-  { id: "emergency_fund", label: "Emergency Fund", emoji: "🛡️", category: "emergency_fund", descriptionPlaceholder: "3–6 months of expenses", Icon: Shield },
-  { id: "housing", label: "Housing", emoji: "🏠", category: "housing", descriptionPlaceholder: "Down payment or rent savings", Icon: Home },
-  { id: "travel", label: "Travel", emoji: "✈️", category: "travel", descriptionPlaceholder: "Dream vacation fund", Icon: Plane },
-  { id: "education", label: "Education", emoji: "🎓", category: "education", descriptionPlaceholder: "Tuition, courses, or training", Icon: GraduationCap },
-  { id: "business", label: "Business", emoji: "💼", category: "business", descriptionPlaceholder: "Startup capital or equipment", Icon: Briefcase },
-  { id: "health", label: "Health", emoji: "❤️", category: "health", descriptionPlaceholder: "Medical expenses or fitness", Icon: Heart },
-  { id: "other", label: "Start from scratch", emoji: "🎯", category: "other", descriptionPlaceholder: "Describe your goal…", Icon: Target },
+  { id: "emergency_fund", label: "Emergency fund", category: "emergency_fund", descriptionPlaceholder: "3–6 months of expenses", Icon: Shield },
+  { id: "housing", label: "Housing", category: "housing", descriptionPlaceholder: "Down payment or rent", Icon: Home },
+  { id: "travel", label: "Travel", category: "travel", descriptionPlaceholder: "A trip you're planning", Icon: Plane },
+  { id: "education", label: "Education", category: "education", descriptionPlaceholder: "Tuition, courses or training", Icon: GraduationCap },
+  { id: "business", label: "Business", category: "business", descriptionPlaceholder: "Startup capital or equipment", Icon: Briefcase },
+  { id: "health", label: "Health", category: "health", descriptionPlaceholder: "Medical costs or fitness", Icon: Heart },
+  { id: "other", label: "Start from scratch", category: "other", descriptionPlaceholder: "Name your goal", Icon: Target },
 ];
 
 function todayPlus(days: number): string {
@@ -50,38 +47,22 @@ function todayPlus(days: number): string {
 const STEPS = ["Template", "Goal details", "Earning", "Savings Rate"] as const;
 type StepIndex = 0 | 1 | 2 | 3;
 
+const TITLE = "text-[16px] font-semibold text-foreground";
+const LEDE = "mt-1 text-sm text-muted-foreground";
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function ProgressBar({ step }: { step: StepIndex }) {
+function StepIndicator({ step }: { step: StepIndex }) {
   return (
-    <div className="mb-8" role="progressbar" aria-valuenow={step + 1} aria-valuemin={1} aria-valuemax={STEPS.length}>
-      <div className="mb-3 flex items-center justify-between">
-        {STEPS.map((label, i) => (
-          <div key={label} className="flex flex-col items-center gap-1">
-            <div
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-colors",
-                i < step
-                  ? "bg-black dark:bg-blue-600 text-white"
-                  : i === step
-                  ? "bg-black dark:bg-blue-600 text-white ring-4 ring-black/10"
-                  : "bg-black/8 dark:bg-white/8 text-black/30 dark:text-white/30"
-              )}
-            >
-              {i < step ? <Check className="h-3.5 w-3.5" /> : i + 1}
-            </div>
-            <span className={cn("text-[10px] font-semibold hidden sm:block", i === step ? "text-black dark:text-white" : "text-black/30 dark:text-white/30")}>
-              {label}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="h-1 w-full overflow-hidden rounded-full bg-black/8 dark:bg-white/8">
-        <div
-          className="h-full rounded-full bg-black dark:bg-white transition-all duration-300"
-          style={{ width: `${((step) / (STEPS.length - 1)) * 100}%` }}
-        />
-      </div>
+    <div className="mb-6">
+      <p className="text-[13px] text-muted-foreground">
+        Step {step + 1} of {STEPS.length}: {STEPS.find((_, i) => i === step)}
+      </p>
+      <GoalProgressBar
+        percent={((step + 1) / STEPS.length) * 100}
+        label="Setup progress"
+        className="mt-2"
+      />
     </div>
   );
 }
@@ -91,18 +72,18 @@ function ProgressBar({ step }: { step: StepIndex }) {
 function StepTemplate({ onSelect }: { onSelect: (t: GoalTemplate) => void }) {
   return (
     <div>
-      <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">What are you saving for?</h2>
-      <p className="mb-6 text-sm text-black/60 dark:text-white/60">Pick a template to get started or create your own.</p>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <h2 className={TITLE}>What are you saving for?</h2>
+      <p className={LEDE}>Pick a starting point. You can change the name and amount next.</p>
+      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
         {GOAL_TEMPLATES.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => onSelect(t)}
-            className="flex flex-col items-center gap-2 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-4 text-center transition-all hover:border-black/20 dark:hover:border-white/20 hover:shadow-sm active:scale-95"
+            className="flex flex-col items-start gap-3 rounded-xl border p-4 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground"
           >
-            <span className="text-2xl" aria-hidden="true">{t.emoji}</span>
-            <span className="text-xs font-semibold text-black dark:text-white">{t.label}</span>
+            <t.Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            <span className="text-sm text-foreground">{t.label}</span>
           </button>
         ))}
       </div>
@@ -131,16 +112,11 @@ function StepDetails({
   const minDate = todayPlus(2);
   return (
     <div>
-      <div className="mb-5 flex items-center gap-3">
-        <span className="text-3xl" aria-hidden="true">{template.emoji}</span>
+      <h2 className={TITLE}>{template.label}</h2>
+      <p className={LEDE}>Set a target and a date.</p>
+      <div className="mt-5 space-y-4">
         <div>
-          <h2 className="text-lg font-semibold text-black dark:text-white">{template.label}</h2>
-          <p className="text-sm text-black/60 dark:text-white/60">Set your goal details</p>
-        </div>
-      </div>
-      <div className="space-y-4">
-        <div>
-          <label htmlFor="onboarding-name" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
+          <label htmlFor="onboarding-name" className={FIELD_LABEL}>
             Goal name
           </label>
           <input
@@ -150,12 +126,12 @@ function StepDetails({
             onChange={(e) => onChange({ ...details, name: e.target.value })}
             placeholder={template.descriptionPlaceholder}
             maxLength={100}
-            className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
+            className={INPUT}
           />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label htmlFor="onboarding-amount" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
+            <label htmlFor="onboarding-amount" className={FIELD_LABEL}>
               Target amount
             </label>
             <input
@@ -166,33 +142,25 @@ function StepDetails({
               value={details.targetAmount}
               onChange={(e) => onChange({ ...details, targetAmount: e.target.value })}
               placeholder="0.00"
-              className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 font-mono text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25
-                         [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              className={NUMBER_INPUT}
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">Currency</label>
-            <div className="flex h-11 rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-1" role="group" aria-label="Select currency">
-              {(["USDC", "XLM"] as const).map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => onChange({ ...details, currency: c })}
-                  className={cn(
-                    "flex-1 rounded-lg text-xs font-semibold transition-colors",
-                    details.currency === c ? "bg-black dark:bg-blue-600 text-white" : "text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white"
-                  )}
-                  aria-pressed={details.currency === c}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
+            <span className={FIELD_LABEL}>Currency</span>
+            <SegmentedControl
+              label="Select currency"
+              options={[
+                { id: "USDC", label: "USDC" },
+                { id: "XLM", label: "XLM" },
+              ]}
+              value={details.currency}
+              onChange={(c) => onChange({ ...details, currency: c })}
+            />
           </div>
         </div>
         <div>
-          <label htmlFor="onboarding-deadline" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
-            Target deadline
+          <label htmlFor="onboarding-deadline" className={FIELD_LABEL}>
+            Target date
           </label>
           <input
             id="onboarding-deadline"
@@ -200,7 +168,7 @@ function StepDetails({
             value={details.deadline}
             min={minDate}
             onChange={(e) => onChange({ ...details, deadline: e.target.value })}
-            className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
+            className={INPUT}
           />
         </div>
       </div>
@@ -208,7 +176,7 @@ function StepDetails({
   );
 }
 
-// ── Step 3: Choose yield protocol ─────────────────────────────────────────────
+// ── Step 3: Earning (separate from the goal) ──────────────────────────────────
 
 function StepYield({ onSkip }: { onSkip: () => void }) {
   const { data: yieldData, isLoading } = useYieldOpportunities("Stellar", 6);
@@ -216,50 +184,46 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
 
   return (
     <div>
-      <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">Earn while you save</h2>
-      <p className="mb-5 text-sm text-black/60 dark:text-white/60">
+      <h2 className={TITLE}>Earn while you save</h2>
+      <p className={LEDE}>
         Your goal tracks a target amount and date. Deposits into the Nester Savings Rate
         don&apos;t add to its progress yet.
       </p>
 
       {isLoading ? (
-        <div className="space-y-2">
+        <div className="mt-5 space-y-2">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="h-14 animate-pulse rounded-2xl bg-black/5 dark:bg-white/5" />
+            <div key={i} className="h-12 animate-pulse rounded-lg bg-foreground/[0.06]" />
           ))}
         </div>
       ) : pools.length > 0 ? (
-        <div className="mb-5 space-y-2">
+        <ul className="mt-5 divide-y rounded-xl border">
           {pools.slice(0, 4).map((pool) => (
-            <div
-              key={pool.pool}
-              className="flex items-center justify-between rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] px-4 py-3"
-            >
+            <li key={pool.pool} className="flex items-center justify-between px-4 py-3">
               <div>
-                <p className="text-sm font-semibold text-black dark:text-white capitalize">{pool.project}</p>
-                <p className="text-xs text-black/50 dark:text-white/50">{pool.symbol} · Risk {pool.riskScore.toFixed(1)}</p>
+                <p className="text-sm capitalize text-foreground">{pool.project}</p>
+                <p className="text-[13px] text-muted-foreground">
+                  {pool.symbol} · Risk {pool.riskScore.toFixed(1)}
+                </p>
               </div>
-              <div className="text-right">
-                <p className="font-mono text-sm font-semibold text-emerald-600">{pool.apy.toFixed(2)}%</p>
-                <p className="text-[10px] text-black/40 dark:text-white/40 uppercase font-bold">APY</p>
-              </div>
-            </div>
+              <p className="text-sm tabular-nums text-foreground">{pool.apy.toFixed(2)}% APY</p>
+            </li>
           ))}
-        </div>
+        </ul>
       ) : null}
 
-      <a
-        href="/dashboard"
-        className="flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-semibold text-black dark:text-white transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-      >
-        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-        See the Nester Savings Rate
-      </a>
-      <p className="mt-3 text-center text-[11px] text-black/40 dark:text-white/40">
-        <button type="button" onClick={onSkip} className="underline hover:text-black dark:hover:text-white">
+      <div className="mt-5 flex flex-wrap items-center gap-4">
+        <a href="/dashboard" className={BUTTON_SECONDARY}>
+          See the Nester Savings Rate
+        </a>
+        <button
+          type="button"
+          onClick={onSkip}
+          className="text-[13px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
           Skip this step
         </button>
-      </p>
+      </div>
     </div>
   );
 }
@@ -268,26 +232,20 @@ function StepYield({ onSkip }: { onSkip: () => void }) {
 
 function StepSavingsRate({ onDone }: { onDone: () => void }) {
   return (
-    <div className="text-center">
-      <h2 className="mb-1 text-lg font-semibold text-black dark:text-white">Earn on the Savings Rate</h2>
-      <p className="mb-6 text-sm text-black/60 dark:text-white/60">
+    <div>
+      <h2 className={TITLE}>Earn on the Savings Rate</h2>
+      <p className={LEDE}>
         The Nester Savings Rate earns a realized rate on USDC. It&apos;s separate from this goal:
         deposits there don&apos;t count toward the goal yet.
       </p>
-      <a
-        href="/dashboard"
-        className="mb-4 flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 py-3.5 text-sm font-semibold text-black dark:text-white transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-      >
-        Open the Savings Rate
-        <ArrowRight className="h-4 w-4" aria-hidden="true" />
-      </a>
-      <button
-        type="button"
-        onClick={onDone}
-        className="w-full rounded-xl bg-black dark:bg-blue-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-75"
-      >
-        Done
-      </button>
+      <div className="mt-6 flex justify-end gap-3">
+        <a href="/dashboard" className={BUTTON_SECONDARY}>
+          Open the Savings Rate
+        </a>
+        <button type="button" onClick={onDone} className={BUTTON_PRIMARY}>
+          Done
+        </button>
+      </div>
     </div>
   );
 }
@@ -314,16 +272,16 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
 
   function handleTemplateSelect(t: GoalTemplate) {
     setSelectedTemplate(t);
-    setDetails((d) => ({ ...d, name: t.label !== "Start from scratch" ? t.label : "" }));
+    setDetails((d) => ({ ...d, name: t.id !== "other" ? t.label : "" }));
     setStep(1);
   }
 
   function validateDetails(): string {
     const amount = parseFloat(details.targetAmount);
-    if (!details.name.trim()) return "Goal name is required.";
-    if (!details.targetAmount || isNaN(amount) || amount <= 0) return "Enter a positive target amount.";
+    if (!details.name.trim()) return "Give your goal a name.";
+    if (!details.targetAmount || isNaN(amount) || amount <= 0) return "Enter a target amount above zero.";
     const minDate = todayPlus(2);
-    if (!details.deadline || details.deadline < minDate) return "Deadline must be at least 2 days in the future.";
+    if (!details.deadline || details.deadline < minDate) return "Pick a date at least 2 days from today.";
     return "";
   }
 
@@ -347,7 +305,7 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
       await queryClient.invalidateQueries({ queryKey: ["savings-goals"] });
       setStep(2);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create goal. Please try again.");
+      setError(err instanceof Error ? err.message : "The goal wasn't created. Try again.");
     } finally {
       setSubmitting(false);
     }
@@ -359,33 +317,26 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
 
   return (
     <>
+      <div className={MODAL_BACKDROP} onClick={onDismiss} aria-hidden="true" />
       <div
-        className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm"
-        onClick={onDismiss}
-        aria-hidden="true"
-      />
-      <div
-        className="fixed inset-x-4 top-12 z-50 mx-auto max-w-xl rounded-3xl bg-white dark:bg-[#100F0F] p-8 shadow-2xl
-                   sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2"
+        className={`${MODAL_PANEL} sm:max-w-xl`}
         role="dialog"
         aria-modal="true"
         aria-label="Savings goal setup"
       >
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-semibold text-black/40 dark:text-white/40 uppercase tracking-widest">
-            Set up your savings
-          </span>
+        <div className="mb-4 flex items-center justify-between">
+          <span className="text-[13px] font-medium text-muted-foreground">New goal</span>
           <button
             type="button"
             onClick={onDismiss}
             aria-label="Close onboarding"
-            className="flex h-8 w-8 items-center justify-center rounded-xl border border-black/10 dark:border-white/10 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <ProgressBar step={step} />
+        <StepIndicator step={step} />
 
         {step === 0 && <StepTemplate onSelect={handleTemplateSelect} />}
 
@@ -393,27 +344,21 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
           <>
             <StepDetails template={selectedTemplate} details={details} onChange={setDetails} />
             {error && (
-              <p className="mt-3 rounded-lg bg-red-50 px-4 py-2.5 text-xs font-medium text-red-700" role="alert">
+              <p className="mt-4 text-sm text-red-600 dark:text-red-400" role="alert">
                 {error}
               </p>
             )}
-            <div className="mt-6 flex gap-3">
-              <button
-                type="button"
-                onClick={handleBack}
-                className="flex items-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 px-4 py-3 text-xs font-semibold text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" onClick={handleBack} className={BUTTON_SECONDARY}>
                 Back
               </button>
               <button
                 type="button"
                 onClick={handleDetailsNext}
                 disabled={submitting}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
+                className={BUTTON_PRIMARY}
               >
                 {submitting ? "Creating goal…" : "Create goal & continue"}
-                {!submitting && <ArrowRight className="h-3.5 w-3.5" />}
               </button>
             </div>
           </>
@@ -422,22 +367,15 @@ export function SavingsOnboardingWizard({ onComplete, onDismiss }: SavingsOnboar
         {step === 2 && (
           <>
             <StepYield onSkip={() => setStep(3)} />
-            <div className="mt-6 flex gap-3">
-              <button
-                type="button"
-                onClick={() => setStep(3)}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-black dark:bg-blue-600 py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75"
-              >
+            <div className="mt-6 flex justify-end">
+              <button type="button" onClick={() => setStep(3)} className={BUTTON_PRIMARY}>
                 Continue
-                <ArrowRight className="h-3.5 w-3.5" />
               </button>
             </div>
           </>
         )}
 
-        {step === 3 && (
-          <StepSavingsRate onDone={onComplete} />
-        )}
+        {step === 3 && <StepSavingsRate onDone={onComplete} />}
       </div>
     </>
   );

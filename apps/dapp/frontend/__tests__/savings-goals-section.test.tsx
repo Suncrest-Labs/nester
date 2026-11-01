@@ -80,6 +80,6 @@ describe("SavingsGoalsSection", () => {
     render(<SavingsGoalsSection />, { wrapper });
 
     expect(screen.getByTestId("savings-goals-empty")).toBeInTheDocument();
-    expect(screen.getByText("No savings goals yet")).toBeInTheDocument();
+    expect(screen.getByText("No goals yet")).toBeInTheDocument();
   });
 });

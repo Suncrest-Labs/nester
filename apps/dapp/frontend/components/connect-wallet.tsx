@@ -35,7 +35,7 @@ function WalletGridCard({
         >
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary/60 overflow-hidden">
                 {isThisConnecting ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-brand-purple" />
+                    <Loader2 className="h-4 w-4 animate-spin text-foreground" />
                 ) : wallet.icon ? (
                     <img
                         src={wallet.icon}
@@ -90,7 +90,7 @@ function WalletListItem({
             </p>
             <div className="shrink-0">
                 {isThisConnecting ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-purple" />
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-foreground" />
                 ) : (
                     <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-foreground" />
                 )}
@@ -180,7 +180,7 @@ export function ConnectWallet() {
     return (
         <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4 bg-background">
             <div className="pointer-events-none absolute inset-0">
-                <div className="absolute -left-40 -top-40 h-[600px] w-[600px] rounded-full bg-brand-purple/[0.04] blur-[120px]" />
+
                 <div className="absolute -bottom-40 -right-40 h-[500px] w-[500px] rounded-full bg-brand-cyan/[0.04] blur-[120px]" />
                 <div
                     className="absolute inset-0 opacity-[0.025]"
@@ -237,7 +237,7 @@ export function ConnectWallet() {
                                     <span className="text-sm font-mono text-muted-foreground bg-secondary px-3 py-1 rounded-full">
                                         {address ? truncateAddress(address) : ""}
                                     </span>
-                                    <span className="text-xs font-medium text-brand-purple bg-brand-purple/10 px-2 py-1 rounded-full uppercase tracking-wider">
+                                    <span className="text-xs font-medium text-muted-foreground border px-2 py-1 rounded-full">
                                         {isTestnet ? "Testnet" : "Mainnet"}
                                     </span>
                                 </div>
@@ -254,7 +254,7 @@ export function ConnectWallet() {
                                         <button
                                             onClick={fundTestnetAccount}
                                             disabled={isFunding}
-                                            className="w-full flex items-center justify-center gap-2 rounded-xl border border-brand-purple/30 bg-brand-purple/5 px-4 py-3 text-sm font-medium text-brand-purple transition-colors hover:bg-brand-purple/10 disabled:opacity-50"
+                                            className="w-full flex items-center justify-center gap-2 rounded-full border px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-foreground/5 disabled:opacity-50"
                                         >
                                             {isFunding ? (
                                                 <Loader2 className="h-4 w-4 animate-spin" />

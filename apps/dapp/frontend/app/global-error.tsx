@@ -40,7 +40,7 @@ export default function GlobalError({
         }}
       >
         <div role="alert" aria-live="assertive" data-testid="global-error-fallback">
-          <h1 style={{ fontSize: "1.25rem", fontWeight: 600, margin: "0 0 0.75rem" }}>
+          <h1 style={{ fontSize: "16px", fontWeight: 600, margin: "0 0 0.5rem" }}>
             Something went wrong
           </h1>
           <p
@@ -52,22 +52,21 @@ export default function GlobalError({
               opacity: 0.65,
             }}
           >
-            The application ran into an unexpected problem. Trying again usually
-            resolves it.
+            Nester hit an unexpected problem and couldn&apos;t load this page. Try
+            again, and reload the page if it keeps happening.
           </p>
           <button
             type="button"
             onClick={reset}
             data-testid="global-error-retry"
             style={{
-              height: "2.75rem",
-              padding: "0 1.25rem",
-              borderRadius: "0.75rem",
+              padding: "0.5rem 1rem",
+              borderRadius: "9999px",
               border: "none",
               background: "#100F0F",
               color: "#ffffff",
-              fontSize: "0.875rem",
-              fontWeight: 600,
+              fontSize: "13px",
+              fontWeight: 500,
               cursor: "pointer",
             }}
           >
