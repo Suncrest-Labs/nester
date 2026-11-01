@@ -37,6 +37,10 @@ vi.mock("@/lib/stellar/savings", () => ({
   executeSavingsRedeem: vi.fn(),
 }));
 
+vi.mock("@/lib/stellar/wallet-balance", () => ({
+  fetchWalletUsdcBalance: vi.fn(() => Promise.resolve({ status: "funded", balance: "100.0000000" })),
+}));
+
 vi.mock("@/lib/api/savings", () => ({
   fetchSavingsHistory: vi.fn(() => Promise.resolve([])),
 }));

@@ -21,6 +21,11 @@ vi.mock("@/lib/stellar/savings", () => ({
   executeSavingsRedeem: (...a: unknown[]) => executeSavingsRedeem(...a),
 }));
 
+const fetchWalletUsdcBalance = vi.fn();
+vi.mock("@/lib/stellar/wallet-balance", () => ({
+  fetchWalletUsdcBalance: (...a: unknown[]) => fetchWalletUsdcBalance(...a),
+}));
+
 import { describeSavingsError } from "../errors";
 import { RateHero } from "../RateHero";
 import { SavePanel } from "../SavePanel";
@@ -60,6 +65,7 @@ function wrap(ui: ReactNode) {
 beforeEach(() => {
   vi.clearAllMocks();
   fetchDepositsPaused.mockResolvedValue(false);
+  fetchWalletUsdcBalance.mockResolvedValue({ status: "funded", balance: "1000000.0000000" });
 });
 
 describe("RateHero", () => {
@@ -280,6 +286,96 @@ describe("SavePanel review fixes", () => {
     const button = screen.getByRole("button", { name: "Deposit USDC" });
     expect(button.getAttribute("aria-describedby")).toBe(reason.id);
     expect(reason.id).not.toBe("");
+  });
+});
+
+describe("SavePanel wallet balance", () => {
+  const position = { shares: "100", value: "100.00", deposited: null };
+
+  it("shows the wallet's USDC balance and Max fills the amount", async () => {
+    fetchWalletUsdcBalance.mockResolvedValue({ status: "funded", balance: "250.5000000" });
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    const balance = await screen.findByTestId("wallet-balance");
+    expect(balance.textContent).toBe("Wallet balance: 250.5 USDC");
+    expect(fetchWalletUsdcBalance).toHaveBeenCalledWith("GAWALLET");
+    await userEvent.click(screen.getByRole("button", { name: "Max" }));
+    expect((screen.getByLabelText("Amount in USDC") as HTMLInputElement).value).toBe("250.5");
+    expect(
+      (screen.getByRole("button", { name: "Deposit USDC" }) as HTMLButtonElement).disabled
+    ).toBe(false);
+  });
+
+  it("blocks a deposit larger than the wallet balance", async () => {
+    fetchWalletUsdcBalance.mockResolvedValue({ status: "funded", balance: "25.0000000" });
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    await screen.findByTestId("wallet-balance");
+    await userEvent.type(screen.getByLabelText("Amount in USDC"), "30");
+    const button = screen.getByRole("button", { name: "Deposit USDC" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    const reason = screen.getByText("Your wallet holds 25 USDC. Enter that amount or less.");
+    expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+  });
+
+  it("keeps the savings max in withdraw mode", async () => {
+    fetchWalletUsdcBalance.mockResolvedValue({ status: "funded", balance: "25.0000000" });
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    await screen.findByTestId("wallet-balance");
+    await userEvent.click(screen.getByRole("tab", { name: "Withdraw" }));
+    expect(screen.queryByTestId("wallet-balance")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Max" }));
+    expect((screen.getByLabelText("Amount in USDC") as HTMLInputElement).value).toBe("100");
+    expect(
+      (screen.getByRole("button", { name: "Withdraw USDC" }) as HTMLButtonElement).disabled
+    ).toBe(false);
+  });
+
+  it("points an unfunded wallet at Friendbot", async () => {
+    fetchWalletUsdcBalance.mockResolvedValue({ status: "unfunded" });
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    await screen.findByText("Your wallet needs testnet XLM first.");
+    const link = screen.getByRole("link", { name: "Fund with Friendbot" });
+    expect(link.getAttribute("href")).toBe("https://friendbot.stellar.org/?addr=GAWALLET");
+    expect(link.getAttribute("target")).toBe("_blank");
+    await userEvent.type(screen.getByLabelText("Amount in USDC"), "10");
+    expect(
+      (screen.getByRole("button", { name: "Deposit USDC" }) as HTMLButtonElement).disabled
+    ).toBe(true);
+  });
+
+  it.each([
+    ["no trustline", { status: "no_trustline" }],
+    ["zero balance", { status: "funded", balance: "0.0000000" }],
+  ])("points a wallet with %s at the Blend faucet", async (_label, result) => {
+    fetchWalletUsdcBalance.mockResolvedValue(result);
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    await screen.findByText("Your wallet has no testnet USDC yet.");
+    const link = screen.getByRole("link", { name: "Get testnet USDC from the Blend faucet" });
+    expect(link.getAttribute("href")).toBe("https://testnet.blend.capital");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(screen.getByTestId("wallet-help").textContent).toMatch(/sends 1,000 test USDC/);
+    expect(screen.queryByRole("button", { name: "Max" })).toBeNull();
+  });
+
+  it("does not block deposits when the balance can't be loaded", async () => {
+    fetchWalletUsdcBalance.mockRejectedValue(new Error("Horizon account lookup failed (500)"));
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    await screen.findByText(/couldn't load your wallet balance/i, undefined, { timeout: 4000 });
+    await userEvent.type(screen.getByLabelText("Amount in USDC"), "10");
+    expect(
+      (screen.getByRole("button", { name: "Deposit USDC" }) as HTMLButtonElement).disabled
+    ).toBe(false);
+  });
+
+  it("refetches the wallet balance after a deposit", async () => {
+    quoteMinShares.mockResolvedValue(BigInt(1));
+    executeSavingsDeposit.mockResolvedValue({ txHash: "a", explorerUrl: "https://x/a", ledger: 1 });
+    wrap(<SavePanel sharePrice="1.0" position={position} />);
+    await screen.findByTestId("wallet-balance");
+    expect(fetchWalletUsdcBalance).toHaveBeenCalledTimes(1);
+    await userEvent.type(screen.getByLabelText("Amount in USDC"), "10");
+    await userEvent.click(screen.getByRole("button", { name: "Deposit USDC" }));
+    await screen.findByText(/Deposit confirmed/);
+    await waitFor(() => expect(fetchWalletUsdcBalance).toHaveBeenCalledTimes(2));
   });
 });
 

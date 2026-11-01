@@ -9,6 +9,8 @@ import { Card } from "@/components/ui/card";
 import { SlippageControl } from "@/components/slippage-control";
 import { useWallet } from "@/components/wallet-provider";
 import { useSlippage } from "@/hooks/useSlippage";
+import { useWalletUsdcBalance, walletUsdcQueryKey } from "@/hooks/useWalletUsdcBalance";
+import config from "@/lib/config";
 import { cn } from "@/lib/utils";
 import { parseAmountToStroops } from "@/lib/decimal";
 import type { SavingsPosition } from "@/lib/api/savings";
@@ -35,6 +37,8 @@ const MODES: { id: Mode; label: string }[] = [
 ];
 
 const SHARE_DECIMALS = 7;
+
+const BLEND_FAUCET_URL = "https://testnet.blend.capital";
 
 interface SavePanelProps {
   /** USDC per share, as a decimal string. */
@@ -64,6 +68,24 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
   });
   const depositsPaused = paused.data === true;
 
+  const walletBalance = useWalletUsdcBalance(address);
+  const wallet = walletBalance.data;
+  const walletUsdc = wallet?.status === "funded" ? new Decimal(wallet.balance) : null;
+  const walletHelp =
+    mode !== "deposit" || !address || !wallet
+      ? null
+      : wallet.status === "unfunded"
+        ? "unfunded"
+        : !walletUsdc || walletUsdc.isZero()
+          ? "no_usdc"
+          : null;
+  const walletHelpReason =
+    walletHelp === "unfunded"
+      ? "Your wallet needs testnet XLM first."
+      : walletHelp === "no_usdc"
+        ? "Your wallet has no testnet USDC yet."
+        : null;
+
   const parsed = amount.trim() === "" ? null : parseAmountToStroops(amount, SHARE_DECIMALS);
   const amountError = parsed && !parsed.valid ? parsed.error?.message : undefined;
   const validAmount = parsed?.valid ? new Decimal(amount.trim()) : null;
@@ -71,6 +93,8 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
 
   const maxValue = position ? new Decimal(position.value) : new Decimal(0);
   const overBalance = mode === "withdraw" && validAmount !== null && validAmount.gt(maxValue);
+  const overWallet =
+    mode === "deposit" && validAmount !== null && walletUsdc !== null && validAmount.gt(walletUsdc);
 
   const shares =
     validAmount && !price.isZero() ? validAmount.div(price).toDecimalPlaces(SHARE_DECIMALS, Decimal.ROUND_DOWN) : null;
@@ -78,9 +102,12 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
   let blockReason: string | null = null;
   if (!address) blockReason = "Connect your wallet to continue.";
   else if (mode === "deposit" && depositsPaused) blockReason = DEPOSITS_PAUSED_MESSAGE;
+  else if (walletHelpReason) blockReason = walletHelpReason;
   else if (mode === "withdraw" && !position) blockReason = "You have no savings to withdraw.";
   else if (price.lte(0)) blockReason = "The share price is unavailable right now. Try again shortly.";
   else if (overBalance) blockReason = `You can withdraw up to ${formatUsdc(position?.value ?? "0")}.`;
+  else if (overWallet && walletUsdc)
+    blockReason = `Your wallet holds ${formatShares(walletUsdc.toFixed())} USDC. Enter that amount or less.`;
 
   const working = status.kind === "working";
   const canSubmit = !!validAmount && !blockReason && !working;
@@ -122,7 +149,10 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
       }
       setAmount("");
       setStatus({ kind: "success", mode, explorerUrl: receipt.explorerUrl });
-      await queryClient.invalidateQueries({ queryKey: ["savings"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["savings"] }),
+        queryClient.invalidateQueries({ queryKey: walletUsdcQueryKey(address) }),
+      ]);
     } catch (err) {
       setStatus({ kind: "error", message: describeSavingsError(err) });
     }
@@ -192,6 +222,16 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
             }}
             className="w-full bg-transparent font-heading text-2xl font-light tabular-nums outline-none placeholder:text-muted-foreground/50"
           />
+          {mode === "deposit" && walletUsdc && walletUsdc.gt(0) && (
+            <button
+              type="button"
+              disabled={working}
+              onClick={() => setAmount(walletUsdc.toFixed())}
+              className="ml-3 rounded-full border border-border px-3 py-1 text-xs font-medium text-foreground/70 hover:text-foreground"
+            >
+              Max
+            </button>
+          )}
           {mode === "withdraw" && position && (
             <button
               type="button"
@@ -209,6 +249,10 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
             <span className="text-destructive">{amountError}</span>
           ) : mode === "withdraw" && position ? (
             <>Available: {formatUsdc(position.value)}</>
+          ) : mode === "deposit" && walletUsdc ? (
+            <span data-testid="wallet-balance">Wallet balance: {formatShares(walletUsdc.toFixed())} USDC</span>
+          ) : mode === "deposit" && walletBalance.isError ? (
+            <>We couldn&apos;t load your wallet balance.</>
           ) : null}
         </p>
 
@@ -225,6 +269,32 @@ export function SavePanel({ sharePrice, position }: SavePanelProps) {
         {blockReason && (
           <p id={`${baseId}-reason`} className="mt-4 text-sm text-foreground/80">
             {blockReason}
+          </p>
+        )}
+        {walletHelpReason && address && blockReason === walletHelpReason && (
+          <p data-testid="wallet-help" className="mt-1 text-sm text-muted-foreground">
+            {walletHelp === "unfunded" ? (
+              <a
+                href={`${config.friendbotUrl.replace(/\/$/, "")}/?addr=${encodeURIComponent(address)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                Fund with Friendbot
+              </a>
+            ) : (
+              <>
+                <a
+                  href={BLEND_FAUCET_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  Get testnet USDC from the Blend faucet
+                </a>
+                . One signature adds USDC to your wallet and sends 1,000 test USDC.
+              </>
+            )}
           </p>
         )}
 
