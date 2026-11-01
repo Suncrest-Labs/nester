@@ -39,7 +39,7 @@ function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
     return (
         <aside
             className={cn(
-                "fixed left-0 bottom-0 z-40 hidden w-[240px] flex-col border-r bg-background lg:flex",
+                "fixed left-0 bottom-0 z-40 hidden w-[240px] flex-col border-r bg-surface lg:flex",
                 bannerOffset ? "top-10" : "top-0"
             )}
         >
@@ -69,7 +69,7 @@ function Sidebar({ bannerOffset }: { bannerOffset: boolean }) {
                             className={cn(
                                 "flex items-center gap-3 rounded-xl px-4 py-3 text-[14px] font-medium transition-colors",
                                 active
-                                    ? "bg-foreground/5 text-foreground"
+                                    ? "bg-card text-foreground shadow-[0_0_0_1px_hsl(var(--border))]"
                                     : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                             )}
                         >
@@ -134,7 +134,7 @@ function TopBar({ bannerOffset }: { bannerOffset: boolean }) {
         <>
             <header
                 className={cn(
-                    "sticky z-30 flex items-center justify-between gap-3 sm:gap-6 border-b bg-background/90 backdrop-blur-md px-4 py-4 sm:px-6 lg:px-10",
+                    "sticky z-30 flex items-center justify-between gap-3 sm:gap-6 border-b bg-surface/85 backdrop-blur-md px-4 py-4 sm:px-6 lg:px-10",
                     bannerOffset ? "top-10" : "top-0"
                 )}
             >

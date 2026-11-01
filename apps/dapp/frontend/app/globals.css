@@ -7,6 +7,7 @@
     --color-foreground: hsl(var(--foreground));
     --color-card: hsl(var(--card));
     --color-card-foreground: hsl(var(--card-foreground));
+    --color-surface: hsl(var(--surface));
     --color-primary: hsl(var(--primary));
     --color-primary-foreground: hsl(var(--primary-foreground));
     --color-secondary: hsl(var(--secondary));
@@ -32,43 +33,45 @@
 
 :root {
     --font-inter: Inter, ui-sans-serif, system-ui, sans-serif;
-    --background: 0 0% 100%;
+    --background: 60 6% 95.5%;
+    --surface: 60 20% 98.5%;
     --foreground: 240 10% 8%;
     --card: 0 0% 100%;
     --card-foreground: 240 10% 8%;
-    --primary: 255 60% 50%;
+    --primary: 240 10% 8%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 5% 35%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
+    --secondary: 60 6% 93%;
+    --secondary-foreground: 240 6% 10%;
+    --muted: 60 6% 93%;
+    --muted-foreground: 240 4% 38%;
+    --accent: 60 6% 93%;
+    --accent-foreground: 240 6% 10%;
     --destructive: 0 72% 45%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 85%;
-    --input: 240 5.9% 85%;
-    --ring: 255 60% 50%;
+    --border: 60 5% 87%;
+    --input: 60 5% 87%;
+    --ring: 240 10% 8%;
     --gradient-brand: linear-gradient(135deg, #B6509E 0%, #2EBAC6 100%);
     --touch-target: 44px;
 }
 
 .dark {
-    --background: 0 0% 4%;
-    --foreground: 0 0% 100%;
-    --card: 0 3% 6%;
-    --card-foreground: 0 0% 100%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 14%;
-    --secondary-foreground: 0 0% 100%;
-    --muted: 0 0% 14%;
-    --muted-foreground: 0 0% 70%;
-    --accent: 0 0% 14%;
-    --accent-foreground: 0 0% 100%;
-    --border: 0 0% 100% / 0.1;
-    --input: 0 0% 100% / 0.1;
-    --ring: 217 91% 60%;
+    --background: 240 6% 3.5%;
+    --surface: 240 5% 6.5%;
+    --foreground: 240 5% 95%;
+    --card: 240 4% 9%;
+    --card-foreground: 240 5% 95%;
+    --primary: 240 5% 95%;
+    --primary-foreground: 240 6% 4%;
+    --secondary: 240 4% 12%;
+    --secondary-foreground: 240 5% 95%;
+    --muted: 240 4% 12%;
+    --muted-foreground: 240 4% 64%;
+    --accent: 240 4% 12%;
+    --accent-foreground: 240 5% 95%;
+    --border: 240 5% 100% / 0.08;
+    --input: 240 5% 100% / 0.1;
+    --ring: 240 5% 95%;
 }
 
 * {

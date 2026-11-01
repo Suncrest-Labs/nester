@@ -95,7 +95,7 @@ export function SegmentedControl<T extends string>({
   onChange: (id: T) => void;
 }) {
   return (
-    <div role="group" aria-label={label} className="inline-flex rounded-full border p-0.5">
+    <div role="group" aria-label={label} className="inline-flex rounded-full border bg-muted p-0.5">
       {options.map((o) => (
         <button
           key={o.id}
