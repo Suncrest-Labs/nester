@@ -12,5 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build     -ldflags="-s -w -X main.version=${VERS
 
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /server /server
+COPY --from=builder /app/migrations /migrations
+ENV MIGRATIONS_DIR=/migrations
 EXPOSE 8080
 ENTRYPOINT ["/server"]
