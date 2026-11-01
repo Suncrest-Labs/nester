@@ -294,7 +294,7 @@ func (c *Chain) serveSoroban(w http.ResponseWriter, r *http.Request) {
 			"transactionData": "",
 		}
 		if ret, ok := c.simulatedReturn(req.Params); ok {
-			result["returnValue"] = ret
+			result["results"] = []map[string]any{{"xdr": ret}}
 		}
 		c.writeResult(w, result)
 	case "sendTransaction":
