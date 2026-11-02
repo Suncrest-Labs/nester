@@ -9,11 +9,12 @@ Every environment variable read by `apps/api/internal/config` at startup. Regene
 - **Mainnet**: constraints enforced at startup, and defaults that are unsafe or must be set deliberately on mainnet.
 - Values are read from the process environment first, then a local `.env`. Empty values count as unset.
 
-151 variables: 5 always required, 8 secret.
+154 variables: 5 always required, 8 secret.
 
 | Name | Type | Default | Required | Secret | Mainnet |
 | --- | --- | --- | --- | --- | --- |
 | `APP_ENV` | string | `development` | no | no | Use `production` (or `staging` for a rehearsal). The default `development` enables the dev-only cipher key fallback and text logs. |
+| `STELLAR_NETWORK_PASSPHRASE` | string | _none_ | yes | no | Must be `Public Global Stellar Network ; September 2015`. Must agree with STELLAR_RPC_URL and STELLAR_HORIZON_URL or startup fails. |
 | `SERVER_HOST` | string | `0.0.0.0` | no | no | — |
 | `SERVER_PORT` | int | `8080` | no | no | — |
 | `SERVER_READ_TIMEOUT` | duration | `15s` | no | no | — |
@@ -25,7 +26,9 @@ Every environment variable read by `apps/api/internal/config` at startup. Regene
 | `DATABASE_DSN` | string | _none_ | yes | **yes** | Carries the database password in userinfo. Use `sslmode=verify-full` against a managed instance. |
 | `DATABASE_POOL_SIZE` | int | `25` | no | no | — |
 | `DATABASE_CONNECTION_TIMEOUT` | duration | `5s` | no | no | — |
-| `STELLAR_NETWORK_PASSPHRASE` | string | _none_ | yes | no | Must be `Public Global Stellar Network ; September 2015`. Must agree with STELLAR_RPC_URL and STELLAR_HORIZON_URL or startup fails. |
+| `DATABASE_STATEMENT_TIMEOUT` | duration | `30s` | no | no | Defaults to 30s, or 10s on mainnet. `0` disables the server-side statement timeout and is intended only for a reviewed migration/backfill job. |
+| `DATABASE_LOCK_TIMEOUT` | duration | `5s` | no | no | Defaults to 5s, or 2s on mainnet. `0` disables the server-side lock timeout. |
+| `DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT` | duration | `1m0s` | no | no | Defaults to 60s, or 30s on mainnet. `0` disables the idle-in-transaction timeout. |
 | `STELLAR_RPC_URL` | url | _none_ | yes | no | Must not contain `testnet` or `futurenet` when the passphrase is mainnet. |
 | `STELLAR_HORIZON_URL` | url | _none_ | yes | no | Must not contain `testnet` or `futurenet` when the passphrase is mainnet. |
 | `STELLAR_OPERATOR_SECRET` | string | _none_ | no | **yes** | Prefer SIGNER_SOCKET_PATH (isolated signer) so this process holds no operator key. If set, store it in the secrets manager only. |

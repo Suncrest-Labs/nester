@@ -577,3 +577,73 @@ func appliedVersions(t *testing.T, idb *sql.DB) map[string]bool {
 	}
 	return result
 }
+
+// TestStatementTimeoutCancelsQuery is the acceptance test for nester#1564: a
+// query that exceeds the configured statement_timeout must be cancelled by
+// PostgreSQL rather than running to completion.
+func TestStatementTimeoutCancelsQuery(t *testing.T) {
+	pool, err := db.Open(db.Config{
+		DSN:               requireDSN(t),
+		ConnectionTimeout: 5 * time.Second,
+		StatementTimeout:  150 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { pool.Close() })
+
+	start := time.Now()
+	_, err = pool.ExecContext(context.Background(), "SELECT pg_sleep(2)")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected pg_sleep(2) to be cancelled by statement_timeout, got nil error")
+	}
+	if !strings.Contains(err.Error(), "statement timeout") &&
+		!strings.Contains(err.Error(), "57014") {
+		t.Fatalf("expected a statement-timeout cancellation, got: %v", err)
+	}
+	if elapsed >= 2*time.Second {
+		t.Fatalf("query ran for %s; statement_timeout did not cancel it", elapsed)
+	}
+}
+
+// TestLockTimeoutOverridesForMigrations shows that the migration escape hatch
+// (db.MigrateUp runs SET LOCAL statement_timeout = 0) actually permits a
+// statement longer than the pool's statement_timeout to finish.
+func TestMigrationTimeoutOverride(t *testing.T) {
+	dsn := requireDSN(t)
+
+	defaults, err := db.Open(db.Config{
+		DSN:               dsn,
+		ConnectionTimeout: 5 * time.Second,
+		StatementTimeout:  200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("db.Open defaults: %v", err)
+	}
+	defer defaults.Close()
+
+	mig, err := db.Open(db.Config{
+		DSN:               dsn,
+		ConnectionTimeout: 5 * time.Second,
+		// Negative disables the server-side timeouts, as a migration or
+		// backfill job would configure it.
+		StatementTimeout: -1,
+		LockTimeout:      -1,
+	})
+	if err != nil {
+		t.Fatalf("db.Open migration: %v", err)
+	}
+	defer mig.Close()
+
+	const slowSQL = "SELECT pg_sleep(1)"
+
+	if _, err := defaults.Exec(slowSQL); err == nil {
+		t.Fatal("expected defaults pool to cancel pg_sleep(1) at the 200ms timeout")
+	}
+
+	if _, err := mig.Exec(slowSQL); err != nil {
+		t.Fatalf("migration pool should allow slow statements: %v", err)
+	}
+}

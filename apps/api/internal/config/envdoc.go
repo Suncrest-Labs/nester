@@ -33,6 +33,15 @@ var varNotes = map[string]varNote{
 	"APP_ENV": {mainnet: "Use `production` (or `staging` for a rehearsal). The default `development` enables the dev-only cipher key fallback and text logs."},
 
 	"DATABASE_DSN": {secret: true, mainnet: "Carries the database password in userinfo. Use `sslmode=verify-full` against a managed instance."},
+	"DATABASE_STATEMENT_TIMEOUT": {
+		mainnet: "Defaults to 30s, or 10s on mainnet. `0` disables the server-side statement timeout and is intended only for a reviewed migration/backfill job.",
+	},
+	"DATABASE_LOCK_TIMEOUT": {
+		mainnet: "Defaults to 5s, or 2s on mainnet. `0` disables the server-side lock timeout.",
+	},
+	"DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT": {
+		mainnet: "Defaults to 60s, or 30s on mainnet. `0` disables the idle-in-transaction timeout.",
+	},
 
 	"STELLAR_NETWORK_PASSPHRASE": {mainnet: "Must be `Public Global Stellar Network ; September 2015`. Must agree with STELLAR_RPC_URL and STELLAR_HORIZON_URL or startup fails."},
 	"STELLAR_RPC_URL":            {mainnet: "Must not contain `testnet` or `futurenet` when the passphrase is mainnet."},
@@ -48,11 +57,11 @@ var varNotes = map[string]varNote{
 	"STELLAR_MAINNET_VAULT_TVL_CAP": {
 		mainnet: "Default `0` means no per-vault cap. Set an explicit ceiling for the staged launch.",
 	},
-	"STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED":  {mainnet: "Leave `false` unless STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS and a max amount are set; this lets the API spend operator funds."},
-	"STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS":    {mainnet: "Allow-list of vaults eligible for operator-funded deposits."},
+	"STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED":   {mainnet: "Leave `false` unless STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS and a max amount are set; this lets the API spend operator funds."},
+	"STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS":     {mainnet: "Allow-list of vaults eligible for operator-funded deposits."},
 	"STELLAR_OPERATOR_FUNDED_DEPOSIT_MAX_AMOUNT": {mainnet: "Per-deposit ceiling. Default `0` is not a safe value if the feature is enabled."},
-	"WITHDRAWAL_BREAKER_ENABLED":                {mainnet: "Default `false` is unsafe for mainnet; enable it."},
-	"WITHDRAWAL_SLIPPAGE_BPS":                   {mainnet: "Must be between 1 and 300."},
+	"WITHDRAWAL_BREAKER_ENABLED":                 {mainnet: "Default `false` is unsafe for mainnet; enable it."},
+	"WITHDRAWAL_SLIPPAGE_BPS":                    {mainnet: "Must be between 1 and 300."},
 
 	"AUTH_JWT_SECRET": {
 		secret:  true,
