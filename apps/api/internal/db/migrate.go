@@ -15,6 +15,17 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )`
 
+// disableSessionTimeouts is applied at the start of every migration
+// transaction. Migrations and backfills are the one place a statement may
+// legitimately run longer than the API's statement_timeout, and they may wait
+// on locks held by a long-running backfill. SET LOCAL scopes the override to
+// the current transaction, so the pool's per-connection defaults are untouched
+// for every other caller.
+const disableSessionTimeouts = `
+SET LOCAL statement_timeout = 0;
+SET LOCAL lock_timeout = 0;
+SET LOCAL idle_in_transaction_session_timeout = 0`
+
 // MigrateUp reads all *.up.sql files from dir, sorts them lexicographically,
 // and applies any that are not yet recorded in schema_migrations.
 //
@@ -50,6 +61,11 @@ func MigrateUp(db *sql.DB, dir string) error {
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("migrate up: begin tx (%s): %w", file, err)
+		}
+
+		if _, err := tx.Exec(disableSessionTimeouts); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("migrate up: disable session timeouts (%s): %w", file, err)
 		}
 
 		if _, err := tx.Exec(string(content)); err != nil {
@@ -101,6 +117,11 @@ func MigrateDown(db *sql.DB, dir string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("migrate down: begin tx (%s): %w", version, err)
+	}
+
+	if _, err := tx.Exec(disableSessionTimeouts); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("migrate down: disable session timeouts (%s): %w", version, err)
 	}
 
 	if _, err := tx.Exec(string(content)); err != nil {
