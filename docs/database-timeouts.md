@@ -32,9 +32,14 @@ at the start of each migration transaction, so schema changes are not
 bounded by the API defaults. `SET LOCAL` is scoped to the transaction: every
 other connection keeps its configured values.
 
-The startup auto-migration path in `cmd/api` uses the same pool, so a
-long-running migration job should set `DATABASE_STATEMENT_TIMEOUT=0`
-(and the other two if needed) for that process only.
+The startup auto-migration path in `cmd/api` uses the same pool as the API.
+Do **not** set `DATABASE_STATEMENT_TIMEOUT=0` process-wide to work around a
+slow migration: it also disables the statement timeout for every query the
+API subsequently serves. The transaction-local override inside `MigrateUp`
+already exempts the migration itself. If a migration or backfill needs a
+process-wide override (for example a backfill that runs outside `MigrateUp`),
+run it as a separate process with its own pool and leave the API process on
+its normal timeouts.
 
 ## Tests
 

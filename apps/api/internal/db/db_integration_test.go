@@ -608,42 +608,77 @@ func TestStatementTimeoutCancelsQuery(t *testing.T) {
 	}
 }
 
-// TestLockTimeoutOverridesForMigrations shows that the migration escape hatch
-// (db.MigrateUp runs SET LOCAL statement_timeout = 0) actually permits a
-// statement longer than the pool's statement_timeout to finish.
+// TestMigrationTimeoutOverride proves the migration escape hatch works end to
+// end through the real migration path: a migration containing a statement
+// longer than the pool's statement_timeout still completes, because MigrateUp
+// runs each migration in a transaction that sets the timeouts to 0 with
+// SET LOCAL.
 func TestMigrationTimeoutOverride(t *testing.T) {
 	dsn := requireDSN(t)
 
-	defaults, err := db.Open(db.Config{
+	pool, err := db.Open(db.Config{
 		DSN:               dsn,
 		ConnectionTimeout: 5 * time.Second,
 		StatementTimeout:  200 * time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("db.Open defaults: %v", err)
+		t.Fatalf("db.Open: %v", err)
 	}
-	defer defaults.Close()
-
-	mig, err := db.Open(db.Config{
-		DSN:               dsn,
-		ConnectionTimeout: 5 * time.Second,
-		// Negative disables the server-side timeouts, as a migration or
-		// backfill job would configure it.
-		StatementTimeout: -1,
-		LockTimeout:      -1,
-	})
-	if err != nil {
-		t.Fatalf("db.Open migration: %v", err)
-	}
-	defer mig.Close()
+	t.Cleanup(func() { pool.Close() })
 
 	const slowSQL = "SELECT pg_sleep(1)"
 
-	if _, err := defaults.Exec(slowSQL); err == nil {
-		t.Fatal("expected defaults pool to cancel pg_sleep(1) at the 200ms timeout")
+	// Control: outside a migration transaction the same statement is
+	// cancelled by the pool's statement_timeout.
+	if _, err := pool.ExecContext(context.Background(), slowSQL); err == nil {
+		t.Fatal("expected the pool to cancel pg_sleep(1) at the 200ms statement_timeout")
 	}
 
-	if _, err := mig.Exec(slowSQL); err != nil {
-		t.Fatalf("migration pool should allow slow statements: %v", err)
+	// Exercise the real path: a migration file that sleeps longer than the
+	// pool timeout must still complete under MigrateUp's transaction-local
+	// override, and the version must be recorded.
+	dir := t.TempDir()
+	// Unique version per run: the test database may be reused, and a
+	// previously recorded version would be skipped.
+	version := fmt.Sprintf("900_slow_migration_%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = pool.ExecContext(
+			context.Background(),
+			`DELETE FROM schema_migrations WHERE version = $1`,
+			version,
+		)
+	})
+	if err := os.WriteFile(
+		filepath.Join(dir, version+".up.sql"),
+		[]byte(slowSQL+";"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write up migration: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, version+".down.sql"),
+		[]byte(""),
+		0o600,
+	); err != nil {
+		t.Fatalf("write down migration: %v", err)
+	}
+
+	start := time.Now()
+	if err := db.MigrateUp(pool, dir); err != nil {
+		t.Fatalf("MigrateUp should override the pool timeout for migrations: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
+		t.Fatalf("migration finished in %s; pg_sleep(1) did not actually run", elapsed)
+	}
+
+	var applied bool
+	if err := pool.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`,
+		version,
+	).Scan(&applied); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	if !applied {
+		t.Fatalf("migration %q was not recorded in schema_migrations", version)
 	}
 }

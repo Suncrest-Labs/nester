@@ -29,8 +29,12 @@ const (
 
 	// MainnetStatementTimeout, MainnetLockTimeout and
 	// MainnetIdleInTransactionSessionTimeout are the stricter defaults used
-	// when StrictTimeouts is set. The API sets StrictTimeouts on Stellar
-	// mainnet, where a stuck query is a financial-availability incident.
+	// when Config.StrictTimeouts is set. The production API does not set that
+	// flag: config.Load already selects the mainnet values from
+	// STELLAR_NETWORK_PASSPHRASE and passes them explicitly to db.Open. These
+	// constants therefore serve callers that bypass config.Load and whose
+	// only mode is mainnet, where a stuck query is a financial-availability
+	// incident.
 	MainnetStatementTimeout                = 10 * time.Second
 	MainnetLockTimeout                     = 2 * time.Second
 	MainnetIdleInTransactionSessionTimeout = 30 * time.Second
@@ -142,7 +146,8 @@ func Open(cfg Config) (*sql.DB, error) {
 // ApplySessionTimeouts sets PostgreSQL's per-session statement, lock and
 // idle-in-transaction timeouts on connConfig. A zero duration selects the
 // default (or the stricter mainnet default when strict is true); a negative
-// duration disables that timeout.
+// duration disables that timeout by writing an explicit "0", which also
+// overrides any value supplied in the DSN.
 //
 // The parameters are sent in the startup packet rather than executed as SET
 // statements, so they apply to every connection the pool opens, including
@@ -157,10 +162,9 @@ func ApplySessionTimeouts(connConfig *pgx.ConnConfig, statement, lock, idle time
 }
 
 func resolveTimeout(configured, def, mainnet time.Duration, strict bool) time.Duration {
-	if configured < 0 {
-		return 0
-	}
-	if configured > 0 {
+	if configured != 0 {
+		// A negative value is the explicit-disable sentinel; a positive value
+		// overrides the default. In both cases the operator's choice wins.
 		return configured
 	}
 	if strict {
@@ -170,14 +174,26 @@ func resolveTimeout(configured, def, mainnet time.Duration, strict bool) time.Du
 }
 
 func setRuntimeParam(connConfig *pgx.ConnConfig, key string, d time.Duration) {
-	if d <= 0 {
+	if d == 0 {
 		return
 	}
 	if connConfig.RuntimeParams == nil {
 		connConfig.RuntimeParams = make(map[string]string)
 	}
-	// PostgreSQL accepts these parameters as integer milliseconds.
-	connConfig.RuntimeParams[key] = strconv.FormatInt(d.Milliseconds(), 10)
+	if d < 0 {
+		// Explicitly disabled: write "0" rather than omitting the parameter so
+		// a timeout supplied in the DSN cannot silently stay in effect.
+		connConfig.RuntimeParams[key] = "0"
+		return
+	}
+	// PostgreSQL accepts these parameters as integer milliseconds. Round
+	// positive sub-millisecond durations up to 1 ms: truncating them to 0
+	// would disable the timeout instead of making it very short.
+	ms := d.Milliseconds()
+	if ms < 1 {
+		ms = 1
+	}
+	connConfig.RuntimeParams[key] = strconv.FormatInt(ms, 10)
 }
 
 // Ping reports whether the database is reachable within the lifetime of ctx.
