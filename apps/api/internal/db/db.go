@@ -6,38 +6,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
-)
-
-const (
-	// DefaultStatementTimeout bounds a single statement on a pooled
-	// connection. A query that runs longer is cancelled by PostgreSQL instead
-	// of holding its connection until the client gives up.
-	DefaultStatementTimeout = 30 * time.Second
-
-	// DefaultLockTimeout bounds how long a statement waits for a table or row
-	// lock before PostgreSQL cancels it.
-	DefaultLockTimeout = 5 * time.Second
-
-	// DefaultIdleInTransactionSessionTimeout closes a connection that has been
-	// idle inside an open transaction for too long, releasing its locks.
-	DefaultIdleInTransactionSessionTimeout = 60 * time.Second
-
-	// MainnetStatementTimeout, MainnetLockTimeout and
-	// MainnetIdleInTransactionSessionTimeout are the stricter defaults used
-	// when Config.StrictTimeouts is set. The production API does not set that
-	// flag: config.Load already selects the mainnet values from
-	// STELLAR_NETWORK_PASSPHRASE and passes them explicitly to db.Open. These
-	// constants therefore serve callers that bypass config.Load and whose
-	// only mode is mainnet, where a stuck query is a financial-availability
-	// incident.
-	MainnetStatementTimeout                = 10 * time.Second
-	MainnetLockTimeout                     = 2 * time.Second
-	MainnetIdleInTransactionSessionTimeout = 30 * time.Second
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // Config holds the parameters used to open a connection pool.
@@ -69,50 +40,16 @@ type Config struct {
 	// DefaultQueryTimeout specifies the default timeout for database operations
 	// when no deadline is set on the context.
 	DefaultQueryTimeout time.Duration
-
-	// StatementTimeout bounds a single statement. Zero selects the default
-	// (DefaultStatementTimeout, or MainnetStatementTimeout when
-	// StrictTimeouts is set). A negative value disables the server-side
-	// timeout.
-	StatementTimeout time.Duration
-
-	// LockTimeout bounds how long a statement waits for a lock. Zero selects
-	// the default (DefaultLockTimeout, or MainnetLockTimeout when
-	// StrictTimeouts is set). A negative value disables it.
-	LockTimeout time.Duration
-
-	// IdleInTransactionSessionTimeout closes connections left idle inside an
-	// open transaction. Zero selects the default
-	// (DefaultIdleInTransactionSessionTimeout, or
-	// MainnetIdleInTransactionSessionTimeout when StrictTimeouts is set).
-	// A negative value disables it.
-	IdleInTransactionSessionTimeout time.Duration
-
-	// StrictTimeouts selects the tighter mainnet defaults for any timeout
-	// field left at zero.
-	StrictTimeouts bool
 }
 
 // Open opens a new *sql.DB, applies the pool settings from cfg, and verifies
 // connectivity with a PingContext.  The caller owns the returned *sql.DB and
 // must call Close when finished.
 func Open(cfg Config) (*sql.DB, error) {
-	connConfig, err := pgx.ParseConfig(cfg.DSN)
+	db, err := sql.Open("pgx", cfg.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("db: parse config: %w", err)
+		return nil, fmt.Errorf("db: open: %w", err)
 	}
-
-	// RuntimeParams are sent in the PostgreSQL startup packet, so every
-	// connection opened from this pool inherits the server-side timeouts.
-	ApplySessionTimeouts(
-		connConfig,
-		cfg.StatementTimeout,
-		cfg.LockTimeout,
-		cfg.IdleInTransactionSessionTimeout,
-		cfg.StrictTimeouts,
-	)
-
-	db := stdlib.OpenDB(*connConfig)
 
 	if cfg.MaxOpenConns > 0 {
 		db.SetMaxOpenConns(cfg.MaxOpenConns)
@@ -143,59 +80,6 @@ func Open(cfg Config) (*sql.DB, error) {
 	return db, nil
 }
 
-// ApplySessionTimeouts sets PostgreSQL's per-session statement, lock and
-// idle-in-transaction timeouts on connConfig. A zero duration selects the
-// default (or the stricter mainnet default when strict is true); a negative
-// duration disables that timeout by writing an explicit "0", which also
-// overrides any value supplied in the DSN.
-//
-// The parameters are sent in the startup packet rather than executed as SET
-// statements, so they apply to every connection the pool opens, including
-// connections created after Open returns.
-func ApplySessionTimeouts(connConfig *pgx.ConnConfig, statement, lock, idle time.Duration, strict bool) {
-	setRuntimeParam(connConfig, "statement_timeout",
-		resolveTimeout(statement, DefaultStatementTimeout, MainnetStatementTimeout, strict))
-	setRuntimeParam(connConfig, "lock_timeout",
-		resolveTimeout(lock, DefaultLockTimeout, MainnetLockTimeout, strict))
-	setRuntimeParam(connConfig, "idle_in_transaction_session_timeout",
-		resolveTimeout(idle, DefaultIdleInTransactionSessionTimeout, MainnetIdleInTransactionSessionTimeout, strict))
-}
-
-func resolveTimeout(configured, def, mainnet time.Duration, strict bool) time.Duration {
-	if configured != 0 {
-		// A negative value is the explicit-disable sentinel; a positive value
-		// overrides the default. In both cases the operator's choice wins.
-		return configured
-	}
-	if strict {
-		return mainnet
-	}
-	return def
-}
-
-func setRuntimeParam(connConfig *pgx.ConnConfig, key string, d time.Duration) {
-	if d == 0 {
-		return
-	}
-	if connConfig.RuntimeParams == nil {
-		connConfig.RuntimeParams = make(map[string]string)
-	}
-	if d < 0 {
-		// Explicitly disabled: write "0" rather than omitting the parameter so
-		// a timeout supplied in the DSN cannot silently stay in effect.
-		connConfig.RuntimeParams[key] = "0"
-		return
-	}
-	// PostgreSQL accepts these parameters as integer milliseconds. Round
-	// positive sub-millisecond durations up to 1 ms: truncating them to 0
-	// would disable the timeout instead of making it very short.
-	ms := d.Milliseconds()
-	if ms < 1 {
-		ms = 1
-	}
-	connConfig.RuntimeParams[key] = strconv.FormatInt(ms, 10)
-}
-
 // Ping reports whether the database is reachable within the lifetime of ctx.
 func Ping(ctx context.Context, db *sql.DB) error {
 	return db.PingContext(ctx)
@@ -212,3 +96,4 @@ func WithQueryTimeout(ctx context.Context, defaultTimeout time.Duration) (contex
 	}
 	return context.WithTimeout(ctx, defaultTimeout)
 }
+
