@@ -21,9 +21,8 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "AdapterPool");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
@@ -274,6 +273,10 @@ impl YieldAdapter for PoolAdapterContract {
 
     fn underlying(env: Env) -> Address {
         env.storage().instance().get(&DataKey::Underlying).unwrap()
+    }
+
+    fn core(env: Env) -> Address {
+        Self::get_vault(env)
     }
 
     /// AMM pools accept any size; capacity is bounded by price impact, which

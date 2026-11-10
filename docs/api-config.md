@@ -9,7 +9,7 @@ Every environment variable read by `apps/api/internal/config` at startup. Regene
 - **Mainnet**: constraints enforced at startup, and defaults that are unsafe or must be set deliberately on mainnet.
 - Values are read from the process environment first, then a local `.env`. Empty values count as unset.
 
-151 variables: 5 always required, 8 secret.
+153 variables: 5 always required, 8 secret.
 
 | Name | Type | Default | Required | Secret | Mainnet |
 | --- | --- | --- | --- | --- | --- |
@@ -37,6 +37,8 @@ Every environment variable read by `apps/api/internal/config` at startup. Regene
 | `STELLAR_USDC_ISSUER` | string | `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` | no | no | Default is the Circle mainnet USDC issuer. It must be overridden on testnet and must not be changed on mainnet without review. |
 | `YIELD_REGISTRY_CONTRACT` | string | _none_ | if mainnet passphrase | no | Startup fails if blank on mainnet. |
 | `STELLAR_ALLOCATION_STRATEGY_ADDRESS` | string | _none_ | if mainnet passphrase | no | Startup fails if blank on mainnet. |
+| `SAVINGS_CORE_CONTRACT_ID` | string | _none_ | no | no | Savings-rate core contract. Leave empty to disable the savings endpoints (503) and the hourly snapshot job. |
+| `SAVINGS_ADAPTER_NAMES` | string | _none_ | no | no | Comma-separated `adapter_contract=Display Name` pairs; unlisted adapters are shown unnamed. |
 | `WITHDRAWAL_SLIPPAGE_BPS` | int | `50` | no | no | Must be between 1 and 300. |
 | `HARVEST_DEFAULT_COMPOUND` | bool | `true` | no | no | — |
 | `STELLAR_MAINNET_VAULT_TVL_CAP` | string | `0` | no | no | Default `0` means no per-vault cap. Set an explicit ceiling for the staged launch. |

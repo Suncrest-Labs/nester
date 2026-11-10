@@ -7,6 +7,6 @@ export default function robots(): MetadataRoute.Robots {
       allow: '/',
       disallow: ['/api/'], // Though the website doesn't have an internal /api, it points to a separate service usually
     },
-    sitemap: 'https://nester.finance/sitemap.xml',
+    sitemap: 'https://usenester.xyz/sitemap.xml',
   };
 }

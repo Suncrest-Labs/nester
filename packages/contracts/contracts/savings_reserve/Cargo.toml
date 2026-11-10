@@ -1,0 +1,17 @@
+[package]
+name = "savings-reserve"
+version = "0.1.0"
+edition = "2021"
+publish = false
+build = "../../build-meta.rs"
+
+[lib]
+name = "savings_reserve"
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

@@ -2,15 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Vault, Globe, BarChart3, Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWallet } from "@/components/wallet-provider";
-
-const BOTTOM_NAV = [
-    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { label: "Vaults", href: "/vaults", icon: Vault },
-    { label: "History", href: "/portfolio", icon: BarChart3 },
-];
+import { APP_NAV as BOTTOM_NAV } from "@/lib/navigation";
 
 export function BottomNav() {
     const pathname = usePathname();
@@ -29,7 +23,7 @@ export function BottomNav() {
                         href={item.href}
                         className={cn(
                             "flex min-h-[44px] min-w-[44px] flex-col items-center justify-center gap-1 p-2 transition-colors",
-                            active ? "text-brand-purple" : "text-foreground/50 hover:text-foreground"
+                            active ? "text-foreground" : "text-foreground/50 hover:text-foreground"
                         )}
                     >
                         <item.icon className="h-5 w-5" />

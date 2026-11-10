@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "contracts/access_control",
   "contracts/adapter_blend",
+  "contracts/adapter_defindex",
   "contracts/adapter_lending",
   "contracts/adapter_pool",
   "contracts/adapter_soroswap",
@@ -12,6 +13,8 @@ members = [
   "contracts/nester",
   "contracts/recurring_deposit",
   "contracts/referral",
+  "contracts/savings_core",
+  "contracts/savings_reserve",
   "contracts/savings_goal",
   "contracts/timelock",
   "contracts/treasury",

@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import path from "path";
 import { withSentryConfig } from "@sentry/nextjs/config";
 import { buildRewrites } from "./lib/rewrites";
+import { retiredRouteRedirects } from "./lib/retired-routes";
 
 // Environment variable validation during build
 if (!process.env.NEXT_PUBLIC_STELLAR_NETWORK && process.env.NODE_ENV !== "development") {
@@ -17,6 +18,9 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     return buildRewrites(process.env);
+  },
+  async redirects() {
+    return retiredRouteRedirects;
   },
 };
 

@@ -2,8 +2,23 @@
 
 Official, unmodified Blend Capital contract WASM, vendored so
 `real_pool_test.rs` exercises `adapter_blend` against Blend's real interface
-instead of a hand-written mock. All are open source (Apache-2.0/MIT, see
-each source repository) and pinned to v1.0.0 because that release matches
+instead of a hand-written mock. These are test-only fixtures: no contract in
+this repository links or ships them, and they are to be replaced at the
+soroban-sdk 22 upgrade (when the v2 pool can run here and the v1 set is no
+longer needed).
+
+Licenses differ by source:
+
+- `blend_pool.wasm`, `blend_pool_factory.wasm`, `blend_backstop.wasm` and
+  `blend_emitter.wasm` are built from
+  [blend-capital/blend-contracts](https://github.com/blend-capital/blend-contracts),
+  which is licensed **AGPL-3.0**, not Apache-2.0/MIT.
+- `blend_pool_v2.wasm` is built from
+  [blend-capital/blend-contracts-v2](https://github.com/blend-capital/blend-contracts-v2),
+  licensed **MIT**.
+- `blend_comet.wasm`: see its source repository (license not verified here).
+
+The v1 set is pinned to v1.0.0 because that release matches
 this workspace's `soroban-sdk = "=21.7.7"` / protocol 21 host. Blend's
 v2.0.0 pool WASM targets protocol 22 and fails `register_contract_wasm` here
 with `"contract protocol number is newer than host"` -- confirmed directly,
@@ -15,7 +30,16 @@ not assumed.
 | `blend_pool_factory.wasm` | [blend-capital/blend-contracts v1.0.0](https://github.com/blend-capital/blend-contracts/releases/tag/v1.0.0_pool-factory_v1.0.0.wasm) | `0287f4ad7350935b83d94e046c0bcabc960b233dbce1531008c021b71d406a1d` |
 | `blend_backstop.wasm` | [blend-capital/blend-contracts v1.0.0](https://github.com/blend-capital/blend-contracts/releases/tag/v1.0.0_backstop_v1.0.0.wasm) | `62f61b32fff99f7eec052a8e573c367759f161c481a5caf0e76a10ae4617c3b4` |
 | `blend_emitter.wasm` | [blend-capital/blend-contracts v1.0.0](https://github.com/blend-capital/blend-contracts/releases/tag/v1.0.0_emitter_v1.0.0.wasm) | `438a5528cff17ede6fe515f095c43c5f15727af17d006971485e52462e7e7b89` |
+| `blend_pool_v2.wasm` | [blend-capital/blend-contracts-v2 v2.0.0](https://github.com/blend-capital/blend-contracts-v2/releases/tag/v2.0.0_pool_cli22.0.1) (`pool_v2.0.0.wasm`) | `a41fc53d6753b6c04eb15b021c55052366a4c8e0e21bc72700f461264ec1350e` |
 | `blend_comet.wasm` | [blend-capital/blend-utils `wasm_v1/comet.wasm`](https://github.com/blend-capital/blend-utils/blob/main/wasm_v1/comet.wasm) | `8abc28913035c07411ed5d134e6bfeab4723d97ddd4d1a22a0605d35c94d1a36` |
+
+`blend_pool_v2.wasm` is the pool the adapter targets (it reads `b_rate`
+through v2's `get_reserve`, which v1 lacks). It is built for protocol 22
+(`rssdkver` 22.0.7), so it cannot be registered in this workspace's
+protocol-21 host; `src/spec_test.rs` reads only its contract spec, checking
+that the adapter's and the mock's Blend structs match v2 field-for-field. The
+real-pool withdraw tests stay ignored until the workspace moves to
+soroban-sdk 22 and can run this WASM.
 
 The Comet AMM (Blend's backstop LP token) has no tagged GitHub release, so
 its WASM comes from `blend-utils`'s own deployment fixture directory instead

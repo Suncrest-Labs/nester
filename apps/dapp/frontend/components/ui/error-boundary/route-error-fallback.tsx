@@ -82,7 +82,7 @@ export function RouteErrorFallback({
           type="button"
           onClick={reset}
           data-testid="route-error-retry"
-          className="inline-flex h-11 items-center gap-2 rounded-xl bg-black px-5 text-sm font-semibold text-white transition-opacity hover:opacity-90 dark:bg-blue-600"
+          className="inline-flex h-11 items-center gap-2 rounded-full bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-80"
         >
           <RefreshCw className="h-4 w-4" aria-hidden="true" />
           Try again

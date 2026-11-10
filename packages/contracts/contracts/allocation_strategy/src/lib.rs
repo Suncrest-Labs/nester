@@ -1,13 +1,12 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "AllocationStrategyContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env, Error,
-    IntoVal, Symbol, Val, Vec,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env,
+    Error, IntoVal, Symbol, Val, Vec,
 };
 
 use nester_access_control::{AccessControl, Role};
@@ -433,7 +432,7 @@ impl AllocationStrategyContract {
     ) -> Vec<AllocationDelta> {
         let registry_id: Address = env.storage().instance().get(&DataKey::RegistryId).unwrap();
         let target_weights = Self::get_weights(env.clone());
-        
+
         let mut adjusted_weights = Vec::new(&env);
         let mut healthy_weight_sum = 0_u32;
         let mut total_to_redistribute = total;
@@ -545,7 +544,7 @@ impl AllocationStrategyContract {
             }
         } else if total_to_redistribute > 0 {
             // No healthy protocols to take the funds!
-            // In a real system, these would stay in the vault. 
+            // In a real system, these would stay in the vault.
             // Here we must still satisfy delta conservation if total was sum(current).
             // This case implies we are withdrawing everything to the vault.
             // The current rebalance architecture (sum=0) doesn't allow net withdrawal
@@ -560,7 +559,7 @@ impl AllocationStrategyContract {
                 .checked_add(d.delta)
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
         }
-        
+
         if delta_sum > 0 {
             // We cannot create funds.
             panic_with_error!(&env, ContractError::AllocationError);
@@ -690,8 +689,11 @@ impl AllocationStrategyContract {
             current
         }
     }
-}
 
+    pub fn version(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Private helpers
@@ -1213,9 +1215,6 @@ fn registry_get_active_sources(env: &Env, registry_id: &Address) -> Vec<Registry
         Ok(Ok(v)) => v,
         Ok(Err(_)) => Vec::new(env),
         Err(_) => Vec::new(env),
-    }
-    pub fn version(env: Env) -> soroban_sdk::String {
-        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
     }
 }
 

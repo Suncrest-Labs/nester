@@ -90,7 +90,7 @@ func NewReflector() (*openapi31.Reflector, error) {
 	r.Spec.Info.
 		WithTitle("Nester API").
 		WithVersion("1.0.0").
-		WithDescription("Generated from Go source (issue #1058). Currently covers the vault lifecycle routes only — see internal/openapi/spec.go for scope.")
+		WithDescription("Generated from Go source (issue #1058). Currently covers the vault lifecycle and savings-rate routes only — see internal/openapi/spec.go for scope.")
 	r.DefaultOptions = append(r.DefaultOptions, fixPointerNullability())
 
 	if err := addCreateVault(r); err != nil {
@@ -103,6 +103,9 @@ func NewReflector() (*openapi31.Reflector, error) {
 		return nil, err
 	}
 	if err := addWithdrawFromVault(r); err != nil {
+		return nil, err
+	}
+	if err := addSavingsOperations(r); err != nil {
 		return nil, err
 	}
 

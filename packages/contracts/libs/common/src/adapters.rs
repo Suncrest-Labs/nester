@@ -78,6 +78,10 @@ pub trait YieldAdapter {
     /// The underlying asset this adapter accepts and pays out.
     fn underlying(env: Env) -> Address;
 
+    /// The one contract (vault or savings core) allowed to move value through
+    /// this adapter. A core registers an adapter only if this is itself.
+    fn core(env: Env) -> Address;
+
     /// Protocol-side deposit ceiling right now. 0 means no capacity.
     fn max_deposit(env: Env) -> i128;
 

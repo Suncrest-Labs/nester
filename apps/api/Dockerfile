@@ -1,4 +1,4 @@
-FROM golang:1.25.14-alpine AS builder
+FROM golang:1.26.10-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -12,5 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build     -ldflags="-s -w -X main.version=${VERS
 
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /server /server
+COPY --from=builder /app/migrations /migrations
+ENV MIGRATIONS_DIR=/migrations
 EXPOSE 8080
 ENTRYPOINT ["/server"]

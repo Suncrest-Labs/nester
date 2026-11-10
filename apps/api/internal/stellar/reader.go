@@ -231,12 +231,12 @@ func (r *ContractReader) simulate(ctx context.Context, contractScAddr xdr.ScAddr
 	if resp.Result.Error != "" {
 		return xdr.ScVal{}, fmt.Errorf("%w: %s", ErrSimulateFailed, resp.Result.Error)
 	}
-	if resp.Result.ReturnValue == "" {
+	if len(resp.Result.Results) == 0 || resp.Result.Results[0].XDR == "" {
 		return xdr.ScVal{}, fmt.Errorf("%w: empty return value from %s", ErrSimulateFailed, functionName)
 	}
 
 	var val xdr.ScVal
-	if err := xdr.SafeUnmarshalBase64(resp.Result.ReturnValue, &val); err != nil {
+	if err := xdr.SafeUnmarshalBase64(resp.Result.Results[0].XDR, &val); err != nil {
 		return xdr.ScVal{}, fmt.Errorf("decode return value: %w", err)
 	}
 	return val, nil
@@ -246,7 +246,9 @@ type simulateResultExtended struct {
 	TransactionData string `json:"transactionData"`
 	MinResourceFee  string `json:"minResourceFee"`
 	Error           string `json:"error,omitempty"`
-	ReturnValue     string `json:"returnValue,omitempty"`
+	Results         []struct {
+		XDR string `json:"xdr"`
+	} `json:"results,omitempty"`
 }
 
 // rpcCall delegates to the shared client so reads here get the same bounded,

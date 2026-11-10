@@ -1,18 +1,42 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useMemo } from "react";
+import Link from "next/link";
+import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { useYieldHarvests } from "@/hooks/useYieldHarvests";
-import { EmptyState } from "@/components/ui/empty-state/empty-state";
 import { getExplorerTxUrl } from "@/utils/explorer";
-import { ArrowLeft, Calendar, ExternalLink, Loader2, RefreshCw } from "lucide-react";
-import Link from "next/link";
 import type { ListYieldHarvestsResponse } from "@/lib/api/yields";
-import { HarvestHistorySkeleton } from "@/components/skeletons/page-skeletons";
+import { LoadingRegion } from "@/components/ui/skeleton/skeleton";
+import {
+  BigNumber,
+  BUTTON_SECONDARY,
+  EmptyPanel,
+  PageHeader,
+  Panel,
+  Section,
+  SKELETON,
+} from "@/components/ui/page-kit";
+import { cn } from "@/lib/utils";
+
+const TH = "px-6 py-3 text-[13px] font-medium text-muted-foreground";
+const TD = "px-6 py-4 text-sm text-foreground";
+
+function formatAmount(value: number) {
+  return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+}
+
+function formatDate(dateStr: string) {
+  return new Date(dateStr).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export default function YieldHarvestHistoryPage() {
-  const router = useRouter();
   const {
     data,
     isLoading,
@@ -32,166 +56,132 @@ export default function YieldHarvestHistoryPage() {
     return allHarvests.reduce((sum, harvest) => sum + parseFloat(harvest.amount), 0);
   }, [allHarvests]);
 
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+  const currency = allHarvests[0]?.currency ?? "";
 
   return (
     <AppShell>
-      <div className="mx-auto max-w-5xl px-5 py-8 sm:px-8">
-        <div className="mb-6">
-          <button
-            onClick={() => router.back()}
-            className="flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white transition-colors mb-3"
-          >
-            <ArrowLeft className="h-3 w-3" />
-            Back
-          </button>
-          <h1 className="text-2xl font-semibold text-black dark:text-white tracking-tight">
-            Harvest History
-          </h1>
-          <p className="mt-1 text-sm text-black/55 dark:text-white/55">
-            View all your past yield harvests.
+      <PageHeader
+        title="Harvest history"
+        lede={
+          <p className="text-sm text-muted-foreground">
+            Every yield harvest recorded for your account, with a link to the transaction.
           </p>
-        </div>
+        }
+        actions={
+          <Link href="/yields" className={BUTTON_SECONDARY}>
+            Back to markets
+          </Link>
+        }
+      />
 
-        {isLoading ? (
-          <HarvestHistorySkeleton />
-        ) : isError ? (
-          <div
-            role="alert"
-            data-testid="harvests-error"
-            className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] py-16"
+      {isLoading ? (
+        <Panel className="mt-8">
+          <LoadingRegion label="Loading harvest history" className="space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className={cn(SKELETON, "h-12")} />
+            ))}
+          </LoadingRegion>
+        </Panel>
+      ) : isError ? (
+        <div role="alert" data-testid="harvests-error" className="mt-8">
+          <EmptyPanel
+            title="Harvest history didn't load."
+            action={
+              <button
+                type="button"
+                onClick={() => refetch()}
+                disabled={isFetching}
+                data-testid="harvests-retry"
+                className={BUTTON_SECONDARY}
+              >
+                <RefreshCw
+                  className={cn("h-3 w-3", isFetching && "animate-spin")}
+                  aria-hidden="true"
+                />
+                {isFetching ? "Retrying…" : "Retry"}
+              </button>
+            }
           >
-            <p className="text-sm text-black/50 dark:text-white/50">Failed to load harvest history.</p>
-            <button
-              type="button"
-              onClick={() => refetch()}
-              disabled={isFetching}
-              data-testid="harvests-retry"
-              className="flex items-center gap-1.5 rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs text-black/55 dark:text-white/55 hover:text-black dark:hover:text-white disabled:opacity-50"
-            >
-              <RefreshCw className={isFetching ? "h-3 w-3 animate-spin" : "h-3 w-3"} aria-hidden="true" />
-              {isFetching ? "Retrying…" : "Retry"}
-            </button>
-          </div>
-        ) : allHarvests.length === 0 ? (
-          <div data-testid="harvests-empty-state" className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]">
-            <EmptyState
-              icon={Calendar}
-              title="No harvests yet"
-              description="Once you start harvesting yield from your vaults, they'll appear here."
-            />
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse min-w-[600px]">
-                <thead>
-                  <tr className="border-b border-black/8 dark:border-white/8 bg-black/[0.02] dark:bg-white/[0.02]">
-                    <th className="px-6 py-3.5 text-[10px] font-medium text-black/50 dark:text-white/50 uppercase tracking-wider">
-                      Date
-                    </th>
-                    <th className="px-6 py-3.5 text-[10px] font-medium text-black/50 dark:text-white/50 uppercase tracking-wider">
-                      Protocol
-                    </th>
-                    <th className="px-6 py-3.5 text-[10px] font-medium text-black/50 dark:text-white/50 uppercase tracking-wider text-right">
-                      Amount
-                    </th>
-                    <th className="px-6 py-3.5 text-[10px] font-medium text-black/50 dark:text-white/50 uppercase tracking-wider">
-                      Currency
-                    </th>
-                    <th className="px-6 py-3.5 text-[10px] font-medium text-black/50 dark:text-white/50 uppercase tracking-wider">
-                      Transaction
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-black/8">
-                  {allHarvests.map((harvest) => (
-                    <tr key={harvest.id} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors">
-                      <td className="px-6 py-5">
-                        <span className="text-sm text-black dark:text-white">{formatDate(harvest.harvested_at)}</span>
-                      </td>
-                      <td className="px-6 py-5">
-                        <span className="text-sm font-medium text-black dark:text-white">
-                          {harvest.protocol || "N/A"}
-                        </span>
-                      </td>
-                      <td className="px-6 py-5 text-right">
-                        <span className="text-sm font-mono text-emerald-600">
-                          +{parseFloat(harvest.amount).toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 6,
-                          })}
-                        </span>
-                      </td>
-                      <td className="px-6 py-5">
-                        <span className="text-sm text-black dark:text-white">{harvest.currency}</span>
-                      </td>
-                      <td className="px-6 py-5">
-                        {harvest.tx_hash ? (
-                          <a
-                            href={getExplorerTxUrl(harvest.tx_hash)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs font-medium text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white transition-colors"
-                          >
-                            View on Explorer
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
-                        ) : (
-                          <span className="text-xs text-black/30 dark:text-white/30">N/A</span>
-                        )}
-                      </td>
+            We couldn&apos;t reach the server. Try again in a moment.
+          </EmptyPanel>
+        </div>
+      ) : allHarvests.length === 0 ? (
+        <div data-testid="harvests-empty-state" className="mt-8">
+          <EmptyPanel title="No harvests yet">
+            Harvested yield will appear here once it has been recorded.
+          </EmptyPanel>
+        </div>
+      ) : (
+        <>
+          <Panel className="mt-8">
+            <h2 className="text-sm font-medium text-muted-foreground">Total harvested</h2>
+            <BigNumber className="mt-3 text-5xl">
+              {formatAmount(totalEarned)}
+              {currency && <span className="ml-2 text-2xl text-muted-foreground">{currency}</span>}
+            </BigNumber>
+          </Panel>
+
+          <Section id="harvests-heading" title="Harvests">
+            <Panel className="overflow-hidden p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[600px] border-collapse text-left">
+                  <thead>
+                    <tr className="border-b">
+                      <th scope="col" className={TH}>Date</th>
+                      <th scope="col" className={TH}>Protocol</th>
+                      <th scope="col" className={cn(TH, "text-right")}>Amount</th>
+                      <th scope="col" className={TH}>Currency</th>
+                      <th scope="col" className={TH}>Transaction</th>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t border-black/8 dark:border-white/8 bg-black/[0.02] dark:bg-white/[0.02]">
-                    <td
-                      colSpan={2}
-                      className="px-6 py-4 text-sm font-semibold text-black dark:text-white"
-                    >
-                      Total Earned
-                    </td>
-                    <td className="px-6 py-4 text-right text-sm font-mono font-semibold text-emerald-600">
-                      +{totalEarned.toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 6,
-                      })}
-                    </td>
-                    <td className="px-6 py-4 text-sm font-medium text-black dark:text-white">
-                      {allHarvests[0]?.currency || ""}
-                    </td>
-                    <td></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-            {hasNextPage && (
-              <div className="px-6 py-4 border-t border-black/8 dark:border-white/8 flex justify-center">
-                <button
-                  onClick={() => fetchNextPage()}
-                  disabled={isFetchingNextPage}
-                  className="flex items-center gap-2 rounded-lg border border-black/10 dark:border-white/10 px-4 py-2 text-xs font-medium text-black dark:text-white hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isFetchingNextPage ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : null}
-                  Load More
-                </button>
+                  </thead>
+                  <tbody className="divide-y">
+                    {allHarvests.map((harvest) => (
+                      <tr key={harvest.id} className="transition-colors hover:bg-foreground/5">
+                        <td className={TD}>{formatDate(harvest.harvested_at)}</td>
+                        <td className={cn(TD, "font-medium")}>{harvest.protocol || "N/A"}</td>
+                        <td className={cn(TD, "text-right tabular-nums")}>
+                          +{formatAmount(parseFloat(harvest.amount))}
+                        </td>
+                        <td className={TD}>{harvest.currency}</td>
+                        <td className={TD}>
+                          {harvest.tx_hash ? (
+                            <a
+                              href={getExplorerTxUrl(harvest.tx_hash)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                            >
+                              View on explorer
+                              <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                            </a>
+                          ) : (
+                            <span className="text-muted-foreground">N/A</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            )}
-          </div>
-        )}
-      </div>
+              {hasNextPage && (
+                <div className="flex justify-center border-t px-6 py-4">
+                  <button
+                    type="button"
+                    onClick={() => fetchNextPage()}
+                    disabled={isFetchingNextPage}
+                    className={BUTTON_SECONDARY}
+                  >
+                    {isFetchingNextPage && (
+                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                    )}
+                    Load more
+                  </button>
+                </div>
+              )}
+            </Panel>
+          </Section>
+        </>
+      )}
     </AppShell>
   );
 }

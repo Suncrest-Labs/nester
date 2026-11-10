@@ -6,18 +6,18 @@ This document describes the security gates that protect the Nester codebase. Eac
 
 Each tool runs exactly once per change.
 
-| Language              | Gate                                | Threshold                                 | Workflow / job                    |
-| --------------------- | ----------------------------------- | ----------------------------------------- | --------------------------------- |
-| Go                    | `govulncheck`                       | 0 unknown CVEs (accepted list maintained) | `security.yml` / `deps`           |
-| Go                    | `gosec`                             | medium severity                           | `security.yml` / `sast`           |
-| Rust                  | `cargo-audit`                       | any CVE                                   | `security.yml` / `deps`           |
-| JavaScript/TypeScript | `pnpm audit`                        | critical only                             | `security.yml` / `deps`           |
-| JavaScript/TypeScript | `eslint` + `eslint-plugin-security` | all violations                            | `ci.yml` / `dapp`                 |
-| All                   | `gitleaks`                          | any secret detection                      | `security.yml` / `secrets`        |
-| All                   | `semgrep`                           | all violations (XSS, injection, etc.)     | `security.yml` / `sast`           |
-| All                   | `CodeQL`                            | all violations                            | `security.yml` / `sast`           |
-| Contracts             | `scripts/contract-audit.sh`         | audit service findings                    | `security.yml` / `contract-audit` |
-| Container images      | `trivy` (api, signer)               | HIGH/CRITICAL with a fix available         | `security.yml` / `image-scan`     |
+| Language              | Gate                                | Threshold                                 | Workflow / job              |
+| --------------------- | ----------------------------------- | ----------------------------------------- | --------------------------- |
+| Go                    | `govulncheck`                       | 0 unknown CVEs (accepted list maintained) | `security.yml` / `Security` |
+| Go                    | `gosec`                             | medium severity                           | `security.yml` / `Security` |
+| Rust                  | `cargo-audit`                       | any CVE                                   | `security.yml` / `Security` |
+| JavaScript/TypeScript | `pnpm audit`                        | critical only                             | `security.yml` / `Security` |
+| JavaScript/TypeScript | `eslint` + `eslint-plugin-security` | all violations                            | `ci.yml` / `JS`             |
+| All                   | `gitleaks`                          | any secret detection                      | `security.yml` / `Security` |
+| All                   | `semgrep`                           | all violations (XSS, injection, etc.)     | `security.yml` / `Security` |
+| All                   | `CodeQL`                            | all violations (push to dev/main, weekly) | `security.yml` / `Security` |
+| Contracts             | `scripts/contract-audit.sh`         | audit service findings                    | `security.yml` / `Security` |
+| Container images      | `trivy` (api, signer)               | HIGH/CRITICAL with a fix available        | `security.yml` / `Security` |
 
 Container image scanning (#1532) covers the two production Dockerfiles that exist today: `apps/api/Dockerfile` and
 `apps/api/Dockerfile.signer`. The dapp has no production Dockerfile (only `Dockerfile.dev`, it deploys as a built
@@ -27,18 +27,23 @@ implemented yet; the `build-images` job in `deploy.yml` is where signing would a
 
 ## Required status checks
 
-Branch protection on `dev` and `main` requires exactly these checks:
+Branch protection on `dev` and `main` requires exactly these checks, which are also every check a pull request shows
+(apart from external apps such as CodeRabbit):
 
-| Check           | Workflow       | What it covers                                                  |
-| --------------- | -------------- | ---------------------------------------------------------------|
-| `CI gate`       | `ci.yml`       | `website`, `dapp`, `api`, `contracts`, `observability`          |
-| `Security gate` | `security.yml` | `secrets`, `deps`, `sast`, `image-scan`, `sbom`, `contract-audit` |
+| Check              | Workflow        | What it covers                                                                      |
+| ------------------ | --------------- | ----------------------------------------------------------------------------------- |
+| `JS`               | `ci.yml`        | website build/lint; dapp security lint, build, unit tests, Playwright E2E           |
+| `API`              | `ci.yml`        | migrations, build, vet, staticcheck, generated-file checks, tests; observability    |
+| `Contracts`        | `ci.yml`        | WASM builds, tests, fmt, clippy, integration tests, WASM hashes                     |
+| `Security`         | `security.yml`  | gitleaks, dependency audits, gosec, semgrep, typosquat, Trivy, SBOM, contract audit |
+| `Contracts freeze` | `pr-policy.yml` | contracts change-control rule after `audit-candidate-1`                             |
 
-Each gate job aggregates every job in its workflow. A job skipped by the path filter counts as a pass; a failed or
-cancelled job fails the gate. Requiring the gates rather than the individual jobs keeps the list well under the limit of
-eight and means a path-filtered job that was skipped can never leave a required check pending.
+Each workflow has one job per check. Each job runs the path filter as its first step and skips the steps a change does
+not need, so a check is never left pending and an untouched area passes in seconds. A pull request therefore always
+shows five checks; adding a job adds a check, so new work goes into an existing job.
 
-No required job uses `continue-on-error`.
+Playwright E2E is the one non-blocking part (`continue-on-error`) until the runner's browser install is fixed; it was
+never part of the merge gate. No other required step uses `continue-on-error`.
 
 ## Workflow budget
 
@@ -122,7 +127,7 @@ pnpm audit --audit-level=critical
 
 **Where it runs:**
 
-- `security.yml` — `deps` job, `pnpm` leg
+- `security.yml` — `Security` job, when JS files change
 
 ### eslint + eslint-plugin-security
 
@@ -139,7 +144,7 @@ pnpm run lint
 
 **Where it runs:**
 
-- `ci.yml` — `dapp` job (`lint:security`), enforced (was `continue-on-error: true`, fixed in #1236)
+- `ci.yml` — `JS` job (`lint:security`), enforced (was `continue-on-error: true`, fixed in #1236)
 
 ## All Languages
 
@@ -155,7 +160,7 @@ gitleaks detect --source . --no-git --redact --config .gitleaks.toml
 
 **Where it runs:**
 
-- `security.yml` — `secrets` job, always
+- `security.yml` — `Security` job, always
 
 ### semgrep
 
@@ -169,39 +174,42 @@ semgrep scan --config p/typescript p/react p/nextjs p/secrets
 
 **Where it runs:**
 
-- `security.yml` — `sast` job, `js` leg, dapp changes
+- `security.yml` — `Security` job, dapp changes
 
 ### CodeQL
 
-**Threshold:** All violations across Go and TypeScript.
+**Threshold:** All violations across Go, TypeScript and Python.
 
 **Where it runs:**
 
-- `security.yml` — `sast` job, one leg per changed language
+- `security.yml` — `Security` job on pushes to `dev`/`main`, weekly and on demand. Not on pull requests, where it would
+  add a check of its own; findings surface on the merge commit.
 
 ## CI Workflows
 
 ### ci.yml
 
-Runs on pull requests and pushes to `dev`/`main`. Jobs are path-filtered (`.github/path-filters.yml`):
+Runs on pull requests and pushes to `dev`/`main`. Three jobs, each path-filtered step by step
+(`.github/path-filters.yml`):
 
-- **website:** build, lint
-- **dapp:** lint (security rules), build, unit tests, Playwright E2E
-- **api:** migration checks, build, vet, staticcheck, OpenAPI check, unit, integration and property tests
-- **contracts:** build, tests, fmt, clippy, integration tests, WASM hashes
-- **observability:** promtool/amtool checks, burn-rate and probe tests, dashboard drift (only when
-  `docker/prometheus/**`, alertmanager, grafana or probe files change)
+- **JS:** website build and lint; dapp security lint, build, unit tests, Playwright E2E (non-blocking)
+- **API:** migration checks, build, vet, staticcheck, OpenAPI and config-doc checks, unit, integration and property
+  tests; promtool/amtool checks, burn-rate and probe tests, dashboard drift when observability files change
+- **Contracts:** build, tests, fmt, clippy, integration tests, WASM hashes
 
 ### security.yml
 
-Runs on pull requests, pushes to `dev`/`main`, weekly, and on demand. Language-specific scans are path-filtered the same
-way; scheduled and manual runs scan everything:
+Runs on pull requests, pushes to `dev`/`main`, weekly, and on demand, as a single `Security` job. Language-specific
+scans are path-filtered the same way; scheduled and manual runs scan everything. Every scan step runs even after an
+earlier one fails, so one finding never hides another:
 
-- **secrets:** gitleaks over full history
-- **deps:** `pnpm audit`, `govulncheck`, `cargo-audit`
-- **sast:** gosec, Semgrep, typosquat check, CodeQL
-- **sbom:** CycloneDX/syft SBOMs
-- **contract-audit:** `scripts/contract-audit.sh`
+- gitleaks over full history
+- `pnpm audit`, `govulncheck`, `cargo-audit`
+- gosec, Semgrep, typosquat check
+- Trivy on the api and signer images
+- CycloneDX/syft SBOMs
+- `scripts/contract-audit.sh`
+- CodeQL (not on pull requests)
 
 ### scheduled.yml
 

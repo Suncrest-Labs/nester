@@ -1,0 +1,217 @@
+{
+  "_links": {
+    "next": {
+      "href": "https://horizon-testnet.stellar.org/accounts/GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E/operations?cursor=23574641696055297&join=transactions&limit=50&order=desc"
+    }
+  },
+  "_embedded": {
+    "records": [
+      {
+        "id": "23643648935628801",
+        "paging_token": "23643648935628801",
+        "transaction_successful": true,
+        "source_account": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+        "type": "invoke_host_function",
+        "type_i": 24,
+        "created_at": "2026-11-01T15:54:30Z",
+        "transaction_hash": "259000ba5f8360ba960115f2dce88f0dc6fadf8c7d611117a1dc6b64300d7dd8",
+        "function": "HostFunctionTypeHostFunctionTypeInvokeContract",
+        "parameters": [
+          {
+            "value": "AAAAEgAAAAEsMOpgd1im0XFxJp2GIJ6G2a0bl8LjuqzRB0hTHSt8Og==",
+            "type": "Address"
+          },
+          {
+            "value": "AAAADwAAAAhhbGxvY2F0ZQ==",
+            "type": "Sym"
+          },
+          {
+            "value": "AAAAEgAAAAAAAAAA3Ckpu2uLM+80LLi8tphuZ/RsM5Nq9XYQRX0eVzvgg0o=",
+            "type": "Address"
+          },
+          {
+            "value": "AAAAEgAAAAGaXL9b6LupJoe+0hYLdEpBOklJSSQw3V1z4RzS0r3plA==",
+            "type": "Address"
+          },
+          {
+            "value": "AAAACgAAAAAAAAAAAAAAAAvrwgA=",
+            "type": "I128"
+          }
+        ],
+        "address": "",
+        "salt": "",
+        "asset_balance_changes": [
+          {
+            "asset_type": "credit_alphanum4",
+            "asset_code": "USDC",
+            "asset_issuer": "GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+            "type": "transfer",
+            "from": "CAWDB2TAO5MKNULROETJ3BRAT2DNTLI3S7BOHOVM2EDUQUY5FN6DUJ4Q",
+            "to": "CCNFZP235C52SJUHX3JBMC3UJJATUSKJJESDBXK5OPQRZUWSXXUZIPU7",
+            "amount": "20.0000000"
+          },
+          {
+            "asset_type": "credit_alphanum4",
+            "asset_code": "USDC",
+            "asset_issuer": "GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+            "type": "transfer",
+            "from": "CCNFZP235C52SJUHX3JBMC3UJJATUSKJJESDBXK5OPQRZUWSXXUZIPU7",
+            "to": "CBMVK2JK6NTOT2O4HNQAIQFJY232BHKGLIMXDVQVHIIZKDACXDFZDWHN",
+            "amount": "20.0000000"
+          }
+        ]
+      },
+      {
+        "id": "23643631755780097",
+        "paging_token": "23643631755780097",
+        "transaction_successful": true,
+        "source_account": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+        "type": "invoke_host_function",
+        "type_i": 24,
+        "created_at": "2026-11-01T15:54:10Z",
+        "transaction_hash": "f7507283099a8ff562ef017e193f7ce9a12a90d2dd53a46e685223122d2542f3",
+        "function": "HostFunctionTypeHostFunctionTypeInvokeContract",
+        "parameters": [
+          {
+            "value": "AAAAEgAAAAEsMOpgd1im0XFxJp2GIJ6G2a0bl8LjuqzRB0hTHSt8Og==",
+            "type": "Address"
+          },
+          {
+            "value": "AAAADwAAAAdleGVjdXRlAA==",
+            "type": "Sym"
+          },
+          {
+            "value": "AAAAAwAAAAI=",
+            "type": "U32"
+          }
+        ],
+        "address": "",
+        "salt": "",
+        "asset_balance_changes": null
+      },
+      {
+        "id": "23628169873494017",
+        "paging_token": "23628169873494017",
+        "transaction_successful": true,
+        "source_account": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+        "type": "invoke_host_function",
+        "type_i": 24,
+        "created_at": "2026-11-01T10:54:10Z",
+        "transaction_hash": "7dec2d13f502ce671b1dd1e7f121b21c8af1a2381cd8ad7baf561db91844adc3",
+        "function": "HostFunctionTypeHostFunctionTypeInvokeContract",
+        "parameters": [
+          {
+            "value": "AAAAEgAAAAEsMOpgd1im0XFxJp2GIJ6G2a0bl8LjuqzRB0hTHSt8Og==",
+            "type": "Address"
+          },
+          {
+            "value": "AAAADwAAAAZyZWRlZW0AAA==",
+            "type": "Sym"
+          },
+          {
+            "value": "AAAAEgAAAAAAAAAA3Ckpu2uLM+80LLi8tphuZ/RsM5Nq9XYQRX0eVzvgg0o=",
+            "type": "Address"
+          },
+          {
+            "value": "AAAACgAAAAAAAAAAAAAAABfXhAA=",
+            "type": "I128"
+          },
+          {
+            "value": "AAAACgAAAAAAAAAAAAAAAAAAAAA=",
+            "type": "I128"
+          }
+        ],
+        "address": "",
+        "salt": "",
+        "asset_balance_changes": [
+          {
+            "asset_type": "credit_alphanum4",
+            "asset_code": "USDC",
+            "asset_issuer": "GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+            "type": "transfer",
+            "from": "CAWDB2TAO5MKNULROETJ3BRAT2DNTLI3S7BOHOVM2EDUQUY5FN6DUJ4Q",
+            "to": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+            "amount": "40.0000000"
+          }
+        ]
+      },
+      {
+        "id": "23628144103698433",
+        "paging_token": "23628144103698433",
+        "transaction_successful": true,
+        "source_account": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+        "type": "invoke_host_function",
+        "type_i": 24,
+        "created_at": "2026-11-01T10:53:40Z",
+        "transaction_hash": "635c60a3b149f056cd3e1a516f53a48486ad085610ca503cd70950b9d38740e2",
+        "function": "HostFunctionTypeHostFunctionTypeInvokeContract",
+        "parameters": [
+          {
+            "value": "AAAAEgAAAAEsMOpgd1im0XFxJp2GIJ6G2a0bl8LjuqzRB0hTHSt8Og==",
+            "type": "Address"
+          },
+          {
+            "value": "AAAADwAAAAdkZXBvc2l0AA==",
+            "type": "Sym"
+          },
+          {
+            "value": "AAAAEgAAAAAAAAAA3Ckpu2uLM+80LLi8tphuZ/RsM5Nq9XYQRX0eVzvgg0o=",
+            "type": "Address"
+          },
+          {
+            "value": "AAAACgAAAAAAAAAAAAAAADuaygA=",
+            "type": "I128"
+          },
+          {
+            "value": "AAAACgAAAAAAAAAAAAAAAAAAAAA=",
+            "type": "I128"
+          }
+        ],
+        "address": "",
+        "salt": "",
+        "asset_balance_changes": [
+          {
+            "asset_type": "credit_alphanum4",
+            "asset_code": "USDC",
+            "asset_issuer": "GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+            "type": "transfer",
+            "from": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+            "to": "CAWDB2TAO5MKNULROETJ3BRAT2DNTLI3S7BOHOVM2EDUQUY5FN6DUJ4Q",
+            "amount": "100.0000000"
+          }
+        ]
+      },
+      {
+        "id": "23628126923796488",
+        "paging_token": "23628126923796488",
+        "transaction_successful": true,
+        "source_account": "GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+        "type": "payment",
+        "type_i": 1,
+        "created_at": "2026-11-01T10:53:20Z",
+        "transaction_hash": "b58d36244e1e1e83e26c8bd8a311c173f4566bb92ccffbc0492d2ea6b9cdc6be",
+        "asset_type": "credit_alphanum4",
+        "asset_code": "wBTC",
+        "asset_issuer": "GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+        "from": "GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+        "to": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+        "amount": "0.0500000"
+      },
+      {
+        "id": "23627916470411265",
+        "paging_token": "23627916470411265",
+        "transaction_successful": true,
+        "source_account": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+        "type": "invoke_host_function",
+        "type_i": 24,
+        "created_at": "2026-11-01T10:49:15Z",
+        "transaction_hash": "c8d93c2bd321e5b102e6a531f0552de190861ebcf534665574b8f67b5299dc93",
+        "function": "HostFunctionTypeHostFunctionTypeCreateContract",
+        "parameters": null,
+        "address": "GDOCSKN3NOFTH3ZUFS4LZNUYNZT7I3BTSNVPK5QQIV6R4VZ34CBUUF3E",
+        "salt": "108468676824212872534419439916324891370258243878384531367681919893592200767240",
+        "asset_balance_changes": null
+      }
+    ]
+  }
+}

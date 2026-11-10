@@ -4,7 +4,7 @@
 Before depositing real funds (mainnet) into Nester Smart Vaults or recurring investment schedules, users must explicitly review and acknowledge our Terms of Service and comprehensive Risk Disclosures.
 
 ## 1. Smart Contract & Technical Risk
-- **Audit Status**: While smart contracts undergo rigorous internal and third-party security audits, experimental code always carries inherent risk.
+- **Audit Status**: Nester's smart contracts have been reviewed internally but have **not** completed an external security audit. An external audit is required before mainnet deposits open (see [contract_audits.md](contract_audits.md)). Even audited code is experimental and carries inherent risk.
 - **Bugs and Exploits**: Unforeseen vulnerabilities in Nester contracts or integrated underlying DeFi protocols (such as Blend, Soroswap, or lending adapters) may result in the permanent loss of deposited funds.
 
 ## 2. No FDIC-Equivalent Insurance

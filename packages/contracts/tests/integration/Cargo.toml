@@ -24,3 +24,7 @@ treasury-contract            = { path = "../../contracts/treasury" }
 ed25519-dalek                = { version = "=2.1.1", features = ["rand_core"] }
 rand                         = { version = "0.8" }
 adapter-pool-contract        = { path = "../../contracts/adapter_pool" }
+savings-core                 = { path = "../../contracts/savings_core" }
+savings-reserve              = { path = "../../contracts/savings_reserve" }
+adapter-blend-contract       = { path = "../../contracts/adapter_blend" }
+adapter-defindex-contract    = { path = "../../contracts/adapter_defindex" }

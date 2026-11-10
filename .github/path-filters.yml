@@ -1,17 +1,18 @@
 # Shared path filters for ci.yml and security.yml (dorny/paths-filter). Kept in
 # one file so the two workflows can never disagree about what "api changed"
-# means. `shared` forces every area to run.
+# means. `shared` forces every area to run; `js_root` is the pnpm workspace
+# root, which affects the website and dapp but not Go or Rust.
 shared:
   - '.github/workflows/**'
   - '.github/actions/**'
   - '.github/path-filters.yml'
-  - 'pnpm-lock.yaml'
+  - '.github/security-scanner-versions.env'
+js_root:
   - 'package.json'
+  - 'pnpm-lock.yaml'
   - 'pnpm-workspace.yaml'
 website:
   - 'apps/website/**'
-  - 'pnpm-lock.yaml'
-  - 'pnpm-workspace.yaml'
 dapp:
   - 'apps/dapp/**'
 api:
@@ -19,6 +20,13 @@ api:
 contracts:
   - 'packages/contracts/**'
   - 'scripts/contract-audit.sh'
+deploy:
+  - 'deploy/**'
+ci_scripts:
+  - 'scripts/validate_vulnignore.py'
+  - 'scripts/test_validate_vulnignore.py'
+  - 'scripts/typosquat_check.py'
+  - 'scripts/test_typosquat_check.py'
 observability:
   - 'docker/prometheus/**'
   - 'docker/alertmanager/**'

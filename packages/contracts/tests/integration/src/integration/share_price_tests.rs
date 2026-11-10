@@ -342,7 +342,7 @@ fn conservation_across_randomized_deposit_report_withdraw_cycles() {
     let mut total_deposited: i128 = INITIAL_DEPOSIT * USER_COUNT as i128;
     let mut total_net_yield_reported: i128 = 0;
     let mut total_withdrawn: i128 = 0;
-    let mut seed: u64 = 0xC0FFEE_1234_5678;
+    let mut seed: u64 = 0x00C0_FFEE_1234_5678;
 
     for cycle in 0..60u32 {
         // xorshift64 -- deterministic, dependency-free pseudo-randomness.

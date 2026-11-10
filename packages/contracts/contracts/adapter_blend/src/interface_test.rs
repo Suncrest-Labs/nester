@@ -1,4 +1,3 @@
-#![cfg(test)]
 //! Proof that the generic lending adapter cannot drive a Blend pool.
 //!
 //! `adapter_lending` passes its own suite because `MockLendingProtocol`

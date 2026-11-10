@@ -10,8 +10,14 @@
 //!
 //! Fidelity is deliberately limited to what the adapter depends on: request
 //! dispatch, bToken accounting against an exchange index, the token pull on
-//! supply, and the payout on withdraw. Interest accrual is driven manually by
-//! `set_index_bps` so a test can make a position appreciate deterministically.
+//! supply (`transfer` from the spender under `submit`, `transfer_from`
+//! against an allowance under `submit_with_allowance`, as in Blend v2), the
+//! payout on withdraw, and Blend v2's `get_reserve` (whose
+//! `data.b_rate` is the same index at Blend's 1e12 scale). As in Blend, both
+//! supply and withdraw request amounts are in the underlying asset: supply
+//! mints bTokens rounded down, withdraw burns bTokens rounded up and caps at
+//! the whole position. Interest accrual is driven manually by `set_index_bps`
+//! so a test can make a position appreciate deterministically.
 
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Map, Vec};
 
@@ -31,6 +37,48 @@ pub struct Positions {
     pub supply: Map<u32, i128>,
 }
 
+/// Blend v2 `ReserveConfig`. Only `index` and `decimals` are meaningful here.
+#[contracttype]
+#[derive(Clone)]
+pub struct ReserveConfig {
+    pub c_factor: u32,
+    pub decimals: u32,
+    pub enabled: bool,
+    pub index: u32,
+    pub l_factor: u32,
+    pub max_util: u32,
+    pub r_base: u32,
+    pub r_one: u32,
+    pub r_three: u32,
+    pub r_two: u32,
+    pub reactivity: u32,
+    pub supply_cap: i128,
+    pub util: u32,
+}
+
+/// Blend v2 `ReserveData`. `b_rate` converts bTokens to underlying at 1e12.
+#[contracttype]
+#[derive(Clone)]
+pub struct ReserveData {
+    pub b_rate: i128,
+    pub b_supply: i128,
+    pub backstop_credit: i128,
+    pub d_rate: i128,
+    pub d_supply: i128,
+    pub ir_mod: i128,
+    pub last_time: u64,
+}
+
+/// Blend v2 `get_reserve` return value.
+#[contracttype]
+#[derive(Clone)]
+pub struct Reserve {
+    pub asset: Address,
+    pub config: ReserveConfig,
+    pub data: ReserveData,
+    pub scalar: i128,
+}
+
 #[contracttype]
 #[derive(Clone)]
 enum PoolKey {
@@ -44,6 +92,8 @@ enum PoolKey {
 }
 
 const INDEX_ONE: i128 = 10_000;
+/// Blend v2's `b_rate` scale (SCALAR_12) per index bps.
+const B_RATE_PER_INDEX_BPS: i128 = 100_000_000;
 const REQUEST_TYPE_SUPPLY: u32 = 0;
 const REQUEST_TYPE_WITHDRAW: u32 = 1;
 
@@ -66,11 +116,51 @@ impl MockBlendPool {
         env.storage().instance().set(&PoolKey::IndexBps, &index_bps);
     }
 
+    pub fn get_reserve(env: Env, asset: Address) -> Reserve {
+        let index: i128 = env.storage().instance().get(&PoolKey::IndexBps).unwrap();
+        let reserve_index: u32 = env
+            .storage()
+            .instance()
+            .get(&PoolKey::ReserveIndex)
+            .unwrap_or(0);
+        Reserve {
+            asset,
+            config: ReserveConfig {
+                c_factor: 0,
+                decimals: 7,
+                enabled: true,
+                index: reserve_index,
+                l_factor: 0,
+                max_util: 0,
+                r_base: 0,
+                r_one: 0,
+                r_three: 0,
+                r_two: 0,
+                reactivity: 0,
+                supply_cap: i128::MAX,
+                util: 0,
+            },
+            data: ReserveData {
+                b_rate: index * B_RATE_PER_INDEX_BPS,
+                b_supply: 0,
+                backstop_credit: 0,
+                d_rate: 1_000_000_000_000,
+                d_supply: 0,
+                ir_mod: 1_000_000_000_000,
+                last_time: env.ledger().timestamp(),
+            },
+            scalar: 10_000_000,
+        }
+    }
+
     pub fn get_positions(env: Env, address: Address) -> Positions {
         Self::positions_for(&env, &address)
     }
 
-    /// Blend's single value-moving entry point.
+    /// Blend v2 `submit`. As in the real pool, a supply is pulled with
+    /// `token.transfer(spender -> pool)` invoked by the pool, so it needs the
+    /// spender's own authorization for that transfer; a contract spender that
+    /// only approved the pool cannot supply this way.
     pub fn submit(
         env: Env,
         from: Address,
@@ -78,9 +168,38 @@ impl MockBlendPool {
         to: Address,
         requests: Vec<Request>,
     ) -> Positions {
+        Self::execute(&env, from, spender, to, requests, false)
+    }
+
+    /// Blend v2 `submit_with_allowance`: identical, except a supply is pulled
+    /// with `token.transfer_from(pool, spender -> pool)` against an allowance
+    /// the spender granted the pool.
+    pub fn submit_with_allowance(
+        env: Env,
+        from: Address,
+        spender: Address,
+        to: Address,
+        requests: Vec<Request>,
+    ) -> Positions {
+        Self::execute(&env, from, spender, to, requests, true)
+    }
+
+    fn execute(
+        env: &Env,
+        from: Address,
+        spender: Address,
+        to: Address,
+        requests: Vec<Request>,
+        with_allowance: bool,
+    ) -> Positions {
+        spender.require_auth();
+        if from != spender {
+            from.require_auth();
+        }
         let token_addr: Address = env.storage().instance().get(&PoolKey::Token).unwrap();
         let index: i128 = env.storage().instance().get(&PoolKey::IndexBps).unwrap();
         let me = env.current_contract_address();
+        let token = token::Client::new(env, &token_addr);
 
         for request in requests.iter() {
             let held: i128 = env
@@ -90,29 +209,32 @@ impl MockBlendPool {
                 .unwrap_or(0);
 
             if request.request_type == REQUEST_TYPE_SUPPLY {
-                // The real pool pulls the tokens itself, which is why the
-                // adapter has to approve it first.
-                token::Client::new(&env, &token_addr).transfer_from(
-                    &me,
-                    &spender,
-                    &me,
-                    &request.amount,
-                );
+                if with_allowance {
+                    token.transfer_from(&me, &spender, &me, &request.amount);
+                } else {
+                    token.transfer(&spender, &me, &request.amount);
+                }
                 let units = request.amount * INDEX_ONE / index;
                 env.storage()
                     .instance()
                     .set(&PoolKey::Supply(from.clone()), &(held + units));
             } else if request.request_type == REQUEST_TYPE_WITHDRAW {
-                let units = if request.amount > held { held } else { request.amount };
-                let assets = units * index / INDEX_ONE;
+                // Blend: burn ceil(amount / rate); if that exceeds the
+                // position, burn it all and pay floor(held * rate).
+                let mut units = (request.amount * INDEX_ONE + index - 1) / index;
+                let mut assets = request.amount;
+                if units > held {
+                    units = held;
+                    assets = held * index / INDEX_ONE;
+                }
                 env.storage()
                     .instance()
                     .set(&PoolKey::Supply(from.clone()), &(held - units));
-                token::Client::new(&env, &token_addr).transfer(&me, &to, &assets);
+                token.transfer(&me, &to, &assets);
             }
         }
 
-        Self::positions_for(&env, &from)
+        Self::positions_for(env, &from)
     }
 
     fn positions_for(env: &Env, address: &Address) -> Positions {

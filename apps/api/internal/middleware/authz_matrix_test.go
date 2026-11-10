@@ -169,6 +169,11 @@ var authzMatrix = []AuthzRoute{
 	// rates
 	{Method: "GET", Path: "/api/v1/rates"},
 
+	// savings
+	{Method: "GET", Path: "/api/v1/savings", Public: true},
+	{Method: "GET", Path: "/api/v1/savings/history", Public: true},
+	{Method: "GET", Path: "/api/v1/savings/position"},
+
 	// savings-goal-templates
 	{Method: "GET", Path: "/api/v1/savings-goal-templates"},
 

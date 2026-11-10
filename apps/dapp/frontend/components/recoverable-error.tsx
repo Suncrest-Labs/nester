@@ -53,7 +53,7 @@ export function RecoverableError({
       <div className="mt-6 flex items-center gap-3">
         <button
           onClick={reset}
-          className="inline-flex items-center gap-2 rounded-full bg-black dark:bg-blue-600 px-5 py-2.5 text-sm text-white transition-opacity hover:opacity-75"
+          className="inline-flex items-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-sm text-background transition-opacity hover:opacity-75"
         >
           <RefreshCw className="h-3.5 w-3.5" />
           Try again

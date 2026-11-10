@@ -22,6 +22,8 @@ const TESTNET_WALLET = process.env.TESTNET_WALLET_ADDRESS ?? '';
 const VAULT_ID = process.env.VAULT_ID ?? '';
 
 test.describe('Deposit / Withdraw journey', () => {
+  test.skip(true,
+    'Tier vault pages (/vaults/:id) are retired and redirect to /dashboard; this journey needs porting to the savings-rate dashboard SavePanel');
   test.skip(!TESTNET_WALLET || !VAULT_ID,
     'Set TESTNET_WALLET_ADDRESS and VAULT_ID env vars to enable testnet E2E');
 

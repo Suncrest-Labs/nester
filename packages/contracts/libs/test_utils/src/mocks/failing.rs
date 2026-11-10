@@ -44,4 +44,3 @@ impl MockFailingAdapter {
         panic_with_error!(&env, ContractError::InvalidOperation)
     }
 }
-

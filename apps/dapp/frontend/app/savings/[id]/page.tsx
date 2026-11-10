@@ -3,22 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { motion } from "framer-motion";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  ArrowLeft,
-  ChevronRight,
-  Pause,
-  Play,
-  Pencil,
-  Archive,
-  Plus,
-  RefreshCcw,
-  Target,
-  Calendar,
-  Wallet,
-  ArrowDownLeft,
-} from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { SavingsDetailSkeleton } from "@/components/skeletons/page-skeletons";
 import { useWallet } from "@/components/wallet-provider";
@@ -34,7 +20,18 @@ import { DeadlineBadge } from "@/components/savings/DeadlineBadge";
 import { EditGoalModal } from "@/components/savings/EditGoalModal";
 import { formatFullDeadline } from "@/lib/savings/deadline";
 import { ProgressVisualization } from "@/components/savings/ProgressVisualization";
+import { formatGoalAmount } from "@/components/savings/GoalProgressBar";
 import type { GoalProgressData } from "@/lib/types/progress";
+import {
+  BUTTON_SECONDARY,
+  BigNumber,
+  COLUMNS,
+  EmptyPanel,
+  PANEL,
+  Panel,
+  PageHeader,
+  Section,
+} from "@/components/ui/page-kit";
 
 function toNumber(value: string | number): number {
   return typeof value === "number" ? value : parseFloat(value) || 0;
@@ -79,12 +76,15 @@ function buildProgressData(goal: SavingsGoal): GoalProgressData {
   };
 }
 
+function sentenceCase(value: string): string {
+  const s = value.replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function goalDisplayName(goal: SavingsGoal): string {
   if (goal.description?.trim()) return goal.description.trim();
-  if (goal.category) {
-    return goal.category.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  }
-  return "Savings Goal";
+  if (goal.category) return sentenceCase(goal.category);
+  return "Savings goal";
 }
 
 function formatAmount(value: string | number, currency: string): string {
@@ -94,10 +94,18 @@ function formatAmount(value: string | number, currency: string): string {
   })} ${currency}`;
 }
 
-function categoryLabel(category?: string): string {
-  if (!category) return "Other";
-  return category.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+function formatShortDate(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
+
+const FREQUENCY_LABEL: Record<string, string> = {
+  weekly: "every week",
+  biweekly: "every two weeks",
+  monthly: "every month",
+};
 
 // ── Auto-compound toggle ────────────────────────────────────────────────────
 
@@ -120,13 +128,13 @@ function AutoCompoundToggle({
       disabled={disabled}
       onClick={() => onToggle(!enabled)}
       className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-black disabled:opacity-50",
-        enabled ? "bg-black dark:bg-white" : "bg-black/15 dark:bg-white/15"
+        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground disabled:opacity-50",
+        enabled ? "bg-foreground" : "bg-foreground/15"
       )}
     >
       <span
         className={cn(
-          "inline-block h-5 w-5 transform rounded-full bg-white dark:bg-[#100F0F] shadow transition-transform",
+          "inline-block h-5 w-5 rounded-full bg-background transition-transform",
           enabled ? "translate-x-5" : "translate-x-0.5"
         )}
       />
@@ -137,28 +145,18 @@ function AutoCompoundToggle({
 // ── Contribution history ────────────────────────────────────────────────────
 
 function ContributionRow({ contribution }: { contribution: SavingsGoalContribution }) {
-  const date = new Date(contribution.created_at);
-  const dateLabel = Number.isNaN(date.getTime())
-    ? "—"
-    : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-
   return (
-    <div className="flex items-center justify-between gap-3 px-5 py-3.5">
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
-          <ArrowDownLeft className="h-4 w-4 text-emerald-600" aria-hidden="true" />
-        </div>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-black dark:text-white capitalize">
-            {contribution.source?.replace(/_/g, " ") || "Contribution"}
-          </p>
-          <p className="text-[11px] text-black/50 dark:text-white/50 font-medium">{dateLabel}</p>
-        </div>
+    <li className="flex items-center justify-between gap-3 py-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm text-foreground">
+          {contribution.source ? sentenceCase(contribution.source) : "Contribution"}
+        </p>
+        <p className="text-[13px] text-muted-foreground">{formatShortDate(contribution.created_at)}</p>
       </div>
-      <span className="shrink-0 font-mono text-sm font-medium text-emerald-600">
+      <span className="shrink-0 text-sm tabular-nums text-foreground">
         +{formatAmount(contribution.amount, contribution.currency)}
       </span>
-    </div>
+    </li>
   );
 }
 
@@ -166,57 +164,40 @@ function ContributionHistory({ goalId }: { goalId: string }) {
   const { data, isLoading, isError, refetch, isFetching } = useSavingsGoalContributions(goalId);
 
   return (
-    <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F]">
-      <div className="border-b border-black/8 dark:border-white/8 px-5 py-4">
-        <h2 className="text-sm font-semibold text-black dark:text-white">Contribution History</h2>
-        <p className="mt-0.5 text-xs text-black/60 dark:text-white/60 font-medium">
-          Deposits and yield applied toward this goal
-        </p>
-      </div>
-
+    <div className={PANEL}>
       {isLoading ? (
-        <div className="divide-y divide-black/5" data-testid="contributions-skeleton">
+        <div className="space-y-3" data-testid="contributions-skeleton" aria-busy="true">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="flex items-center justify-between px-5 py-3.5">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 animate-pulse rounded-lg bg-black/10 dark:bg-white/10" />
-                <div className="space-y-1.5">
-                  <div className="h-3 w-28 animate-pulse rounded bg-black/10 dark:bg-white/10" />
-                  <div className="h-2.5 w-20 animate-pulse rounded bg-black/10 dark:bg-white/10" />
-                </div>
-              </div>
-              <div className="h-3 w-16 animate-pulse rounded bg-black/10 dark:bg-white/10" />
-            </div>
+            <div key={i} className="h-10 animate-pulse rounded-lg bg-foreground/[0.06]" />
           ))}
         </div>
       ) : isError ? (
-        <div className="px-5 py-8 text-center" data-testid="contributions-error">
-          <p className="text-sm font-medium text-black/70 dark:text-white/70">Couldn&apos;t load contributions</p>
+        <div data-testid="contributions-error">
+          <p role="alert" className="text-sm text-foreground">
+            The history for this goal couldn&apos;t be loaded.
+          </p>
           <button
             type="button"
             onClick={() => refetch()}
             disabled={isFetching}
-            className="mt-3 rounded-lg bg-black dark:bg-blue-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+            className={`mt-4 ${BUTTON_SECONDARY}`}
           >
-            {isFetching ? "Retrying…" : "Retry"}
+            {isFetching ? "Retrying…" : "Try again"}
           </button>
         </div>
       ) : !data?.length ? (
-        <div className="px-5 py-10 text-center" data-testid="contributions-empty">
-          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-black/5 dark:bg-white/5">
-            <Wallet className="h-5 w-5 text-black/40 dark:text-white/40" aria-hidden="true" />
-          </div>
-          <p className="text-sm font-semibold text-black dark:text-white">No contributions yet</p>
-          <p className="mx-auto mt-1 max-w-xs text-xs text-black/60 dark:text-white/60 font-medium">
-            Make your first deposit to start building toward this goal.
+        <div data-testid="contributions-empty">
+          <p className="text-sm text-foreground">Nothing recorded yet</p>
+          <p className="mt-2 max-w-[60ch] text-sm text-muted-foreground">
+            Amounts counted toward this goal will be listed here.
           </p>
         </div>
       ) : (
-        <div className="divide-y divide-black/5">
+        <ul className="-my-3 divide-y">
           {data.map((c) => (
             <ContributionRow key={c.id} contribution={c} />
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );
@@ -283,231 +264,171 @@ export default function SavingsGoalDetailPage() {
 
   return (
     <AppShell>
-      {/* Breadcrumb */}
-      <motion.nav
-        initial={{ opacity: 0, x: -8 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.3 }}
-        className="mb-7 flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50 font-medium"
-        aria-label="Breadcrumb"
+      <Link
+        href="/savings"
+        className="mb-6 inline-flex items-center gap-1.5 rounded text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground"
       >
-        <Link
-          href="/savings"
-          className="inline-flex items-center gap-1.5 hover:text-black dark:hover:text-white transition-colors focus-visible:ring-2 focus-visible:ring-black"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-          Savings
-        </Link>
-        <ChevronRight className="h-3.5 w-3.5 text-black/30 dark:text-white/30" aria-hidden="true" />
-        <span className="text-black/70 dark:text-white/70 truncate max-w-[200px]">
-          {goal ? goalDisplayName(goal) : "Goal"}
-        </span>
-      </motion.nav>
+        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+        All goals
+      </Link>
 
       {isLoading ? (
         <SavingsDetailSkeleton />
       ) : isError || !goal ? (
-        <div className="rounded-3xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-12 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5">
-            <Target className="h-6 w-6 text-black/40 dark:text-white/40" aria-hidden="true" />
-          </div>
-          <p className="text-sm font-semibold text-black dark:text-white">Goal not found</p>
-          <p className="mx-auto mt-1 max-w-xs text-xs text-black/60 dark:text-white/60 font-medium">
-            This savings goal may have been removed or is unavailable.
-          </p>
-          <Link
-            href="/savings"
-            className="mt-5 inline-block rounded-xl bg-black dark:bg-blue-600 px-6 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-75"
-          >
-            Back to Savings
-          </Link>
-        </div>
+        <EmptyPanel
+          title="This goal couldn't be found"
+          action={
+            <Link href="/savings" className={BUTTON_SECONDARY}>
+              Back to goals
+            </Link>
+          }
+        >
+          It may have been archived, or the link is out of date. Your other goals are still on the
+          goals page.
+        </EmptyPanel>
       ) : (
         (() => {
           const current = toNumber(goal.current_amount);
-          const target = toNumber(goal.target_amount);
           const isPaused = goal.status === "paused";
           const isCompleted = goal.status === "completed";
+          const schedule = goal.active_schedule;
 
           return (
             <>
-              {/* Header */}
-              <motion.div
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35, delay: 0.05 }}
-                className="mb-8"
-              >
-                <div className="flex items-start justify-between gap-4 flex-wrap">
-                  <div className="min-w-0">
-                    <div className="mb-2 flex items-center gap-2 flex-wrap">
-                      <span className="rounded-full bg-black/5 dark:bg-white/5 px-2.5 py-0.5 text-[11px] font-medium text-black/60 dark:text-white/60">
-                        {categoryLabel(goal.category)}
-                      </span>
-                      {isPaused && (
-                        <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold uppercase text-amber-700">
-                          Paused
-                        </span>
-                      )}
-                      {isCompleted && (
-                        <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold uppercase text-emerald-700">
-                          Completed
-                        </span>
-                      )}
-                      <DeadlineBadge deadline={goal.deadline} status={goal.status} />
-                    </div>
-                    <h1 className="text-2xl text-black dark:text-white sm:text-3xl font-semibold truncate">
-                      {goalDisplayName(goal)}
-                    </h1>
-                    <p className="mt-2 text-sm text-black/60 dark:text-white/60 font-medium">
-                      Target {formatAmount(goal.target_amount, goal.currency)} by{" "}
-                      {formatFullDeadline(goal.deadline)}
+              <PageHeader
+                title={goalDisplayName(goal)}
+                lede={
+                  <p className="text-sm text-muted-foreground">
+                    {goal.category ? sentenceCase(goal.category) : "Other"}
+                    {isPaused && " · Paused"}
+                    {isCompleted && " · Reached"}
+                  </p>
+                }
+              />
+
+              <div className={`mt-8 ${COLUMNS}`}>
+                <div>
+                  <section aria-labelledby="goal-saved-label" className="py-2">
+                    <BigNumber className="text-6xl tracking-tight sm:text-7xl">
+                      {formatGoalAmount(current)}
+                    </BigNumber>
+                    <p id="goal-saved-label" className="mt-3 text-sm text-muted-foreground">
+                      Saved of{" "}
+                      <span className="tabular-nums text-foreground/80">
+                        {formatAmount(goal.target_amount, goal.currency)}
+                      </span>{" "}
+                      by {formatFullDeadline(goal.deadline)}
                     </p>
-                  </div>
+                  </section>
 
-                  {/* Action buttons */}
-                  <div className="flex items-center gap-2 flex-wrap shrink-0">
-                    <Link
-                      href="/savings#vault-grid"
-                      className="flex items-center gap-1.5 rounded-xl bg-black dark:bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-black"
-                    >
-                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                      Deposit
-                    </Link>
-                    {!isCompleted && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          isPaused
-                            ? runAction("resumed", () => savingsGoals.resume(id))
-                            : runAction("paused", () => savingsGoals.pause(id))
-                        }
-                        className="flex items-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 px-4 py-2.5 text-xs font-semibold text-black/70 dark:text-white/70 transition-colors hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
-                      >
-                        {isPaused ? (
-                          <Play className="h-3.5 w-3.5" aria-hidden="true" />
-                        ) : (
-                          <Pause className="h-3.5 w-3.5" aria-hidden="true" />
-                        )}
-                        {isPaused ? "Resume" : "Pause"}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => setEditOpen(true)}
-                      className="flex items-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 px-4 py-2.5 text-xs font-semibold text-black/70 dark:text-white/70 transition-colors hover:border-black/20 dark:hover:border-white/20 hover:text-black dark:hover:text-white disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
-                    >
-                      <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={handleArchive}
-                      className="flex items-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 px-4 py-2.5 text-xs font-semibold text-black/70 dark:text-white/70 transition-colors hover:border-red-200 hover:text-red-600 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-black"
-                    >
-                      <Archive className="h-3.5 w-3.5" aria-hidden="true" />
-                      Archive
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-
-              {/* Progress + details */}
-              <motion.div
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35, delay: 0.1 }}
-                className="grid gap-5 lg:grid-cols-5"
-              >
-                {/* Left: progress + contributions */}
-                <div className="space-y-5 lg:col-span-3">
-                  {/* Progress card */}
-                  <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-6">
-                    <div className="mb-4 flex items-end justify-between gap-4">
-                      <div>
-                        <p className="text-xs text-black/60 dark:text-white/60 font-medium">Current balance</p>
-                        <p className="mt-1 font-mono text-3xl text-black dark:text-white">
-                          {formatAmount(goal.current_amount, goal.currency)}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs text-black/60 dark:text-white/60 font-medium">Target</p>
-                        <p className="mt-1 font-mono text-lg text-black/70 dark:text-white/70">
-                          {formatAmount(goal.target_amount, goal.currency)}
-                        </p>
-                      </div>
-                    </div>
-
+                  <div className="mt-6">
                     <ProgressVisualization progress={buildProgressData(goal)} />
                   </div>
 
-                  {/* Contributions */}
-                  <ContributionHistory goalId={id} />
+                  <Section
+                    id="contributions-heading"
+                    title="History"
+                    lede="Amounts recorded toward this goal."
+                  >
+                    <ContributionHistory goalId={id} />
+                  </Section>
                 </div>
 
-                {/* Right: details */}
-                <div className="space-y-5 lg:col-span-2">
-                  <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5">
-                    <p className="mb-4 text-xs text-black/60 dark:text-white/60 font-semibold uppercase tracking-widest">
-                      Goal Details
-                    </p>
-                    <dl className="space-y-3.5">
+                <div className="grid gap-6">
+                  <Panel title="Details">
+                    <dl className="mt-4 space-y-3 text-sm">
                       <div className="flex items-start justify-between gap-3">
-                        <dt className="flex items-center gap-2 text-xs text-black/60 dark:text-white/60">
-                          <Target className="h-3.5 w-3.5 text-black/40 dark:text-white/40" aria-hidden="true" />
-                          Target
-                        </dt>
-                        <dd className="text-right font-mono text-xs text-black dark:text-white font-medium">
+                        <dt className="text-muted-foreground">Target</dt>
+                        <dd className="text-right tabular-nums text-foreground">
                           {formatAmount(goal.target_amount, goal.currency)}
                         </dd>
                       </div>
                       <div className="flex items-start justify-between gap-3">
-                        <dt className="flex items-center gap-2 text-xs text-black/60 dark:text-white/60">
-                          <Wallet className="h-3.5 w-3.5 text-black/40 dark:text-white/40" aria-hidden="true" />
-                          Currency
-                        </dt>
-                        <dd className="text-right text-xs text-black dark:text-white font-medium">{goal.currency}</dd>
-                      </div>
-                      <div className="flex items-start justify-between gap-3">
-                        <dt className="flex items-center gap-2 text-xs text-black/60 dark:text-white/60">
-                          <Calendar className="h-3.5 w-3.5 text-black/40 dark:text-white/40" aria-hidden="true" />
-                          Deadline
-                        </dt>
-                        <dd className="text-right text-xs text-black dark:text-white font-medium">
+                        <dt className="text-muted-foreground">Target date</dt>
+                        <dd className="text-right text-foreground">
                           {formatFullDeadline(goal.deadline)}
+                          <span className="mt-0.5 block">
+                            <DeadlineBadge deadline={goal.deadline} status={goal.status} />
+                          </span>
                         </dd>
                       </div>
-                      {goal.description && (
-                        <div className="border-t border-black/6 dark:border-white/6 pt-3.5">
-                          <dt className="mb-1 text-xs text-black/60 dark:text-white/60">Description</dt>
-                          <dd className="text-xs text-black/80 dark:text-white/80 leading-relaxed">{goal.description}</dd>
-                        </div>
-                      )}
+                      <div className="flex items-start justify-between gap-3">
+                        <dt className="text-muted-foreground">Schedule</dt>
+                        <dd className="text-right text-foreground">
+                          {schedule ? (
+                            <>
+                              <span className="tabular-nums">
+                                {formatAmount(schedule.amount, schedule.currency)}
+                              </span>{" "}
+                              {FREQUENCY_LABEL[schedule.frequency] ?? schedule.frequency}
+                              <span className="mt-0.5 block text-[13px] text-muted-foreground">
+                                Next on {formatShortDate(schedule.next_run_at)}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground">None</span>
+                          )}
+                        </dd>
+                      </div>
                     </dl>
-                  </div>
 
-                  {/* Auto-compound */}
-                  <div className="rounded-2xl border border-black/8 dark:border-white/8 bg-white dark:bg-[#100F0F] p-5">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/5 dark:bg-white/5">
-                          <RefreshCcw className="h-4 w-4 text-black/50 dark:text-white/50" aria-hidden="true" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-black dark:text-white">Auto-compound</p>
-                          <p className="text-[11px] text-black/60 dark:text-white/60 font-medium">
-                            Reinvest yield toward this goal
-                          </p>
-                        </div>
+                    <div className="mt-6 flex flex-wrap gap-3">
+                      {!isCompleted && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            isPaused
+                              ? runAction("resumed", () => savingsGoals.resume(id))
+                              : runAction("paused", () => savingsGoals.pause(id))
+                          }
+                          className={BUTTON_SECONDARY}
+                        >
+                          {isPaused ? "Resume" : "Pause"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setEditOpen(true)}
+                        className={BUTTON_SECONDARY}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={handleArchive}
+                        className={cn(BUTTON_SECONDARY, "text-red-600 dark:text-red-400")}
+                      >
+                        Archive
+                      </button>
+                    </div>
+                  </Panel>
+
+                  <Panel>
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-medium text-foreground">Auto-compound</h3>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Reinvest yield toward this goal.
+                        </p>
                       </div>
                       <AutoCompoundToggle goal={goal} disabled={busy} onToggle={handleAutoCompound} />
                     </div>
-                  </div>
+                  </Panel>
+
+                  <Panel title="Where the money is">
+                    <p className="mt-2 text-sm text-foreground/80">
+                      Goals don&apos;t hold money. Your savings stay in the Nester Savings Rate,
+                      and this goal tracks progress toward your target.
+                    </p>
+                    <Link href="/dashboard" className={`mt-4 ${BUTTON_SECONDARY}`}>
+                      Open the Savings Rate
+                    </Link>
+                  </Panel>
                 </div>
-              </motion.div>
+              </div>
 
               {editOpen && <EditGoalModal goal={goal} onClose={() => setEditOpen(false)} />}
             </>

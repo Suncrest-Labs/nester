@@ -1,0 +1,40 @@
+# Public testnet API on Render's free tier. Postgres lives on Neon (free); see
+# docs/deploy-testnet.md for the one-time setup and the Vercel env the dapp needs.
+services:
+  - type: web
+    name: nester-api-testnet
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: feat/savings-rate
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: SERVER_PORT
+        value: "8080"
+      - key: PORT
+        value: "8080"
+      - key: RUN_MIGRATIONS
+        value: "true"
+      - key: DATABASE_DSN
+        sync: false
+      - key: AUTH_JWT_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: https://app.usenester.xyz,https://localhost:3002
+      - key: STELLAR_NETWORK_PASSPHRASE
+        value: Test SDF Network ; September 2015
+      - key: STELLAR_RPC_URL
+        value: https://soroban-testnet.stellar.org
+      - key: STELLAR_HORIZON_URL
+        value: https://horizon-testnet.stellar.org
+      - key: SAVINGS_CORE_CONTRACT_ID
+        value: CAWDB2TAO5MKNULROETJ3BRAT2DNTLI3S7BOHOVM2EDUQUY5FN6DUJ4Q
+      - key: SAVINGS_ADAPTER_NAMES
+        value: CCJZEW3FJ4NPPNMKPYVPFJOGYDZKV5DHFHP2NYLNYCKOTFUENI3HQ2YL=Blend,CCNFZP235C52SJUHX3JBMC3UJJATUSKJJESDBXK5OPQRZUWSXXUZIPU7=DeFindex
+      - key: LOG_FORMAT
+        value: json

@@ -1013,6 +1013,29 @@ func run() error {
 	handler.NewMoneyPathSwitchHandler(moneyPathSwitchService).Register(mux)
 	authHandler.Register(mux)
 	rateHandler.Register(mux)
+
+	// Savings-rate vault: public overview/history, per-wallet position, and
+	// the hourly savings.snapshot job that feeds the trailing realized rate.
+	// Without SAVINGS_CORE_CONTRACT_ID the routes answer 503 and no job runs.
+	var savingsService *service.SavingsService
+	if coreID := cfg.Stellar().SavingsCoreContract(); coreID != "" {
+		savingsService = service.NewSavingsService(
+			stellarpkg.NewSavingsReader(contractReader, coreID, cfg.Stellar().SavingsAdapterNames()),
+			postgres.NewSavingsRepository(db),
+		)
+		savingsService.SetLeaderChecker(schedulerLeadership)
+		savingsService.SetLogger(baseLogger.WithGroup("savings-snapshot"))
+		savingsSnapshotCtx, cancelSavingsSnapshot := context.WithCancel(shutdownCtx)
+		defer cancelSavingsSnapshot()
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			savingsService.RunSnapshots(savingsSnapshotCtx, time.Hour)
+		}()
+	} else {
+		baseLogger.Info("SAVINGS_CORE_CONTRACT_ID is not set: savings endpoints return 503 and the savings.snapshot job is skipped")
+	}
+	handler.NewSavingsHandler(savingsService).Register(mux)
 	performanceHandler.Register(mux)
 	tvlHandler.Register(mux)
 	projectionHandler.Register(mux)

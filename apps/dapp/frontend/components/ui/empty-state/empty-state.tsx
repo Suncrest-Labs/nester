@@ -86,7 +86,7 @@ export function EmptyState({
             "rounded-lg font-medium transition-all",
             classes.button,
             action.variant === "primary" 
-              ? "bg-black dark:bg-blue-600 text-white hover:bg-black/90 dark:hover:bg-blue-700"
+              ? "bg-foreground text-background hover:opacity-80"
               : "border border-black/[0.08] dark:border-white/[0.08] bg-white dark:bg-[#100F0F] text-black dark:text-white hover:border-black/20 dark:hover:border-white/20 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
           )}
         >

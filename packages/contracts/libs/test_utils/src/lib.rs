@@ -13,7 +13,7 @@ pub use hostile::{
 };
 pub use mocks::{
     MockAmmPool, MockAmmPoolClient, MockFailingAdapter, MockFailingAdapterClient,
-    MockLendingProtocol, MockLendingProtocolClient,
+    MockLendingProtocol, MockLendingProtocolClient, MockYieldAdapter, MockYieldAdapterClient,
 };
 
 #[cfg(test)]

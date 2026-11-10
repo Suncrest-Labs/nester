@@ -42,7 +42,7 @@ describe("MaturityTimeline", () => {
   it("renders locked positions when provided", () => {
     render(<MaturityTimeline positions={lockedPositions} />);
     expect(screen.getByTestId("maturity-timeline")).toBeInTheDocument();
-    expect(screen.getByText("Locked Positions")).toBeInTheDocument();
+    expect(screen.getByText("Locked positions")).toBeInTheDocument();
   });
 
   it("displays locked amounts and currencies", () => {

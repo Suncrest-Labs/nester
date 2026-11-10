@@ -199,7 +199,7 @@ export function WebSocketProvider({
               message: p.reason
                 ? `Vault paused: ${p.reason}`
                 : `Vault ${p.vaultId} has been paused by the safety circuit breaker.`,
-              actionUrl: "/vaults",
+              actionUrl: "/dashboard",
               actionLabel: "View Vault Status",
             },
             { showToast: true },
@@ -216,7 +216,7 @@ export function WebSocketProvider({
               priority: "transactional",
               title: "Vault Resumed",
               message: `Vault ${p.vaultId || "operations"} has been resumed. Deposits and withdrawals are active.`,
-              actionUrl: "/vaults",
+              actionUrl: "/dashboard",
               actionLabel: "View Vault",
             },
             { showToast: true },
@@ -235,7 +235,7 @@ export function WebSocketProvider({
               message:
                 p.message ||
                 `Emergency queue ${p.queueId} (${p.asset}) fill level reached ${p.fillPercentage}%.`,
-              actionUrl: "/vaults",
+              actionUrl: "/dashboard",
               actionLabel: "Manage Emergency Queue",
               coalesceKey: `emergency_queue_fill_${p.asset}`,
             },
@@ -274,7 +274,7 @@ export function WebSocketProvider({
               message:
                 p.reason ||
                 `Circuit breaker ${p.breakerId} tripped for ${p.asset || "vault"}.`,
-              actionUrl: "/vaults",
+              actionUrl: "/dashboard",
               actionLabel: "Review Circuit Breaker",
             },
             { showToast: true },

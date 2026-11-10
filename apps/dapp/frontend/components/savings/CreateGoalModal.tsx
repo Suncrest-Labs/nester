@@ -4,6 +4,8 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { savingsGoals, type CreateSavingsGoalInput } from "@/lib/api/savings-goals";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT, SegmentedControl } from "@/components/ui/page-kit";
+import { GOAL_CATEGORIES, MODAL_BACKDROP, MODAL_PANEL, NUMBER_INPUT, FIELD_LABEL } from "./modal-styles";
 
 interface CreateGoalModalProps {
   onClose: () => void;
@@ -29,9 +31,9 @@ export function CreateGoalModal({ onClose }: CreateGoalModalProps) {
 
   function validate(): string {
     const amount = parseFloat(targetAmount);
-    if (!description.trim()) return "Description is required.";
-    if (!targetAmount || isNaN(amount) || amount <= 0) return "Enter a positive target amount.";
-    if (!deadline || deadline < minDate) return "Deadline must be at least 2 days in the future.";
+    if (!description.trim()) return "Give your goal a name.";
+    if (!targetAmount || isNaN(amount) || amount <= 0) return "Enter a target amount above zero.";
+    if (!deadline || deadline < minDate) return "Pick a date at least 2 days from today.";
     return "";
   }
 
@@ -56,7 +58,7 @@ export function CreateGoalModal({ onClose }: CreateGoalModalProps) {
       await queryClient.invalidateQueries({ queryKey: ["savings-goals"] });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create goal. Please try again.");
+      setError(err instanceof Error ? err.message : "The goal wasn't created. Try again.");
     } finally {
       setSubmitting(false);
     }
@@ -64,26 +66,17 @@ export function CreateGoalModal({ onClose }: CreateGoalModalProps) {
 
   return (
     <>
-      <div
-        className="fixed inset-0 z-50 bg-black/25 backdrop-blur-sm"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div
-        className="fixed inset-x-4 top-16 z-50 mx-auto max-w-lg rounded-3xl bg-white dark:bg-[#100F0F] p-8 shadow-2xl
-                   sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-goal-title"
-      >
+      <div className={MODAL_BACKDROP} onClick={onClose} aria-hidden="true" />
+      <div className={MODAL_PANEL} role="dialog" aria-modal="true" aria-labelledby="create-goal-title">
         <div className="mb-6 flex items-center justify-between">
-          <h2 id="create-goal-title" className="text-lg font-semibold text-black dark:text-white">
-            New Savings Goal
+          <h2 id="create-goal-title" className="text-[16px] font-semibold text-foreground">
+            Create a goal
           </h2>
           <button
+            type="button"
             onClick={onClose}
             aria-label="Close"
-            className="flex h-8 w-8 items-center justify-center rounded-xl border border-black/10 dark:border-white/10 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
@@ -91,23 +84,23 @@ export function CreateGoalModal({ onClose }: CreateGoalModalProps) {
 
         <form onSubmit={handleSubmit} noValidate className="space-y-5">
           <div>
-            <label htmlFor="goal-description" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
-              Description
+            <label htmlFor="goal-description" className={FIELD_LABEL}>
+              Name
             </label>
             <input
               id="goal-description"
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="e.g. Emergency fund, Holiday trip…"
+              placeholder="Emergency fund, holiday…"
               maxLength={200}
-              className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
+              className={INPUT}
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label htmlFor="goal-amount" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
+              <label htmlFor="goal-amount" className={FIELD_LABEL}>
                 Target amount
               </label>
               <input
@@ -118,40 +111,27 @@ export function CreateGoalModal({ onClose }: CreateGoalModalProps) {
                 value={targetAmount}
                 onChange={(e) => setTargetAmount(e.target.value)}
                 placeholder="0.00"
-                className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 font-mono text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25
-                           [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                className={NUMBER_INPUT}
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">Currency</label>
-              <div
-                className="flex h-11 rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-1"
-                role="group"
-                aria-label="Select currency"
-              >
-                {(["USDC", "XLM"] as const).map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setCurrency(c)}
-                    className={`flex-1 rounded-lg text-xs font-semibold transition-colors ${
-                      currency === c
-                        ? "bg-black dark:bg-blue-600 text-white"
-                        : "text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white"
-                    }`}
-                    aria-pressed={currency === c}
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
+              <span className={FIELD_LABEL}>Currency</span>
+              <SegmentedControl
+                label="Select currency"
+                options={[
+                  { id: "USDC", label: "USDC" },
+                  { id: "XLM", label: "XLM" },
+                ]}
+                value={currency}
+                onChange={setCurrency}
+              />
             </div>
           </div>
 
           <div>
-            <label htmlFor="goal-deadline" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
-              Target deadline
+            <label htmlFor="goal-deadline" className={FIELD_LABEL}>
+              Target date
             </label>
             <input
               id="goal-deadline"
@@ -159,51 +139,40 @@ export function CreateGoalModal({ onClose }: CreateGoalModalProps) {
               value={deadline}
               min={minDate}
               onChange={(e) => setDeadline(e.target.value)}
-              className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
+              className={INPUT}
             />
           </div>
 
           <div>
-            <label htmlFor="goal-category" className="mb-1.5 block text-xs font-medium text-black/60 dark:text-white/60">
+            <label htmlFor="goal-category" className={FIELD_LABEL}>
               Category
             </label>
             <select
               id="goal-category"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="h-11 w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] px-4 text-sm text-black dark:text-white outline-none transition-colors focus:border-black/25 dark:focus:border-white/25"
+              className={INPUT}
             >
-              <option value="other">Other</option>
-              <option value="emergency_fund">Emergency Fund</option>
-              <option value="education">Education</option>
-              <option value="housing">Housing</option>
-              <option value="travel">Travel</option>
-              <option value="business">Business</option>
-              <option value="health">Health</option>
-              <option value="retirement">Retirement</option>
+              {GOAL_CATEGORIES.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
             </select>
           </div>
 
           {error && (
-            <p className="rounded-lg bg-red-50 px-4 py-2.5 text-xs font-medium text-red-700" role="alert">
+            <p className="text-sm text-red-600 dark:text-red-400" role="alert">
               {error}
             </p>
           )}
 
-          <div className="flex gap-3 pt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 rounded-xl border border-black/10 dark:border-white/10 py-3 text-xs font-semibold text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-            >
+          <div className="flex justify-end gap-3 pt-1">
+            <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="flex-1 rounded-xl bg-black dark:bg-blue-600 py-3 text-xs font-semibold text-white transition-opacity hover:opacity-75 disabled:opacity-50"
-            >
-              {submitting ? "Creating…" : "Create Goal"}
+            <button type="submit" disabled={submitting} className={BUTTON_PRIMARY}>
+              {submitting ? "Creating…" : "Create goal"}
             </button>
           </div>
         </form>

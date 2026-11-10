@@ -7,46 +7,46 @@ import { Landmark, Coins, ArrowRightLeft, ShieldCheck, Zap, LineChart } from "lu
 const LAYERS = [
   {
     id: "vaults",
-    title: "Smart Vault Layer",
-    subtitle: "The Savings Core",
+    title: "Savings Core",
+    subtitle: "The Nester Savings Rate",
     icon: <Landmark strokeWidth={1.5} size={28} />,
     color: "bg-[#111]",
     textColor: "text-[#f5f5f0]",
     borderColor: "border-[#333]",
-    description: "Tiered, non-custodial savings vaults built on Soroban smart contracts. Choose Conservative (6–8% APY), Balanced (8–12%) or Growth (12–18%) to match your risk profile — deposits mint vault shares that track your exact stake, and you can withdraw to your own wallet at any time.",
+    description: "One non-custodial USDC savings product built on Soroban smart contracts. Deposits mint shares, the share price rises as the yield venues pay, and you can withdraw to your own wallet at any time while assets are liquid.",
     features: [
-      { icon: <ShieldCheck size={16} />, text: "Three risk-tiered vaults, 6–18% target APY" },
-      { icon: <Zap size={16} />, text: "Non-custodial nVault share accounting" },
-      { icon: <ArrowRightLeft size={16} />, text: "Goal-based savings vaults" }
+      { icon: <ShieldCheck size={16} />, text: "One USDC product, no tiers" },
+      { icon: <Zap size={16} />, text: "Realized 7-day rate, never guaranteed" },
+      { icon: <ArrowRightLeft size={16} />, text: "Share price derived on-chain" }
     ]
   },
   {
     id: "defi",
-    title: "Smart Yield Layer",
-    subtitle: "The DeFi Engine",
+    title: "Yield Venues",
+    subtitle: "Blend and DeFindex",
     icon: <Coins strokeWidth={1.5} size={28} />,
     color: "bg-[#f5f5f0]",
     textColor: "text-[#111]",
     borderColor: "border-black/[0.08]",
-    description: "The underlying smart contract architecture that actually puts your money to work. It aggregates fragmented liquidity and distributes it into institutional-grade lending protocols to secure the highest safe APY.",
+    description: "Adapter contracts route deposits to Stellar yield venues and report the value of each position on-chain. Each venue has an absolute cap and a percentage cap.",
     features: [
-      { icon: <Landmark size={16} />, text: "Blend integration" },
-      { icon: <ShieldCheck size={16} />, text: "Auto-compounding smart vaults" },
-      { icon: <Zap size={16} />, text: "Zero collateral lockup strategies" }
+      { icon: <Landmark size={16} />, text: "Blend and DeFindex adapters" },
+      { icon: <ShieldCheck size={16} />, text: "Absolute and percentage caps" },
+      { icon: <Zap size={16} />, text: "Losses are shared pro-rata" }
     ]
   },
   {
-    id: "portfolio",
-    title: "Auto-Invest & Portfolio Layer",
-    subtitle: "Your Money on Autopilot",
+    id: "safeguards",
+    title: "Reserve and Timelock",
+    subtitle: "Bounded Governance",
     icon: <LineChart strokeWidth={1.5} size={28} />,
     color: "bg-white",
     textColor: "text-[#111]",
     borderColor: "border-black/[0.08]",
-    description: "On-chain recurring deposit mandates keep your savings growing automatically — set an amount and cadence once, and deposits execute themselves. A live portfolio view tracks every position, P&L, and performance in real time.",
+    description: "A 10% performance fee on gains above the previous high-water mark is paid as shares into a locked reserve that can only cover saver losses. Risk-adding changes wait behind a public timelock, and a guardian can only reduce risk.",
     features: [
-      { icon: <ArrowRightLeft size={16} />, text: "On-chain recurring deposit mandates" },
-      { icon: <LineChart size={16} />, text: "Live positions, P&L & performance" },
+      { icon: <ArrowRightLeft size={16} />, text: "Locked reserve, timelocked use" },
+      { icon: <LineChart size={16} />, text: "Public timelock, 3 days by default" },
       { icon: <Zap size={16} />, text: "Withdraw to your own wallet anytime" }
     ]
   }

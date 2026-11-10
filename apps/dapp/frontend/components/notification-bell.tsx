@@ -64,10 +64,10 @@ export function NotificationBell() {
                 ref={triggerRef}
                 onClick={() => setOpen((prev) => !prev)}
                 className={cn(
-                    "relative inline-flex h-10 w-10 items-center justify-center rounded-full border transition-all hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-foreground/20",
+                    "relative inline-flex h-9 w-9 items-center justify-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground",
                     safetyCount > 0
-                        ? "border-red-500/60 bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-400"
-                        : "border-border bg-white dark:bg-[#100F0F] text-foreground/70 hover:border-black/20 dark:hover:border-white/20"
+                        ? "border-red-500/60 text-red-600 dark:text-red-400"
+                        : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                 )}
                 aria-label={`Notifications, ${unreadCount} unread${
                     safetyCount > 0 ? `, ${safetyCount} critical safety alerts` : ""
@@ -78,20 +78,19 @@ export function NotificationBell() {
                 {safetyCount > 0 ? (
                     <ShieldAlert
                         className={cn(
-                            "h-4 w-4 text-red-600 dark:text-red-400",
-                            !shouldReduceMotion && "animate-pulse"
+                            "h-4 w-4 text-red-600 dark:text-red-400"
                         )}
                     />
                 ) : (
-                    <Bell className="h-4 w-4 text-foreground/70" />
+                    <Bell className="h-4 w-4" />
                 )}
 
                 {unreadCount > 0 && (
                     <span
                         className={cn(
-                            "absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm",
+                            "absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
                             safetyCount > 0
-                                ? cn("bg-red-600", !shouldReduceMotion && "animate-bounce")
+                                ? "bg-red-600 text-white"
                                 : "bg-foreground text-background"
                         )}
                     >
@@ -117,23 +116,23 @@ export function NotificationBell() {
                         transition={{ duration: 0.15 }}
                         role="region"
                         aria-label="Recent notifications"
-                        className="overflow-hidden rounded-2xl border border-border bg-white dark:bg-[#100F0F] shadow-xl shadow-black/8 max-md:fixed max-md:left-3 max-md:right-3 max-md:top-18 max-md:w-auto md:absolute md:right-0 md:top-full md:mt-2 md:w-[min(92vw,26rem)] z-50"
+                        className="overflow-hidden rounded-xl border bg-card max-md:fixed max-md:left-3 max-md:right-3 max-md:top-18 max-md:w-auto md:absolute md:right-0 md:top-full md:mt-2 md:w-[min(92vw,26rem)] z-50"
                     >
-                        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                        <div className="flex items-center justify-between border-b px-4 py-3">
                             <div className="flex items-center gap-2">
                                 <p className="text-sm font-medium text-foreground">
                                     Notifications
                                 </p>
                                 {isDisconnected && (
-                                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/80 dark:text-amber-300">
-                                        REST Fallback
+                                    <span className="text-[12px] text-amber-700 dark:text-amber-400">
+                                        Live updates paused
                                     </span>
                                 )}
                             </div>
                             {unreadCount > 0 && (
                                 <button
                                     onClick={markAllAsRead}
-                                    className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground/70 transition-colors hover:bg-secondary hover:text-foreground"
+                                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
                                 >
                                     <CheckCheck className="h-3.5 w-3.5" />
                                     Mark all read
@@ -144,7 +143,7 @@ export function NotificationBell() {
                         <div className="max-h-[min(24rem,70vh)] overflow-y-auto">
                             {recent.length === 0 ? (
                                 <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-                                    No notifications yet
+                                    No notifications yet. Deposits, withdrawals and alerts will show up here.
                                 </p>
                             ) : (
                                 recent.map((notification) => {
@@ -154,10 +153,8 @@ export function NotificationBell() {
                                         <div
                                             key={notification.id}
                                             className={cn(
-                                                "border-b border-border/70 px-4 py-3 transition-colors last:border-b-0",
-                                                isSafety
-                                                    ? "bg-red-50/60 dark:bg-red-950/30"
-                                                    : !notification.read && "bg-secondary/30"
+                                                "border-b px-4 py-3 transition-colors last:border-b-0",
+                                                !notification.read && "bg-foreground/[0.03]"
                                             )}
                                         >
                                             <div className="mb-1 flex items-start justify-between gap-3">
@@ -169,7 +166,7 @@ export function NotificationBell() {
                                                         className={cn(
                                                             "text-sm font-medium",
                                                             isSafety
-                                                                ? "text-red-900 dark:text-red-200"
+                                                                ? "text-red-600 dark:text-red-400"
                                                                 : "text-foreground"
                                                         )}
                                                     >
@@ -178,7 +175,7 @@ export function NotificationBell() {
                                                     {Boolean(
                                                         notification.count && notification.count > 1
                                                     ) && (
-                                                        <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                                                        <span className="rounded-full border px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
                                                             x{notification.count}
                                                         </span>
                                                     )}
@@ -186,7 +183,7 @@ export function NotificationBell() {
                                                 {!notification.read && (
                                                     <button
                                                         onClick={() => markAsRead(notification.id)}
-                                                        className="shrink-0 text-[11px] font-medium text-foreground/55 transition-colors hover:text-foreground"
+                                                        className="shrink-0 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
                                                     >
                                                         Mark read
                                                     </button>
@@ -196,14 +193,14 @@ export function NotificationBell() {
                                                 {notification.message}
                                             </p>
                                             <div className="mt-2 flex items-center justify-between">
-                                                <span className="text-[11px] text-muted-foreground/80">
+                                                <span className="text-[12px] text-muted-foreground">
                                                     {formatRelativeTime(notification.timestamp)}
                                                 </span>
                                                 {notification.actionUrl && (
                                                     <NotificationActionLink
                                                         href={notification.actionUrl}
                                                         onClick={() => setOpen(false)}
-                                                        className="text-[11px] font-medium text-foreground/80 underline-offset-2 transition-colors hover:underline hover:text-foreground"
+                                                        className="text-[12px] font-medium text-foreground underline-offset-2 hover:underline"
                                                     >
                                                         {notification.actionLabel || "View"}
                                                     </NotificationActionLink>
@@ -215,13 +212,13 @@ export function NotificationBell() {
                             )}
                         </div>
 
-                        <div className="border-t border-border bg-secondary/20 px-4 py-2.5">
+                        <div className="border-t px-4 py-2.5">
                             <Link
                                 href="/notifications"
                                 onClick={() => setOpen(false)}
-                                className="block text-center text-xs font-medium text-foreground/70 transition-colors hover:text-foreground"
+                                className="block text-center text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground"
                             >
-                                Open Notification Center
+                                See all notifications
                             </Link>
                         </div>
                     </motion.div>

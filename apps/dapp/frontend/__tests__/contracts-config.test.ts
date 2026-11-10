@@ -29,6 +29,7 @@ const VALID_IDS: Record<ContractKey, string> = {
   vaultXlm: `C${"B".repeat(55)}`,
   vaultToken: `C${"D".repeat(55)}`,
   usdc: `C${"E".repeat(55)}`,
+  savingsCore: `C${"F".repeat(55)}`,
 };
 
 /** The name #1094 is about: read by the app, never written by any deploy path. */

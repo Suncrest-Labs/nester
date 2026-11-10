@@ -14,7 +14,7 @@ import (
 // existing fixtures.
 const testContractAddress = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
 
-// newSimulateServer serves simulateTransaction responses whose returnValue is
+// newSimulateServer serves simulateTransaction responses whose results[0].xdr is
 // the given i128, encoded exactly as Soroban RPC returns it.
 func newSimulateServer(t *testing.T, hi int64, lo uint64) *httptest.Server {
 	t.Helper()
@@ -32,7 +32,7 @@ func newSimulateServer(t *testing.T, hi int64, lo uint64) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      1,
-			"result":  map[string]any{"returnValue": encoded},
+			"result":  map[string]any{"results": []map[string]any{{"xdr": encoded}}},
 		})
 	}))
 }

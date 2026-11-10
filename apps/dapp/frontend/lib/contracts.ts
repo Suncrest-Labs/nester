@@ -15,7 +15,7 @@
  * exact variable to set.
  */
 
-export type ContractKey = "vault" | "vaultXlm" | "vaultToken" | "usdc";
+export type ContractKey = "vault" | "vaultXlm" | "vaultToken" | "usdc" | "savingsCore";
 
 /**
  * The environment variable carrying each contract address. Exported so tests
@@ -26,6 +26,7 @@ export const CONTRACT_ENV_VARS: Readonly<Record<ContractKey, string>> = {
   vaultXlm: "NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID",
   vaultToken: "NEXT_PUBLIC_VAULT_TOKEN_CONTRACT_ID",
   usdc: "NEXT_PUBLIC_USDC_CONTRACT_ID",
+  savingsCore: "NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID",
 };
 
 /**
@@ -99,6 +100,7 @@ function readRawContractEnv(): Record<ContractKey, string | undefined> {
     vaultXlm: process.env.NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID,
     vaultToken: process.env.NEXT_PUBLIC_VAULT_TOKEN_CONTRACT_ID,
     usdc: process.env.NEXT_PUBLIC_USDC_CONTRACT_ID,
+    savingsCore: process.env.NEXT_PUBLIC_SAVINGS_CORE_CONTRACT_ID,
   };
 }
 
