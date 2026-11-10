@@ -274,8 +274,8 @@ type LaunchCapsConfig struct {
 }
 
 func (l LaunchCapsConfig) PerUserDepositCap() string { return l.perUserDepositCap }
-func (l LaunchCapsConfig) GlobalTVLCap() string       { return l.globalTVLCap }
-func (l LaunchCapsConfig) WarnThresholdsPct() []int   { return l.warnThresholdsPct }
+func (l LaunchCapsConfig) GlobalTVLCap() string      { return l.globalTVLCap }
+func (l LaunchCapsConfig) WarnThresholdsPct() []int  { return l.warnThresholdsPct }
 
 // validateWarnThresholdsPct enforces LAUNCH_CAP_WARN_THRESHOLDS_PCT's
 // contract: every threshold must be a percentage in (0, 100], and the list
@@ -317,6 +317,14 @@ type DatabaseConfig struct {
 	dsn               string
 	poolSize          int
 	connectionTimeout time.Duration
+
+	// statementTimeout, lockTimeout and idleInTransactionTimeout are applied
+	// to every PostgreSQL connection in the pool (nester#1564). A negative
+	// value disables that server-side timeout; zero is never stored because
+	// the loader resolves the default before assigning.
+	statementTimeout         time.Duration
+	lockTimeout              time.Duration
+	idleInTransactionTimeout time.Duration
 }
 
 type StellarConfig struct {
@@ -448,6 +456,21 @@ func loadFrom(loader *envLoader) (*Config, error) {
 		loader.addError("APP_ENV must be one of development, staging, production, test")
 	}
 
+	// Read the passphrase once so the database timeouts can use the stricter
+	// mainnet defaults (nester#1564). A stuck query on mainnet is an
+	// availability incident, not just a slow page.
+	networkPassphrase := loader.requiredString("STELLAR_NETWORK_PASSPHRASE")
+	mainnet := networkPassphrase == StellarMainnetPassphrase
+
+	statementDefault := 30 * time.Second
+	lockDefault := 5 * time.Second
+	idleInTransactionDefault := 60 * time.Second
+	if mainnet {
+		statementDefault = 10 * time.Second
+		lockDefault = 2 * time.Second
+		idleInTransactionDefault = 30 * time.Second
+	}
+
 	cfg := &Config{
 		environment: environment,
 		server: ServerConfig{
@@ -464,9 +487,16 @@ func loadFrom(loader *envLoader) (*Config, error) {
 			dsn:               loader.requiredString("DATABASE_DSN"),
 			poolSize:          loader.intDefault("DATABASE_POOL_SIZE", 25),
 			connectionTimeout: loader.durationDefault("DATABASE_CONNECTION_TIMEOUT", 5*time.Second),
+			// An explicit 0 disables the server-side timeout (the documented
+			// escape hatch for a reviewed migration/backfill job). Store it as
+			// -1 so the getter and db.ApplySessionTimeouts can tell "disabled"
+			// apart from "unset, use the default".
+			statementTimeout:         disabledIfZero(loader.durationDefault("DATABASE_STATEMENT_TIMEOUT", statementDefault)),
+			lockTimeout:              disabledIfZero(loader.durationDefault("DATABASE_LOCK_TIMEOUT", lockDefault)),
+			idleInTransactionTimeout: disabledIfZero(loader.durationDefault("DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT", idleInTransactionDefault)),
 		},
 		stellar: StellarConfig{
-			networkPassphrase:                 loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
+			networkPassphrase:                 networkPassphrase,
 			rpcURL:                            loader.requiredURL("STELLAR_RPC_URL"),
 			horizonURL:                        loader.requiredURL("STELLAR_HORIZON_URL"),
 			operatorSecret:                    loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
@@ -1076,11 +1106,11 @@ type CanaryConfig struct {
 	latencyThreshold time.Duration
 }
 
-func (c Config) Canary() CanaryConfig                { return c.canary }
-func (n CanaryConfig) Enabled() bool                 { return n.enabled }
-func (n CanaryConfig) Interval() time.Duration       { return n.interval }
-func (n CanaryConfig) VaultID() uuid.UUID            { return n.vaultID }
-func (n CanaryConfig) Amount() string                { return n.amount }
+func (c Config) Canary() CanaryConfig                  { return c.canary }
+func (n CanaryConfig) Enabled() bool                   { return n.enabled }
+func (n CanaryConfig) Interval() time.Duration         { return n.interval }
+func (n CanaryConfig) VaultID() uuid.UUID              { return n.vaultID }
+func (n CanaryConfig) Amount() string                  { return n.amount }
 func (n CanaryConfig) LatencyThreshold() time.Duration { return n.latencyThreshold }
 
 // RebalancerConfig governs the automated vault rebalance-decision loop
@@ -1639,6 +1669,34 @@ func (d DatabaseConfig) PoolSize() int {
 
 func (d DatabaseConfig) ConnectionTimeout() time.Duration {
 	return d.connectionTimeout
+}
+
+// StatementTimeout is the per-connection PostgreSQL statement_timeout. A
+// negative value means the server-side timeout is disabled.
+func (d DatabaseConfig) StatementTimeout() time.Duration {
+	return d.statementTimeout
+}
+
+// LockTimeout is the per-connection PostgreSQL lock_timeout. A negative value
+// means the server-side timeout is disabled.
+func (d DatabaseConfig) LockTimeout() time.Duration {
+	return d.lockTimeout
+}
+
+// IdleInTransactionSessionTimeout is the per-connection PostgreSQL
+// idle_in_transaction_session_timeout. A negative value means the server-side
+// timeout is disabled.
+func (d DatabaseConfig) IdleInTransactionSessionTimeout() time.Duration {
+	return d.idleInTransactionTimeout
+}
+
+// disabledIfZero maps the documented "0 disables" env value to the negative
+// sentinel db.ApplySessionTimeouts understands.
+func disabledIfZero(d time.Duration) time.Duration {
+	if d == 0 {
+		return -1
+	}
+	return d
 }
 
 func (s StellarConfig) NetworkPassphrase() string {

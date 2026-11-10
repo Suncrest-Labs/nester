@@ -8,6 +8,7 @@ import (
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/suncrestlabs/nester/apps/api/internal/config"
+	dbconn "github.com/suncrestlabs/nester/apps/api/internal/db"
 )
 
 // maxPoolConns caps the pgxpool connection count. It also keeps the value well
@@ -77,6 +78,19 @@ func newPostgresDB(cfg config.DatabaseConfig, tracingEnabled bool) (*PostgresDB,
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
 	poolConfig.MaxConnLifetime = time.Hour
 	poolConfig.HealthCheckPeriod = poolConfig.MaxConnIdleTime
+
+	// Server-side timeouts are sent in the PostgreSQL startup packet, so they
+	// cover every connection the pool opens, not just the first one
+	// (nester#1564). config.Load has already resolved the mainnet defaults, so
+	// strict is false here; a negative value disables the corresponding
+	// timeout.
+	dbconn.ApplySessionTimeouts(
+		poolConfig.ConnConfig,
+		cfg.StatementTimeout(),
+		cfg.LockTimeout(),
+		cfg.IdleInTransactionSessionTimeout(),
+		false,
+	)
 
 	if tracingEnabled {
 		// IncludeQueryParameters is deliberately not set: bound parameters
