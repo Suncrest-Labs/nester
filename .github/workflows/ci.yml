@@ -118,19 +118,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # Browser binaries are mandatory; system libraries are not installed by
-      # Playwright alone, but the runner image already ships the ones Chromium
-      # needs. `install-deps` shells out to apt through sudo and fails the step
-      # outright when that path is unavailable (unsupported distro, apt lock,
-      # denied sudo), which hid every E2E result behind an environment error.
-      # Keep it advisory: a truly missing library surfaces from the browser
-      # launch in the test step with its own, actionable error.
       - name: Install Playwright browsers
-        run: |
-          set -euo pipefail
-          pnpm --filter @nester/dapp exec playwright install chromium
-          pnpm --filter @nester/dapp exec playwright install-deps chromium || \
-            echo "::warning::Could not install Playwright system dependencies; using the runner image's libraries."
+        run: pnpm --filter @nester/dapp exec playwright install chromium --with-deps
 
       - name: Run E2E tests
         run: pnpm --filter @nester/dapp run test:e2e
