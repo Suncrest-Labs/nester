@@ -311,7 +311,12 @@ fn contribution_overflow_returns_distinct_error_without_changing_totals() {
     client.contribute(&contributor, &id, &1i128);
 
     let result = client.try_contribute(&contributor, &id, &i128::MAX);
-    assert_eq!(result, Err(Ok(ContractError::ArithmeticOverflow)));
+    assert_eq!(
+        result,
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            ContractError::ArithmeticOverflow as u32,
+        ))),
+    );
 
     assert_eq!(client.get_goal(&id).contributed, 1);
     assert_eq!(client.get_contributor_amount(&id, &contributor), 1);
