@@ -2,7 +2,10 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events as _, Ledger as _,
+    },
     token, Address, BytesN, Env, IntoVal, Vec,
 };
 
@@ -641,6 +644,63 @@ fn sequential_goal_created_after_last_claim_is_eligible() {
         paid > 0,
         "a non-overlapping later goal must still be claimable"
     );
+}
+
+#[test]
+fn claim_records_are_persistent_and_do_not_grow_instance_storage() {
+    let f = setup();
+    f.token_admin.mint(&f.admin, &3_000_000_000);
+    f.rewards.fund_pool(&f.admin, &3_000_000_000);
+
+    let initial_instance_size = f.env.as_contract(&f.rewards.address, || {
+        f.env.storage().instance().all().len()
+    });
+
+    for seed in 1..=3 {
+        let id = steady_contributions(&f, seed, TARGET, TARGET / 10, 10);
+        f.advance(60 * DAY);
+        f.rewards.claim_goal_bonus(&f.owner, &id);
+
+        assert!(f.env.as_contract(&f.rewards.address, || {
+            f.env
+                .storage()
+                .persistent()
+                .has(&crate::DataKey::Claimed(id.clone()))
+        }));
+        assert!(
+            f.env.as_contract(&f.rewards.address, || {
+                f.env
+                    .storage()
+                    .persistent()
+                    .get_ttl(&crate::DataKey::Claimed(id.clone()))
+            }) >= nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+        assert_eq!(
+            f.env.as_contract(&f.rewards.address, || {
+                f.env.storage().persistent().get::<_, BytesN<32>>(
+                    &crate::DataKey::ActiveClaimWindow(f.vault.address.clone(), f.owner.clone()),
+                )
+            }),
+            Some(id)
+        );
+        assert!(
+            f.env.as_contract(&f.rewards.address, || {
+                f.env
+                    .storage()
+                    .persistent()
+                    .get_ttl(&crate::DataKey::ActiveClaimWindow(
+                        f.vault.address.clone(),
+                        f.owner.clone(),
+                    ))
+            }) >= nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+        assert_eq!(
+            f.env.as_contract(&f.rewards.address, || {
+                f.env.storage().instance().all().len()
+            }),
+            initial_instance_size
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
