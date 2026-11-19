@@ -285,6 +285,7 @@ impl SavingsGoalContract {
     /// * [`ContractError::InvalidOperation`] if the goal is not `Active`.
     /// * [`ContractError::ExceedsLimit`] if `contributor` is new and the goal
     ///   already tracks [`MAX_CONTRIBUTORS_PER_GOAL`] distinct contributors.
+    /// * [`ContractError::ArithmeticOverflow`] if cumulative accounting exceeds `i128::MAX`.
     pub fn contribute(
         env: Env,
         contributor: Address,
@@ -305,7 +306,10 @@ impl SavingsGoalContract {
         record_contribution(&env, &goal_id, &mut goal, &contributor, amount);
         record_contribution_stats(&env, &goal_id, &goal, amount);
 
-        goal.contributed += amount;
+        goal.contributed = goal
+            .contributed
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
         attest_new_milestones(&env, &goal_id, &mut goal);
 
@@ -519,7 +523,10 @@ fn record_contribution(
         goal.contributors.push_back(contributor.clone());
     }
 
-    env.storage().persistent().set(&key, &(prev + amount));
+    let total = prev
+        .checked_add(amount)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+    env.storage().persistent().set(&key, &total);
     extend_persistent_ttl(env, &key);
 }
 
@@ -611,7 +618,7 @@ fn complete_goal(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mut Goal) 
     // the last one, so this closing interval needs its own accrual step
     // regardless of which path completed the goal.
     let key = DataKey::ContributionStats(goal_id.clone());
-    let mut stats: ContributionStats = env.storage().instance().get(&key).unwrap_or_default();
+    let mut stats: ContributionStats = env.storage().persistent().get(&key).unwrap_or_default();
     let since = if stats.last_updated_at == 0 {
         goal.created_at
     } else {
