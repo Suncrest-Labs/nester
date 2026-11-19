@@ -75,6 +75,7 @@ type Config struct {
 	rebalancer             RebalancerConfig
 	goalNotificationDigest GoalNotificationDigestConfig
 	schedulerLeadership    SchedulerLeadershipConfig
+	transactionLimits      TransactionLimitsConfig
 	tracing                TracingConfig
 	metrics                MetricsConfig
 	indexer                IndexerConfig
@@ -264,6 +265,7 @@ type TVLConfig struct {
 // LaunchCapsConfig governs the per-user deposit cap and global TVL cap for
 // the testnet launch (nester#1119). Amounts are stored as decimal strings
 // (matching RecurringDepositConfig.minDeposit) and parsed by whoever wires
+// the caps checker, so an operator can change either cap by editing the env
 // the caps checker, so an operator can change either cap by editing the env
 // var and restarting — no code change or migration needed. A zero/empty
 // value disables that cap.

@@ -8,6 +8,8 @@ package moneypath
 
 import (
 	"errors"
+	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,6 +46,60 @@ var ErrPaused = errors.New("money path operation is paused")
 
 // ErrUnknownOperation marks a switch name that is not one of Operations().
 var ErrUnknownOperation = errors.New("unknown money path operation")
+
+// ErrTransactionLimitExceeded is returned when a single deposit or withdrawal
+// amount exceeds the configured per-transaction ceiling. This is independent of
+// daily caps and bounds the blast radius of a single compromised session or
+// client bug.
+var ErrTransactionLimitExceeded = errors.New("amount exceeds per-transaction limit")
+
+// TransactionLimit is the per-transaction ceiling for a single operation.
+// A zero or nil Max means no ceiling is configured for that operation.
+type TransactionLimit struct {
+	Operation Operation
+	// Max is the largest permitted single-transaction amount in base units.
+	Max *big.Int
+}
+
+// TransactionLimitError carries the offending amount and the configured ceiling
+// so a handler can explain the refusal without a second lookup.
+type TransactionLimitError struct {
+	Operation Operation
+	Amount    *big.Int
+	Max       *big.Int
+}
+
+func (e *TransactionLimitError) Error() string {
+	return fmt.Sprintf("%s amount %s exceeds per-transaction limit %s",
+		e.Operation, e.Amount.String(), e.Max.String())
+}
+
+// Unwrap lets errors.Is(err, ErrTransactionLimitExceeded) match.
+func (e *TransactionLimitError) Unwrap() error {
+	return ErrTransactionLimitExceeded
+}
+
+// CheckTransactionLimit enforces the per-transaction ceiling for op against
+// amount. It returns nil when no ceiling is configured (limit nil or Max nil/
+// non-positive), when the amount is within the ceiling, or when the amount is
+// non-positive (amount validation is the caller's responsibility). It returns a
+// *TransactionLimitError when amount exceeds the ceiling.
+func CheckTransactionLimit(limit *TransactionLimit, op Operation, amount *big.Int) error {
+	if limit == nil || limit.Max == nil || limit.Max.Sign() <= 0 {
+		return nil
+	}
+	if amount == nil || amount.Sign() <= 0 {
+		return nil
+	}
+	if amount.Cmp(limit.Max) > 0 {
+		return &TransactionLimitError{
+			Operation: op,
+			Amount:    new(big.Int).Set(amount),
+			Max:       new(big.Int).Set(limit.Max),
+		}
+	}
+	return nil
+}
 
 // Switch is the current state of one operation's pause flag.
 type Switch struct {

@@ -51,6 +51,20 @@ type withdrawRequest struct {
 	TxHash string `json:"tx_hash,omitempty"`
 }
 
+// maxSingleTransactionAmount is the per-transaction ceiling enforced at the
+// API layer for deposits and withdrawals. It is independent of daily caps and
+// limits the blast radius of a compromised session or client bug.
+var maxSingleTransactionAmount = decimal.NewFromInt(100000)
+
+// validateSingleTransactionLimit rejects amounts above the per-transaction
+// ceiling. A non-positive ceiling disables the check.
+func validateSingleTransactionLimit(amount decimal.Decimal) error {
+	if maxSingleTransactionAmount.IsPositive() && amount.GreaterThan(maxSingleTransactionAmount) {
+		return errors.New("amount exceeds the maximum single-transaction limit of " + maxSingleTransactionAmount.String())
+	}
+	return nil
+}
+
 type rebalanceRequest struct {
 	VaultID      string `json:"vault_id"`
 	FromProtocol string `json:"from_protocol"`

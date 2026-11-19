@@ -54,6 +54,10 @@ var varNotes = map[string]varNote{
 	"WITHDRAWAL_BREAKER_ENABLED":                {mainnet: "Default `false` is unsafe for mainnet; enable it."},
 	"WITHDRAWAL_SLIPPAGE_BPS":                   {mainnet: "Must be between 1 and 300."},
 
+	"STELLAR_MAX_SINGLE_TX_AMOUNT": {
+		mainnet: "Per-transaction ceiling for deposits and withdrawals, enforced at the API layer independently of daily caps. Default `0` means no per-transaction cap; set an explicit value for the staged launch.",
+	},
+
 	"AUTH_JWT_SECRET": {
 		secret:  true,
 		mainnet: "At least 32 characters with 8+ distinct bytes. The `.env.example` development value is rejected in production and staging.",
