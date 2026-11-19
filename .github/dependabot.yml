@@ -1,25 +1,79 @@
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /apps/dapp/frontend
+  - package-ecosystem: "cargo"
+    directory: "/packages/contracts"
     schedule:
-      interval: daily
-    open-pull-requests-limit: 0
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "smart-contracts"]
+    groups:
+      cargo-deps:
+        patterns: ["*"]
 
-  - package-ecosystem: gomod
-    directory: /apps/api
+  - package-ecosystem: "gomod"
+    directory: "/apps/api"
     schedule:
-      interval: daily
-    open-pull-requests-limit: 0
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "backend"]
+    groups:
+      go-deps:
+        patterns: ["*"]
 
-  - package-ecosystem: cargo
-    directory: /packages/contracts
+  - package-ecosystem: "npm"
+    directory: "/apps/dapp/frontend"
     schedule:
-      interval: daily
-    open-pull-requests-limit: 0
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "frontend"]
+    groups:
+      npm-production:
+        dependency-type: "production"
+        patterns: ["*"]
+      npm-dev:
+        dependency-type: "development"
+        patterns: ["*"]
 
-  - package-ecosystem: github-actions
-    directory: /
+  - package-ecosystem: "npm"
+    directory: "/apps/website"
     schedule:
-      interval: daily
-    open-pull-requests-limit: 0
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "frontend"]
+    groups:
+      website-production:
+        dependency-type: "production"
+        patterns: ["*"]
+      website-dev:
+        dependency-type: "development"
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "ci"]
+    groups:
+      github-actions:
+        patterns: ["*"]
