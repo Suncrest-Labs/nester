@@ -1,7 +1,7 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Ledger as _},
     xdr::{FromXdr, LedgerKey, ScVal, ToXdr},
     Address, Bytes, Env, String,
 };
@@ -858,4 +858,86 @@ fn balances_and_allowances_are_not_in_instance_storage() {
         assert!(env.storage().persistent().has(&balance));
         assert!(env.storage().persistent().has(&allowance));
     });
+}
+
+// ---------------------------------------------------------------------------
+// Persistent TTL renewal
+// ---------------------------------------------------------------------------
+
+fn persistent_ttl(env: &Env, token_id: &Address, key: &crate::DataKey) -> u32 {
+    env.as_contract(token_id, || env.storage().persistent().get_ttl(key))
+}
+
+/// Mints and approves for `user`, then moves the ledger forward until every
+/// entry written so far is one ledger below the renewal threshold.
+fn setup_entries_near_expiry(
+    env: &Env,
+) -> (VaultTokenContractClient<'_>, Address, Address, Address) {
+    let (client, _, token_id) = setup(env);
+    let user = Address::generate(env);
+    let spender = Address::generate(env);
+    client.mint_for_deposit(&user, &1_000);
+    client.approve(&user, &spender, &500, &1_000_000);
+    client.extend_ttl(&None);
+
+    for key in [
+        crate::DataKey::Balance(user.clone()),
+        crate::DataKey::DepositTimestamp(user.clone()),
+        crate::DataKey::Allowance(user.clone(), spender.clone()),
+    ] {
+        assert_eq!(
+            persistent_ttl(env, &token_id, &key),
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+    }
+
+    let advance = nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        - nester_common::POSITION_TTL_THRESHOLD_LEDGERS
+        + 1;
+    env.ledger().with_mut(|li| li.sequence_number += advance);
+    assert_eq!(
+        persistent_ttl(env, &token_id, &crate::DataKey::Balance(user.clone())),
+        nester_common::POSITION_TTL_THRESHOLD_LEDGERS - 1
+    );
+    (client, token_id, user, spender)
+}
+
+#[test]
+fn writes_renew_persistent_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token_id, user, spender) = setup_entries_near_expiry(&env);
+
+    client.mint_for_deposit(&user, &1_000);
+    client.approve(&user, &spender, &400, &1_000_000);
+
+    for key in [
+        crate::DataKey::Balance(user.clone()),
+        crate::DataKey::DepositTimestamp(user.clone()),
+        crate::DataKey::Allowance(user.clone(), spender.clone()),
+    ] {
+        assert_eq!(
+            persistent_ttl(&env, &token_id, &key),
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+    }
+}
+
+#[test]
+fn extend_ttl_renews_balance_and_deposit_timestamp() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token_id, user, _) = setup_entries_near_expiry(&env);
+
+    client.extend_ttl(&Some(user.clone()));
+
+    for key in [
+        crate::DataKey::Balance(user.clone()),
+        crate::DataKey::DepositTimestamp(user.clone()),
+    ] {
+        assert_eq!(
+            persistent_ttl(&env, &token_id, &key),
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+    }
 }
