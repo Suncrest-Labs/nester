@@ -18,7 +18,7 @@ extern crate std;
 use soroban_sdk::{testutils::Ledger as _, BytesN};
 
 use nester_access_control::Role;
-use nester_common::{MIN_UPGRADE_DELAY_VAULT, MIN_DEPOSIT_AMOUNT};
+use nester_common::{MIN_DEPOSIT_AMOUNT, MIN_UPGRADE_DELAY_VAULT};
 use nester_test_utils::NesterHarness;
 use vault_contract::FeeConfig;
 
@@ -59,6 +59,12 @@ fn test_upgrade_wasm_swap_preserves_all_state() {
     h.mint_deposit_tokens(&h.vault_id, YIELD);
     h.vault().report_yield(&h.admin, &YIELD);
 
+    // Yield vests linearly; let it fully vest so the pre-upgrade snapshot is
+    // the settled value and the only thing under test is the WASM swap.
+    let vested_at = h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1;
+    h.env.ledger().set_timestamp(vested_at);
+    h.vault().report_yield(&h.admin, &0);
+
     let pre_total = h.token().total_assets();
     let pre_alice = h.token().balance(&alice);
     let pre_bob = h.token().balance(&bob);
@@ -88,12 +94,17 @@ fn test_upgrade_wasm_swap_preserves_all_state() {
 
     // Run migration and confirm schema version advances (or stays at current).
     let schema_after = h.vault().migrate();
-    assert!(schema_after >= 1, "schema version must be ≥ 1 after migration");
+    assert!(
+        schema_after >= 1,
+        "schema version must be ≥ 1 after migration"
+    );
     let idempotent = h.vault().migrate();
     assert_eq!(schema_after, idempotent, "migrate must be idempotent");
 
     // Release vested yield then check all balances are intact.
-    h.env.ledger().set_timestamp(eta + h.vault().get_yield_vesting_period() + 1);
+    h.env
+        .ledger()
+        .set_timestamp(eta + h.vault().get_yield_vesting_period() + 1);
     h.vault().report_yield(&h.admin, &0);
 
     assert_eq!(

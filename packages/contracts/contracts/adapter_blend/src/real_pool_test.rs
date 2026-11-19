@@ -13,9 +13,9 @@
 //! genuine interface or protocol-behavior change on Blend's side shows up
 //! here.
 
-#![cfg(test)]
 extern crate std;
 
+#[allow(clippy::too_many_arguments)]
 mod blend_pool {
     soroban_sdk::contractimport!(file = "fixtures/blend_pool.wasm");
 }

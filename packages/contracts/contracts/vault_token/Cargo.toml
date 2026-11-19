@@ -3,7 +3,6 @@ name = "vault-token-contract"
 version = "0.1.0"
 edition = "2021"
 publish = false
-build = "../../build-meta.rs"
 
 [lib]
 # rlib so the Vault contract can import the generated client for cross-contract calls.

@@ -3,7 +3,6 @@ name = "treasury-contract"
 version = "0.1.0"
 edition = "2021"
 publish = false
-build = "../../build-meta.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
