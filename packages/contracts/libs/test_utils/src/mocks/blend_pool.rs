@@ -103,7 +103,11 @@ impl MockBlendPool {
                     .instance()
                     .set(&PoolKey::Supply(from.clone()), &(held + units));
             } else if request.request_type == REQUEST_TYPE_WITHDRAW {
-                let units = if request.amount > held { held } else { request.amount };
+                let units = if request.amount > held {
+                    held
+                } else {
+                    request.amount
+                };
                 let assets = units * index / INDEX_ONE;
                 env.storage()
                     .instance()

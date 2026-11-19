@@ -1,15 +1,16 @@
 #![no_std]
+// create_mandate is a contract entrypoint; its arguments are its ABI.
+#![allow(clippy::too_many_arguments)]
 
 soroban_sdk::contractmeta!(key = "name", val = "RecurringDepositContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 
 mod test;
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env,
-    IntoVal, Symbol, Vec,
+    Symbol, Vec,
 };
 
 use nester_access_control::{AccessControl, Role};
@@ -130,7 +131,7 @@ impl RecurringDepositContract {
         if amount_per_period <= 0 {
             panic_with_error!(&env, Error::InvalidAmount);
         }
-        if period_secs < MIN_PERIOD_SECS || period_secs > MAX_PERIOD_SECS {
+        if !(MIN_PERIOD_SECS..=MAX_PERIOD_SECS).contains(&period_secs) {
             panic_with_error!(&env, Error::InvalidAmount);
         }
         if expires_at <= start_at {

@@ -9,12 +9,20 @@ pub struct ReentrantYieldSourceContract;
 #[contractimpl]
 impl ReentrantYieldSourceContract {
     pub fn initialize(env: Env, vault: Address, attacker: Address) {
-        env.storage().instance().set(&symbol_short!("vault"), &vault);
-        env.storage().instance().set(&symbol_short!("att"), &attacker);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("vault"), &vault);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("att"), &attacker);
     }
 
     pub fn harvest(env: Env) {
-        let vault: Address = env.storage().instance().get(&symbol_short!("vault")).unwrap();
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("vault"))
+            .unwrap();
         let attacker: Address = env.storage().instance().get(&symbol_short!("att")).unwrap();
         VaultContractClient::new(&env, &vault).withdraw(&attacker, &1_i128, &0_i128);
     }

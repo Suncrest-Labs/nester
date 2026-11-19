@@ -13,7 +13,9 @@
 //! genuine interface or protocol-behavior change on Blend's side shows up
 //! here.
 
-#![cfg(test)]
+// contractimport! generates clients mirroring Blend's ABI, argument count included.
+#![allow(clippy::too_many_arguments)]
+
 extern crate std;
 
 mod blend_pool {

@@ -1,12 +1,15 @@
 name: Security
 
-# Every security tool runs exactly once per change, here. Language-specific
-# scans are path-filtered with the same filters as ci.yml; the scheduled and
-# manual runs scan everything.
+# Every security tool runs exactly once per change, here, in a single job so a
+# pull request shows one "Security" check. Language-specific scans are
+# path-filtered with the same filters as ci.yml; the scheduled and manual runs
+# scan everything. Each scan step runs unless the job was cancelled, so one
+# failing scanner never hides another's findings, and any failure fails the job.
 #
-# Required status checks (see docs/security/ci-gates.md): "Security gate". It
-# aggregates every job below, so a job skipped by the path filter counts as a
-# pass and a failed or cancelled job blocks the merge.
+# CodeQL runs on pushes to dev/main, weekly and on demand, not on pull
+# requests: on a PR it adds a check of its own.
+#
+# Required status checks (see docs/security/ci-gates.md): "Security".
 
 on:
   pull_request:
@@ -24,21 +27,17 @@ permissions:
   contents: read
 
 jobs:
-  changes:
-    name: Detect changes
+  security:
+    name: Security
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
-    outputs:
-      deps_matrix: ${{ steps.matrix.outputs.deps }}
-      sast_matrix: ${{ steps.matrix.outputs.sast }}
-      sbom: ${{ steps.matrix.outputs.sbom }}
-      contracts: ${{ steps.matrix.outputs.contracts }}
-      dapp: ${{ steps.matrix.outputs.dapp }}
-      api: ${{ steps.matrix.outputs.api }}
+      security-events: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
 
       # Scheduled and manual runs have no diff to filter on and scan everything.
       - uses: dorny/paths-filter@b41dfa943b1939b9b646f67753bfe35cf6e4de03 # v3.0.2
@@ -48,55 +47,49 @@ jobs:
           base: ${{ github.event_name == 'push' && github.event.before || '' }}
           filters: .github/path-filters.yml
 
-      - name: Build job matrices
-        id: matrix
+      - name: Decide what to scan
+        id: scope
         env:
           ALL: ${{ github.event_name != 'pull_request' && github.event_name != 'push' }}
           SHARED: ${{ steps.filter.outputs.shared }}
+          JS_ROOT: ${{ steps.filter.outputs.js_root }}
           WEBSITE: ${{ steps.filter.outputs.website }}
           DAPP: ${{ steps.filter.outputs.dapp }}
           API: ${{ steps.filter.outputs.api }}
           CONTRACTS: ${{ steps.filter.outputs.contracts }}
           PYTHON: ${{ steps.filter.outputs.python }}
+          CI_SCRIPTS: ${{ steps.filter.outputs.ci_scripts }}
         run: |
           on() { [ "$ALL" = "true" ] || [ "$SHARED" = "true" ] || [ "$1" = "true" ]; }
 
-          js=false;   if on "$WEBSITE" || on "$DAPP"; then js=true; fi
+          js=false;   if on "$WEBSITE" || on "$DAPP" || on "$JS_ROOT"; then js=true; fi
           dapp=false; if on "$DAPP"; then dapp=true; fi
           api=false;  if on "$API"; then api=true; fi
           rust=false; if on "$CONTRACTS"; then rust=true; fi
           py=false;   if on "$PYTHON"; then py=true; fi
-
-          deps='[]'
-          [ "$js" = true ]   && deps=$(jq -c '. + [{"tool":"pnpm"}]' <<<"$deps")
-          [ "$api" = true ]  && deps=$(jq -c '. + [{"tool":"govulncheck"}]' <<<"$deps")
-          [ "$rust" = true ] && deps=$(jq -c '. + [{"tool":"cargo-audit"}]' <<<"$deps")
-
-          sast='[]'
-          [ "$api" = true ] && sast=$(jq -c '. + [{"tool":"go","codeql":"go"}]' <<<"$sast")
-          [ "$js" = true ]  && sast=$(jq -c '. + [{"tool":"js","codeql":"javascript-typescript"}]' <<<"$sast")
-          [ "$py" = true ]  && sast=$(jq -c '. + [{"tool":"python","codeql":"python"}]' <<<"$sast")
-
-          sbom=false
-          if [ "$api" = true ] || [ "$dapp" = true ] || [ "$rust" = true ]; then sbom=true; fi
+          scripts=false; if on "$CI_SCRIPTS"; then scripts=true; fi
+          sbom=false; if [ "$api" = true ] || [ "$dapp" = true ] || [ "$rust" = true ]; then sbom=true; fi
 
           {
-            echo "deps=$deps"
-            echo "sast=$sast"
-            echo "sbom=$sbom"
-            echo "contracts=$rust"
+            echo "js=$js"
             echo "dapp=$dapp"
             echo "api=$api"
+            echo "rust=$rust"
+            echo "py=$py"
+            echo "scripts=$scripts"
+            echo "sbom=$sbom"
           } >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
-  secrets:
-    name: Secrets (gitleaks)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          fetch-depth: 0
+      # The waiver validator and typosquat check decide what this job lets
+      # through, so their own regression tests run before either is trusted.
+      - name: Test security scripts
+        if: steps.scope.outputs.scripts == 'true'
+        run: |
+          python3 scripts/test_validate_vulnignore.py
+          python3 scripts/test_typosquat_check.py
+
+      # ── Secrets ──────────────────────────────────────────────────────────
 
       - name: Install gitleaks
         run: |
@@ -106,62 +99,65 @@ jobs:
 
       # Scans full history. .gitleaksignore (read from the source root) and the
       # allowlist in .gitleaks.toml carry the reviewed false positives.
-      - name: Run gitleaks
+      - name: Secrets (gitleaks)
         run: gitleaks detect --source . --redact --no-banner --config .gitleaks.toml
 
-  deps:
-    name: Dependency audit (${{ matrix.tool }})
-    needs: changes
-    if: needs.changes.outputs.deps_matrix != '[]'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.changes.outputs.deps_matrix) }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # ── Toolchains ───────────────────────────────────────────────────────
 
       # pnpm: a workspace with a single root pnpm-lock.yaml, so the audit runs
-      # once from the root. Resolves straight from the lockfile and never needs
-      # an install.
+      # once from the root. It resolves straight from the lockfile and never
+      # installs, so there is no pnpm store and no `cache: pnpm` (the post-job
+      # cache save would fail on the missing path).
       - name: Setup pnpm
-        if: matrix.tool == 'pnpm'
+        if: steps.scope.outputs.js == 'true'
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4.1.0
 
       - name: Setup Node
-        if: matrix.tool == 'pnpm'
+        if: steps.scope.outputs.js == 'true'
         uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
         with:
           node-version: 22
 
-      - name: Report moderate and above advisories
-        if: matrix.tool == 'pnpm'
+      - uses: ./.github/actions/setup
+        if: steps.scope.outputs.api == 'true'
+        with:
+          go: "true"
+
+      - uses: ./.github/actions/setup
+        if: steps.scope.outputs.rust == 'true'
+        with:
+          rust: "true"
+
+      # Pinned (#1221): an unpinned @latest means whatever the registry serves at
+      # that moment runs in CI with repository context. The pins live in
+      # security-scanner-versions.env; see that file for the update cadence.
+      - name: Install Go scanners
+        if: steps.scope.outputs.api == 'true'
+        run: |
+          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+          go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
+
+      - name: Install cargo-audit
+        if: steps.scope.outputs.rust == 'true'
+        run: cargo install cargo-audit --locked
+
+      # ── Dependency audits ────────────────────────────────────────────────
+
+      - name: Dependency audit (pnpm, moderate and above, report only)
+        if: ${{ !cancelled() && steps.scope.outputs.js == 'true' }}
         run: pnpm audit --audit-level=moderate || true
 
       # Enforced at `critical`: every critical advisory is fixed through root
       # pnpm.overrides rather than suppressed, so a new critical breaks the
       # build. #1025 raises this to `high` once the Expo/react-native and
       # Trezor transitive backlog clears upstream.
-      - name: Fail on critical advisories
-        if: matrix.tool == 'pnpm'
+      - name: Dependency audit (pnpm)
+        if: ${{ !cancelled() && steps.scope.outputs.js == 'true' }}
         run: pnpm audit --audit-level=critical
 
-      - uses: ./.github/actions/setup
-        if: matrix.tool == 'govulncheck'
-        with:
-          go: "true"
-
-      # Pinned (#1221): an unpinned @latest means whatever the registry serves at
-      # that moment runs in CI with repository context. The pin lives in
-      # security-scanner-versions.env; see that file for the update cadence.
-      - name: Install govulncheck
-        if: matrix.tool == 'govulncheck'
-        run: |
-          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
-          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
-
-      - name: Run govulncheck
-        if: matrix.tool == 'govulncheck'
+      - name: Dependency audit (govulncheck)
+        if: ${{ !cancelled() && steps.scope.outputs.api == 'true' }}
         working-directory: apps/api
         run: |
           set +e
@@ -192,62 +188,26 @@ jobs:
             exit $EXIT_CODE
           fi
 
-      - uses: ./.github/actions/setup
-        if: matrix.tool == 'cargo-audit'
-        with:
-          rust: "true"
-
-      - name: Install cargo-audit
-        if: matrix.tool == 'cargo-audit'
-        run: cargo install cargo-audit --locked
-
-      - name: Run cargo-audit
-        if: matrix.tool == 'cargo-audit'
+      - name: Dependency audit (cargo-audit)
+        if: ${{ !cancelled() && steps.scope.outputs.rust == 'true' }}
         working-directory: packages/contracts
         run: cargo audit
 
-  sast:
-    name: SAST (${{ matrix.tool }})
-    needs: changes
-    if: needs.changes.outputs.sast_matrix != '[]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.changes.outputs.sast_matrix) }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          fetch-depth: 0
-
-      - uses: ./.github/actions/setup
-        if: matrix.tool == 'go'
-        with:
-          go: "true"
-
-      - name: Install gosec
-        if: matrix.tool == 'go'
-        # Pinned (#1221): see security-scanner-versions.env.
-        run: |
-          . "$GITHUB_WORKSPACE/.github/security-scanner-versions.env"
-          go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
+      # ── Static analysis ──────────────────────────────────────────────────
 
       # Enforcing gate (#1035). gosec -severity medium reports zero issues:
       # genuine defects are fixed and the remainder are annotated per rule at the
       # single line each applies to. No rule is globally disabled, so a new
       # finding fails the build rather than accumulating.
-      - name: Run gosec
-        if: matrix.tool == 'go'
+      - name: SAST (gosec)
+        if: ${{ !cancelled() && steps.scope.outputs.api == 'true' }}
         working-directory: apps/api
         run: gosec -severity medium ./...
 
       # semgrep/semgrep-action is archived; the maintained CLI is run directly,
       # pinned to a released version.
-      - name: Semgrep (TypeScript/Next.js)
-        if: matrix.tool == 'js' && needs.changes.outputs.dapp == 'true'
+      - name: SAST (semgrep)
+        if: ${{ !cancelled() && steps.scope.outputs.dapp == 'true' }}
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
         run: |
@@ -260,81 +220,55 @@ jobs:
       # Compares the base manifest against the head manifest and checks only
       # dependencies added by this change. The script is an advisory heuristic
       # that always exits 0 and reports suspects as workflow warnings, so it
-      # cannot block an unrelated PR and needs no continue-on-error.
+      # cannot block an unrelated PR.
       - name: Typosquat detection (new npm dependencies)
-        if: matrix.tool == 'js' && needs.changes.outputs.dapp == 'true'
+        if: ${{ !cancelled() && steps.scope.outputs.dapp == 'true' }}
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 scripts/typosquat_check.py apps/dapp/frontend/package.json "$BASE_REF"
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
-        with:
-          languages: ${{ matrix.codeql }}
+      # ── Container images ─────────────────────────────────────────────────
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
-
-  # Builds the API and signer images (the two production Dockerfiles that
-  # exist today: apps/api/Dockerfile and apps/api/Dockerfile.signer) and
-  # scans them for OS/package-level CVEs the source-level scans above never
-  # see (#1532). The dapp has no production Dockerfile yet (only
-  # Dockerfile.dev), it deploys as a built Next.js artifact, not a container,
-  # so there is nothing to scan for it until that changes.
-  #
-  # Images are built and scanned here but not pushed; release images are
-  # pushed only by deploy.yml's build-images job on a release tag.
-  image-scan:
-    name: Image scan (Trivy)
-    needs: changes
-    if: needs.changes.outputs.api == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - name: api
-            dockerfile: apps/api/Dockerfile
-          - name: signer
-            dockerfile: apps/api/Dockerfile.signer
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Build ${{ matrix.name }} image
+      # Builds the API and signer images (the two production Dockerfiles that
+      # exist today) and scans them for OS/package-level CVEs the source-level
+      # scans above never see (#1532). The dapp has no production Dockerfile
+      # yet, so there is nothing to scan for it. Images are built and scanned
+      # here but not pushed; release images are pushed only by deploy.yml.
+      - name: Build images for scanning
+        if: ${{ !cancelled() && steps.scope.outputs.api == 'true' }}
         run: |
-          docker build \
-            -f ${{ matrix.dockerfile }} \
-            -t nester-${{ matrix.name }}:scan \
-            apps/api
+          docker build -f apps/api/Dockerfile -t nester-api:scan apps/api
+          docker build -f apps/api/Dockerfile.signer -t nester-signer:scan apps/api
 
-      - name: Scan ${{ matrix.name }} image
+      - name: Image scan (api)
+        if: ${{ !cancelled() && steps.scope.outputs.api == 'true' }}
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: "nester-${{ matrix.name }}:scan"
+          image-ref: "nester-api:scan"
           format: "table"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
           exit-code: "1"
 
-  sbom:
-    name: SBOM
-    needs: changes
-    if: needs.changes.outputs.sbom == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - uses: ./.github/actions/setup
+      - name: Image scan (signer)
+        if: ${{ !cancelled() && steps.scope.outputs.api == 'true' }}
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          go: "true"
+          image-ref: "nester-signer:scan"
+          format: "table"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          exit-code: "1"
 
-      - name: Install cyclonedx-gomod (Go, pinned release)
-        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0
+      # ── SBOM ─────────────────────────────────────────────────────────────
 
-      - name: Install syft (pinned release, checksum-verified)
+      - name: Install SBOM tools
+        if: ${{ !cancelled() && steps.scope.outputs.sbom == 'true' }}
         run: |
+          set -euo pipefail
+          if [ "${{ steps.scope.outputs.api }}" = "true" ]; then
+            go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0
+          fi
           SYFT_VERSION=1.50.0
           ASSET="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
           curl -sSfL -o "/tmp/${ASSET}" \
@@ -347,7 +281,7 @@ jobs:
           sudo mv /tmp/syft /usr/local/bin/syft
 
       - name: Generate Go API SBOM
-        if: needs.changes.outputs.api == 'true'
+        if: ${{ !cancelled() && steps.scope.outputs.api == 'true' }}
         working-directory: apps/api
         run: |
           cyclonedx-gomod mod -json -output ../../sbom-api.json .
@@ -356,31 +290,27 @@ jobs:
       # syft catalogs the pnpm lockfile directly. @cyclonedx/cyclonedx-npm
       # dropped --pnpm support in v6.
       - name: Generate frontend SBOM (npm/pnpm)
-        if: needs.changes.outputs.dapp == 'true'
+        if: ${{ !cancelled() && steps.scope.outputs.dapp == 'true' }}
         working-directory: apps/dapp/frontend
         run: syft dir:. --output cyclonedx-json=../../../sbom-frontend.json
 
       - name: Generate contracts SBOM (Rust)
-        if: needs.changes.outputs.contracts == 'true'
+        if: ${{ !cancelled() && steps.scope.outputs.rust == 'true' }}
         working-directory: packages/contracts
         run: syft dir:. --output cyclonedx-json=../../sbom-contracts.json
 
       - name: Upload SBOM artifacts
+        if: ${{ !cancelled() && steps.scope.outputs.sbom == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom-artifacts
           path: sbom-*.json
           if-no-files-found: error
 
-  contract-audit:
-    name: Contract audit (x402)
-    needs: changes
-    if: needs.changes.outputs.contracts == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # ── Contracts ────────────────────────────────────────────────────────
 
-      - name: Run pre-deploy contract audit
+      - name: Contract audit (x402)
+        if: ${{ !cancelled() && steps.scope.outputs.rust == 'true' }}
         env:
           X402_PAYMENT_PROOF: ${{ secrets.X402_PAYMENT_PROOF }}
           CONTRACT_AUDIT_ADDRESSES: ${{ vars.CONTRACT_AUDIT_ADDRESSES }}
@@ -390,30 +320,25 @@ jobs:
           ./scripts/contract-audit.sh
 
       - name: Upload audit reports
-        if: always()
+        if: ${{ !cancelled() && steps.scope.outputs.rust == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: contract-audit-reports
           path: audit-report-*.json
           if-no-files-found: ignore
 
-  # The single required status check for this workflow. A path-skipped job
-  # reports "skipped", which this treats as a pass; failure or cancellation of
-  # any job blocks the merge.
-  security-gate:
-    name: Security gate
-    needs: [changes, secrets, deps, sast, image-scan, sbom, contract-audit]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every security job to have passed or been skipped
-        env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: |
-          echo "Job results: $RESULTS"
-          for result in $RESULTS; do
-            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
-              echo "::error::A security job finished with result '$result'."
-              exit 1
-            fi
-          done
+      # ── CodeQL (not on pull requests) ────────────────────────────────────
+
+      - name: Initialize CodeQL
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        uses: github/codeql-action/init@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
+        with:
+          languages: go, javascript-typescript, python
+
+      - name: Autobuild
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        uses: github/codeql-action/autobuild@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
+
+      - name: CodeQL analysis
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        uses: github/codeql-action/analyze@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3

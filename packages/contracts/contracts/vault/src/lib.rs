@@ -1,10 +1,11 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "VaultContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 
+// Multi-asset basket valuation, not yet wired into the vault.
+#[allow(dead_code, unused_variables)]
 mod basket;
 mod breaker;
 pub mod conversion;
@@ -136,8 +137,8 @@ mod rebalance;
 
 use nester_access_control::{AccessControl, Role};
 use nester_common::{
-    emit_event, emit_event_with_sym, with_reentrancy_guard, AssetConfig, BasketValuation,
-    CalleeAllowlist, ContractError, PriceInfo, SourceStatus,
+    emit_event, emit_event_with_sym, with_reentrancy_guard, CalleeAllowlist, ContractError,
+    SourceStatus,
 };
 use queue::{QueueEntry, QueuePosition, QueueStats};
 pub use rebalance::RebalanceLeg;
@@ -2881,6 +2882,7 @@ impl VaultContract {
     // Core vault operations
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::comparison_chain)]
     pub fn report_yield(env: Env, caller: Address, amount: i128) {
         caller.require_auth();
         if !AccessControl::has_role(&env, &caller, Role::Manager)
@@ -2973,9 +2975,7 @@ impl VaultContract {
         // 50-variant cap.
         let now = env.ledger().timestamp();
         let last_harvest = get_last_harvest_at(&env, &user);
-        if last_harvest != 0
-            && now < last_harvest.saturating_add(get_min_harvest_interval(&env))
-        {
+        if last_harvest != 0 && now < last_harvest.saturating_add(get_min_harvest_interval(&env)) {
             panic_with_error!(&env, ContractError::TimelockNotReady);
         }
 
@@ -5278,9 +5278,10 @@ impl VaultContract {
         };
         match user {
             None => {
-                env.storage()
-                    .instance()
-                    .extend_ttl(INSTANCE_TTL_THRESHOLD_LEDGERS, INSTANCE_TTL_EXTEND_TO_LEDGERS);
+                env.storage().instance().extend_ttl(
+                    INSTANCE_TTL_THRESHOLD_LEDGERS,
+                    INSTANCE_TTL_EXTEND_TO_LEDGERS,
+                );
             }
             Some(u) => {
                 for key in [

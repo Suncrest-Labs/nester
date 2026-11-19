@@ -2,9 +2,8 @@
 
 soroban_sdk::contractmeta!(key = "name", val = "LpAggregator");
 extern crate nester_common;
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+include!(concat!(env!("OUT_DIR"), "/contractmeta.rs"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, vec,
     Address, Env, IntoVal, Symbol, Val, Vec,
@@ -358,7 +357,9 @@ impl LpAggregator {
             }
         }
         pools.push_back(pool);
-        env.storage().instance().set(&symbol_short!("POOLS"), &pools);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("POOLS"), &pools);
     }
 
     pub fn version(env: Env) -> soroban_sdk::String {
