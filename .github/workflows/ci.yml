@@ -99,7 +99,8 @@ jobs:
   # WebSocket, a stalled API response) rather than by pointing the app at a real
   # backend, so they need nothing but the dev server. smoke.spec.ts is excluded
   # by playwright.config.ts — it is full-stack and runs post-deploy against
-  # staging in deploy.yml.
+  # staging in deploy.yml. mainnet.spec.ts is excluded by the test:e2e script
+  # and runs against a Mainnet production build in the job below.
   dapp-e2e:
     name: Dapp E2E (Playwright)
     needs: changes
@@ -130,6 +131,71 @@ jobs:
         with:
           name: playwright-report
           path: apps/dapp/frontend/playwright-report/
+          retention-days: 7
+
+  dapp-e2e-mainnet:
+    name: Dapp E2E (Mainnet smoke)
+    needs: changes
+    if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+      NEXT_PUBLIC_STELLAR_NETWORK: "Public Global Stellar Network ; September 2015"
+      NEXT_PUBLIC_STELLAR_RPC_URL: https://soroban-rpc.mainnet.stellar.org
+      NEXT_PUBLIC_STELLAR_HORIZON_URL: https://horizon.stellar.org
+      NEXT_PUBLIC_EXPLORER_URL: https://stellar.expert/explorer/public
+      NEXT_PUBLIC_NETWORK: mainnet
+      NEXT_PUBLIC_ENABLE_AI: "false"
+      NEXT_PUBLIC_VAULT_CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID: CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+      NEXT_PUBLIC_VAULT_TOKEN_CONTRACT_ID: CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+      NEXT_PUBLIC_USDC_CONTRACT_ID: CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+      NEXT_PUBLIC_MAINNET_VAULT_CONTRACT: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      NEXT_PUBLIC_MAINNET_VAULT_TOKEN_CONTRACT: CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+      NEXT_PUBLIC_MAINNET_YIELD_REGISTRY_CONTRACT: CEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+      NEXT_PUBLIC_MAINNET_ALLOCATION_STRATEGY_CONTRACT: CFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+      NEXT_PUBLIC_MAINNET_TREASURY_CONTRACT: CGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG
+      NEXT_PUBLIC_MAINNET_ACCESS_CONTROL_CONTRACT: CHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: ./.github/actions/setup
+        with:
+          node: "true"
+
+      - name: Install Playwright browser
+        run: pnpm --filter @nester/dapp exec playwright install chromium --with-deps
+
+      - name: Build dapp with Mainnet configuration
+        run: pnpm --filter @nester/dapp run build
+
+      - name: Start production build
+        run: |
+          pnpm --filter @nester/dapp exec next start -p 3001 > /tmp/nester-mainnet-next.log 2>&1 &
+          echo $! > /tmp/nester-mainnet-next.pid
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://localhost:3001/ > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/nester-mainnet-next.log
+          exit 1
+
+      - name: Run read-only Mainnet smoke tests
+        env:
+          STAGING_URL: http://localhost:3001
+        run: pnpm --filter @nester/dapp run test:e2e:mainnet
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-mainnet-report
+          path: |
+            apps/dapp/frontend/playwright-report/
+            apps/dapp/frontend/test-results/
           retention-days: 7
 
   api:
@@ -436,7 +502,7 @@ jobs:
   # any job blocks the merge.
   ci-gate:
     name: CI gate
-    needs: [changes, website, dapp, api, contracts, observability]
+    needs: [changes, website, dapp, dapp-e2e-mainnet, api, contracts, observability]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -9,6 +9,9 @@ if (!process.env.NEXT_PUBLIC_STELLAR_NETWORK && process.env.NODE_ENV !== "develo
 }
 
 const nextConfig: NextConfig = {
+  experimental: {
+    agentUpgrade: "security",
+  },
   reactStrictMode: true,
   turbopack: {
     // Monorepo root (where pnpm-lock.yaml lives) so Turbopack resolves the
