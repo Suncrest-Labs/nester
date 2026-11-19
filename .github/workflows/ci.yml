@@ -390,11 +390,17 @@ jobs:
         run: promtool check config docker/prometheus/prometheus.yml
 
       - name: Check Alertmanager config
-        env:
-          PAGERDUTY_SERVICE_KEY: test-placeholder
-          OPSGENIE_API_KEY: test-placeholder
-          SLACK_WEBHOOK_URL: https://example.invalid/
-        run: amtool check-config docker/alertmanager/alertmanager.yml
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          config = Path("docker/alertmanager/alertmanager.yml").read_text()
+          config = config.replace("${PAGERDUTY_SERVICE_KEY}", "ci-placeholder")
+          config = config.replace("${OPSGENIE_API_KEY}", "ci-placeholder")
+          config = config.replace("${SLACK_WEBHOOK_URL}", "https://example.invalid/")
+          Path("/tmp/alertmanager-ci.yml").write_text(config)
+          PY
+          amtool check-config /tmp/alertmanager-ci.yml
 
       # Proves the fast-burn alert fires on an induced burst, the slow-burn
       # alert tickets without paging, a healthy system stays quiet, and the
