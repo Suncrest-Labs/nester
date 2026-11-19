@@ -43,7 +43,9 @@ use nester_access_control::Role;
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
     testutils::{Address as _, Events as _, Ledger, LedgerInfo},
-    token, Address, BytesN, Env, IntoVal, String, Symbol, Vec,
+    token,
+    xdr::{FromXdr, LedgerKey, ScVal, ToXdr},
+    Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
@@ -3860,4 +3862,97 @@ mod pause_matrix {
             prop_assert_eq!(vault.get_shares(&user), shares - to_withdraw);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Deposit cost vs. holder count (#1470)
+// ---------------------------------------------------------------------------
+
+/// Re-creates `addr` (bound to `from`) inside `to`.
+fn carry_address(from: &Env, to: &Env, addr: &Address) -> Address {
+    let raw: std::vec::Vec<u8> = addr.clone().to_xdr(from).iter().collect();
+    Address::from_xdr(to, &Bytes::from_slice(to, &raw)).unwrap()
+}
+
+/// CPU and memory of `vault.deposit` for a fresh depositor after
+/// `depositors` other accounts have deposited.
+///
+/// The deposit is measured in a new `Env` restored from a ledger snapshot,
+/// so storage is loaded on demand as on the network instead of the test
+/// host carrying every entry written during setup.
+fn vault_deposit_cost_with_depositors(depositors: u32) -> (u64, u64) {
+    let setup_env = Env::default();
+    setup_env.mock_all_auths();
+    setup_env.budget().reset_unlimited();
+
+    let sac_contract = setup_env.register_stellar_asset_contract_v2(Address::generate(&setup_env));
+    let token_id = sac_contract.address();
+    let sac = token::StellarAssetClient::new(&setup_env, &token_id);
+    let admin = Address::generate(&setup_env);
+    let treasury = setup_env.register_contract(None, MockTreasury);
+    let vault_id = setup_env.register_contract(None, VaultContract);
+    let vault_token_id = setup_env.register_contract(None, VaultTokenContract);
+    let vault = VaultContractClient::new(&setup_env, &vault_id);
+    vault.initialize(&admin, &token_id, &vault_token_id, &treasury);
+    VaultTokenContractClient::new(&setup_env, &vault_token_id).initialize(
+        &vault_id,
+        &String::from_str(&setup_env, "Nester USDC Vault"),
+        &String::from_str(&setup_env, "nUSDC"),
+        &7u32,
+    );
+
+    for _ in 0..depositors {
+        let user = Address::generate(&setup_env);
+        sac.mint(&user, &(10 * XLM));
+        vault.deposit(&user, &(10 * XLM), &0);
+    }
+    let user = Address::generate(&setup_env);
+    sac.mint(&user, &(10 * XLM));
+
+    // Drop auth nonces recorded during setup: the restored Env replays the
+    // same nonce sequence and would hit "nonce already exists".
+    let mut snapshot = setup_env.to_snapshot();
+    snapshot.ledger.ledger_entries.retain(|(key, _)| {
+        !matches!(
+            key.as_ref(),
+            LedgerKey::ContractData(d) if matches!(d.key, ScVal::LedgerKeyNonce(_))
+        )
+    });
+
+    let env = Env::from_snapshot(snapshot);
+    env.mock_all_auths();
+    let vault_id = carry_address(&setup_env, &env, &vault_id);
+    let vault_token_id = carry_address(&setup_env, &env, &vault_token_id);
+    let treasury = carry_address(&setup_env, &env, &treasury);
+    let user = carry_address(&setup_env, &env, &user);
+    env.register_contract(Some(&vault_id), VaultContract);
+    env.register_contract(Some(&vault_token_id), VaultTokenContract);
+    env.register_contract(Some(&treasury), MockTreasury);
+    let vault = VaultContractClient::new(&env, &vault_id);
+    let shares = VaultTokenContractClient::new(&env, &vault_token_id);
+    assert_eq!(shares.total_supply(), 10 * XLM * i128::from(depositors));
+    assert_eq!(shares.balance(&user), 0);
+
+    env.budget().reset_default();
+    vault.deposit(&user, &(10 * XLM), &0);
+    (
+        env.budget().cpu_instruction_cost(),
+        env.budget().memory_bytes_cost(),
+    )
+}
+
+#[test]
+fn vault_deposit_cost_does_not_grow_with_holder_count() {
+    let (cpu_1, mem_1) = vault_deposit_cost_with_depositors(1);
+    let (cpu_1000, mem_1000) = vault_deposit_cost_with_depositors(1_000);
+    std::println!("vault_deposit_cost holders=1 cpu={cpu_1} mem={mem_1}");
+    std::println!("vault_deposit_cost holders=1000 cpu={cpu_1000} mem={mem_1000}");
+    assert!(
+        cpu_1000 * 100 <= cpu_1 * 105,
+        "cpu with 1000 holders ({cpu_1000}) is more than 5% above 1 holder ({cpu_1})"
+    );
+    assert!(
+        mem_1000 * 100 <= mem_1 * 105,
+        "mem with 1000 holders ({mem_1000}) is more than 5% above 1 holder ({mem_1})"
+    );
 }

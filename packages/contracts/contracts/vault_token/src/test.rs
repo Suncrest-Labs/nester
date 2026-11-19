@@ -2,7 +2,8 @@ extern crate std;
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
-    Address, Env, String,
+    xdr::{FromXdr, LedgerKey, ScVal, ToXdr},
+    Address, Bytes, Env, String,
 };
 
 use crate::{VaultTokenContract, VaultTokenContractClient};
@@ -768,4 +769,93 @@ fn balance_of_unfunded_account_is_zero() {
     let (client, _vault, _) = setup(&env);
     let stranger = Address::generate(&env);
     assert_eq!(client.balance(&stranger), 0_i128);
+}
+
+// ---------------------------------------------------------------------------
+// Storage layout (#1470)
+// ---------------------------------------------------------------------------
+
+/// CPU and memory of `mint_for_deposit` for a fresh depositor, after
+/// `holders` other accounts already hold shares.
+///
+/// The deposit is measured in a new `Env` restored from a ledger snapshot,
+/// so storage is loaded on demand as on the network instead of the test
+/// host carrying every entry written during setup.
+fn deposit_cost_with_holders(holders: u32) -> (u64, u64) {
+    let setup_env = Env::default();
+    setup_env.mock_all_auths();
+    setup_env.budget().reset_unlimited();
+    let (client, _, token_id) = setup(&setup_env);
+    for _ in 0..holders {
+        client.mint_for_deposit(&Address::generate(&setup_env), &1_000);
+    }
+
+    // A depositor that does not hold shares yet.
+    let user = Address::generate(&setup_env);
+
+    // Objects are bound to their Env, so carry addresses over as XDR.
+    let id_xdr: std::vec::Vec<u8> = token_id.clone().to_xdr(&setup_env).iter().collect();
+    let user_xdr: std::vec::Vec<u8> = user.to_xdr(&setup_env).iter().collect();
+
+    // Drop auth nonces recorded during setup: the restored Env replays the
+    // same nonce sequence and would hit "nonce already exists".
+    let mut snapshot = setup_env.to_snapshot();
+    snapshot.ledger.ledger_entries.retain(|(key, _)| {
+        !matches!(
+            key.as_ref(),
+            LedgerKey::ContractData(d) if matches!(d.key, ScVal::LedgerKeyNonce(_))
+        )
+    });
+
+    let env = Env::from_snapshot(snapshot);
+    env.mock_all_auths();
+    let token_id = Address::from_xdr(&env, &Bytes::from_slice(&env, &id_xdr)).unwrap();
+    let user = Address::from_xdr(&env, &Bytes::from_slice(&env, &user_xdr)).unwrap();
+    env.register_contract(Some(&token_id), VaultTokenContract);
+    let client = VaultTokenContractClient::new(&env, &token_id);
+    assert_eq!(client.total_supply(), 1_000 * i128::from(holders));
+    assert_eq!(client.balance(&user), 0);
+
+    env.budget().reset_default();
+    client.mint_for_deposit(&user, &1_000);
+    (
+        env.budget().cpu_instruction_cost(),
+        env.budget().memory_bytes_cost(),
+    )
+}
+
+#[test]
+fn deposit_cost_does_not_grow_with_holder_count() {
+    let (cpu_1, mem_1) = deposit_cost_with_holders(1);
+    let (cpu_1000, mem_1000) = deposit_cost_with_holders(1_000);
+    std::println!("deposit_cost holders=1 cpu={cpu_1} mem={mem_1}");
+    std::println!("deposit_cost holders=1000 cpu={cpu_1000} mem={mem_1000}");
+    assert!(
+        cpu_1000 * 100 <= cpu_1 * 105,
+        "cpu with 1000 holders ({cpu_1000}) is more than 5% above 1 holder ({cpu_1})"
+    );
+    assert!(
+        mem_1000 * 100 <= mem_1 * 105,
+        "mem with 1000 holders ({mem_1000}) is more than 5% above 1 holder ({mem_1})"
+    );
+}
+
+#[test]
+fn balances_and_allowances_are_not_in_instance_storage() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, token_id) = setup(&env);
+    let user = Address::generate(&env);
+    let spender = Address::generate(&env);
+    client.mint_for_deposit(&user, &1_000);
+    client.approve(&user, &spender, &500, &1_000);
+
+    env.as_contract(&token_id, || {
+        let balance = crate::DataKey::Balance(user.clone());
+        let allowance = crate::DataKey::Allowance(user.clone(), spender.clone());
+        assert!(!env.storage().instance().has(&balance));
+        assert!(!env.storage().instance().has(&allowance));
+        assert!(env.storage().persistent().has(&balance));
+        assert!(env.storage().persistent().has(&allowance));
+    });
 }
