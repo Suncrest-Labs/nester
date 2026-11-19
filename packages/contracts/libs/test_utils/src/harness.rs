@@ -98,6 +98,7 @@ impl NesterHarness {
         );
 
         VaultTokenContractClient::new(&env, &token_id).initialize(
+            &admin,
             &vault_id,
             &String::from_str(&env, "Nester USDC Vault"),
             &String::from_str(&env, "nUSDC"),

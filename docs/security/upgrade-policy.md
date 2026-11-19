@@ -9,21 +9,39 @@
 
 ## Upgrade posture by contract
 
-| Contract | Upgrade mechanism | Timelock? | Evidence |
-| :--- | :--- | :--- | :--- |
-| `vault` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 48 h (`MIN_UPGRADE_DELAY_VAULT`) | `vault/src/lib.rs`, `libs/common/src/upgrade.rs` |
-| `treasury` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 7 days (`MIN_UPGRADE_DELAY_TREASURY`) | `treasury/src/lib.rs` |
-| `yield_registry` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 48 h (`MIN_UPGRADE_DELAY_YIELD_REGISTRY`) | `yield_registry/src/lib.rs` |
-| `allocation_strategy` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 48 h (`MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY`) | `allocation_strategy/src/lib.rs` |
-| **`nester`** | **Instant admin `upgrade`** | **No timelock** | `nester/src/lib.rs:172` |
-| **`vault_factory`** | **No upgrade function** | **N/A** | `vault_factory/src/lib.rs` (no `upgrade` entry point) |
+Every crate that `scripts/list_contract_packages.py` reports as deployable
+(a `cdylib` under `packages/contracts/contracts/`, excluding test fixtures) is
+listed here with its decision (#1475). "Upgradeable" always means the shared
+`nester_common::Upgrade` module: `Role::Upgrader` proposes, the ETA must be at
+least the minimum delay away, and execution is permissionless after the ETA.
 
-Delay constants are defined in
-`libs/common/src/constants.rs:55-64`.
+| Contract | Decision | Minimum delay | Notes |
+| :--- | :--- | :--- | :--- |
+| `vault` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_VAULT`) | |
+| `vault_token` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_VAULT_TOKEN`) | Holds every share balance, so a bug must be fixable without migrating holders. `initialize` takes an `admin` that can grant `Role::Upgrader`. The admin cannot touch balances directly, but through a timelocked upgrade (48 h) it can replace the code. |
+| `treasury` | Upgradeable | 7 days (`MIN_UPGRADE_DELAY_TREASURY`) | |
+| `yield_registry` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_YIELD_REGISTRY`) | |
+| `allocation_strategy` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY`) | |
+| `recurring_deposit` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_RECURRING_DEPOSIT`) | Before #1475 it skipped the Upgrader check and stored an ETA of `u64::MAX`, so no proposal could ever execute. |
+| `vault_factory` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_VAULT_FACTORY`) | Separate from `propose_wasm_hash`, which only changes the WASM used for vaults created later. |
+| `savings_goal` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_SAVINGS_GOAL`) | |
+| `goal_rewards` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_GOAL_REWARDS`) | |
+| `referral` | Upgradeable | 48 h (`MIN_UPGRADE_DELAY_REFERRAL`) | |
+| `nester` | Upgradeable through `nester_common::Upgrade` | 48 h (target; not enforced until #1474) | Today `upgrade` swaps the WASM immediately on `Role::Admin` (`nester/src/lib.rs`), with no proposal or delay. Moving it onto `nester_common::Upgrade` is #1474; its propose/execute tests belong there, since those entrypoints do not exist yet. |
+| `adapter_blend` | Immutable | n/a | Adapters have no admin; only the vault moves value through them. A faulty adapter is replaced by deploying a new one and pointing the source at it with `yield_registry::set_source_adapter`. The vault always calls the adapter the registry currently lists, so funds held through the old adapter have to be withdrawn through it before the switch. A bug in the old adapter's `withdraw` therefore cannot be fixed in place. |
+| `adapter_lending` | Immutable | n/a | As `adapter_blend`. |
+| `adapter_pool` | Immutable | n/a | As `adapter_blend`. |
+| `adapter_soroswap` | Immutable | n/a | As `adapter_blend`. |
+| `lp_aggregator` | Immutable | n/a | Swaps are stubs (#1476). A working version is deployed as a new contract. |
+| `rent_escrow` | Not deployable | n/a | `src/lib.rs` is a `compile_error!` placeholder. |
+| `access_control` | Library, not deployed on its own | n/a | No `#[contract]`; compiled into the contracts that use `AccessControl`, which upgrade with them. |
+| `timelock` | Library, not deployed on its own | n/a | No `#[contract]`; compiled into `vault_factory`. |
+
+Delay constants are defined in `libs/common/src/constants.rs`.
 
 ---
 
-## Timelock path (vault, treasury, registry, allocation_strategy)
+## Timelock path (every contract marked Upgradeable above except `nester`)
 
 These contracts use the shared `nester_common::Upgrade` module
 (`libs/common/src/upgrade.rs`):
@@ -64,15 +82,6 @@ window. Tracked in a follow-up issue.
 
 ---
 
-## `vault_factory` — no upgrade function
-
-`vault_factory/src/lib.rs` has no `upgrade` entry point and no `Upgrade` usage.
-The contract is currently not upgradeable. This may be intentional (factory
-logic is minimal) but should be documented as a deliberate decision or the
-missing path should be added. Tracked as a follow-up.
-
----
-
 ## Storage safety on upgrade
 
 `update_current_contract_wasm` swaps WASM in-place and never touches contract
@@ -85,6 +94,10 @@ in `libs/common/src/upgrade.rs`).
 
 ## Enforcement
 
-Timelock behaviour is asserted in `vault/src/test.rs`: `Role::Admin` alone
-cannot propose an upgrade, a delay below the minimum is rejected, and execution
-before the proposal's ETA is rejected regardless of caller.
+Each upgradeable contract except `vault` and `nester` has unit tests in its
+`src/test.rs` (module `upgrade`) covering: `Role::Admin` alone cannot propose,
+a matured proposal executes, and an ETA shorter than the minimum delay or an
+execution before the ETA is rejected. The vault is covered by
+`vault/src/test.rs` (Upgrader role, minimum delay, execution before the ETA)
+and `tests/integration/src/integration/upgrade_tests.rs` (a matured upgrade
+executes and keeps state).

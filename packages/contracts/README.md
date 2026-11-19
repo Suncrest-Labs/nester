@@ -276,7 +276,7 @@ mod tests {
 
 ## Contract Upgrade Runbook
 
-All upgradeable Nester contracts (`vault`, `yield_registry`, `allocation_strategy`, `treasury`) use a secure, timelock-governed upgrade mechanism.
+All upgradeable Nester contracts use a timelock-governed upgrade mechanism. The decision for every deployable contract, with its minimum delay, is in [`docs/security/upgrade-policy.md`](../../docs/security/upgrade-policy.md).
 
 ### 1. Reproducible Build Process
 Compile and optimize contract WASM binaries:

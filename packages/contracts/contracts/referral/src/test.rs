@@ -324,3 +324,70 @@ fn only_the_registered_vault_can_accrue_rewards() {
     let result = client.try_accrue_reward(&user, &1_000_000i128, &MIN_DEPOSIT, &deposit_time);
     assert!(result.is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Timelocked upgrade (#1475)
+// ---------------------------------------------------------------------------
+
+mod upgrade {
+    use super::*;
+    use nester_access_control::Role;
+    use soroban_sdk::Bytes;
+
+    const DELAY: u64 = nester_common::MIN_UPGRADE_DELAY_REFERRAL;
+
+    #[test]
+    fn propose_upgrade_requires_upgrader_role() {
+        let (env, admin, _vault, _token, client) = setup();
+        let eta = env.ledger().timestamp() + DELAY;
+        let hash = soroban_sdk::BytesN::from_array(&env, &[7u8; 32]);
+
+        // Admin alone is not enough.
+        assert!(client.try_propose_upgrade(&admin, &hash, &eta).is_err());
+        let stranger = soroban_sdk::Address::generate(&env);
+        assert!(client.try_propose_upgrade(&stranger, &hash, &eta).is_err());
+        assert_eq!(client.get_pending_upgrade(), None);
+    }
+
+    #[test]
+    fn propose_and_execute_upgrade_after_delay() {
+        let (env, admin, _vault, _token, client) = setup();
+        let upgrader = soroban_sdk::Address::generate(&env);
+        client.grant_role(&admin, &upgrader, &Role::Upgrader);
+        let hash = env.deployer().upload_contract_wasm(Bytes::new(&env));
+        let eta = env.ledger().timestamp() + DELAY;
+
+        client.propose_upgrade(&upgrader, &hash, &eta);
+        let pending = client.get_pending_upgrade().unwrap();
+        assert_eq!(pending.wasm_hash, hash);
+        assert_eq!(pending.eta, eta);
+
+        env.ledger().set_timestamp(eta);
+        let relayer = soroban_sdk::Address::generate(&env);
+        assert!(client.try_execute_upgrade(&relayer, &hash).is_ok());
+    }
+
+    #[test]
+    fn execute_upgrade_before_eta_is_rejected() {
+        let (env, admin, _vault, _token, client) = setup();
+        let upgrader = soroban_sdk::Address::generate(&env);
+        client.grant_role(&admin, &upgrader, &Role::Upgrader);
+        let hash = env.deployer().upload_contract_wasm(Bytes::new(&env));
+        let now = env.ledger().timestamp();
+
+        assert!(
+            client
+                .try_propose_upgrade(&upgrader, &hash, &(now + DELAY - 1))
+                .is_err(),
+            "an ETA shorter than the minimum delay must be rejected"
+        );
+
+        client.propose_upgrade(&upgrader, &hash, &(now + DELAY));
+        env.ledger().set_timestamp(now + DELAY - 1);
+        assert!(
+            client.try_execute_upgrade(&upgrader, &hash).is_err(),
+            "execute_upgrade must reject before the ETA"
+        );
+        assert!(client.get_pending_upgrade().is_some());
+    }
+}
