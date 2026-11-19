@@ -263,16 +263,16 @@ jobs:
           rust: "true"
 
       - name: Build yield_registry WASM
-        run: cargo build --release --target wasm32-unknown-unknown -p yield-registry-contract
+        run: cargo +stable build --release --target wasm32-unknown-unknown -p yield-registry-contract
 
       - name: Ensure yield_registry.wasm is available for allocation_strategy
         run: test -f target/wasm32-unknown-unknown/release/yield_registry.wasm
 
       - name: Build allocation_strategy WASM
-        run: cargo build --release --target wasm32-unknown-unknown -p allocation-strategy-contract
+        run: cargo +stable build --release --target wasm32-unknown-unknown -p allocation-strategy-contract
 
       - name: Build vault_token WASM (required for vault-contract tests)
-        run: cargo build --release --target wasm32-unknown-unknown -p vault-token-contract
+        run: cargo +stable build --release --target wasm32-unknown-unknown -p vault-token-contract
 
       - name: Ensure vault_token.wasm is available for vault-contract tests
         run: test -f target/wasm32-unknown-unknown/release/vault_token.wasm
@@ -280,13 +280,13 @@ jobs:
       - name: Test contracts
         env:
           PROPTEST_RNG_SEED: "29062026"
-        run: cargo test --lib
+        run: cargo +stable test --lib
 
       - name: Run deterministic share-accounting properties
         env:
           PROPTEST_CASES: "32"
           PROPTEST_RNG_SEED: "29062026"
-        run: cargo test -p nester-integration-tests property_tests
+        run: cargo +stable test -p nester-integration-tests property_tests
 
       # The vault contract's integration tests link against the pre-compiled
       # vault_token.wasm artifact built above. Run them explicitly and fail the
@@ -294,7 +294,7 @@ jobs:
       # give false confidence that the contract logic was verified.
       - name: Run vault-contract tests
         run: |
-          if ! output=$(cargo test -p vault-contract 2>&1); then
+          if ! output=$(cargo +stable test -p vault-contract 2>&1); then
             echo "$output"
             echo "ERROR: vault-contract tests failed to build or run"
             exit 1
@@ -313,21 +313,21 @@ jobs:
       # randomized run happens in scheduled.yml.
       - name: Check vault-contract fuzz target compiles
         working-directory: packages/contracts/contracts/vault/fuzz
-        run: cargo check --bin conversion_math
+        run: cargo +stable check --bin conversion_math
 
       # Blocking gate (#1484): format violations fail the job.
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo +stable fmt --all -- --check
 
       # Blocking gate (#1484): clippy warnings are errors, so a lint introduced
       # by a toolchain bump also blocks the PR.
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo +stable clippy --all-targets -- -D warnings
 
       # Full integration suite (#1483): no filter, so every test in
       # nester-integration-tests executes.
       - name: Run integration tests
-        run: cargo test -p nester-integration-tests
+        run: cargo +stable test -p nester-integration-tests
 
       # Reproducible WASM hashes (moved from contract-audit.yml). The three
       # crates above are already built; cargo skips them and builds only the
@@ -335,11 +335,11 @@ jobs:
       - name: Build deployable contracts and calculate WASM hashes
         working-directory: .
         run: |
-          cargo metadata --manifest-path packages/contracts/Cargo.toml --no-deps --format-version 1 \
+          cargo +stable metadata --manifest-path packages/contracts/Cargo.toml --no-deps --format-version 1 \
             | python3 scripts/list_contract_packages.py \
             | while read -r pkg_name; do
                 echo "Building $pkg_name..."
-                cargo build --manifest-path packages/contracts/Cargo.toml --release --target wasm32-unknown-unknown -p "$pkg_name"
+                cargo +stable build --manifest-path packages/contracts/Cargo.toml --release --target wasm32-unknown-unknown -p "$pkg_name"
               done
           mkdir -p wasm-hashes
           {
