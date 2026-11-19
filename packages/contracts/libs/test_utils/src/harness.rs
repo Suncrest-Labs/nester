@@ -16,7 +16,11 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, IssuerFlags},
+    token::StellarAssetClient,
+    Address, Env, String,
+};
 
 use allocation_strategy_contract::{AllocationStrategyContract, AllocationStrategyContractClient};
 use treasury_contract::{TreasuryContract, TreasuryContractClient};
@@ -74,9 +78,14 @@ impl NesterHarness {
         let strategy_id = env.register_contract(None, AllocationStrategyContract);
 
         // Register a Stellar asset contract to act as the deposit token (e.g. USDC).
-        let deposit_token_id = env
-            .register_stellar_asset_contract_v2(token_admin)
-            .address();
+        // The issuer must be able to revoke authorization so issuer-action
+        // tests (freeze / clawback) exercise the real SAC behaviour.
+        let deposit_sac = env.register_stellar_asset_contract_v2(token_admin);
+        deposit_sac.issuer().set_flag(IssuerFlags::RevocableFlag);
+        deposit_sac
+            .issuer()
+            .set_flag(IssuerFlags::ClawbackEnabledFlag);
+        let deposit_token_id = deposit_sac.address();
 
         // Initialise in dependency order.
         TreasuryContractClient::new(&env, &treasury_id).initialize(&admin, &vault_id);

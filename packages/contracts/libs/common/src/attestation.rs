@@ -158,8 +158,8 @@ pub fn build_payload_bytes(env: &Env, payload: &AttestationPayload, nonce: u64) 
     } else {
         0
     };
-    for i in addr_start..addr_str_len {
-        buf.push_back(addr_buf[i]);
+    for &b in &addr_buf[addr_start..addr_str_len] {
+        buf.push_back(b);
     }
     while buf.len() < 32 {
         buf.push_back(0u8);
@@ -172,8 +172,8 @@ pub fn build_payload_bytes(env: &Env, payload: &AttestationPayload, nonce: u64) 
     buf.push_back((id_len_u32 & 0xff) as u8);
 
     // N bytes: source_id UTF-8 data
-    for i in 0..id_len_n {
-        buf.push_back(sym_buf[i]);
+    for &b in &sym_buf[..id_len_n] {
+        buf.push_back(b);
     }
 
     // 1 byte: field tag

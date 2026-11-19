@@ -270,7 +270,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   staging-smoke-test:
     name: "Smoke Tests (Gating)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: staging-deploy
     if: github.event.inputs.skip_smoke_tests != 'true'
     timeout-minutes: 15
@@ -724,7 +724,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   production-smoke-test:
     name: "Production Smoke Checks"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: production-deploy
     timeout-minutes: 15
     steps:

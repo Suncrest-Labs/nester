@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 extern crate std;
 
 use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env};
@@ -149,9 +147,7 @@ fn initialize_requires_admin_signature() {
     let id = env.register_contract(None, NesterContract);
     let client = NesterContractClient::new(&env, &id);
 
-    assert!(client
-        .try_initialize(&admin, &p.clone().into())
-        .is_err());
+    assert!(client.try_initialize(&admin, &p.clone().into()).is_err());
     assert_eq!(
         client.version(),
         0,
