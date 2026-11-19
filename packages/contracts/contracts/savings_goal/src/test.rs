@@ -7,6 +7,7 @@ use soroban_sdk::{
 };
 
 use vault_factory_contract::{VaultFactoryContract, VaultFactoryContractClient};
+use nester_common::ContractError;
 
 use crate::{
     GoalStatus, SavingsGoalContract, SavingsGoalContractClient, MAX_CONTRIBUTORS_PER_GOAL,
@@ -298,4 +299,38 @@ fn five_hundred_goals_and_three_contributors_do_not_grow_instance_storage() {
     for contributor in &contributors {
         assert_eq!(client.get_contributor_amount(&first_id, contributor), 1);
     }
+}
+
+#[test]
+fn contribution_overflow_returns_distinct_error_without_changing_totals() {
+    let (env, owner, vault, client) = setup();
+    let id = goal_id(&env, 15);
+    client.create_goal(&owner, &id, &vault, &i128::MAX, &future_deadline(&env));
+
+    let contributor = Address::generate(&env);
+    client.contribute(&contributor, &id, &1i128);
+
+    let result = client.try_contribute(&contributor, &id, &i128::MAX);
+    assert_eq!(result, Err(Ok(ContractError::ArithmeticOverflow)));
+
+    assert_eq!(client.get_goal(&id).contributed, 1);
+    assert_eq!(client.get_contributor_amount(&id, &contributor), 1);
+    assert_eq!(client.get_contribution_stats(&id).contribution_count, 1);
+}
+
+#[test]
+fn completed_goal_preserves_persistent_contribution_statistics() {
+    let (env, owner, vault, client) = setup();
+    let id = goal_id(&env, 16);
+    client.create_goal(&owner, &id, &vault, &10i128, &future_deadline(&env));
+
+    let contributor = Address::generate(&env);
+    client.contribute(&contributor, &id, &4i128);
+    client.contribute(&contributor, &id, &6i128);
+
+    let stats = client.get_contribution_stats(&id);
+    assert_eq!(client.get_goal(&id).status, GoalStatus::Completed);
+    assert_eq!(stats.contribution_count, 2);
+    assert_eq!(stats.largest_contribution, 6);
+    assert_eq!(stats.completed_at, env.ledger().timestamp());
 }
