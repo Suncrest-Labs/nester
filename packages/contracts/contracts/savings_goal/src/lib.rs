@@ -46,6 +46,10 @@ const GOAL_COMPLETED: Symbol = symbol_short!("GOAL_CMP");
 const GOAL_EXPIRED: Symbol = symbol_short!("GOAL_EXP");
 const GOAL_ABANDONED: Symbol = symbol_short!("GOAL_AB");
 
+// Persistent records are renewed on access before their TTL becomes short.
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400;
+
 /// Percentage thresholds attested as the goal progresses. Index into this
 /// array is the bit position set in [`Goal::milestones`].
 pub const MILESTONE_THRESHOLDS_PCT: [u32; 4] = [25, 50, 75, 100];
@@ -229,7 +233,7 @@ impl SavingsGoalContract {
 
         if env
             .storage()
-            .instance()
+            .persistent()
             .has(&DataKey::Goal(goal_id.clone()))
         {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
@@ -255,9 +259,7 @@ impl SavingsGoalContract {
             contributors: Vec::new(&env),
             created_at: env.ledger().timestamp(),
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Goal(goal_id.clone()), &goal);
+        save_goal(&env, &goal_id, &goal);
 
         env.events().publish(
             (SAVINGS_GOAL, GOAL_CREATED, goal_id),
@@ -401,7 +403,7 @@ impl SavingsGoalContract {
     }
 
     pub fn has_goal(env: Env, goal_id: soroban_sdk::BytesN<32>) -> bool {
-        env.storage().instance().has(&DataKey::Goal(goal_id))
+        env.storage().persistent().has(&DataKey::Goal(goal_id))
     }
 
     pub fn get_goal_status(env: Env, goal_id: soroban_sdk::BytesN<32>) -> GoalStatus {
@@ -415,10 +417,10 @@ impl SavingsGoalContract {
         goal_id: soroban_sdk::BytesN<32>,
         contributor: Address,
     ) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::ContributorAmount(goal_id, contributor))
-            .unwrap_or(0)
+        let key = DataKey::ContributorAmount(goal_id, contributor);
+        let amount = env.storage().persistent().get(&key).unwrap_or(0);
+        extend_persistent_ttl(&env, &key);
+        amount
     }
 
     /// All distinct addresses that have contributed to `goal_id`, for
@@ -431,10 +433,10 @@ impl SavingsGoalContract {
     /// `goal_id` (issue #819). Defaulted (all zero) for a goal that has
     /// never received a contribution.
     pub fn get_contribution_stats(env: Env, goal_id: soroban_sdk::BytesN<32>) -> ContributionStats {
-        env.storage()
-            .instance()
-            .get(&DataKey::ContributionStats(goal_id))
-            .unwrap_or_default()
+        let key = DataKey::ContributionStats(goal_id);
+        let stats = env.storage().persistent().get(&key).unwrap_or_default();
+        extend_persistent_ttl(&env, &key);
+        stats
     }
 
     // -----------------------------------------------------------------------
@@ -456,23 +458,41 @@ impl SavingsGoalContract {
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
     }
+
+    pub fn version(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 
+fn extend_persistent_ttl(env: &Env, key: &DataKey) {
+    if env.storage().persistent().has(key) {
+        env.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
+    }
+}
+
 fn get_goal_or_panic(env: &Env, goal_id: &soroban_sdk::BytesN<32>) -> Goal {
-    env.storage()
-        .instance()
-        .get::<DataKey, Goal>(&DataKey::Goal(goal_id.clone()))
-        .unwrap_or_else(|| panic_with_error!(env, ContractError::StrategyNotFound))
+    let key = DataKey::Goal(goal_id.clone());
+    let goal = env
+        .storage()
+        .persistent()
+        .get::<DataKey, Goal>(&key)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::StrategyNotFound));
+    extend_persistent_ttl(env, &key);
+    goal
 }
 
 fn save_goal(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &Goal) {
-    env.storage()
-        .instance()
-        .set(&DataKey::Goal(goal_id.clone()), goal);
+    let key = DataKey::Goal(goal_id.clone());
+    env.storage().persistent().set(&key, goal);
+    extend_persistent_ttl(env, &key);
 }
 
 /// Update per-contributor accounting for `contributor`, adding them to the
@@ -485,7 +505,7 @@ fn record_contribution(
     amount: i128,
 ) {
     let key = DataKey::ContributorAmount(goal_id.clone(), contributor.clone());
-    let prev: i128 = env.storage().instance().get(&key).unwrap_or(0);
+    let prev: i128 = env.storage().persistent().get(&key).unwrap_or(0);
 
     if prev == 0 {
         if goal.contributors.len() >= MAX_CONTRIBUTORS_PER_GOAL {
@@ -494,7 +514,8 @@ fn record_contribution(
         goal.contributors.push_back(contributor.clone());
     }
 
-    env.storage().instance().set(&key, &(prev + amount));
+    env.storage().persistent().set(&key, &(prev + amount));
+    extend_persistent_ttl(env, &key);
 }
 
 /// Number of seconds in one contribution "period", used to bucket
@@ -517,7 +538,7 @@ fn record_contribution_stats(
     amount: i128,
 ) {
     let key = DataKey::ContributionStats(goal_id.clone());
-    let mut stats: ContributionStats = env.storage().instance().get(&key).unwrap_or_default();
+    let mut stats: ContributionStats = env.storage().persistent().get(&key).unwrap_or_default();
     let now = env.ledger().timestamp();
 
     let since = if stats.last_updated_at == 0 {
@@ -545,7 +566,8 @@ fn record_contribution_stats(
     }
 
     stats.last_updated_at = now;
-    env.storage().instance().set(&key, &stats);
+    env.storage().persistent().set(&key, &stats);
+    extend_persistent_ttl(env, &key);
 }
 
 /// Set the bit for any milestone threshold newly crossed by `goal.contributed`
@@ -596,7 +618,8 @@ fn complete_goal(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mut Goal) 
         .saturating_add(goal.contributed.saturating_mul(elapsed as i128));
     stats.last_updated_at = now;
     stats.completed_at = now;
-    env.storage().instance().set(&key, &stats);
+    env.storage().persistent().set(&key, &stats);
+    extend_persistent_ttl(env, &key);
 
     env.events().publish(
         (SAVINGS_GOAL, GOAL_COMPLETED, goal_id.clone()),
@@ -622,9 +645,6 @@ fn is_known_vault(env: &Env, vault: &Address) -> bool {
         &Symbol::new(env, "is_nester_vault"),
         soroban_sdk::vec![env, vault.into_val(env)],
     )
-    pub fn version(env: Env) -> soroban_sdk::String {
-        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
-    }
 }
 
 // ---------------------------------------------------------------------------
