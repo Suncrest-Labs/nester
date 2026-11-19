@@ -149,6 +149,7 @@ fn setup() -> (
 
     let vault_token = VaultTokenContractClient::new(&env, &vault_token_id);
     vault_token.initialize(
+        &admin,
         &vault_id,
         &String::from_str(&env, "Nester USDC Vault"),
         &String::from_str(&env, "nUSDC"),

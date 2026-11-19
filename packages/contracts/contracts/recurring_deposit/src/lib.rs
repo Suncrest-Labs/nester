@@ -477,19 +477,31 @@ impl RecurringDepositContract {
     // Upgrade
     // -----------------------------------------------------------------------
 
-    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
-        admin.require_auth();
-        Upgrade::propose_upgrade(&env, &admin, new_wasm_hash, 0, u64::MAX);
+    /// Proposes a new WASM upgrade.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_RECURRING_DEPOSIT
+    /// (48 hours). Previously this took no ETA and stored `u64::MAX`, so a
+    /// proposal could never execute (#1475).
+    pub fn propose_upgrade(env: Env, proposer: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &proposer, Role::Upgrader);
+        Upgrade::propose_upgrade(
+            &env,
+            &proposer,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_RECURRING_DEPOSIT,
+            eta,
+        );
     }
 
-    pub fn execute_upgrade(env: Env, admin: Address, wasm_hash: BytesN<32>) {
-        admin.require_auth();
-        Upgrade::execute_upgrade(&env, &admin, wasm_hash);
+    /// Executes a matured WASM upgrade. Permissionless after the ETA.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        Upgrade::execute_upgrade(&env, &caller, wasm_hash);
     }
 
-    pub fn cancel_upgrade(env: Env, admin: Address) {
-        admin.require_auth();
-        Upgrade::cancel_upgrade(&env, &admin);
+    /// Cancels a pending WASM upgrade. Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, canceller: Address) {
+        AccessControl::require_role(&env, &canceller, Role::Upgrader);
+        Upgrade::cancel_upgrade(&env, &canceller);
     }
 
     pub fn get_pending_upgrade(env: Env) -> Option<PendingUpgrade> {
