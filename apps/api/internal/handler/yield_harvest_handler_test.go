@@ -47,7 +47,7 @@ func newYieldHarvestServer(t *testing.T, userID uuid.UUID, svc yieldHarvestServi
 func decodeYieldHarvestData(t *testing.T, body io.Reader) service.ListYieldHarvestsOutput {
 	t.Helper()
 	var env struct {
-		Success bool                        `json:"success"`
+		Success bool                            `json:"success"`
 		Data    service.ListYieldHarvestsOutput `json:"data"`
 	}
 	if err := json.NewDecoder(body).Decode(&env); err != nil {
@@ -169,6 +169,68 @@ func TestYieldHarvestHandler_CursorForwarded(t *testing.T) {
 	defer resp.Body.Close()
 	if svc.lastInput.Cursor != cursor {
 		t.Errorf("expected cursor %q forwarded, got %q", cursor, svc.lastInput.Cursor)
+	}
+}
+
+func TestYieldHarvestHandler_VaultFilterForwarded(t *testing.T) {
+	userID := uuid.New()
+	vaultID := uuid.New()
+	svc := &fakeYieldHarvestService{
+		output: service.ListYieldHarvestsOutput{Items: []yieldharvest.YieldHarvest{}, NextCursor: ""},
+	}
+	srv := newYieldHarvestServer(t, userID, svc)
+	defer srv.Close()
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/v1/yields/harvests?vault_id=%s", srv.URL, vaultID))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if svc.lastInput.VaultID == nil {
+		t.Fatal("expected vault_id forwarded to service, got nil")
+	}
+	if *svc.lastInput.VaultID != vaultID {
+		t.Errorf("expected vault_id %s forwarded, got %s", vaultID, *svc.lastInput.VaultID)
+	}
+}
+
+func TestYieldHarvestHandler_VaultFilterOptional(t *testing.T) {
+	userID := uuid.New()
+	svc := &fakeYieldHarvestService{
+		output: service.ListYieldHarvestsOutput{Items: []yieldharvest.YieldHarvest{}, NextCursor: ""},
+	}
+	srv := newYieldHarvestServer(t, userID, svc)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/yields/harvests")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if svc.lastInput.VaultID != nil {
+		t.Errorf("expected no vault filter, got %s", *svc.lastInput.VaultID)
+	}
+}
+
+func TestYieldHarvestHandler_InvalidVaultFilter(t *testing.T) {
+	userID := uuid.New()
+	svc := &fakeYieldHarvestService{}
+	srv := newYieldHarvestServer(t, userID, svc)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/yields/harvests?vault_id=not-a-uuid")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+	if svc.lastInput.UserID != uuid.Nil {
+		t.Error("service must not be called for an invalid vault_id")
 	}
 }
 
