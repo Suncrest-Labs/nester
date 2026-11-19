@@ -1,0 +1,14 @@
+# cargo-audit configuration. Every ignore needs a justification and a review
+# date; remove the entry as soon as the upstream fix is reachable.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0387: timing variability in crypto-bigint 0.5.5 constant-time ops.
+    # - Reached only via soroban-sdk -> soroban-env-host -> elliptic-curve, the
+    #   native host used by the soroban-sdk testutils. It is absent from the
+    #   wasm32 build graph (`cargo tree -i crypto-bigint --target wasm32-unknown-unknown`).
+    # - Fix needs crypto-bigint >=0.7.6, which requires a soroban-env-host
+    #   release; soroban-sdk is pinned to =21.7.7 (WASM-compatible with rustc 1.82).
+    # Review date: 2027-01-15. Owner: contracts team.
+    "RUSTSEC-2026-0387",
+]
