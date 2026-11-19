@@ -390,7 +390,15 @@ jobs:
         run: promtool check config docker/prometheus/prometheus.yml
 
       - name: Check Alertmanager config
-        run: amtool check-config docker/alertmanager/alertmanager.yml
+        # The committed file carries ${ENV} placeholders that a deployed
+        # environment substitutes with real secrets; amtool rejects them as
+        # invalid URLs, so validate a copy rendered with dummy values.
+        run: |
+          sed -e 's|${PAGERDUTY_SERVICE_KEY}|dummy-pagerduty-key|' \
+              -e 's|${OPSGENIE_API_KEY}|dummy-opsgenie-key|' \
+              -e 's|${SLACK_WEBHOOK_URL}|https://hooks.example.invalid/dummy|' \
+              docker/alertmanager/alertmanager.yml > "$RUNNER_TEMP/alertmanager.yml"
+          amtool check-config "$RUNNER_TEMP/alertmanager.yml"
 
       # Proves the fast-burn alert fires on an induced burst, the slow-burn
       # alert tickets without paging, a healthy system stays quiet, and the
