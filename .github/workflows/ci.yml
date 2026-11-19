@@ -390,6 +390,10 @@ jobs:
         run: promtool check config docker/prometheus/prometheus.yml
 
       - name: Check Alertmanager config
+        env:
+          PAGERDUTY_SERVICE_KEY: test-placeholder
+          OPSGENIE_API_KEY: test-placeholder
+          SLACK_WEBHOOK_URL: https://example.invalid/
         run: amtool check-config docker/alertmanager/alertmanager.yml
 
       # Proves the fast-burn alert fires on an induced burst, the slow-burn
