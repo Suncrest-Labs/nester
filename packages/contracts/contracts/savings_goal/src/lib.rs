@@ -403,7 +403,12 @@ impl SavingsGoalContract {
     }
 
     pub fn has_goal(env: Env, goal_id: soroban_sdk::BytesN<32>) -> bool {
-        env.storage().persistent().has(&DataKey::Goal(goal_id))
+        let key = DataKey::Goal(goal_id);
+        let exists = env.storage().persistent().has(&key);
+        if exists {
+            extend_persistent_ttl(&env, &key);
+        }
+        exists
     }
 
     pub fn get_goal_status(env: Env, goal_id: soroban_sdk::BytesN<32>) -> GoalStatus {
