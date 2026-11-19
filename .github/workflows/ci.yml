@@ -137,7 +137,7 @@ jobs:
     name: Dapp E2E (Mainnet smoke)
     needs: changes
     if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
