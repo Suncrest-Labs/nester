@@ -22,6 +22,7 @@ import { useSlippage } from "@/hooks/useSlippage";
 import { SlippageControl } from "@/components/slippage-control";
 import { applySlippage } from "@/lib/slippage";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { FEE_SCHEDULE_TIERS, FULL_FEE_SCHEDULE_HREF } from "@/lib/fees";
 import { useDepositPreflight } from "@/hooks/useDepositPreflight";
 import { addUsdcTrustline, preflightMessage } from "@/lib/stellar/preflight";
 import { TransactionAnnouncer } from "@/components/vault/transactionAnnouncer";
@@ -613,6 +614,44 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
                     <span className="font-medium text-foreground">{value}</span>
                   </div>
                 ))}
+              </div>
+
+              {/* Fee schedule summary before deposit */}
+              <div
+                data-testid="fee-schedule-summary"
+                className="mt-4 rounded-2xl border border-border bg-secondary/20 p-4 text-xs"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                    Fee Schedule Summary
+                  </p>
+                  <Link
+                    href={FULL_FEE_SCHEDULE_HREF}
+                    data-testid="full-fee-schedule-link"
+                    className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-2 hover:opacity-80"
+                  >
+                    Full fee schedule
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                </div>
+                <div className="mt-2.5 space-y-1.5 text-muted-foreground">
+                  {FEE_SCHEDULE_TIERS.map((tier) => (
+                    <div key={tier.id} className="flex items-center justify-between">
+                      <span>
+                        {tier.label} ({tier.tenureRange})
+                      </span>
+                      <span className="font-medium text-foreground">{tier.exitFeeRate} exit fee</span>
+                    </div>
+                  ))}
+                  {meta && (
+                    <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
+                      <span>Performance / Management fee</span>
+                      <span className="font-medium text-foreground">
+                        {meta.performanceFeePct}% yield · {meta.managementFeePct}%/yr
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
