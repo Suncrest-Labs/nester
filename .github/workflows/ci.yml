@@ -104,7 +104,7 @@ jobs:
     name: Dapp E2E (Playwright)
     needs: changes
     if: needs.changes.outputs.dapp == 'true' || needs.changes.outputs.shared == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -390,17 +390,15 @@ jobs:
         run: promtool check config docker/prometheus/prometheus.yml
 
       - name: Check Alertmanager config
+        # The committed file carries ${ENV} placeholders that a deployed
+        # environment substitutes with real secrets; amtool rejects them as
+        # invalid URLs, so validate a copy rendered with dummy values.
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          config = Path("docker/alertmanager/alertmanager.yml").read_text()
-          config = config.replace("${PAGERDUTY_SERVICE_KEY}", "ci-placeholder")
-          config = config.replace("${OPSGENIE_API_KEY}", "ci-placeholder")
-          config = config.replace("${SLACK_WEBHOOK_URL}", "https://example.invalid/")
-          Path("/tmp/alertmanager-ci.yml").write_text(config)
-          PY
-          amtool check-config /tmp/alertmanager-ci.yml
+          sed -e 's|${PAGERDUTY_SERVICE_KEY}|dummy-pagerduty-key|' \
+              -e 's|${OPSGENIE_API_KEY}|dummy-opsgenie-key|' \
+              -e 's|${SLACK_WEBHOOK_URL}|https://hooks.example.invalid/dummy|' \
+              docker/alertmanager/alertmanager.yml > "$RUNNER_TEMP/alertmanager.yml"
+          amtool check-config "$RUNNER_TEMP/alertmanager.yml"
 
       # Proves the fast-burn alert fires on an induced burst, the slow-burn
       # alert tickets without paging, a healthy system stays quiet, and the

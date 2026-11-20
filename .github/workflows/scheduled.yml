@@ -83,6 +83,10 @@ jobs:
     defaults:
       run:
         working-directory: packages/contracts/contracts/vault/fuzz
+    # The contracts workspace pins rustc 1.82 via rust-toolchain.toml, which
+    # would shadow the nightly installed below for every cargo call in this dir.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 

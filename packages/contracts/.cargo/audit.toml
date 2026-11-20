@@ -1,0 +1,22 @@
+# cargo-audit configuration. Every ignore needs a justification and a review
+# date; remove the entry as soon as the upstream fix is reachable.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0387: timing variability in crypto-bigint 0.5.5 constant-time ops.
+    # - Reached only via soroban-sdk -> soroban-env-host -> elliptic-curve, the
+    #   native host used by the soroban-sdk testutils. It is absent from the
+    #   wasm32 build graph (`cargo tree -i crypto-bigint --target wasm32-unknown-unknown`).
+    # - Fix needs crypto-bigint >=0.7.6, which requires a soroban-env-host
+    #   release; soroban-sdk is pinned to =21.7.7 (WASM-compatible with rustc 1.82).
+    # Review date: 2027-01-15. Owner: contracts team.
+    "RUSTSEC-2026-0387",
+
+    # RUSTSEC-2026-0009: stack exhaustion in time <0.3.47.
+    # - time 0.3.36 is held back because >=0.3.47 needs edition2024, which the
+    #   pinned rustc 1.82 cannot parse.
+    # - It is only an optional dependency of serde_with (locked but never
+    #   compiled): `cargo tree -i time --target all -e all` prints nothing.
+    # Review date: 2027-01-15, or when the rustc pin moves past 1.85.
+    "RUSTSEC-2026-0009",
+]

@@ -53,9 +53,7 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "GoalRewardsContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
@@ -189,6 +187,10 @@ pub struct GoalRewardsContract;
 
 #[contractimpl]
 impl GoalRewardsContract {
+    pub fn version(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+    }
+
     /// `goal_registry` is the `savings_goal` contract this reads goal state
     /// from. `token` is both the pool's currency and the vault's asset
     /// (checked at claim time against the goal's own vault — see
@@ -238,8 +240,7 @@ impl GoalRewardsContract {
         AccessControl::require_role(&env, &caller, Role::Admin);
 
         if bonus_bps > MAX_BONUS_BPS
-            || max_bonus_absolute > MAX_BONUS_ABSOLUTE_CEILING
-            || max_bonus_absolute < 0
+            || !(0..=MAX_BONUS_ABSOLUTE_CEILING).contains(&max_bonus_absolute)
             || min_target < 0
         {
             panic_with_error!(&env, GoalRewardError::InvalidConfig);
@@ -659,10 +660,6 @@ impl GoalRewardsContract {
 
     pub fn is_claimed(env: Env, goal_id: BytesN<32>) -> bool {
         is_claimed(&env, &goal_id)
-    }
-
-    pub fn version(env: Env) -> soroban_sdk::String {
-        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
     }
 
     // -----------------------------------------------------------------

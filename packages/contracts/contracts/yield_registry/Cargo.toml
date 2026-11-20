@@ -3,7 +3,6 @@ name = "yield-registry-contract"
 version = "0.1.0"
 edition = "2021"
 publish = false
-build = "../../build-meta.rs"
 
 [lib]
 # Use a clean crate name so allocation_strategy can import it as `yield_registry`.
