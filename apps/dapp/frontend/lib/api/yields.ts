@@ -120,13 +120,17 @@ export async function removeYieldBookmark(protocolSlug: string): Promise<void> {
 
 export async function fetchYieldHarvests(
   cursor?: string,
-  limit = 20
+  limit = 20,
+  vaultId?: string
 ): Promise<ListYieldHarvestsResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
   });
   if (cursor) {
     params.set("cursor", cursor);
+  }
+  if (vaultId) {
+    params.set("vault_id", vaultId);
   }
   const res = await fetch(`${config.apiUrl}/yields/harvests?${params}`, {
     headers: { Authorization: `Bearer ${getStoredToken()}` },

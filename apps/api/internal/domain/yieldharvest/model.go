@@ -36,6 +36,10 @@ type CreateInput struct {
 // ListFilter carries pagination and optional filtering parameters.
 type ListFilter struct {
 	UserID uuid.UUID
+	// VaultID optionally narrows the list to a single vault. The harvest modal
+	// uses it to show that vault's history without paging through every
+	// harvest the user has ever made (nester#949).
+	VaultID *uuid.UUID
 	// CursorTime and CursorID together form the keyset cursor (harvested_at DESC, id DESC).
 	CursorTime *time.Time
 	CursorID   *uuid.UUID
