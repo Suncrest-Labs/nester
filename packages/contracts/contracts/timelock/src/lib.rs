@@ -167,6 +167,11 @@ impl Timelock {
         };
 
         env.storage().persistent().set(&DataKey::Operation(id), &op);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Operation(id),
+            nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
 
         // Append to the ID list
         let mut ids: Vec<u64> = env

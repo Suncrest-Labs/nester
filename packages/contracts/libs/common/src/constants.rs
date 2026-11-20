@@ -100,21 +100,21 @@ pub const MAX_OPEN_LOCKS_PER_USER: u32 = 20;
 pub const MAX_TOTAL_OPEN_LOCKS: u32 = 200;
 
 // ---------------------------------------------------------------------------
-// Keeper-managed TTL extension (issue #1485)
+// Keeper-managed and per-access Soroban storage TTL constants
 // ---------------------------------------------------------------------------
-/// Ledgers remaining below which a permissionless keeper should renew instance
-/// storage TTL. At 5 s/ledger ≈ 7 days.
-pub const INSTANCE_TTL_THRESHOLD_LEDGERS: u32 = 120_960;
-/// Target ledger count when extending instance storage TTL. At 5 s/ledger ≈ 30 days.
-pub const INSTANCE_TTL_EXTEND_TO_LEDGERS: u32 = 518_400;
-/// Ledgers remaining below which a keeper should renew a per-user position entry.
-pub const POSITION_TTL_THRESHOLD_LEDGERS: u32 = 120_960;
-/// Target ledger count when extending a per-user position entry. At 5 s/ledger ≈ 30 days.
-pub const POSITION_TTL_EXTEND_TO_LEDGERS: u32 = 518_400;
+/// Ledger count below which instance and persistent entries should be renewed.
+/// At 5-second ledgers this is roughly 7 days.
+pub const TTL_BUMP_THRESHOLD_LEDGERS: u32 = 120_960;
+/// Target ledger count after renewal. At 5-second ledgers this is roughly 30 days
+/// and is below the network maximum entry TTL.
+pub const TTL_EXTEND_TO_LEDGERS: u32 = 518_400;
 
-// ---------------------------------------------------------------------------
-// Collection size caps (issue #1491)
-// ---------------------------------------------------------------------------
+/// Compatibility names retained for existing keeper entrypoints.
+pub const INSTANCE_TTL_THRESHOLD_LEDGERS: u32 = TTL_BUMP_THRESHOLD_LEDGERS;
+pub const INSTANCE_TTL_EXTEND_TO_LEDGERS: u32 = TTL_EXTEND_TO_LEDGERS;
+pub const POSITION_TTL_THRESHOLD_LEDGERS: u32 = TTL_BUMP_THRESHOLD_LEDGERS;
+pub const POSITION_TTL_EXTEND_TO_LEDGERS: u32 = TTL_EXTEND_TO_LEDGERS;
+
 /// Maximum yield sources that may be registered in the yield registry.
 /// `get_active_sources` and the rebalance iteration walk this list in a single
 /// transaction; a larger list pushes CPU past the per-tx budget.

@@ -707,6 +707,12 @@ pub struct RebalanceCompletedEventData {
 // ---------------------------------------------------------------------------
 
 fn require_initialized(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(
+            nester_common::TTL_BUMP_THRESHOLD_LEDGERS,
+            nester_common::TTL_EXTEND_TO_LEDGERS,
+        );
     if !env.storage().instance().has(&DataKey::Token) {
         panic_with_error!(env, ContractError::NotInitialized);
     }
@@ -1164,7 +1170,7 @@ fn set_emergency_queue(env: &Env, queue: &soroban_sdk::Vec<EmergencyRequest>) {
 
 // ---------------------------------------------------------------------------
 // Tiered fee schedule helpers (issue #813)
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------
 
 fn has_first_deposit_at(env: &Env, user: &Address) -> bool {
     env.storage()
@@ -1961,13 +1967,6 @@ fn get_all_open_locks(env: &Env) -> Vec<locks::LockedPosition> {
 fn get_total_reported_yield(env: &Env) -> i128 {
     env.storage()
         .instance()
-        .get(&DataKey::TotalReportedYield)
-        .unwrap_or(0)
-}
-
-fn set_total_reported_yield(env: &Env, amount: i128) {
-    env.storage()
-        .instance()
         .set(&DataKey::TotalReportedYield, &amount);
 }
 
@@ -2152,8 +2151,8 @@ fn compute_fresh_rebalance_plan(env: &Env) -> (Vec<RebalanceLeg>, i128, i128) {
 }
 
 // ---------------------------------------------------------------------------
-// Early-exit penalty escrow helpers (issue #805)
-// ---------------------------------------------------------------------------
+// Early-exit penalty escrow distribution (issue #805)
+// -----------------------------------------------------------------------
 
 fn get_penalty_escrow(env: &Env) -> i128 {
     env.storage()
@@ -2993,7 +2992,7 @@ impl VaultContract {
                 gross_yield,
                 performance_fee: 0,
                 net_yield: 0,
-                compounded: false,
+                compounded: false, // true if net_yield was reinvested into vault shares
                 new_share_balance,
                 user,
             };
@@ -3051,7 +3050,7 @@ impl VaultContract {
             let total_assets = get_total_assets(&env);
             let post_fee_assets = total_assets
                 .checked_sub(performance_fee)
-                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+                .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
             set_total_assets(&env, post_fee_assets);
             sync_vault_token_total_assets(&env);
 
@@ -3102,7 +3101,6 @@ impl VaultContract {
     // fall together, the treasury is paid in full, and no other holder moves.
     // Running both paths took roughly twice the configured rate on the same
     // yield, with the extra half taken from holders who never harvested.
-    //
     // Minting fee-equivalent shares to the treasury was considered and
     // rejected. A new claim on a fixed pool of assets has to come from
     // somewhere: minting while the fee leaves the vault lowers the share price
@@ -3200,7 +3198,7 @@ impl VaultContract {
         for a in current.iter() {
             deployed_total = deployed_total
                 .checked_add(a.amount)
-                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+                .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
         }
         if deployed_total <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);
@@ -3270,7 +3268,7 @@ impl VaultContract {
             let current_amount = get_source_allocation(&env, &d.source_id);
             let new_amount = current_amount
                 .checked_add(effective_delta)
-                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+                .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
 
             if new_amount < 0 {
                 // Indicates the target wants to withdraw more than the source holds —
@@ -3440,7 +3438,7 @@ impl VaultContract {
             let current_amount = get_source_allocation(&env, &leg.source_id);
             let new_amount = current_amount
                 .checked_add(leg.delta)
-                .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
+                .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
             if new_amount < 0 {
                 panic_with_error!(&env, ContractError::AllocationError);
             }
@@ -3761,10 +3759,6 @@ impl VaultContract {
         result
     }
 
-    pub fn get_penalty_escrow(env: Env) -> i128 {
-        get_penalty_escrow(&env)
-    }
-
     pub fn get_penalty_config(env: Env) -> PenaltyConfig {
         PenaltyConfig {
             depositor_share_bps: get_depositor_share_bps(&env),
@@ -3906,10 +3900,15 @@ impl VaultContract {
             &DataKey::DepositTime(user.clone()),
             &env.ledger().timestamp(),
         );
+        env.storage().persistent().extend_ttl(
+            &DataKey::DepositTime(user.clone()),
+            nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
 
         // Tenure starts on a user's first deposit and is never reset by
         // subsequent deposits — only a full exit resets it (see
-        // `withdraw_internal`). This rewards long-tenured behaviour instead
+        // `withdraw_internal`). This rewards long-tenure behaviour instead
         // of punishing it every time a user tops up their position.
         if !has_first_deposit_at(&env, &user) {
             set_first_deposit_at(&env, &user, env.ledger().timestamp());
@@ -4063,6 +4062,7 @@ impl VaultContract {
             let perf_fee =
                 nester_common::fees::calculate_performance_fee(yield_part, performance_fee_bps)
                     .unwrap_or_else(|e| panic_with_error!(&env, e));
+
             total_fee = total_fee
                 .checked_add(perf_fee)
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
@@ -4094,11 +4094,11 @@ impl VaultContract {
         let exit_tiers_configured = !get_exit_tiers(&env).is_empty();
         if exit_tiers_configured || env.ledger().timestamp() < deposit_time + min_lock {
             let exit_fee_bps = effective_exit_fee_bps(&env, &user, &config);
-            let early_fee =
-                nester_common::fees::calculate_withdrawal_fee(assets_to_withdraw, exit_fee_bps)
-                    .unwrap_or_else(|e| panic_with_error!(&env, e));
             total_fee = total_fee
-                .checked_add(early_fee)
+                .checked_add(
+                    nester_common::fees::calculate_withdrawal_fee(assets_to_withdraw, exit_fee_bps)
+                        .unwrap_or_else(|e| panic_with_error!(&env, e)),
+                )
                 .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
         }
 
@@ -4736,7 +4736,7 @@ impl VaultContract {
         shares_returned
     }
 
-    /// Permissionlessly drive the fair emergency queue forward. Anyone may
+    /// Permissionless drive the fair emergency queue forward. Anyone may
     /// call this — exits do not depend on operator liveness. `max_entries`
     /// is capped by [`queue::MAX_PROCESS_ENTRIES`] regardless of the value
     /// requested, so a single call can never exceed the tx resource budget.
@@ -5028,6 +5028,7 @@ impl VaultContract {
         let elapsed = now
             .saturating_sub(last_accrual)
             .min(nester_common::fees::MAX_FEE_ACCRUAL_INTERVAL_SECONDS);
+
         if elapsed > 0 {
             let config = get_fee_config(&env);
             let total_assets = get_total_assets(&env);

@@ -117,6 +117,11 @@ impl VaultTokenContract {
             &DataKey::DepositTimestamp(to.clone()),
             &env.ledger().timestamp(),
         );
+        env.storage().persistent().extend_ttl(
+            &DataKey::DepositTimestamp(to.clone()),
+            nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
         // Sender's timestamp is no longer meaningful once their balance is zero.
         if get_balance(&env, &from) == 0 {
             env.storage()
@@ -137,6 +142,11 @@ impl VaultTokenContract {
         env.storage().persistent().set(
             &DataKey::DepositTimestamp(to.clone()),
             &env.ledger().timestamp(),
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::DepositTimestamp(to.clone()),
+            nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
         );
         if get_balance(&env, &from) == 0 {
             env.storage()
@@ -298,6 +308,11 @@ impl VaultTokenContract {
             &DataKey::DepositTimestamp(to.clone()),
             &env.ledger().timestamp(),
         );
+        env.storage().persistent().extend_ttl(
+            &DataKey::DepositTimestamp(to.clone()),
+            nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
         env.events()
             .publish((symbol_short!("mint"), to), (shares, amount));
         shares
@@ -381,10 +396,15 @@ impl VaultTokenContract {
     /// contract.  Returns 0 if no timestamp has been recorded (e.g. the user
     /// has never received shares via deposit or transfer).
     pub fn get_deposit_time(env: Env, user: Address) -> u64 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::DepositTimestamp(user))
-            .unwrap_or(0)
+        let key = DataKey::DepositTimestamp(user);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(
+                &key,
+                nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+                nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+            );
+        }
+        env.storage().persistent().get(&key).unwrap_or(0)
     }
 
     pub fn version(env: Env) -> soroban_sdk::String {
@@ -451,20 +471,25 @@ pub fn amount_for_shares_math(shares: i128, total_supply: i128, total_assets: i1
 // ---------------------------------------------------------------------------
 
 fn get_balance(env: &Env, account: &Address) -> i128 {
-    env.storage()
-        .instance()
-        .get::<DataKey, i128>(&DataKey::Balance(account.clone()))
-        .unwrap_or(0_i128)
+    let key = DataKey::Balance(account.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
+    }
+    env.storage().persistent().get(&key).unwrap_or(0_i128)
 }
 
 fn set_balance(env: &Env, account: &Address, amount: i128) {
-    env.storage()
-        .instance()
-        .set(&DataKey::Balance(account.clone()), &amount);
-}
-
-fn receive_balance(env: &Env, account: &Address, amount: i128) {
-    set_balance(env, account, get_balance(env, account) + amount);
+    let key = DataKey::Balance(account.clone());
+    env.storage().persistent().set(&key, &amount);
+    env.storage().persistent().extend_ttl(
+        &key,
+        nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+        nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+    );
 }
 
 fn spend_balance(env: &Env, account: &Address, amount: i128) {
@@ -532,6 +557,10 @@ fn spend_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
 
 /// Panic unless the invocation is authorised by the stored Vault address.
 fn require_vault(env: &Env) {
+    env.storage().instance().extend_ttl(
+        nester_common::TTL_BUMP_THRESHOLD_LEDGERS,
+        nester_common::TTL_EXTEND_TO_LEDGERS,
+    );
     let vault: Address = env
         .storage()
         .instance()
