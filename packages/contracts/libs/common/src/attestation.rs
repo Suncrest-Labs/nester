@@ -153,11 +153,7 @@ pub fn build_payload_bytes(env: &Env, payload: &AttestationPayload, nonce: u64) 
 
     // 32 bytes: contract address. The strkey form is 56 ASCII characters; take
     // its last 32 so the field is fixed-width and stable for a given address.
-    let addr_start = if addr_str_len >= 32 {
-        addr_str_len - 32
-    } else {
-        0
-    };
+    let addr_start = addr_str_len.saturating_sub(32);
     for &b in &addr_buf[addr_start..addr_str_len] {
         buf.push_back(b);
     }
