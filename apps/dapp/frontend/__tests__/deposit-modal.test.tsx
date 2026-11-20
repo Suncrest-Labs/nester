@@ -74,6 +74,16 @@ describe("DepositModal", () => {
     expect(screen.getByText(/estimated annual yield/i)).toBeInTheDocument();
   });
 
+  it("shows fee schedule summary and link to full schedule before deposit", () => {
+    render(<DepositModal open vault={mockVault} onClose={() => {}} />);
+    const summary = screen.getByTestId("fee-schedule-summary");
+    expect(summary).toHaveTextContent(/Tier 1/i);
+    expect(summary).toHaveTextContent(/Tier 2/i);
+    expect(summary).toHaveTextContent(/Tier 3/i);
+    const link = screen.getByTestId("full-fee-schedule-link");
+    expect(link).toHaveAttribute("href", "/vaults#fee-schedule");
+  });
+
   it("displays error for insufficient balance", () => {
     render(<DepositModal open vault={mockVault} onClose={() => {}} />);
     fireEvent.change(screen.getByPlaceholderText("0.00"), { target: { value: "5000" } });
