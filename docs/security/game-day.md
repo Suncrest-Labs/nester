@@ -165,9 +165,11 @@ procedure.
 | Human factors throughout | A test cannot rehearse them | Whether the runbook is findable and followable at 3am by someone who did not write it |
 
 **Recommended before relying on this runbook in production:** a manual tabletop
-exercise against a staging deployment, covering the on-chain rotation in §D.1
-and the communication path in §F. Those are the two areas where an executable
-harness provides no coverage at all.
+exercise against a staging deployment, covering the on-chain rotation in §D.1,
+the communication path in §F, and the end-to-end deposit pause & release drill
+(including real testnet multisig signing and dapp banner verification) in
+[`game-day-deposit-pause.md`](game-day-deposit-pause.md). Those are the areas
+where an executable harness provides no coverage at all.
 
 ---
 
