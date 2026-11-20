@@ -261,7 +261,7 @@ mod tests {
 
     /// Mirrors savings_goal's own incremental update (record_contribution_stats
     /// + the final interval closed in complete_goal), operating on the pure
-    /// ContributionStatsInput shape.
+    ///   ContributionStatsInput shape.
     fn incremental_walk(
         contributions: &[Contribution],
         created_at: u64,

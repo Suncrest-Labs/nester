@@ -29,6 +29,7 @@ import type { Vault as VaultDefinition, MarketStrategy } from "@/lib/types/vault
 import { vaultsApi } from "@/lib/api/vaults";
 import {
   executeVaultDeposit,
+  assertWalletOnDappNetwork,
   resolveDepositMinSharesOut,
   UserRejectedError,
   TransactionFailedError,
@@ -362,6 +363,9 @@ export function DepositModal({ open, onClose, vault }: DepositModalProps) {
         contractId: vault.contractAddress,
         amount: amountInput.trim(),
       };
+      // A wrong-network wallet is knowable locally; surface it before the
+      // quote's RPC round trip, which would otherwise mask it on failure.
+      await assertWalletOnDappNetwork();
       const { minSharesOut } = await resolveDepositMinSharesOut(
         quoteParams,
         slippageBps,

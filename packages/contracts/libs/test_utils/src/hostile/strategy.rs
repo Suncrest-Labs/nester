@@ -9,8 +9,12 @@ pub struct ReentrantStrategyContract;
 #[contractimpl]
 impl ReentrantStrategyContract {
     pub fn initialize(env: Env, vault: Address, attacker: Address) {
-        env.storage().instance().set(&symbol_short!("vault"), &vault);
-        env.storage().instance().set(&symbol_short!("att"), &attacker);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("vault"), &vault);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("att"), &attacker);
     }
 
     pub fn calculate_rebalance_deltas(
@@ -18,7 +22,11 @@ impl ReentrantStrategyContract {
         _current: Vec<CurrentAllocationView>,
         _total: i128,
     ) -> Vec<AllocationDeltaView> {
-        let vault: Address = env.storage().instance().get(&symbol_short!("vault")).unwrap();
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("vault"))
+            .unwrap();
         let attacker: Address = env.storage().instance().get(&symbol_short!("att")).unwrap();
         let client = VaultContractClient::new(&env, &vault);
         client.withdraw(&attacker, &1_i128, &0_i128);

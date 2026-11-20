@@ -13,8 +13,8 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _},
-    IntoVal, Symbol,
+    testutils::{Events as _, Ledger as _},
+    Symbol, TryFromVal,
 };
 
 use nester_access_control::Role;
@@ -35,13 +35,25 @@ fn no_fees(h: &NesterHarness) {
     );
 }
 
-/// Return the last event's topic[0] and topic[1] as `Symbol`s.
+/// topic[0] and topic[1] as `Symbol`s, or `None` for events (e.g. SAC
+/// transfers) whose second topic is an address rather than a symbol.
+fn symbol_topics(
+    h: &NesterHarness,
+    topics: &soroban_sdk::Vec<soroban_sdk::Val>,
+) -> Option<(Symbol, Symbol)> {
+    let t0 = Symbol::try_from_val(&h.env, &topics.get(0)?).ok()?;
+    let t1 = Symbol::try_from_val(&h.env, &topics.get(1)?).ok()?;
+    Some((t0, t1))
+}
+
+/// Return the last symbol-topic event's topic[0] and topic[1].
 fn last_event_topics(h: &NesterHarness) -> (Symbol, Symbol) {
     let events = h.env.events().all();
-    let (_, topics, _) = events.last().expect("expected at least one event").clone();
-    let t0: Symbol = topics.get(0).unwrap().into_val(&h.env);
-    let t1: Symbol = topics.get(1).unwrap().into_val(&h.env);
-    (t0, t1)
+    events
+        .iter()
+        .rev()
+        .find_map(|(_, topics, _)| symbol_topics(h, &topics))
+        .expect("expected at least one event with symbol topics")
 }
 
 // ── Topic-symbol golden tests ─────────────────────────────────────────────────
@@ -74,7 +86,11 @@ fn withdraw_event_topics_match_events_md() {
 
     let (contract, action) = last_event_topics(&h);
     assert_eq!(contract, Symbol::new(&h.env, "VAULT"), "withdraw: topic[0]");
-    assert_eq!(action, Symbol::new(&h.env, "WITHDRAW"), "withdraw: topic[1]");
+    assert_eq!(
+        action,
+        Symbol::new(&h.env, "WITHDRAW"),
+        "withdraw: topic[1]"
+    );
 }
 
 /// pause() emits (VAULT, PAUSE, caller).
@@ -115,12 +131,9 @@ fn report_yield_emits_yld_strt_event() {
 
     let expected = Symbol::new(&h.env, "YLD_STRT");
     let events = h.env.events().all();
-    let has_yld_strt = events.iter().any(|(_, topics, _)| {
-        topics.len() >= 2 && {
-            let t1: Symbol = topics.get(1).unwrap().into_val(&h.env);
-            t1 == expected
-        }
-    });
+    let has_yld_strt = events
+        .iter()
+        .any(|(_, topics, _)| symbol_topics(&h, &topics).map_or(false, |(_, t1)| t1 == expected));
 
     assert!(has_yld_strt, "report_yield must emit a YLD_STRT event");
 }
@@ -137,20 +150,17 @@ fn harvest_event_topics_match_events_md() {
     h.vault().grant_role(&h.admin, &h.admin, &Role::Manager);
     h.mint_deposit_tokens(&h.vault_id, DEPOSIT / 10);
     h.vault().report_yield(&h.admin, &(DEPOSIT / 10));
-    h.env.ledger().set_timestamp(
-        h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1,
-    );
+    h.env
+        .ledger()
+        .set_timestamp(h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1);
     h.vault().report_yield(&h.admin, &0);
     h.vault().harvest(&user);
 
     let expected = Symbol::new(&h.env, "HARVEST");
     let events = h.env.events().all();
-    let has_harvest = events.iter().any(|(_, topics, _)| {
-        topics.len() >= 2 && {
-            let t1: Symbol = topics.get(1).unwrap().into_val(&h.env);
-            t1 == expected
-        }
-    });
+    let has_harvest = events
+        .iter()
+        .any(|(_, topics, _)| symbol_topics(&h, &topics).map_or(false, |(_, t1)| t1 == expected));
 
     assert!(has_harvest, "harvest must emit a HARVEST event");
 }
@@ -173,9 +183,9 @@ fn generate_event_fixtures() {
     h.vault().grant_role(&h.admin, &h.admin, &Role::Manager);
     h.mint_deposit_tokens(&h.vault_id, DEPOSIT / 10);
     h.vault().report_yield(&h.admin, &(DEPOSIT / 10));
-    h.env.ledger().set_timestamp(
-        h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1,
-    );
+    h.env
+        .ledger()
+        .set_timestamp(h.env.ledger().timestamp() + h.vault().get_yield_vesting_period() + 1);
     h.vault().report_yield(&h.admin, &0);
     h.vault().harvest(&user);
     h.vault().pause(&h.admin);
@@ -191,16 +201,16 @@ fn generate_event_fixtures() {
     let mut entries = std::vec::Vec::new();
 
     for (contract_id, topics, _data) in events.iter() {
-        if topics.len() < 2 {
+        let Some((t0, t1)) = symbol_topics(&h, &topics) else {
             continue;
-        }
-        let t0: Symbol = topics.get(0).unwrap().into_val(&h.env);
-        let t1: Symbol = topics.get(1).unwrap().into_val(&h.env);
+        };
 
         // Symbols implement Debug in testutils.
         entries.push(std::format!(
             "{{\"contract\":\"{:?}\",\"topic0\":\"{:?}\",\"topic1\":\"{:?}\"}}",
-            contract_id, t0, t1
+            contract_id,
+            t0,
+            t1
         ));
     }
 

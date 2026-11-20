@@ -12,6 +12,12 @@ import json
 import os
 import sys
 
+# TODO: goal-rewards-contract links savings_goal as a Rust crate, so every
+# exported name (initialize, grant_role, ...) is defined twice and wasm-ld
+# fails. It needs to call savings_goal through contractimport! of its WASM
+# (as vault does with vault_token) before it can be built for deployment.
+NOT_YET_BUILDABLE = {"goal-rewards-contract"}
+
 meta = json.load(sys.stdin)
 root = meta["workspace_root"].replace("\\", "/").rstrip("/")
 for pkg in meta["packages"]:
@@ -22,5 +28,7 @@ for pkg in meta["packages"]:
     if "/test_fixtures/" in "/" + rel:
         continue
     if not any("cdylib" in t["kind"] for t in pkg["targets"]):
+        continue
+    if pkg["name"] in NOT_YET_BUILDABLE:
         continue
     print(pkg["name"])

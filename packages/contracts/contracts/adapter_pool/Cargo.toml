@@ -3,7 +3,6 @@ name = "adapter-pool-contract"
 version = "0.1.0"
 edition = "2021"
 publish = false
-build = "../../build-meta.rs"
 
 [lib]
 # Clean crate name so other crates can import it as `adapter_pool`.

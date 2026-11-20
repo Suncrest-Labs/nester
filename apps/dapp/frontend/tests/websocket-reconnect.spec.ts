@@ -186,6 +186,12 @@ test.describe('WebSocket reconnection', () => {
         });
         await page.goto(HARNESS);
 
+        // The hook's initial status is "offline", so asserting it straight away
+        // passes on first paint, before any attempt has been made. Wait for the
+        // retry cycle to start so the next assertion means "gave up".
+        await expect(badge(page)).toHaveAttribute('data-status', 'reconnecting', {
+            timeout: 30_000,
+        });
         // Default schedule is 5 attempts at ~1/2/4/8/16s (jitter shortens
         // each), after which the client stops and says so rather than
         // looping in the background.
@@ -211,6 +217,12 @@ test.describe('WebSocket reconnection', () => {
         });
         await page.goto(HARNESS);
 
+        // The hook's initial status is "offline", so asserting it straight away
+        // passes on first paint, before any attempt has been made. Wait for the
+        // retry cycle to start so the next assertion means "gave up".
+        await expect(badge(page)).toHaveAttribute('data-status', 'reconnecting', {
+            timeout: 30_000,
+        });
         await expect(badge(page)).toHaveAttribute('data-status', 'offline', {
             timeout: 60_000,
         });
