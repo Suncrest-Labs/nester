@@ -50,30 +50,21 @@ These extend lock-position entries by ~10,000 ledgers (~0.6 days at 5 s/ledger)
 whenever a lock is settled or queried. This is intentionally short because locks
 have a bounded natural lifetime.
 
-### 3.2 `require_initialized` does NOT extend TTL
+### 3.2 Instance TTL is renewed on initialized vault calls
 
-The `require_initialized` helper (`vault/src/lib.rs:704`) only **checks** that
-`DataKey::Token` is set in instance storage — it does not call `extend_ttl`:
+`require_initialized` (`packages/contracts/contracts/vault/src/lib.rs:709`) now
+calls `instance().extend_ttl(...)` using the shared constants before checking
+initialization (`packages/contracts/libs/common/src/constants.rs:120`). This
+covers vault public calls that pass through `require_initialized`, including
+`deposit` (`vault/src/lib.rs:3815`) and `withdraw` (`vault/src/lib.rs:4008`).
 
-```rust
-// vault/src/lib.rs:704-708
-fn require_initialized(env: &Env) {
-    if !env.storage().instance().has(&DataKey::Token) {
-        panic_with_error!(env, ContractError::NotInitialized);
-    }
-}
-```
+### 3.3 Canonical TTL constants
 
-Instance storage TTL extension on user interactions is **not yet implemented**.
-This is a known gap — if the vault becomes dormant, instance storage can expire.
-Tracked as a follow-up to issue #1220.
-
-### 3.3 No `TTL_BUMP_THRESHOLD_LEDGERS` / `TTL_EXTEND_TO_LEDGERS` constants
-
-The previous version of this document described two named constants
-(`TTL_BUMP_THRESHOLD_LEDGERS = 120_960`, `TTL_EXTEND_TO_LEDGERS = 518_400`).
-**These constants do not exist** anywhere in the codebase today. The only TTL
-constants live locally in `vault/src/lib.rs:1755-1756` (see §3.1).
+The canonical constants are
+`TTL_BUMP_THRESHOLD_LEDGERS = 120_960` and `TTL_EXTEND_TO_LEDGERS = 518_400`
+(`packages/contracts/libs/common/src/constants.rs:120-123`). Their 30-day target
+is below the network's mainnet `max_entry_ttl`; compatibility aliases retain
+existing keeper entrypoints (`constants.rs:126-129`).
 
 ---
 
@@ -85,16 +76,16 @@ constants live locally in `vault/src/lib.rs:1755-1756` (see §3.1).
 | Persistent per-user position (160 B) | ~0.00008 XLM / month |
 
 Figures are illustrative; actual rent rates depend on the current network fee
-schedule. Because instance TTL auto-extension is not implemented, operators
-should monitor instance TTL directly and bump manually until the auto-extension
-feature ships.
+schedule. Instance TTL is renewed from initialized vault calls, and persistent
+per-user entries are renewed on matching read/write helpers
+(`packages/contracts/contracts/vault/src/lib.rs:1126`,
+`packages/contracts/contracts/vault_token/src/lib.rs:473`).
 
 ---
 
 ## 5. Verification
 
-End-to-end TTL tests added under issue #1220 live in
-`tests/integration/src/integration/lifecycle_tests.rs` and assert that user
-balances survive a large ledger-sequence advance. Those tests are run by
-`cargo test -p nester-integration-tests` (no filter) -- see
-`.github/workflows/ci.yml` `contracts` job, step "Run integration tests".
+A CI step runs `packages/contracts/scripts/check_storage_ttl.py`, which fails if
+a deployable contract persistent `.set()` lacks a matching `.extend_ttl()` in the
+same write region (`.github/workflows/ci.yml:361`). The contract unit suite also
+runs through `cargo test --lib` (`.github/workflows/ci.yml:365`).
