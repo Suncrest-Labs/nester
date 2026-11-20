@@ -261,6 +261,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           rust: "true"
+          rust-toolchain: "1.82.0"
 
       - name: Build yield_registry WASM
         run: cargo build --release --target wasm32-unknown-unknown -p yield-registry-contract
@@ -319,8 +320,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # Blocking gate (#1484): clippy warnings are errors, so a lint introduced
-      # by a toolchain bump also blocks the PR.
+      # Blocking gate (#1484): clippy warnings are errors.
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
@@ -335,11 +335,11 @@ jobs:
       - name: Build deployable contracts and calculate WASM hashes
         working-directory: .
         run: |
-          cargo metadata --manifest-path packages/contracts/Cargo.toml --no-deps --format-version 1 \
+          cargo +1.82.0 metadata --manifest-path packages/contracts/Cargo.toml --no-deps --format-version 1 \
             | python3 scripts/list_contract_packages.py \
             | while read -r pkg_name; do
                 echo "Building $pkg_name..."
-                cargo build --manifest-path packages/contracts/Cargo.toml --release --target wasm32-unknown-unknown -p "$pkg_name"
+                cargo +1.82.0 build --manifest-path packages/contracts/Cargo.toml --release --target wasm32-unknown-unknown -p "$pkg_name"
               done
           mkdir -p wasm-hashes
           {
