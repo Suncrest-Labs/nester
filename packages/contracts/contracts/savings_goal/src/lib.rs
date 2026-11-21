@@ -469,7 +469,6 @@ impl SavingsGoalContract {
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -594,8 +593,7 @@ fn attest_new_milestones(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mu
         // i128 for large target amounts. The remainder is always below 100.
         let target = goal.target_amount;
         let threshold = *threshold_pct as i128;
-        let required = (target / 100) * threshold
-            + ((target % 100) * threshold + 99) / 100;
+        let required = (target / 100) * threshold + ((target % 100) * threshold + 99) / 100;
         if goal.contributed >= required {
             goal.milestones |= mask;
             env.events().publish(
