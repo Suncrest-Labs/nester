@@ -19,6 +19,7 @@ import (
 	"github.com/stellar/go/txnbuild"
 	"github.com/stellar/go/xdr"
 
+	"github.com/suncrestlabs/nester/apps/api/internal/rpcbudget"
 	"github.com/suncrestlabs/nester/apps/api/internal/telemetry"
 	logpkg "github.com/suncrestlabs/nester/apps/api/pkg/logger"
 )
@@ -739,6 +740,7 @@ func (c *ContractInvoker) simulateContractFn(
 	contractAddress, functionName string,
 	args []xdr.ScVal,
 ) (xdr.ScVal, error) {
+	ctx = rpcbudget.WithDefaultPriority(ctx, rpcbudget.PriorityLow)
 	contractScAddr, err := contractAddressToXDR(contractAddress)
 	if err != nil {
 		return xdr.ScVal{}, err

@@ -49,6 +49,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/repository"
 	"github.com/suncrestlabs/nester/apps/api/internal/repository/postgres"
 	"github.com/suncrestlabs/nester/apps/api/internal/retry"
+	"github.com/suncrestlabs/nester/apps/api/internal/rpcbudget"
 	"github.com/suncrestlabs/nester/apps/api/internal/scheduler"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
 	performancesvc "github.com/suncrestlabs/nester/apps/api/internal/service/performance"
@@ -2241,7 +2242,8 @@ type httpClientSetter interface {
 // A nil set means the breakers are disabled, and every method on it degrades
 // to "no guard" so no call site needs to branch.
 type chainBreakerSet struct {
-	router *breaker.Router
+	router       *breaker.Router
+	budgetRouter *rpcbudget.Router
 }
 
 // newChainBreakers builds one breaker per chain upstream, wires them to the
@@ -2255,48 +2257,79 @@ type chainBreakerSet struct {
 // CIRCUIT_BREAKER_HORIZON_* (nester#1314) when an upstream's actual SLA
 // warrants different numbers.
 func newChainBreakers(cfg *config.Config, m *metrics.Metrics, logger *slog.Logger) (*chainBreakerSet, error) {
+	var router *breaker.Router
 	if !cfg.CircuitBreaker().Enabled() {
 		logger.Warn("chain circuit breakers are disabled; a degraded Soroban RPC or Horizon will not be shed")
+	} else {
+		sorobanPolicy := cfg.CircuitBreaker().SorobanRPCPolicy()
+		horizonPolicy := cfg.CircuitBreaker().HorizonPolicy()
+		onTransition := chainBreakerLogger(logger.WithGroup("circuit-breaker"))
+
+		sorobanBreaker := breaker.New(string(metrics.UpstreamSorobanRPC), sorobanPolicy, onTransition)
+		horizonBreaker := breaker.New(string(metrics.UpstreamHorizon), horizonPolicy, onTransition)
+
+		router = breaker.NewRouter()
+		if err := router.Register(cfg.Stellar().RPCURL(), sorobanBreaker); err != nil {
+			return nil, err
+		}
+		if err := router.Register(cfg.Stellar().HorizonURL(), horizonBreaker); err != nil {
+			return nil, err
+		}
+
+		if err := m.RegisterBreakers(map[metrics.Upstream]metrics.BreakerReader{
+			metrics.UpstreamSorobanRPC: sorobanBreaker,
+			metrics.UpstreamHorizon:    horizonBreaker,
+		}); err != nil {
+			// Non-fatal, for the same reason as the freshness collector: losing
+			// the metric must not stop the API serving, and the breakers still
+			// protect the upstreams and still appear in /health/detailed.
+			logger.Error("failed to register circuit breaker collector", "error", err)
+		}
+
+		logger.Info("chain circuit breakers enabled",
+			"soroban_rpc_failure_ratio", sorobanPolicy.FailureRatio,
+			"soroban_rpc_min_requests", sorobanPolicy.MinRequests,
+			"soroban_rpc_window", sorobanPolicy.Window.String(),
+			"soroban_rpc_open_duration", sorobanPolicy.OpenDuration.String(),
+			"horizon_failure_ratio", horizonPolicy.FailureRatio,
+			"horizon_min_requests", horizonPolicy.MinRequests,
+			"horizon_window", horizonPolicy.Window.String(),
+			"horizon_open_duration", horizonPolicy.OpenDuration.String(),
+		)
+	}
+
+	var budgetRouter *rpcbudget.Router
+	if cfg.RPCBudget().Enabled() {
+		sorobanBudget := rpcbudget.New(string(metrics.UpstreamSorobanRPC), cfg.RPCBudget().SorobanRPCPolicy())
+		horizonBudget := rpcbudget.New(string(metrics.UpstreamHorizon), cfg.RPCBudget().HorizonPolicy())
+
+		budgetRouter = rpcbudget.NewRouter()
+		if err := budgetRouter.Register(cfg.Stellar().RPCURL(), sorobanBudget); err != nil {
+			return nil, err
+		}
+		if err := budgetRouter.Register(cfg.Stellar().HorizonURL(), horizonBudget); err != nil {
+			return nil, err
+		}
+
+		if err := m.RegisterRPCBudgets(map[metrics.Upstream]metrics.RPCBudgetReader{
+			metrics.UpstreamSorobanRPC: sorobanBudget,
+			metrics.UpstreamHorizon:    horizonBudget,
+		}); err != nil {
+			logger.Error("failed to register rpc budget collector", "error", err)
+		}
+
+		logger.Info("outbound rpc budget limiters enabled",
+			"soroban_rpc_rps", cfg.RPCBudget().SorobanRPCPolicy().RefillRate,
+			"soroban_rpc_burst", cfg.RPCBudget().SorobanRPCPolicy().Burst,
+			"horizon_rps", cfg.RPCBudget().HorizonPolicy().RefillRate,
+			"horizon_burst", cfg.RPCBudget().HorizonPolicy().Burst,
+		)
+	}
+
+	if router == nil && budgetRouter == nil {
 		return nil, nil
 	}
-
-	sorobanPolicy := cfg.CircuitBreaker().SorobanRPCPolicy()
-	horizonPolicy := cfg.CircuitBreaker().HorizonPolicy()
-	onTransition := chainBreakerLogger(logger.WithGroup("circuit-breaker"))
-
-	sorobanBreaker := breaker.New(string(metrics.UpstreamSorobanRPC), sorobanPolicy, onTransition)
-	horizonBreaker := breaker.New(string(metrics.UpstreamHorizon), horizonPolicy, onTransition)
-
-	router := breaker.NewRouter()
-	if err := router.Register(cfg.Stellar().RPCURL(), sorobanBreaker); err != nil {
-		return nil, err
-	}
-	if err := router.Register(cfg.Stellar().HorizonURL(), horizonBreaker); err != nil {
-		return nil, err
-	}
-
-	if err := m.RegisterBreakers(map[metrics.Upstream]metrics.BreakerReader{
-		metrics.UpstreamSorobanRPC: sorobanBreaker,
-		metrics.UpstreamHorizon:    horizonBreaker,
-	}); err != nil {
-		// Non-fatal, for the same reason as the freshness collector: losing
-		// the metric must not stop the API serving, and the breakers still
-		// protect the upstreams and still appear in /health/detailed.
-		logger.Error("failed to register circuit breaker collector", "error", err)
-	}
-
-	logger.Info("chain circuit breakers enabled",
-		"soroban_rpc_failure_ratio", sorobanPolicy.FailureRatio,
-		"soroban_rpc_min_requests", sorobanPolicy.MinRequests,
-		"soroban_rpc_window", sorobanPolicy.Window.String(),
-		"soroban_rpc_open_duration", sorobanPolicy.OpenDuration.String(),
-		"horizon_failure_ratio", horizonPolicy.FailureRatio,
-		"horizon_min_requests", horizonPolicy.MinRequests,
-		"horizon_window", horizonPolicy.Window.String(),
-		"horizon_open_duration", horizonPolicy.OpenDuration.String(),
-	)
-
-	return &chainBreakerSet{router: router}, nil
+	return &chainBreakerSet{router: router, budgetRouter: budgetRouter}, nil
 }
 
 // chainBreakerLogger logs state transitions only.
@@ -2326,7 +2359,7 @@ func chainBreakerLogger(logger *slog.Logger) breaker.TransitionFunc {
 
 // readers exposes the breakers for the health response, keyed by upstream.
 func (s *chainBreakerSet) readers() map[metrics.Upstream]*breaker.Breaker {
-	if s == nil {
+	if s == nil || s.router == nil {
 		return nil
 	}
 	out := make(map[metrics.Upstream]*breaker.Breaker, len(s.router.Breakers()))
@@ -2337,19 +2370,22 @@ func (s *chainBreakerSet) readers() map[metrics.Upstream]*breaker.Breaker {
 }
 
 // client returns an HTTP client for one chain upstream: metrics innermost,
-// breaker outermost.
+// circuit breaker middle, rpcbudget outermost.
 //
-// The order matters. A rejected call never reaches the metrics transport, so
-// it is not counted as an outbound request and does not plant a near-zero
-// sample in the latency histogram or a transport error under a made-up kind.
-// nester_outbound_* therefore keeps meaning "calls we actually made", and the
-// shed load is reported by the breaker's own rejection counter instead.
+// The order matters. A budget-shed or breaker-rejected call never reaches the
+// metrics transport, so it is not counted as an outbound request, and a
+// budget-shed call never trips the circuit breaker.
 func (s *chainBreakerSet) client(m *metrics.Metrics, timeout time.Duration, upstream metrics.Upstream) *http.Client {
 	client := m.InstrumentClient(&http.Client{Timeout: timeout}, upstream)
 	if s == nil {
 		return client
 	}
-	client.Transport = s.router.Transport(client.Transport)
+	if s.router != nil {
+		client.Transport = s.router.Transport(client.Transport)
+	}
+	if s.budgetRouter != nil {
+		client.Transport = s.budgetRouter.Transport(client.Transport)
+	}
 	return client
 }
 

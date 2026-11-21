@@ -15,6 +15,7 @@ import (
 
 	"github.com/suncrestlabs/nester/apps/api/internal/breaker"
 	"github.com/suncrestlabs/nester/apps/api/internal/retry"
+	"github.com/suncrestlabs/nester/apps/api/internal/rpcbudget"
 	"github.com/suncrestlabs/nester/apps/api/internal/telemetry"
 )
 
@@ -180,9 +181,9 @@ func retryableRPCError(err error) bool {
 		return false
 	}
 
-	// Checked first: an open breaker is the one failure that must never be
-	// retried, and it can be wrapped inside a *url.Error by http.Client.
-	if errors.Is(err, breaker.ErrOpen) {
+	// Checked first: an open breaker or exhausted local RPC budget must never
+	// be retried, and either can be wrapped inside a *url.Error by http.Client.
+	if errors.Is(err, breaker.ErrOpen) || errors.Is(err, rpcbudget.ErrBudgetExhausted) {
 		return false
 	}
 	if errors.Is(err, context.Canceled) {
