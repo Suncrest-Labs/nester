@@ -470,9 +470,6 @@ impl SavingsGoalContract {
         AccessControl::accept_admin(&env, &new_admin);
     }
 
-    pub fn version(env: Env) -> soroban_sdk::String {
-        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
-    }
 }
 
 // ---------------------------------------------------------------------------
