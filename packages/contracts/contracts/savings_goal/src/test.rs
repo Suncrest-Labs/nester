@@ -1,12 +1,15 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{storage::{Instance as _, Persistent as _}, Address as _, Events as _, Ledger as _},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events as _, Ledger as _,
+    },
     token, Address, BytesN, Env, IntoVal, Vec,
 };
 
-use vault_factory_contract::{VaultFactoryContract, VaultFactoryContractClient};
 use nester_common::ContractError;
+use vault_factory_contract::{VaultFactoryContract, VaultFactoryContractClient};
 
 use crate::{
     GoalStatus, SavingsGoalContract, SavingsGoalContractClient, MAX_CONTRIBUTORS_PER_GOAL,
@@ -297,7 +300,10 @@ fn five_hundred_goals_and_three_contributors_do_not_grow_instance_storage() {
     // Query paths still return the correct values after all 2,500 writes.
     let first_id = BytesN::from_array(&env, &[0u8; 32]);
     assert_eq!(client.get_goal(&first_id).contributed, 3);
-    assert_eq!(client.get_contribution_stats(&first_id).contribution_count, 3);
+    assert_eq!(
+        client.get_contribution_stats(&first_id).contribution_count,
+        3
+    );
     for contributor in &contributors {
         assert_eq!(client.get_contributor_amount(&first_id, contributor), 1);
     }
