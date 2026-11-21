@@ -267,6 +267,9 @@ fn registry_never_holds_token_balance_across_full_lifecycle() {
 #[test]
 fn five_hundred_goals_and_three_contributors_do_not_grow_instance_storage() {
     let (env, owner, vault, client) = setup();
+    // This stress test makes 2,000 contract calls in one environment.
+    // Disable the cumulative emulator budget; keep all storage assertions.
+    env.budget().reset_unlimited();
     let contributors = [
         Address::generate(&env),
         Address::generate(&env),
