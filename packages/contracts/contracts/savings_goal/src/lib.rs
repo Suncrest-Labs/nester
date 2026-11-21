@@ -590,9 +590,13 @@ fn attest_new_milestones(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mu
         if goal.milestones & mask != 0 {
             continue;
         }
-        // contributed / target >= threshold / 100, cross-multiplied to avoid
-        // floating point: contributed * 100 >= threshold * target.
-        if goal.contributed.saturating_mul(100) >= (*threshold_pct as i128) * goal.target_amount {
+        // Compare against ceil(target * threshold / 100) without overflowing
+        // i128 for large target amounts. The remainder is always below 100.
+        let target = goal.target_amount;
+        let threshold = *threshold_pct as i128;
+        let required = (target / 100) * threshold
+            + ((target % 100) * threshold + 99) / 100;
+        if goal.contributed >= required {
             goal.milestones |= mask;
             env.events().publish(
                 (SAVINGS_GOAL, GOAL_MILESTONE, goal_id.clone()),
