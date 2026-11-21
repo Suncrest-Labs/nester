@@ -1,10 +1,14 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events as _, Ledger as _,
+    },
     token, Address, BytesN, Env, IntoVal, Vec,
 };
 
+use nester_common::ContractError;
 use vault_factory_contract::{VaultFactoryContract, VaultFactoryContractClient};
 
 use crate::{
@@ -261,4 +265,85 @@ fn registry_never_holds_token_balance_across_full_lifecycle() {
     let goal = client.get_goal(&id);
     assert_eq!(goal.status, GoalStatus::Completed);
     assert_eq!(token_client.balance(&client.address), 0);
+}
+
+#[test]
+fn five_hundred_goals_and_three_contributors_do_not_grow_instance_storage() {
+    let (env, owner, vault, client) = setup();
+    // This stress test makes 2,000 contract calls in one environment.
+    // Disable the cumulative emulator budget; keep all storage assertions.
+    env.budget().reset_unlimited();
+    let contributors = [
+        Address::generate(&env),
+        Address::generate(&env),
+        Address::generate(&env),
+    ];
+    let baseline = env.as_contract(&client.address, || env.storage().instance().all().len());
+
+    for index in 0u32..500 {
+        let mut id_bytes = [0u8; 32];
+        id_bytes[..4].copy_from_slice(&index.to_be_bytes());
+        let id = BytesN::from_array(&env, &id_bytes);
+
+        client.create_goal(&owner, &id, &vault, &10_000i128, &future_deadline(&env));
+        for contributor in &contributors {
+            client.contribute(contributor, &id, &1i128);
+        }
+    }
+
+    env.as_contract(&client.address, || {
+        assert_eq!(env.storage().instance().all().len(), baseline);
+        // Every goal has a goal record, stats record and three contributor records.
+        assert_eq!(env.storage().persistent().all().len(), 500 * 5);
+    });
+
+    // Query paths still return the correct values after all 2,500 writes.
+    let first_id = BytesN::from_array(&env, &[0u8; 32]);
+    assert_eq!(client.get_goal(&first_id).contributed, 3);
+    assert_eq!(
+        client.get_contribution_stats(&first_id).contribution_count,
+        3
+    );
+    for contributor in &contributors {
+        assert_eq!(client.get_contributor_amount(&first_id, contributor), 1);
+    }
+}
+
+#[test]
+fn contribution_overflow_returns_distinct_error_without_changing_totals() {
+    let (env, owner, vault, client) = setup();
+    let id = goal_id(&env, 15);
+    client.create_goal(&owner, &id, &vault, &i128::MAX, &future_deadline(&env));
+
+    let contributor = Address::generate(&env);
+    client.contribute(&contributor, &id, &1i128);
+
+    let result = client.try_contribute(&contributor, &id, &i128::MAX);
+    assert_eq!(
+        result,
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            ContractError::ArithmeticOverflow as u32,
+        ))),
+    );
+
+    assert_eq!(client.get_goal(&id).contributed, 1);
+    assert_eq!(client.get_contributor_amount(&id, &contributor), 1);
+    assert_eq!(client.get_contribution_stats(&id).contribution_count, 1);
+}
+
+#[test]
+fn completed_goal_preserves_persistent_contribution_statistics() {
+    let (env, owner, vault, client) = setup();
+    let id = goal_id(&env, 16);
+    client.create_goal(&owner, &id, &vault, &10i128, &future_deadline(&env));
+
+    let contributor = Address::generate(&env);
+    client.contribute(&contributor, &id, &4i128);
+    client.contribute(&contributor, &id, &6i128);
+
+    let stats = client.get_contribution_stats(&id);
+    assert_eq!(client.get_goal(&id).status, GoalStatus::Completed);
+    assert_eq!(stats.contribution_count, 2);
+    assert_eq!(stats.largest_contribution, 6);
+    assert_eq!(stats.completed_at, env.ledger().timestamp());
 }

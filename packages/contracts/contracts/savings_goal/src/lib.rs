@@ -44,6 +44,10 @@ const GOAL_COMPLETED: Symbol = symbol_short!("GOAL_CMP");
 const GOAL_EXPIRED: Symbol = symbol_short!("GOAL_EXP");
 const GOAL_ABANDONED: Symbol = symbol_short!("GOAL_AB");
 
+// Persistent records are renewed on access before their TTL becomes short.
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400;
+
 /// Percentage thresholds attested as the goal progresses. Index into this
 /// array is the bit position set in [`Goal::milestones`].
 pub const MILESTONE_THRESHOLDS_PCT: [u32; 4] = [25, 50, 75, 100];
@@ -231,7 +235,7 @@ impl SavingsGoalContract {
 
         if env
             .storage()
-            .instance()
+            .persistent()
             .has(&DataKey::Goal(goal_id.clone()))
         {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
@@ -257,9 +261,7 @@ impl SavingsGoalContract {
             contributors: Vec::new(&env),
             created_at: env.ledger().timestamp(),
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Goal(goal_id.clone()), &goal);
+        save_goal(&env, &goal_id, &goal);
 
         env.events().publish(
             (SAVINGS_GOAL, GOAL_CREATED, goal_id),
@@ -285,6 +287,7 @@ impl SavingsGoalContract {
     /// * [`ContractError::InvalidOperation`] if the goal is not `Active`.
     /// * [`ContractError::ExceedsLimit`] if `contributor` is new and the goal
     ///   already tracks [`MAX_CONTRIBUTORS_PER_GOAL`] distinct contributors.
+    /// * [`ContractError::ArithmeticOverflow`] if cumulative accounting exceeds `i128::MAX`.
     pub fn contribute(
         env: Env,
         contributor: Address,
@@ -305,7 +308,10 @@ impl SavingsGoalContract {
         record_contribution(&env, &goal_id, &mut goal, &contributor, amount);
         record_contribution_stats(&env, &goal_id, &goal, amount);
 
-        goal.contributed += amount;
+        goal.contributed = goal
+            .contributed
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ArithmeticOverflow));
 
         attest_new_milestones(&env, &goal_id, &mut goal);
 
@@ -403,7 +409,12 @@ impl SavingsGoalContract {
     }
 
     pub fn has_goal(env: Env, goal_id: soroban_sdk::BytesN<32>) -> bool {
-        env.storage().instance().has(&DataKey::Goal(goal_id))
+        let key = DataKey::Goal(goal_id);
+        let exists = env.storage().persistent().has(&key);
+        if exists {
+            extend_persistent_ttl(&env, &key);
+        }
+        exists
     }
 
     pub fn get_goal_status(env: Env, goal_id: soroban_sdk::BytesN<32>) -> GoalStatus {
@@ -417,10 +428,10 @@ impl SavingsGoalContract {
         goal_id: soroban_sdk::BytesN<32>,
         contributor: Address,
     ) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::ContributorAmount(goal_id, contributor))
-            .unwrap_or(0)
+        let key = DataKey::ContributorAmount(goal_id, contributor);
+        let amount = env.storage().persistent().get(&key).unwrap_or(0);
+        extend_persistent_ttl(&env, &key);
+        amount
     }
 
     /// All distinct addresses that have contributed to `goal_id`, for
@@ -433,10 +444,10 @@ impl SavingsGoalContract {
     /// `goal_id` (issue #819). Defaulted (all zero) for a goal that has
     /// never received a contribution.
     pub fn get_contribution_stats(env: Env, goal_id: soroban_sdk::BytesN<32>) -> ContributionStats {
-        env.storage()
-            .instance()
-            .get(&DataKey::ContributionStats(goal_id))
-            .unwrap_or_default()
+        let key = DataKey::ContributionStats(goal_id);
+        let stats = env.storage().persistent().get(&key).unwrap_or_default();
+        extend_persistent_ttl(&env, &key);
+        stats
     }
 
     // -----------------------------------------------------------------------
@@ -464,17 +475,31 @@ impl SavingsGoalContract {
 // Private helpers
 // ---------------------------------------------------------------------------
 
+fn extend_persistent_ttl(env: &Env, key: &DataKey) {
+    if env.storage().persistent().has(key) {
+        env.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
+    }
+}
+
 fn get_goal_or_panic(env: &Env, goal_id: &soroban_sdk::BytesN<32>) -> Goal {
-    env.storage()
-        .instance()
-        .get::<DataKey, Goal>(&DataKey::Goal(goal_id.clone()))
-        .unwrap_or_else(|| panic_with_error!(env, ContractError::StrategyNotFound))
+    let key = DataKey::Goal(goal_id.clone());
+    let goal = env
+        .storage()
+        .persistent()
+        .get::<DataKey, Goal>(&key)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::StrategyNotFound));
+    extend_persistent_ttl(env, &key);
+    goal
 }
 
 fn save_goal(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &Goal) {
-    env.storage()
-        .instance()
-        .set(&DataKey::Goal(goal_id.clone()), goal);
+    let key = DataKey::Goal(goal_id.clone());
+    env.storage().persistent().set(&key, goal);
+    extend_persistent_ttl(env, &key);
 }
 
 /// Update per-contributor accounting for `contributor`, adding them to the
@@ -487,7 +512,7 @@ fn record_contribution(
     amount: i128,
 ) {
     let key = DataKey::ContributorAmount(goal_id.clone(), contributor.clone());
-    let prev: i128 = env.storage().instance().get(&key).unwrap_or(0);
+    let prev: i128 = env.storage().persistent().get(&key).unwrap_or(0);
 
     if prev == 0 {
         if goal.contributors.len() >= MAX_CONTRIBUTORS_PER_GOAL {
@@ -496,7 +521,11 @@ fn record_contribution(
         goal.contributors.push_back(contributor.clone());
     }
 
-    env.storage().instance().set(&key, &(prev + amount));
+    let total = prev
+        .checked_add(amount)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::ArithmeticOverflow));
+    env.storage().persistent().set(&key, &total);
+    extend_persistent_ttl(env, &key);
 }
 
 /// Number of seconds in one contribution "period", used to bucket
@@ -519,7 +548,7 @@ fn record_contribution_stats(
     amount: i128,
 ) {
     let key = DataKey::ContributionStats(goal_id.clone());
-    let mut stats: ContributionStats = env.storage().instance().get(&key).unwrap_or_default();
+    let mut stats: ContributionStats = env.storage().persistent().get(&key).unwrap_or_default();
     let now = env.ledger().timestamp();
 
     let since = if stats.last_updated_at == 0 {
@@ -547,7 +576,8 @@ fn record_contribution_stats(
     }
 
     stats.last_updated_at = now;
-    env.storage().instance().set(&key, &stats);
+    env.storage().persistent().set(&key, &stats);
+    extend_persistent_ttl(env, &key);
 }
 
 /// Set the bit for any milestone threshold newly crossed by `goal.contributed`
@@ -559,9 +589,12 @@ fn attest_new_milestones(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mu
         if goal.milestones & mask != 0 {
             continue;
         }
-        // contributed / target >= threshold / 100, cross-multiplied to avoid
-        // floating point: contributed * 100 >= threshold * target.
-        if goal.contributed.saturating_mul(100) >= (*threshold_pct as i128) * goal.target_amount {
+        // Compare against ceil(target * threshold / 100) without overflowing
+        // i128 for large target amounts. The remainder is always below 100.
+        let target = goal.target_amount;
+        let threshold = *threshold_pct as i128;
+        let required = (target / 100) * threshold + ((target % 100) * threshold + 99) / 100;
+        if goal.contributed >= required {
             goal.milestones |= mask;
             env.events().publish(
                 (SAVINGS_GOAL, GOAL_MILESTONE, goal_id.clone()),
@@ -586,7 +619,7 @@ fn complete_goal(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mut Goal) 
     // the last one, so this closing interval needs its own accrual step
     // regardless of which path completed the goal.
     let key = DataKey::ContributionStats(goal_id.clone());
-    let mut stats: ContributionStats = env.storage().instance().get(&key).unwrap_or_default();
+    let mut stats: ContributionStats = env.storage().persistent().get(&key).unwrap_or_default();
     let since = if stats.last_updated_at == 0 {
         goal.created_at
     } else {
@@ -598,7 +631,8 @@ fn complete_goal(env: &Env, goal_id: &soroban_sdk::BytesN<32>, goal: &mut Goal) 
         .saturating_add(goal.contributed.saturating_mul(elapsed as i128));
     stats.last_updated_at = now;
     stats.completed_at = now;
-    env.storage().instance().set(&key, &stats);
+    env.storage().persistent().set(&key, &stats);
+    extend_persistent_ttl(env, &key);
 
     env.events().publish(
         (SAVINGS_GOAL, GOAL_COMPLETED, goal_id.clone()),
