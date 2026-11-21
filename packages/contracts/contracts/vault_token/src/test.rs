@@ -558,6 +558,34 @@ fn pure_floor_division_truncates() {
     assert_eq!(crate::amount_for_shares_math(1, 3, 10), 3);
 }
 
+#[test]
+fn share_conversion_reports_overflow_instead_of_multiplying_raw() {
+    let amount = i128::MAX / 10_000_000 + 1;
+
+    assert_eq!(
+        crate::try_shares_for_deposit_math(amount, 10_000_000, 1),
+        Err(nester_common::ContractError::ArithmeticOverflow)
+    );
+    assert_eq!(
+        crate::try_amount_for_shares_math(amount, 1, 10_000_000),
+        Err(nester_common::ContractError::ArithmeticOverflow)
+    );
+}
+
+#[test]
+fn share_conversion_overflow_is_rejected_by_the_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let user = Address::generate(&env);
+    let amount = i128::MAX / 10_000_000 + 1;
+
+    client.mint_for_deposit(&user, &10_000_000_i128);
+    client.set_total_assets(&1_i128);
+
+    assert!(client.try_shares_for_deposit(&amount).is_err());
+}
+
 // ---------------------------------------------------------------------------
 // Authorisation: vault-only mint / burn (#51)
 // ---------------------------------------------------------------------------

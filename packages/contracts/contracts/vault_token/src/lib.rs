@@ -248,26 +248,38 @@ impl VaultTokenContract {
     /// Preview: shares a deposit of `amount` would mint **right now**.
     /// Does not change state.
     pub fn shares_for_deposit(env: Env, amount: i128) -> i128 {
-        shares_for_deposit_math(amount, get_total_supply(&env), get_total_assets(&env))
+        match try_shares_for_deposit_math(amount, get_total_supply(&env), get_total_assets(&env)) {
+            Ok(shares) => shares,
+            Err(error) => panic_with_error!(&env, error),
+        }
     }
 
     /// Preview: underlying that `shares` would redeem for **right now**.
     /// Does not change state.
     pub fn amount_for_shares(env: Env, shares: i128) -> i128 {
-        amount_for_shares_math(shares, get_total_supply(&env), get_total_assets(&env))
+        match try_amount_for_shares_math(shares, get_total_supply(&env), get_total_assets(&env)) {
+            Ok(amount) => amount,
+            Err(error) => panic_with_error!(&env, error),
+        }
     }
 
     /// Price per share. Uses 10,000,000 as the 1.0 unit denominator since decimals is 7.
     pub fn share_price(env: Env) -> i128 {
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
-        amount_for_shares_math(10_000_000, total_supply, total_assets)
+        match try_amount_for_shares_math(10_000_000, total_supply, total_assets) {
+            Ok(price) => price,
+            Err(error) => panic_with_error!(&env, error),
+        }
     }
 
     /// Calculates underlying asset value corresponding to the user's current token balance.
     pub fn underlying_balance(env: Env, user: Address) -> i128 {
         let balance = get_balance(&env, &user);
-        amount_for_shares_math(balance, get_total_supply(&env), get_total_assets(&env))
+        match try_amount_for_shares_math(balance, get_total_supply(&env), get_total_assets(&env)) {
+            Ok(amount) => amount,
+            Err(error) => panic_with_error!(&env, error),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -286,7 +298,10 @@ impl VaultTokenContract {
         require_vault(&env);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
-        let shares = shares_for_deposit_math(amount, total_supply, total_assets);
+        let shares = match try_shares_for_deposit_math(amount, total_supply, total_assets) {
+            Ok(shares) => shares,
+            Err(error) => panic_with_error!(&env, error),
+        };
         receive_balance(&env, &to, shares);
         set_total_supply(&env, total_supply + shares);
         set_total_assets(&env, total_assets + amount);
@@ -313,7 +328,10 @@ impl VaultTokenContract {
         require_vault(&env);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
-        let amount = amount_for_shares_math(shares, total_supply, total_assets);
+        let amount = match try_amount_for_shares_math(shares, total_supply, total_assets) {
+            Ok(amount) => amount,
+            Err(error) => panic_with_error!(&env, error),
+        };
         spend_balance(&env, &from, shares);
         set_total_supply(&env, total_supply - shares);
         set_total_assets(&env, total_assets - amount);
@@ -425,27 +443,57 @@ impl VaultTokenContract {
 // Pure exchange-rate math
 // ---------------------------------------------------------------------------
 
+/// Checked share conversion for a deposit.
+pub fn try_shares_for_deposit_math(
+    amount: i128,
+    total_supply: i128,
+    total_assets: i128,
+) -> Result<i128, ContractError> {
+    if amount < 0 {
+        return Err(ContractError::InvalidAmount);
+    }
+    if total_supply == 0 || total_assets == 0 {
+        Ok(amount)
+    } else {
+        amount
+            .checked_mul(total_supply)
+            .and_then(|product| product.checked_div(total_assets))
+            .ok_or(ContractError::ArithmeticOverflow)
+    }
+}
+
+/// Checked share conversion for a withdrawal.
+pub fn try_amount_for_shares_math(
+    shares: i128,
+    total_supply: i128,
+    total_assets: i128,
+) -> Result<i128, ContractError> {
+    if shares < 0 {
+        return Err(ContractError::InvalidAmount);
+    }
+    if total_supply == 0 {
+        Ok(shares)
+    } else {
+        shares
+            .checked_mul(total_assets)
+            .and_then(|product| product.checked_div(total_supply))
+            .ok_or(ContractError::ArithmeticOverflow)
+    }
+}
+
 /// Shares to mint for a deposit of `amount`.
 ///
 /// * First deposit (`total_supply == 0`): issues 1:1.
 /// * Subsequent: `floor(amount * total_supply / total_assets)`.
 pub fn shares_for_deposit_math(amount: i128, total_supply: i128, total_assets: i128) -> i128 {
-    if total_supply == 0 || total_assets == 0 {
-        amount
-    } else {
-        amount * total_supply / total_assets
-    }
+    try_shares_for_deposit_math(amount, total_supply, total_assets).unwrap_or(0)
 }
 
 /// Underlying amount for `shares`.
 ///
 /// `floor(shares * total_assets / total_supply)`.
 pub fn amount_for_shares_math(shares: i128, total_supply: i128, total_assets: i128) -> i128 {
-    if total_supply == 0 {
-        shares
-    } else {
-        shares * total_assets / total_supply
-    }
+    try_amount_for_shares_math(shares, total_supply, total_assets).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
