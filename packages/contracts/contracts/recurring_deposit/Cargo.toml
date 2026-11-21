@@ -5,7 +5,6 @@ authors = ["Nester Team"]
 license = "Apache-2.0"
 edition = "2021"
 publish = false
-build = "../../build-meta.rs"
 rust-version = "1.79.0"
 
 [lib]

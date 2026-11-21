@@ -3,7 +3,6 @@ name = "nester-access-control"
 version = "0.1.0"
 edition = "2021"
 publish = false
-build = "../../build-meta.rs"
 
 [lib]
 name = "nester_access_control"

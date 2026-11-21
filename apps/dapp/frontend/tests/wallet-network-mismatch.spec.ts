@@ -8,7 +8,7 @@ function envelope(data: unknown) {
 }
 
 async function openDepositModal(page: import("@playwright/test").Page, walletPassphrase: string) {
-  await mockFreighter(page, { walletPassphrase, dappNetwork: "mainnet" });
+  await mockFreighter(page, { walletPassphrase, dappNetwork: "testnet" });
   await page.route(/\/accounts\/G[A-Z0-9]{55}$/, (route) =>
     route.fulfill({
       status: 200,
@@ -61,22 +61,22 @@ async function openDepositModal(page: import("@playwright/test").Page, walletPas
 test.describe("wallet network guard", () => {
   test.setTimeout(120_000);
 
-  test("blocks the deposit with a switch-network prompt when the wallet is on testnet and the dapp on mainnet", async ({
+  test("blocks the deposit with a switch-network prompt when the wallet is on mainnet and the dapp on testnet", async ({
     page,
   }) => {
-    await openDepositModal(page, TESTNET_PASSPHRASE);
-
-    await page.getByRole("button", { name: "Confirm Deposit" }).dispatchEvent("click");
-
-    await expect(page.getByText("Switch your wallet to Mainnet")).toBeVisible();
-    expect(await page.evaluate(() => (window as unknown as { __freighterSignCalls: number }).__freighterSignCalls)).toBe(0);
-  });
-
-  test("does not show the prompt when the wallet is on the dapp network", async ({ page }) => {
     await openDepositModal(page, MAINNET_PASSPHRASE);
 
     await page.getByRole("button", { name: "Confirm Deposit" }).dispatchEvent("click");
 
-    await expect(page.getByText("Switch your wallet to Mainnet")).toHaveCount(0);
+    await expect(page.getByText("Switch your wallet to Testnet", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __freighterSignCalls: number }).__freighterSignCalls)).toBe(0);
+  });
+
+  test("does not show the prompt when the wallet is on the dapp network", async ({ page }) => {
+    await openDepositModal(page, TESTNET_PASSPHRASE);
+
+    await page.getByRole("button", { name: "Confirm Deposit" }).dispatchEvent("click");
+
+    await expect(page.getByText("Switch your wallet to Testnet", { exact: true })).toHaveCount(0);
   });
 });
