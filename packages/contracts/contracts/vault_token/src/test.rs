@@ -544,7 +544,7 @@ fn pure_shares_for_deposit_proportional() {
 fn impaired_vault_rejects_new_deposit_with_typed_error() {
     assert_eq!(
         crate::try_shares_for_deposit_math(1_000, 10_000, 0),
-        Err(nester_common::ContractError::VaultImpaired)
+        Err(nester_common::ContractError::InvalidOperation)
     );
 
     let env = Env::default();
@@ -559,13 +559,13 @@ fn impaired_vault_rejects_new_deposit_with_typed_error() {
     assert_eq!(
         client.try_shares_for_deposit(&5_000_i128),
         Err(Ok(soroban_sdk::Error::from_contract_error(
-            nester_common::ContractError::VaultImpaired as u32,
+            nester_common::ContractError::InvalidOperation as u32,
         )))
     );
     assert_eq!(
         client.try_mint_for_deposit(&bob, &5_000_i128),
         Err(Ok(soroban_sdk::Error::from_contract_error(
-            nester_common::ContractError::VaultImpaired as u32,
+            nester_common::ContractError::InvalidOperation as u32,
         )))
     );
     assert_eq!(client.total_supply(), 10_000);

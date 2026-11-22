@@ -440,7 +440,7 @@ pub fn try_shares_for_deposit_math(
     if total_supply == 0 {
         Ok(amount)
     } else if total_assets == 0 {
-        Err(ContractError::VaultImpaired)
+        Err(ContractError::InvalidOperation)
     } else {
         Ok(amount * total_supply / total_assets)
     }

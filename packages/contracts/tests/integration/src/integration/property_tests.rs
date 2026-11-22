@@ -327,7 +327,7 @@ proptest! {
         prop_assert_eq!(
             result,
             Err(Ok(soroban_sdk::Error::from_contract_error(
-                nester_common::ContractError::VaultImpaired as u32,
+                nester_common::ContractError::InvalidOperation as u32,
             )))
         );
     }
