@@ -404,3 +404,61 @@ tests:
       - eval_time: 15m
         alertname: MoneyPathMetricsAbsent
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # 7. Vault asset composition divergence (nester#1421)
+  # ---------------------------------------------------------------------
+  # The independent check: vault's total_assets diverges from the sum of its
+  # USDC balance and adapter positions. Unlike BalanceComparator (DB vs chain),
+  # this compares chain against chain, so disagreement means the vault's
+  # accounting is broken, an exploit, or adapter misreporting. A single
+  # composition mismatch pages immediately — there is no acceptable rate.
+  - interval: 1m
+    name: vault asset composition divergence pages
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_reconcile_balance_last_run_age_seconds'
+        values: '0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '0+4x60'
+      # Composition divergence appears at minute 10
+      - series: 'nester_reconcile_divergences_total{kind="composition_mismatch"}'
+        values: '0x10 1x50'
+      - series: 'nester_submission_pending_count'
+        values: '0x60'
+      - series: 'nester_submission_pending_oldest_age_seconds'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VaultAssetCompositionDivergence
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: money_path_integrity
+              service: api
+            exp_annotations:
+              summary: >-
+                Vault total_assets diverges from USDC + adapter positions
+              description: >-
+                One or more vaults report a total_assets value that does not match the sum of their USDC SAC balance and deployed adapter positions, beyond the configured basis point threshold. This is the independent check for exploits and accounting bugs. Check reconciliation_findings for vault IDs, divergence amounts, and basis points. Unlike balance mismatches (DB vs chain), this is chain vs chain, so the vault's own accounting is suspect.
+              dashboard: /d/nester-slo-money-path/money-path-integrity
+              runbook: docs/observability/runbooks/vault-asset-composition.md
+
+  # A healthy composition check stays quiet
+  - interval: 1m
+    name: healthy vault asset composition does not alert
+    input_series:
+      - series: 'nester_reconcile_last_run_age_seconds'
+        values: '0+0x60'
+      - series: 'nester_reconcile_balance_last_run_age_seconds'
+        values: '0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0+60x4 0'
+      - series: 'nester_reconcile_runs_total{outcome="completed"}'
+        values: '0+4x60'
+      # No composition divergences
+      - series: 'nester_reconcile_divergences_total{kind="composition_mismatch"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: VaultAssetCompositionDivergence
+        exp_alerts: []

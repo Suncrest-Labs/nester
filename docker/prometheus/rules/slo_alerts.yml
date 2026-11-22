@@ -694,6 +694,36 @@ groups:
           dashboard: /d/nester-slo-money-path/money-path-integrity
           runbook: docs/observability/runbooks/money-path-integrity.md
 
+      - alert: VaultAssetCompositionDivergence
+        # Vault's total_assets diverges from USDC balance + adapter positions
+        # (nester#1421). This is the independent check that catches exploits
+        # and accounting bugs: a vault reports one total, but when we sum what
+        # it actually holds, the numbers disagree beyond the tolerance measured
+        # in basis points. Distinct from BalanceComparator (DB vs chain): this
+        # compares chain against chain, so disagreement means the vault's
+        # accounting is broken, an exploit has drained funds, or an adapter is
+        # misreporting positions.
+        expr: |
+          sum(increase(nester_reconcile_divergences_total{kind="composition_mismatch"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Vault total_assets diverges from USDC + adapter positions
+          description: >-
+            One or more vaults report a total_assets value that does not match
+            the sum of their USDC SAC balance and deployed adapter positions,
+            beyond the configured basis point threshold. This is the independent
+            check for exploits and accounting bugs. Check reconciliation_findings
+            for vault IDs, divergence amounts, and basis points. Unlike balance
+            mismatches (DB vs chain), this is chain vs chain, so the vault's
+            own accounting is suspect.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/vault-asset-composition.md
+
       - alert: PendingSubmissionsBacklogged
         # Age, not depth. A queue of 200 that drains in seconds is healthy; a
         # queue of 3 that has not moved in 30 minutes is money the user cannot

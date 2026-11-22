@@ -124,6 +124,144 @@ func (s StroopsBalanceReader) TotalAssets(ctx context.Context, contractAddress s
 	return s.Reader.TotalAssetsStroops(ctx, contractAddress)
 }
 
+// USDCBalanceReader adapts ContractReader to read USDC balances for reconciliation.
+// It requires the USDC contract address to be provided at construction time.
+type USDCBalanceReader struct {
+	Reader              *ContractReader
+	USDCContractAddress string
+}
+
+func (u USDCBalanceReader) USDCBalance(ctx context.Context, holderAddress string) (decimal.Decimal, error) {
+	return u.Reader.USDCBalance(ctx, u.USDCContractAddress, holderAddress)
+}
+
+// AdapterPositionReader adapts ContractReader to read vault adapter positions for reconciliation.
+type AdapterPositionReader struct {
+	Reader *ContractReader
+}
+
+func (a AdapterPositionReader) AdapterPositions(ctx context.Context, vaultAddress string) (map[string]decimal.Decimal, error) {
+	return a.Reader.AdapterPositions(ctx, vaultAddress)
+}
+
+// USDCBalance reads the USDC balance of an address from the USDC Stellar Asset Contract (SAC).
+// Returns the balance in raw stroops to match the reconciliation unit contract.
+//
+// This is used by the vault asset composition reconciler (nester#1421) to verify
+// that total_assets equals USDC_balance + adapter_positions. The balance is read
+// via the standard SAC `balance(address)` function.
+func (r *ContractReader) USDCBalance(ctx context.Context, usdcContractAddress, holderAddress string) (decimal.Decimal, error) {
+	holderScAddr, err := addressToScAddress(holderAddress)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("invalid holder address: %w", err)
+	}
+
+	args := []xdr.ScVal{holderScAddr}
+	raw, err := r.simulateI128(ctx, usdcContractAddress, "balance", args)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	// SAC balances are i128 in stroops, matching vault balances
+	return decimal.NewFromInt(raw), nil
+}
+
+// AdapterPositions reads all deployed adapter positions for a vault by calling
+// the vault's `get_sources` function to enumerate sources, then summing their
+// allocations. Returns a map of source_id -> deployed amount in stroops.
+//
+// Used by vault asset composition reconciliation (nester#1421) to verify
+// total_assets = USDC_balance + sum(adapter_positions).
+func (r *ContractReader) AdapterPositions(ctx context.Context, vaultAddress string) (map[string]decimal.Decimal, error) {
+	// Call get_sources() to enumerate all protocol sources
+	contractScAddr, err := contractAddressToXDR(vaultAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	sourcesVal, err := r.simulate(ctx, contractScAddr, "get_sources", nil)
+	if err != nil {
+		return nil, fmt.Errorf("get_sources failed: %w", err)
+	}
+
+	// get_sources returns Vec<Symbol> (source IDs)
+	if sourcesVal.Type != xdr.ScValTypeScvVec {
+		return nil, fmt.Errorf("get_sources returned unexpected type: %v", sourcesVal.Type)
+	}
+
+	sources := *sourcesVal.MustVec()
+	positions := make(map[string]decimal.Decimal, len(sources))
+
+	// For each source, call get_source_allocation(source_id) to get deployed amount
+	for _, sourceVal := range sources {
+		if sourceVal.Type != xdr.ScValTypeScvSymbol {
+			continue
+		}
+		sourceID := string(sourceVal.MustSym())
+
+		args := []xdr.ScVal{sourceVal}
+		allocationVal, err := r.simulate(ctx, contractScAddr, "get_source_allocation", args)
+		if err != nil {
+			// Skip sources that can't be read rather than failing the whole check
+			continue
+		}
+
+		// get_source_allocation returns Map with "allocated" key holding i128 amount
+		if allocationVal.Type != xdr.ScValTypeScvMap {
+			continue
+		}
+
+		scMap := allocationVal.MustMap()
+		for _, entry := range *scMap {
+			if entry.Key.Type == xdr.ScValTypeScvSymbol && string(entry.Key.MustSym()) == "allocated" {
+				if entry.Val.Type == xdr.ScValTypeScvI128 {
+					parts := entry.Val.MustI128()
+					hi := int64(parts.Hi)
+					lo := uint64(parts.Lo)
+					
+					var amount int64
+					if hi == 0 {
+						if lo > math.MaxInt64 {
+							continue // Skip overflow
+						}
+						amount = int64(lo)
+					} else if hi == -1 {
+						if lo < uint64(1<<63) {
+							continue // Skip underflow
+						}
+						amount = int64(lo)
+					} else {
+						continue // Skip out-of-range
+					}
+					
+					positions[sourceID] = decimal.NewFromInt(amount)
+				}
+			}
+		}
+	}
+
+	return positions, nil
+}
+
+// addressToScAddress converts a Stellar address string to an ScAddress for use in contract args.
+func addressToScAddress(address string) (xdr.ScVal, error) {
+	kp, err := keypair.ParseAddress(address)
+	if err != nil {
+		return xdr.ScVal{}, err
+	}
+	var accountID xdr.AccountId
+	if err := accountID.SetAddress(kp.Address()); err != nil {
+		return xdr.ScVal{}, err
+	}
+	scAddr := xdr.ScAddress{
+		Type:      xdr.ScAddressTypeScAddressTypeAccount,
+		AccountId: &accountID,
+	}
+	return xdr.ScVal{
+		Type: xdr.ScValTypeScvAddress,
+		Address: &scAddr,
+	}, nil
+}
+
 // SourceAPYBPS calls yield_registry get_source_performance(id) and returns
 // current_apy_bps from the on-chain record.
 func (r *ContractReader) SourceAPYBPS(ctx context.Context, registryAddress, protocolID string) (uint32, error) {

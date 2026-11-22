@@ -172,6 +172,12 @@ const (
 	// DivergenceStuck is a record that has not reached a terminal state
 	// within its expected window.
 	DivergenceStuck DivergenceKind = "stuck"
+	// DivergenceCompositionMismatch is when a vault's total_assets diverges
+	// from the sum of its USDC balance and adapter positions (nester#1421).
+	// Unlike mismatch (DB vs chain), this compares chain against chain, so
+	// it indicates the vault's own accounting is broken, an exploit, or
+	// adapter misreporting.
+	DivergenceCompositionMismatch DivergenceKind = "composition_mismatch"
 )
 
 func newSLOCollectors() *sloCollectors {
