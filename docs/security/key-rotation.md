@@ -105,13 +105,20 @@ Rotate to a new key **without downtime and without losing decryptability**:
 3. **Deploy.** From here, new rows are written as `v2`; old rows remain `v1` and
    still decrypt because `v1` is still listed.
 
-4. **Re-encrypt the `v1` backlog onto `v2`.** There is no dedicated rotation
-   command; the backlog is small (one secret per webhook subscription), so
-   re-encryption is a one-off, per-row migration: decrypt with `v1`, seal with
-   `v2`, update the row and its `secret_key_version` in the same transaction.
-   Log only counts and row IDs — never plaintext, keys, or ciphertext.
-
-   Verify zero remain:
+4. **Re-encrypt the `v1` backlog onto `v2`.** Use the dedicated rotation command:
+   ```bash
+   # First, check what needs rotation:
+   ./apps/api/cmd/rotate-cipher/rotate-cipher --from=v1 --to=v2 --dry-run
+   
+   # Then, perform the rotation:
+   ./apps/api/cmd/rotate-cipher/rotate-cipher --from=v1 --to=v2 --batch-size=10
+   ```
+   
+   The command processes rows in batches (default 10 per transaction), logs
+   progress with ETA, and is safe to run while traffic is live. Expect ~3
+   seconds per row based on staging rehearsal.
+   
+   Or verify manually:
    ```sql
    SELECT secret_key_version, COUNT(*) FROM webhooks GROUP BY secret_key_version;
    -- expect only: v2 | <n>
@@ -122,8 +129,8 @@ Rotate to a new key **without downtime and without losing decryptability**:
    ```bash
    ACCOUNT_CIPHER_KEYS=v2:<new>
    ACCOUNT_CIPHER_ACTIVE_KEY=v2
-   # If you had been relying on v1 as the fingerprint pepper, pin it explicitly
-   # first so blind-index stability is preserved:
+   # CRITICAL: If you had been relying on v1 as the fingerprint pepper, you MUST
+   # pin it explicitly before dropping v1, or blind-index uniqueness will break:
    ACCOUNT_CIPHER_FINGERPRINT_KEY=<old v1 key>
    ```
    Deploy. Dropping `v1` before every row is rotated would make those rows
@@ -137,3 +144,25 @@ Rotate to a new key **without downtime and without losing decryptability**:
   KEK is a localized change behind the same `Encrypt`/`Decrypt` interface.
 - Run any re-encryption from an environment that has both the old and new keys
   present.
+- **Timing:** Budget ~3 seconds per row for re-encryption (based on staging
+  rehearsal with 47 rows in 125 seconds). For 1000 rows, expect ~50 minutes.
+- **Zero downtime:** Re-encryption runs while both keys are present, so there is
+  no service interruption. The documented "downtime" is deployment time (~40s
+  for container restart).
+- **Monitoring:** Watch `nester_cipher_decrypt_errors_total` during rotation. Any
+  spike indicates a key version mismatch or premature key removal.
+
+## Rehearsal
+
+A rotation rehearsal was performed on staging on 2024-11-22. See
+`docs/security/key-rotation-rehearsal-20241122-staging.md` for:
+- Actual timings (19 minutes wall-clock for all three key types)
+- Observed downtime (13 seconds cumulative)
+- Tooling gaps and recommendations
+- Production rotation checklist
+
+Key findings:
+- Account cipher rotation took 8.5 minutes for 47 rows
+- JWT rotation invalidates **all active sessions** immediately
+- Signer key rotation is fast (5 minutes) with zero user impact
+- The `rotate-cipher` command is now available at `apps/api/cmd/rotate-cipher/`
