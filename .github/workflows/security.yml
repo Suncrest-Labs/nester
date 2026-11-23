@@ -38,10 +38,10 @@ jobs:
       dapp: ${{ steps.matrix.outputs.dapp }}
       api: ${{ steps.matrix.outputs.api }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Scheduled and manual runs have no diff to filter on and scan everything.
-      - uses: dorny/paths-filter@b41dfa943b1939b9b646f67753bfe35cf6e4de03 # v3.0.2
+      - uses: dorny/paths-filter@f3360c560367c9daf72b88c0e6164162034c5721 # v3.0.2
         id: filter
         if: github.event_name == 'pull_request' || github.event_name == 'push'
         with:
@@ -94,7 +94,7 @@ jobs:
     name: Secrets (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -119,18 +119,18 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.deps_matrix) }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # pnpm: a workspace with a single root pnpm-lock.yaml, so the audit runs
       # once from the root. Resolves straight from the lockfile and never needs
       # an install.
       - name: Setup pnpm
         if: matrix.tool == 'pnpm'
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v4.1.0
 
       - name: Setup Node
         if: matrix.tool == 'pnpm'
-        uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858 # v4.3.0
+        uses: actions/setup-node@66f83c8206e0997178c8fd7bf1da9efccf5dd388 # v4.3.0
         with:
           node-version: 22
 
@@ -219,7 +219,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.sast_matrix) }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -268,15 +268,15 @@ jobs:
         run: python3 scripts/typosquat_check.py apps/dapp/frontend/package.json "$BASE_REF"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
+        uses: github/codeql-action/init@38112626f97ac1fd7acf3df7ebca51f4677c1b38 # v3
         with:
           languages: ${{ matrix.codeql }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
+        uses: github/codeql-action/autobuild@38112626f97ac1fd7acf3df7ebca51f4677c1b38 # v3
 
       - name: Analyze
-        uses: github/codeql-action/analyze@f02afd42b08e9c7fd2198fe321a96e6b3867a0fd # v3
+        uses: github/codeql-action/analyze@38112626f97ac1fd7acf3df7ebca51f4677c1b38 # v3
 
   # Builds the API and signer images (the two production Dockerfiles that
   # exist today: apps/api/Dockerfile and apps/api/Dockerfile.signer) and
@@ -300,7 +300,7 @@ jobs:
           - name: signer
             dockerfile: apps/api/Dockerfile.signer
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build ${{ matrix.name }} image
         run: |
@@ -310,7 +310,7 @@ jobs:
             apps/api
 
       - name: Scan ${{ matrix.name }} image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: "nester-${{ matrix.name }}:scan"
           format: "table"
@@ -324,7 +324,7 @@ jobs:
     if: needs.changes.outputs.sbom == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/setup
         with:
@@ -366,7 +366,7 @@ jobs:
         run: syft dir:. --output cyclonedx-json=../../sbom-contracts.json
 
       - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-artifacts
           path: sbom-*.json
@@ -378,7 +378,7 @@ jobs:
     if: needs.changes.outputs.contracts == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run pre-deploy contract audit
         env:
@@ -391,7 +391,7 @@ jobs:
 
       - name: Upload audit reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: contract-audit-reports
           path: audit-report-*.json
