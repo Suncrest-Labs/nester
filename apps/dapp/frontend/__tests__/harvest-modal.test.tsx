@@ -6,12 +6,18 @@ import type { ReactNode } from "react";
 import { HarvestModal } from "@/components/vault/HarvestModal";
 import { vaultsApi } from "@/lib/api/vaults";
 import type { HarvestPreview, HarvestResult } from "@/lib/api/vaults";
+import { fetchYieldHarvests } from "@/lib/api/yields";
+import type { YieldHarvest } from "@/lib/api/yields";
 
 vi.mock("@/lib/api/vaults", () => ({
   vaultsApi: {
     previewHarvest: vi.fn(),
     harvest: vi.fn(),
   },
+}));
+
+vi.mock("@/lib/api/yields", () => ({
+  fetchYieldHarvests: vi.fn(),
 }));
 
 vi.mock("@/utils/explorer", () => ({
@@ -24,6 +30,8 @@ const preview: HarvestPreview = {
   gross_yield_usdc: "12.500000",
   performance_fee_usdc: "1.250000",
   net_yield_usdc: "11.250000",
+  gas_cost_usdc: "0.050000",
+  net_yield_after_gas_usdc: "11.200000",
   compounded: true,
   estimated_new_shares: "11.250000",
   performance_fee_bps: 1000,
@@ -46,6 +54,17 @@ const zeroYieldPreview: HarvestPreview = {
   compounded: true,
   performance_fee_bps: 1000,
   impaired: true,
+};
+
+const vaultHarvest: YieldHarvest = {
+  id: "harvest-1",
+  user_id: "user-1",
+  vault_id: "vault-1",
+  amount: "3.400000",
+  currency: "USDC",
+  protocol: "blend",
+  harvested_at: "2026-05-01T10:00:00Z",
+  tx_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
 };
 
 function renderHarvestModal() {
@@ -76,6 +95,10 @@ function renderHarvestModal() {
 describe("HarvestModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fetchYieldHarvests).mockResolvedValue({
+      items: [],
+      next_cursor: "",
+    });
   });
 
   it("shows preview loading state on open", async () => {
@@ -103,8 +126,39 @@ describe("HarvestModal", () => {
     expect(screen.getByText("12.50 USDC")).toBeInTheDocument();
     expect(screen.getByText("Performance Fee (10%)")).toBeInTheDocument();
     expect(screen.getByText("1.25 USDC")).toBeInTheDocument();
-    expect(screen.getByText("11.25 USDC")).toBeInTheDocument();
+    // Gas from the API, and net after gas as reported by the API (11.25 net
+    // minus 0.05 estimated gas), not a gas-free figure.
+    expect(screen.getByText("0.05 USDC")).toBeInTheDocument();
+    expect(screen.getByText("11.20 USDC")).toBeInTheDocument();
+    expect(screen.getByText("11.250000")).toBeInTheDocument();
     expect(vaultsApi.previewHarvest).toHaveBeenCalledWith("vault-1", true);
+  });
+
+  it("lists this vault's past harvests with net after gas", async () => {
+    vi.mocked(vaultsApi.previewHarvest).mockResolvedValue(preview);
+    vi.mocked(fetchYieldHarvests).mockResolvedValue({
+      items: [vaultHarvest],
+      next_cursor: "",
+    });
+
+    renderHarvestModal();
+
+    expect(await screen.findByText("May 1, 2026")).toBeInTheDocument();
+    expect(screen.getByText("blend")).toBeInTheDocument();
+    expect(screen.getByText("3.40 USDC")).toBeInTheDocument();
+    // 3.40 net - 0.05 estimated gas.
+    expect(screen.getByText("3.35 USDC")).toBeInTheDocument();
+    expect(fetchYieldHarvests).toHaveBeenCalledWith(undefined, 20, "vault-1");
+  });
+
+  it("shows an empty state when the vault has no harvests", async () => {
+    vi.mocked(vaultsApi.previewHarvest).mockResolvedValue(preview);
+
+    renderHarvestModal();
+
+    expect(
+      await screen.findByText(/no harvests have been recorded for this vault/i),
+    ).toBeInTheDocument();
   });
 
   it("submits harvest from the confirm step", async () => {

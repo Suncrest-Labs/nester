@@ -31,8 +31,10 @@ type YieldHarvestRecorder interface {
 // ListYieldHarvestsInput carries pagination parameters for GET /yields/harvests.
 type ListYieldHarvestsInput struct {
 	UserID uuid.UUID
-	Cursor string
-	Limit  int
+	// VaultID narrows the list to one vault when set (nester#949).
+	VaultID *uuid.UUID
+	Cursor  string
+	Limit   int
 }
 
 // ListYieldHarvestsOutput is the paginated response.
@@ -82,8 +84,9 @@ func (s *YieldHarvestService) ListHarvests(ctx context.Context, input ListYieldH
 	}
 
 	filter := yieldharvest.ListFilter{
-		UserID: input.UserID,
-		Limit:  limit + 1, // fetch one extra to determine if there is a next page
+		UserID:  input.UserID,
+		VaultID: input.VaultID,
+		Limit:   limit + 1, // fetch one extra to determine if there is a next page
 	}
 
 	if input.Cursor != "" {

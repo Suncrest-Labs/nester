@@ -1499,6 +1499,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("HARVEST_ENGINE_GAS_FEE: %w", err)
 	}
+	// The harvest preview reports net yield after gas, so it must use the same
+	// fee estimate the engine gates on; otherwise the modal would tell users a
+	// harvest is profitable when the engine would defer it (#949).
+	vaultService.SetHarvestGasFee(harvestGasFee)
 	harvestExecutor := harvest.NewServiceExecutor(vaultService, userService)
 	jobWorker.Register(harvest.DefaultJobType,
 		harvest.NewJobHandler(harvestExecutor, baseLogger.WithGroup("harvest-job")), 0)

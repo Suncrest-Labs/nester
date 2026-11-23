@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
+	"github.com/suncrestlabs/nester/apps/api/pkg/response"
 )
 
 // yieldHarvestServicer is the service surface the handler depends on.
@@ -62,10 +62,24 @@ func (h *YieldHarvestHandler) ListHarvests(w http.ResponseWriter, r *http.Reques
 		limit = v
 	}
 
+	// Optional vault scoping. The harvest modal asks only for the vault the
+	// user is about to harvest, so results are not diluted by harvests made in
+	// other vaults (nester#949).
+	var vaultFilter *uuid.UUID
+	if raw := q.Get("vault_id"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("vault_id must be a valid UUID"))
+			return
+		}
+		vaultFilter = &parsed
+	}
+
 	out, err := h.svc.ListHarvests(r.Context(), service.ListYieldHarvestsInput{
-		UserID: userID,
-		Cursor: q.Get("cursor"),
-		Limit:  limit,
+		UserID:  userID,
+		VaultID: vaultFilter,
+		Cursor:  q.Get("cursor"),
+		Limit:   limit,
 	})
 	if err != nil {
 		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list yield harvests"))
