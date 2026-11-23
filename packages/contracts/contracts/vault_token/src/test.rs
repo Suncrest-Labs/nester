@@ -541,6 +541,38 @@ fn pure_shares_for_deposit_proportional() {
 }
 
 #[test]
+fn impaired_vault_rejects_new_deposit_with_typed_error() {
+    assert_eq!(
+        crate::try_shares_for_deposit_math(1_000, 10_000, 0),
+        Err(nester_common::ContractError::InvalidOperation)
+    );
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    client.mint_for_deposit(&alice, &10_000_i128);
+    client.set_total_assets(&0_i128);
+
+    assert_eq!(
+        client.try_shares_for_deposit(&5_000_i128),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::InvalidOperation as u32,
+        )))
+    );
+    assert_eq!(
+        client.try_mint_for_deposit(&bob, &5_000_i128),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::InvalidOperation as u32,
+        )))
+    );
+    assert_eq!(client.total_supply(), 10_000);
+    assert_eq!(client.balance(&bob), 0);
+}
+
+#[test]
 fn pure_amount_for_shares_no_supply() {
     // total_supply == 0 → 1:1
     assert_eq!(crate::amount_for_shares_math(500, 0, 0), 500);

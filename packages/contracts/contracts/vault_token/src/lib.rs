@@ -248,7 +248,8 @@ impl VaultTokenContract {
     /// Preview: shares a deposit of `amount` would mint **right now**.
     /// Does not change state.
     pub fn shares_for_deposit(env: Env, amount: i128) -> i128 {
-        shares_for_deposit_math(amount, get_total_supply(&env), get_total_assets(&env))
+        try_shares_for_deposit_math(amount, get_total_supply(&env), get_total_assets(&env))
+            .unwrap_or_else(|e| panic_with_error!(&env, e))
     }
 
     /// Preview: underlying that `shares` would redeem for **right now**.
@@ -286,7 +287,8 @@ impl VaultTokenContract {
         require_vault(&env);
         let total_supply = get_total_supply(&env);
         let total_assets = get_total_assets(&env);
-        let shares = shares_for_deposit_math(amount, total_supply, total_assets);
+        let shares = try_shares_for_deposit_math(amount, total_supply, total_assets)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
         receive_balance(&env, &to, shares);
         set_total_supply(&env, total_supply + shares);
         set_total_assets(&env, total_assets + amount);
@@ -425,16 +427,29 @@ impl VaultTokenContract {
 // Pure exchange-rate math
 // ---------------------------------------------------------------------------
 
-/// Shares to mint for a deposit of `amount`.
+/// Fallible share calculation for a deposit of `amount`.
 ///
-/// * First deposit (`total_supply == 0`): issues 1:1.
-/// * Subsequent: `floor(amount * total_supply / total_assets)`.
-pub fn shares_for_deposit_math(amount: i128, total_supply: i128, total_assets: i128) -> i128 {
-    if total_supply == 0 || total_assets == 0 {
-        amount
+/// A live supply backed by zero assets is an impaired vault, not a first
+/// deposit. Rejecting it prevents a new depositor from recapitalising existing
+/// holders while receiving an incorrect 1:1 ownership fraction.
+pub fn try_shares_for_deposit_math(
+    amount: i128,
+    total_supply: i128,
+    total_assets: i128,
+) -> Result<i128, ContractError> {
+    if total_supply == 0 {
+        Ok(amount)
+    } else if total_assets == 0 {
+        Err(ContractError::InvalidOperation)
     } else {
-        amount * total_supply / total_assets
+        Ok(amount * total_supply / total_assets)
     }
+}
+
+/// Shares to mint for a deposit of `amount`.
+pub fn shares_for_deposit_math(amount: i128, total_supply: i128, total_assets: i128) -> i128 {
+    try_shares_for_deposit_math(amount, total_supply, total_assets)
+        .expect("impaired vault cannot mint shares")
 }
 
 /// Underlying amount for `shares`.
