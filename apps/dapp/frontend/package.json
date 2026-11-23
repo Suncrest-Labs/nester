@@ -62,7 +62,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "axe-core": "^4.10.2",
-    "@lhci/cli": "^0.14.0",
+    "@lhci/cli": "^0.16.1",
     "@vitejs/plugin-react": "^4.3.4",
     "@vitest/coverage-v8": "^4.1.12",
     "eslint": "^9",
