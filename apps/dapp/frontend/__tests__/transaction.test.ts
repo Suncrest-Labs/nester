@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const sendTransaction = vi.fn();
+const getTransaction = vi.fn();
 const getNetwork = vi.fn();
 const walletSign = vi.fn();
 
@@ -8,12 +9,18 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
   class FakeServer {
     sendTransaction = sendTransaction;
-    getTransaction = vi.fn();
+    getTransaction = getTransaction;
   }
   return {
     ...actual,
     rpc: { ...actual.rpc, Server: FakeServer },
-    Transaction: class FakeTransaction {},
+    Transaction: class FakeTransaction {
+      source = "GTEST";
+      timeBounds = { minTime: "0", maxTime: "1" };
+      hash() {
+        return Buffer.from("f".repeat(64), "hex");
+      }
+    },
   };
 });
 
@@ -30,12 +37,19 @@ vi.mock("@creit.tech/stellar-wallets-kit", () => ({
 import { NETWORKS } from "@/lib/networks";
 import {
   TX_TIMEOUT_SECONDS,
+  AmbiguousTransactionError,
+  TransactionFailedError,
   TransactionExpiredError,
   WalletNetworkMismatchError,
+  refreshSubmittedTransactions,
   signTransaction,
   signWithExpiryRebuild,
   submitTransaction,
 } from "@/lib/stellar/transaction";
+import {
+  getSubmittedTransactions,
+  recordSubmittedTransaction,
+} from "@/lib/stellar/transaction-history";
 
 function builtTx(maxTime: number, xdr = "xdr") {
   return { xdr, transaction: { timeBounds: { minTime: "0", maxTime: String(maxTime) } } };
@@ -134,6 +148,14 @@ describe("signing expiry", () => {
 });
 
 describe("submitTransaction txTooLate", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    sendTransaction.mockReset();
+    getTransaction.mockReset();
+  });
+
+  afterEach(() => vi.useRealTimers());
+
   it("maps a txTooLate rejection to TransactionExpiredError", async () => {
     sendTransaction.mockResolvedValue({
       status: "ERROR",
@@ -144,5 +166,62 @@ describe("submitTransaction txTooLate", () => {
     });
 
     await expect(submitTransaction("signed")).rejects.toBeInstanceOf(TransactionExpiredError);
+  });
+
+  it("persists a submission and marks it confirmed after RPC success", async () => {
+    vi.useFakeTimers();
+    sendTransaction.mockResolvedValue({ status: "PENDING", hash: "f".repeat(64) });
+    getTransaction.mockResolvedValue({ status: "SUCCESS", ledger: 42 });
+
+    const submission = submitTransaction("signed");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(submission).resolves.toMatchObject({ txHash: "f".repeat(64), ledger: 42 });
+    expect(getSubmittedTransactions("GTEST", "testnet")[0].status).toBe("confirmed");
+  });
+
+  it("marks on-chain failures as failed", async () => {
+    vi.useFakeTimers();
+    sendTransaction.mockResolvedValue({ status: "PENDING", hash: "f".repeat(64) });
+    getTransaction.mockResolvedValue({
+      status: "FAILED",
+      resultMetaXdr: { toXDR: () => "failed-result" },
+    });
+
+    const submission = submitTransaction("signed");
+    const failure = expect(submission).rejects.toBeInstanceOf(TransactionFailedError);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await failure;
+    expect(getSubmittedTransactions("GTEST", "testnet")[0].status).toBe("failed");
+  });
+
+  it("archives NOT_FOUND only after time bounds expire", async () => {
+    const record = recordSubmittedTransaction("GTEST", "testnet", {
+      txHash: "e".repeat(64),
+      minTime: 0,
+      maxTime: 1,
+    });
+    getTransaction.mockResolvedValue({ status: "NOT_FOUND" });
+
+    await refreshSubmittedTransactions("GTEST", "testnet");
+
+    expect(getSubmittedTransactions("GTEST", "testnet")[0]).toMatchObject({
+      txHash: record.txHash,
+      status: "archived",
+    });
+  });
+
+  it("blocks another submission while the previous hash remains ambiguous", async () => {
+    const pending = recordSubmittedTransaction("GTEST", "testnet", {
+      txHash: "a".repeat(64),
+      minTime: 0,
+      maxTime: Math.floor(Date.now() / 1000) + 60,
+    });
+    getTransaction.mockResolvedValue({ status: "NOT_FOUND" });
+
+    await expect(submitTransaction("signed")).rejects.toMatchObject({
+      name: AmbiguousTransactionError.name,
+      txHash: pending.txHash,
+    });
+    expect(sendTransaction).not.toHaveBeenCalled();
   });
 });
