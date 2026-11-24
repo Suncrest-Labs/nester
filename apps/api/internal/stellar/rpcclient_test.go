@@ -536,3 +536,120 @@ func TestApplicationErrorsInsideA200AreNotRetried(t *testing.T) {
 		t.Fatal("the application error was not decoded for the call site")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Automatic failover to secondary RPC provider
+// ---------------------------------------------------------------------------
+
+// When the primary RPC endpoint fails with a 5xx error on an idempotent read,
+// rpcClient automatically fails over to the configured secondary endpoint and
+// returns its result without surfacing an error to the caller.
+func TestFailover_IdempotentReadFallsBackToSecondaryOn5xx(t *testing.T) {
+	primary := newRPCServer(t, func(_ string, _ int, w http.ResponseWriter) {
+		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+	})
+	secondary := newRPCServer(t, func(_ string, _ int, w http.ResponseWriter) {
+		writeRPCResult(w, map[string]any{"latestLedger": 12345})
+	})
+
+	opts := noSleepOptions(&recordingObserver{})
+	opts.SecondaryURL = secondary.server.URL
+	client := newRPCClient(primary.server.URL, &http.Client{Timeout: 5 * time.Second}, opts, false)
+
+	var resp struct {
+		Result map[string]any `json:"result"`
+	}
+	if err := client.call(context.Background(), "getLatestLedger", nil, &resp); err != nil {
+		t.Fatalf("call() = %v, want nil via secondary failover", err)
+	}
+	if primary.count("getLatestLedger") != opts.Policy.MaxAttempts {
+		t.Fatalf("primary hits = %d, want %d", primary.count("getLatestLedger"), opts.Policy.MaxAttempts)
+	}
+	if secondary.count("getLatestLedger") != 1 {
+		t.Fatalf("secondary hits = %d, want 1", secondary.count("getLatestLedger"))
+	}
+}
+
+// When the primary RPC endpoint's circuit breaker is open, rpcClient fails over
+// immediately to the secondary endpoint — including for sendTransaction, because
+// the breaker rejected the call locally before any network I/O occurred.
+func TestFailover_OpenBreakerFailsOverImmediatelyIncludingWrites(t *testing.T) {
+	secondary := newRPCServer(t, func(_ string, _ int, w http.ResponseWriter) {
+		writeRPCResult(w, map[string]any{"status": "PENDING"})
+	})
+
+	primaryURL := "http://primary.invalid/rpc"
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() == primaryURL {
+			return nil, fmt.Errorf("primary breaker: %w", breaker.ErrOpen)
+		}
+		return http.DefaultTransport.RoundTrip(req)
+	})
+
+	opts := noSleepOptions(nil)
+	opts.SecondaryURL = secondary.server.URL
+	client := newRPCClient(primaryURL, &http.Client{Transport: transport}, opts, false)
+
+	var resp map[string]any
+	if err := client.call(context.Background(), "sendTransaction", nil, &resp); err != nil {
+		t.Fatalf("call(sendTransaction) = %v, want nil via secondary failover when primary breaker is open", err)
+	}
+	if secondary.count("sendTransaction") != 1 {
+		t.Fatalf("secondary hits = %d, want 1", secondary.count("sendTransaction"))
+	}
+}
+
+// A non-idempotent sendTransaction that actually reached the primary and failed
+// with a 5xx must NOT automatically fail over to the secondary, preventing
+// accidental double submission.
+func TestFailover_SendTransactionDoesNotFailOverAfterPrimaryNetworkAttempt(t *testing.T) {
+	primary := newRPCServer(t, func(_ string, _ int, w http.ResponseWriter) {
+		http.Error(w, "gateway timeout", http.StatusGatewayTimeout)
+	})
+	secondary := newRPCServer(t, func(_ string, _ int, w http.ResponseWriter) {
+		writeRPCResult(w, map[string]any{"status": "PENDING"})
+	})
+
+	opts := noSleepOptions(nil)
+	opts.SecondaryURL = secondary.server.URL
+	client := newRPCClient(primary.server.URL, &http.Client{Timeout: 5 * time.Second}, opts, false)
+
+	var resp map[string]any
+	if err := client.call(context.Background(), "sendTransaction", nil, &resp); err == nil {
+		t.Fatal("call(sendTransaction) = nil, want error (must not fail over after primary network attempt)")
+	}
+	if primary.count("sendTransaction") != 1 {
+		t.Fatalf("primary hits = %d, want 1", primary.count("sendTransaction"))
+	}
+	if secondary.count("sendTransaction") != 0 {
+		t.Fatalf("secondary hits = %d, want 0", secondary.count("sendTransaction"))
+	}
+}
+
+// Deterministic 4xx client errors from the primary must NOT trigger failover.
+func TestFailover_ClientErrorDoesNotFailOver(t *testing.T) {
+	primary := newRPCServer(t, func(_ string, _ int, w http.ResponseWriter) {
+		http.Error(w, "bad request", http.StatusBadRequest)
+	})
+	secondary := newRPCServer(t, func(_ string, _ int, w http.ResponseWriter) {
+		writeRPCResult(w, map[string]any{"ok": true})
+	})
+
+	opts := noSleepOptions(nil)
+	opts.SecondaryURL = secondary.server.URL
+	client := newRPCClient(primary.server.URL, &http.Client{Timeout: 5 * time.Second}, opts, false)
+
+	var resp map[string]any
+	if err := client.call(context.Background(), "getHealth", nil, &resp); err == nil {
+		t.Fatal("call(getHealth) = nil, want error on 400")
+	}
+	if secondary.count("getHealth") != 0 {
+		t.Fatalf("secondary hits = %d, want 0 for 400 client error", secondary.count("getHealth"))
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}

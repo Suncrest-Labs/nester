@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
@@ -44,8 +45,9 @@ import (
 // attempts from it and let a retry storm run to completion against a dead
 // endpoint.
 type rpcClient struct {
-	url    string
-	client *http.Client
+	url          string
+	secondaryURL string
+	client       *http.Client
 
 	runner *retry.Runner
 	policy retry.Policy
@@ -65,9 +67,10 @@ type rpcClient struct {
 // caller in this package. The zero value is usable: it means the package
 // defaults and no metrics, which is what a test or the backfill CLI gets.
 type RPCOptions struct {
-	Runner   *retry.Runner
-	Policy   retry.Policy
-	Observer RPCObserver
+	Runner       *retry.Runner
+	Policy       retry.Policy
+	Observer     RPCObserver
+	SecondaryURL string
 }
 
 // RPCObserver receives one report per logical RPC call, after any retries.
@@ -92,13 +95,18 @@ func newRPCClient(rpcURL string, client *http.Client, opts RPCOptions, traced bo
 	if opts.Runner == nil {
 		opts.Runner = retry.New()
 	}
+	secondary := strings.TrimSpace(opts.SecondaryURL)
+	if strings.EqualFold(strings.TrimRight(secondary, "/"), strings.TrimRight(strings.TrimSpace(rpcURL), "/")) {
+		secondary = ""
+	}
 	return &rpcClient{
-		url:      rpcURL,
-		client:   client,
-		runner:   opts.Runner,
-		policy:   opts.Policy,
-		observer: opts.Observer,
-		traced:   traced,
+		url:          rpcURL,
+		secondaryURL: secondary,
+		client:       client,
+		runner:       opts.Runner,
+		policy:       opts.Policy,
+		observer:     opts.Observer,
+		traced:       traced,
 	}
 }
 
@@ -219,6 +227,27 @@ func retryableRPCError(err error) bool {
 	return true
 }
 
+// shouldFailoverRPCError reports whether a failed primary RPC call should
+// automatically fail over to the configured secondary RPC endpoint.
+//
+// An open circuit breaker (breaker.ErrOpen) always triggers failover — even
+// for sendTransaction — because the breaker rejected the request locally before
+// any network I/O occurred, so there is no risk of double submission. For all
+// other failures, only idempotent methods with transient/upstream errors fail
+// over to the secondary endpoint.
+func shouldFailoverRPCError(method string, err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, breaker.ErrOpen) {
+		return true
+	}
+	if !isIdempotentRPCMethod(method) {
+		return false
+	}
+	return retryableRPCError(err)
+}
+
 // call performs one logical JSON-RPC call, retrying it when the method is
 // idempotent and the failure looks transient.
 //
@@ -250,8 +279,17 @@ func (c *rpcClient) call(ctx context.Context, method string, params, result any)
 	}
 
 	res, err := c.runner.Do(ctx, c.policy, retryable, func(ctx context.Context) error {
-		return c.attempt(ctx, method, body, result)
+		return c.attempt(ctx, c.url, method, body, result)
 	})
+
+	if err != nil && c.secondaryURL != "" && shouldFailoverRPCError(method, err) {
+		secRes, secErr := c.runner.Do(ctx, c.policy, retryable, func(ctx context.Context) error {
+			return c.attempt(ctx, c.secondaryURL, method, body, result)
+		})
+		res.Attempts += secRes.Attempts
+		res.Elapsed += secRes.Elapsed
+		err = secErr
+	}
 
 	c.observe(res, err)
 
@@ -266,8 +304,8 @@ func (c *rpcClient) call(ctx context.Context, method string, params, result any)
 // attempt performs one HTTP round trip. It is called once per retry, and must
 // therefore not consume anything it cannot rebuild — hence body is passed in
 // as bytes and wrapped in a fresh reader each time.
-func (c *rpcClient) attempt(ctx context.Context, method string, body []byte, result any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
+func (c *rpcClient) attempt(ctx context.Context, targetURL, method string, body []byte, result any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

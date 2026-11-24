@@ -305,15 +305,17 @@ func run() error {
 	// first place. Only idempotent reads are retried — the stellar package
 	// decides that per RPC method, and sendTransaction is never among them.
 	sorobanRPCOptions := stellarpkg.RPCOptions{
-		Runner:   retry.New(),
-		Policy:   cfg.RPCRetry().Policy(),
-		Observer: appMetrics.RPCRecorderFor(metrics.UpstreamSorobanRPC),
+		Runner:       retry.New(),
+		Policy:       cfg.RPCRetry().Policy(),
+		Observer:     appMetrics.RPCRecorderFor(metrics.UpstreamSorobanRPC),
+		SecondaryURL: cfg.Stellar().SecondaryRPCURL(),
 	}
 	baseLogger.Info("soroban rpc retry policy",
 		"max_attempts", sorobanRPCOptions.Policy.MaxAttempts,
 		"base_delay", sorobanRPCOptions.Policy.BaseDelay.String(),
 		"max_delay", sorobanRPCOptions.Policy.MaxDelay.String(),
 		"budget", sorobanRPCOptions.Policy.Budget.String(),
+		"secondary_configured", sorobanRPCOptions.SecondaryURL != "",
 	)
 
 	vaultRepository := postgres.NewVaultRepository(db)
@@ -2810,10 +2812,32 @@ func pingStellarDependencies(logger *slog.Logger, cfg *config.Config) error {
 
 	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), timeout)
 	defer rpcCancel()
-	if res := stellarpkg.PingSorobanRPC(rpcCtx, client, cfg.Stellar().RPCURL()); !res.OK {
-		return fmt.Errorf("soroban rpc unreachable at %s: %s", cfg.Stellar().RPCURL(), res.Error)
-	} else {
-		logger.Info("soroban rpc reachable", "url", cfg.Stellar().RPCURL(), "latest_ledger", res.LatestLedger)
+	primaryRes := stellarpkg.PingSorobanRPC(rpcCtx, client, cfg.Stellar().RPCURL())
+	if primaryRes.OK {
+		logger.Info("soroban rpc reachable", "url", cfg.Stellar().RPCURL(), "latest_ledger", primaryRes.LatestLedger)
+	}
+
+	if secondaryURL := cfg.Stellar().SecondaryRPCURL(); secondaryURL != "" {
+		secCtx, secCancel := context.WithTimeout(context.Background(), timeout)
+		defer secCancel()
+		secRes := stellarpkg.PingSorobanRPC(secCtx, client, secondaryURL)
+		if secRes.OK {
+			logger.Info("soroban secondary rpc reachable", "url", secondaryURL, "latest_ledger", secRes.LatestLedger)
+		} else if primaryRes.OK {
+			logger.Warn("soroban secondary rpc unreachable; automatic failover degraded", "url", secondaryURL, "error", secRes.Error)
+		} else {
+			return fmt.Errorf("soroban primary rpc unreachable at %s (%s) and secondary rpc unreachable at %s (%s)",
+				cfg.Stellar().RPCURL(), primaryRes.Error, secondaryURL, secRes.Error)
+		}
+		if !primaryRes.OK {
+			logger.Warn("soroban primary rpc unreachable at startup; secondary rpc is healthy for failover",
+				"primary_url", cfg.Stellar().RPCURL(),
+				"primary_error", primaryRes.Error,
+				"secondary_url", secondaryURL,
+			)
+		}
+	} else if !primaryRes.OK {
+		return fmt.Errorf("soroban rpc unreachable at %s: %s", cfg.Stellar().RPCURL(), primaryRes.Error)
 	}
 
 	return nil
