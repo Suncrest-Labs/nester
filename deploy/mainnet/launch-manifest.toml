@@ -1,0 +1,173 @@
+# Local mainnet-protocol launch manifest (nester#1569).
+#
+# This is the contract set the local protocol rehearsal deploys after quickstart
+# has been pinned to mainnet's protocol version and its Soroban settings have
+# been applied. The order mirrors packages/contracts/scripts/deploy-mainnet.sh:
+# deploy every contract first, then initialise in dependency order.
+#
+# It is intentionally outside packages/contracts/: it is not the audited mainnet
+# contract set tracked by the contracts freeze (nester#1501), and it must never
+# be pointed at a public network. The workflow only ever supplies a local RPC
+# URL and the "Standalone Network ; February 2017" passphrase.
+#
+# Placeholders:
+#   {{<ContractName>}}  contract ID assigned earlier in this manifest
+#   {{ADMIN}}           source account that deploys and initialises
+#   {{USDC_SAC}}        local USDC Stellar Asset Contract address
+#   {{XLM_SAC}}         native XLM Stellar Asset Contract address
+
+[[contract]]
+name = "VaultTokenUSDC"
+package = "vault-token-contract"
+wasm = "vault_token.wasm"
+
+[[contract]]
+name = "VaultTokenXLM"
+package = "vault-token-contract"
+wasm = "vault_token.wasm"
+
+[[contract]]
+name = "VaultUSDC"
+package = "vault-contract"
+wasm = "vault_contract.wasm"
+
+[[contract]]
+name = "VaultXLM"
+package = "vault-contract"
+wasm = "vault_contract.wasm"
+
+[[contract]]
+name = "Treasury"
+package = "treasury-contract"
+wasm = "treasury_contract.wasm"
+
+[[contract]]
+name = "YieldRegistry"
+package = "yield-registry-contract"
+wasm = "yield_registry.wasm"
+
+[[contract]]
+name = "AllocationStrategy"
+package = "allocation-strategy-contract"
+wasm = "allocation_strategy_contract.wasm"
+
+[[contract]]
+name = "Nester"
+package = "nester-contract"
+wasm = "nester_contract.wasm"
+
+[[init]]
+contract = "VaultTokenUSDC"
+function = "initialize"
+args = [
+  "--vault", "{{VaultUSDC}}",
+  "--name", "Nester USDC Vault Token",
+  "--symbol", "nUSDC",
+  "--decimals", "7",
+]
+
+[[init]]
+contract = "VaultTokenXLM"
+function = "initialize"
+args = [
+  "--vault", "{{VaultXLM}}",
+  "--name", "Nester XLM Vault Token",
+  "--symbol", "nXLM",
+  "--decimals", "7",
+]
+
+[[init]]
+contract = "Treasury"
+function = "initialize"
+args = [
+  "--admin", "{{ADMIN}}",
+  "--vault", "{{VaultUSDC}}",
+]
+
+[[init]]
+contract = "VaultUSDC"
+function = "initialize"
+args = [
+  "--admin", "{{ADMIN}}",
+  "--token_address", "{{USDC_SAC}}",
+  "--vault_token_address", "{{VaultTokenUSDC}}",
+  "--treasury", "{{Treasury}}",
+]
+
+[[init]]
+contract = "VaultXLM"
+function = "initialize"
+args = [
+  "--admin", "{{ADMIN}}",
+  "--token_address", "{{XLM_SAC}}",
+  "--vault_token_address", "{{VaultTokenXLM}}",
+  "--treasury", "{{Treasury}}",
+]
+
+[[init]]
+contract = "YieldRegistry"
+function = "initialize"
+args = [
+  "--admin", "{{ADMIN}}",
+]
+
+[[init]]
+contract = "AllocationStrategy"
+function = "initialize"
+args = [
+  "--admin", "{{ADMIN}}",
+  "--registry_id", "{{YieldRegistry}}",
+]
+
+# nester-contract takes a ProtocolInitConfig struct. stellar-cli accepts it as
+# JSON, so keep the struct literal here rather than drifting from the Rust ABI
+# by passing stale flat flags.
+[[init]]
+contract = "Nester"
+function = "initialize"
+args = [
+  "--admin", "{{ADMIN}}",
+  "--config", '{"vault_usdc":"{{VaultUSDC}}","vault_xlm":"{{VaultXLM}}","vault_token_usdc":"{{VaultTokenUSDC}}","vault_token_xlm":"{{VaultTokenXLM}}","treasury":"{{Treasury}}","yield_registry":"{{YieldRegistry}}","allocation_strategy":"{{AllocationStrategy}}"}',
+]
+
+# Post-init reads prove each contract is live on the local network and holds the
+# state initialization just wrote, not merely that deploy returned an ID.
+[[verify]]
+contract = "VaultTokenUSDC"
+function = "name"
+expect = "Nester USDC Vault Token"
+
+[[verify]]
+contract = "VaultTokenUSDC"
+function = "decimals"
+expect = "7"
+
+[[verify]]
+contract = "Treasury"
+function = "get_vault"
+expect = "{{VaultUSDC}}"
+
+[[verify]]
+contract = "VaultUSDC"
+function = "version"
+expect = "0.1.0"
+
+[[verify]]
+contract = "VaultXLM"
+function = "version"
+expect = "0.1.0"
+
+[[verify]]
+contract = "YieldRegistry"
+function = "version"
+expect = "0.1.0"
+
+[[verify]]
+contract = "AllocationStrategy"
+function = "version"
+expect = "0.1.0"
+
+[[verify]]
+contract = "Nester"
+function = "version"
+expect = "1"

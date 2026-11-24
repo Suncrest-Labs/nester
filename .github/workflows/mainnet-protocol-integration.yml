@@ -1,0 +1,519 @@
+name: Mainnet protocol integration
+
+# Manual rehearsal for nester#1569. Testnet and mainnet can run different
+# protocol versions and different network settings, so a suite that passes
+# against testnet can still have mainnet reject the same calls.
+#
+# This workflow:
+#   1. reads the protocol version currently running on mainnet,
+#   2. starts a local quickstart network pinned to that version,
+#   3. applies mainnet's Soroban config settings (limits, fees, TTLs) verbatim,
+#   4. deploys deploy/mainnet/launch-manifest.toml against that network,
+#   5. runs the contract integration suite and the dapp mainnet e2e smoke suite,
+#   6. records a run report with the protocol version, settings and results.
+#
+# It is dispatch-only: it pulls a multi-gigabyte quickstart image and is too slow
+# for every pull request. Nothing here talks to a public network except the
+# read-only mainnet RPC call that reports the protocol version and settings; the
+# deploy and test steps only ever use the local standalone passphrase.
+
+on:
+  workflow_dispatch:
+    inputs:
+      protocol_version:
+        description: >-
+          Protocol version to pin quickstart to. Leave empty to read the version
+          currently active on mainnet.
+        required: false
+        type: string
+        default: ""
+      quickstart_image:
+        description: "quickstart image to run (must contain the protocol version's config settings)"
+        required: false
+        type: string
+        default: "stellar/quickstart:latest"
+      mainnet_rpc_url:
+        description: "Read-only mainnet Soroban RPC used to fetch the protocol version and settings"
+        required: false
+        type: string
+        default: "https://mainnet.sorobanrpc.com"
+      run_e2e:
+        description: "Run the dapp mainnet e2e smoke suite after deploying the manifest"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # One rehearsal at a time. It owns fixed ports and a named container, and a
+  # second run would race the first one's deploy/verification steps.
+  group: mainnet-protocol-integration
+  cancel-in-progress: false
+
+env:
+  MAINNET_PASSPHRASE: "Public Global Stellar Network ; September 2015"
+  LOCAL_PASSPHRASE: "Standalone Network ; February 2017"
+  LOCAL_RPC_URL: "http://localhost:8000/soroban/rpc"
+  QUICKSTART_CONTAINER: "nester-mainnet-protocol"
+  STELLAR_CLI_VERSION: "30.0.1"
+  REPORT_DIR: ".mainnet-protocol"
+
+jobs:
+  rehearsal:
+    name: Rehearse against mainnet protocol
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: ./.github/actions/setup
+        with:
+          rust: "true"
+
+      # Pinned so the CLI that reads mainnet settings cannot change underneath
+      # the workflow. The archive name matches stellar-cli's release assets.
+      - name: Install Stellar CLI
+        run: |
+          set -euo pipefail
+          archive="stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSfL \
+            "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/${archive}" \
+            | sudo tar xz -C /usr/local/bin stellar
+          stellar --version
+
+      # Reads the live mainnet protocol version and the complete Soroban
+      # ConfigUpgradeSet from a read-only RPC. No transaction is submitted.
+      - name: Read mainnet protocol version and settings
+        env:
+          MAINNET_RPC_URL: ${{ inputs.mainnet_rpc_url }}
+          PROTOCOL_VERSION_INPUT: ${{ inputs.protocol_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR"
+
+          observed_version="$(curl -sSf -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"getNetwork"}' \
+            "$MAINNET_RPC_URL" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["protocolVersion"])')"
+
+          protocol_version="$PROTOCOL_VERSION_INPUT"
+          if [ -z "$protocol_version" ]; then
+            protocol_version="$observed_version"
+          fi
+
+          case "$protocol_version" in
+            ''|*[!0-9]*)
+              echo "::error::protocol_version must be a positive integer (got '$protocol_version')"
+              exit 1
+              ;;
+          esac
+
+          echo "mainnet protocol version: $observed_version"
+          echo "protocol version pinned for this run: $protocol_version"
+          if [ "$observed_version" != "$protocol_version" ]; then
+            echo "::warning::Pinning quickstart to $protocol_version while mainnet currently reports $observed_version."
+          fi
+
+          echo "PROTOCOL_VERSION=$protocol_version" >> "$GITHUB_ENV"
+          echo "OBSERVED_MAINNET_PROTOCOL_VERSION=$observed_version" >> "$GITHUB_ENV"
+
+          stellar network rm mainnet-source >/dev/null 2>&1 || true
+          stellar network add mainnet-source \
+            --rpc-url "$MAINNET_RPC_URL" \
+            --network-passphrase "$MAINNET_PASSPHRASE"
+
+          stellar network settings --network mainnet-source --output json-formatted \
+            > "$REPORT_DIR/mainnet-settings.json"
+
+          python3 scripts/mainnet_protocol.py prepare-settings \
+            --input "$REPORT_DIR/mainnet-settings.json" \
+            --output "$REPORT_DIR/quickstart-config-settings/mainnet.json"
+
+          max_contract_bytes="$(python3 -c '
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          for entry in data["updated_entry"]:
+              if "contract_max_size_bytes" in entry:
+                  print(entry["contract_max_size_bytes"])
+                  break
+          else:
+              raise SystemExit("mainnet settings have no contract_max_size_bytes")
+          ' "$REPORT_DIR/mainnet-settings.json") "
+          echo "MAX_CONTRACT_BYTES=$max_contract_bytes" >> "$GITHUB_ENV"
+          echo "mainnet contract size limit: $max_contract_bytes bytes"
+
+      # quickstart accepts any <name>.json in its per-protocol config-settings
+      # directory as a --limits value. Mounting a directory with our prepared
+      # mainnet.json lets it apply mainnet's real limits during startup, before
+      # friendbot or any test transaction runs, using the same mechanism the
+      # image uses for its own testnet/unlimited profiles.
+      - name: Start quickstart pinned to the mainnet protocol version
+        env:
+          QUICKSTART_IMAGE: ${{ inputs.quickstart_image }}
+        run: |
+          set -euo pipefail
+          docker rm -f "$QUICKSTART_CONTAINER" >/dev/null 2>&1 || true
+
+          docker run -d --name "$QUICKSTART_CONTAINER" \
+            -p 8000:8000 \
+            -p 11626:11626 \
+            -v "$PWD/$REPORT_DIR/quickstart-config-settings:/opt/stellar-default/local/core/etc/config-settings/p${PROTOCOL_VERSION}:ro" \
+            "$QUICKSTART_IMAGE" \
+            --local \
+            --protocol-version "$PROTOCOL_VERSION" \
+            --limits mainnet \
+            --enable core,horizon,rpc \
+            --logs
+
+      - name: Wait for the local network and verify protocol version
+        run: |
+          set -euo pipefail
+          healthy=false
+          for _ in $(seq 1 100); do
+            if curl -s -m 5 -X POST \
+              -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+              "$LOCAL_RPC_URL" | grep -q '"status":"healthy"'; then
+              healthy=true
+              break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$QUICKSTART_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
+              echo "::error::quickstart exited before the RPC became healthy."
+              docker logs "$QUICKSTART_CONTAINER" 2>&1 | tail -100
+              exit 1
+            fi
+            sleep 3
+          done
+
+          if [ "$healthy" != "true" ]; then
+            echo "::error::local Soroban RPC did not become healthy."
+            docker logs "$QUICKSTART_CONTAINER" 2>&1 | tail -100
+            exit 1
+          fi
+
+          local_version="$(curl -sSf -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"getNetwork"}' \
+            "$LOCAL_RPC_URL" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["protocolVersion"])')"
+          core_version="$(curl -sSf http://localhost:11626/info \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["ledger"]["version"])')"
+
+          echo "local RPC protocol version: $local_version"
+          echo "local core ledger version:  $core_version"
+          if [ "$local_version" != "$PROTOCOL_VERSION" ] || [ "$core_version" != "$PROTOCOL_VERSION" ]; then
+            echo "::error::local network is not on the pinned mainnet protocol version ($PROTOCOL_VERSION)."
+            docker logs "$QUICKSTART_CONTAINER" 2>&1 | tail -100
+            exit 1
+          fi
+
+      # Fails the run if quickstart did not actually apply the prepared
+      # ConfigUpgradeSet. This is the check that makes the suite's result
+      # meaningful: a passing test on default local limits proves nothing.
+      - name: Verify local network uses mainnet's settings
+        run: |
+          set -euo pipefail
+          stellar network rm local-mainnet-protocol >/dev/null 2>&1 || true
+          stellar network add local-mainnet-protocol \
+            --rpc-url "$LOCAL_RPC_URL" \
+            --network-passphrase "$LOCAL_PASSPHRASE"
+
+          # quickstart arms the ConfigUpgradeSet during startup and returns; the
+          # settings become visible on the next ledger close. Retry until the
+          # network reports them instead of racing that close.
+          ok=false
+          for _ in $(seq 1 40); do
+            stellar network settings --network local-mainnet-protocol --output json-formatted \
+              > "$REPORT_DIR/local-settings.json"
+            if python3 scripts/mainnet_protocol.py compare-settings \
+              --quiet \
+              --expected "$REPORT_DIR/quickstart-config-settings/mainnet.json" \
+              --actual "$REPORT_DIR/local-settings.json"; then
+              ok=true
+              break
+            fi
+            sleep 3
+          done
+
+          if [ "$ok" != "true" ]; then
+            echo "::error::local network did not apply mainnet's Soroban settings."
+            python3 scripts/mainnet_protocol.py compare-settings \
+              --expected "$REPORT_DIR/quickstart-config-settings/mainnet.json" \
+              --actual "$REPORT_DIR/local-settings.json" || true
+            exit 1
+          fi
+          python3 scripts/mainnet_protocol.py compare-settings \
+            --expected "$REPORT_DIR/quickstart-config-settings/mainnet.json" \
+            --actual "$REPORT_DIR/local-settings.json"
+
+      - name: Fund deployer and create the local USDC asset
+        run: |
+          set -euo pipefail
+          stellar keys generate --overwrite deployer
+          stellar keys generate --overwrite usdc-issuer
+
+          DEPLOYER="$(stellar keys address deployer)"
+          USDC_ISSUER="$(stellar keys address usdc-issuer)"
+
+          # Friendbot starts after the config upgrade settles, so the RPC can be
+          # healthy while friendbot still returns 502 for a few ledgers.
+          for _ in $(seq 1 30); do
+            if curl -sSf "http://localhost:8000/friendbot?addr=${DEPLOYER}" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          for _ in $(seq 1 30); do
+            if curl -sSf "http://localhost:8000/friendbot?addr=${USDC_ISSUER}" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+
+          if ! curl -sSf "http://localhost:8000/accounts/${DEPLOYER}" >/dev/null \
+            || ! curl -sSf "http://localhost:8000/accounts/${USDC_ISSUER}" >/dev/null; then
+            echo "::error::friendbot did not fund the local deployer/issuer accounts."
+            exit 1
+          fi
+
+          # A launch manifest has both a USDC and an XLM vault. Deploy a real
+          # local USDC SAC so the manifest exercises distinct underlying assets
+          # instead of aliasing USDC to native XLM.
+          stellar contract asset deploy \
+            --asset "USDC:${USDC_ISSUER}" \
+            --source-account usdc-issuer \
+            --network local-mainnet-protocol
+
+          USDC_SAC="$(stellar contract id asset \
+            --asset "USDC:${USDC_ISSUER}" \
+            --network local-mainnet-protocol \
+            | grep -oE 'C[A-Z2-7]{55}' | tail -1)"
+          XLM_SAC="$(stellar contract id asset \
+            --asset native \
+            --network local-mainnet-protocol \
+            | grep -oE 'C[A-Z2-7]{55}' | tail -1)"
+
+          if [ -z "$USDC_SAC" ] || [ -z "$XLM_SAC" ]; then
+            echo "::error::could not derive the local SAC addresses."
+            exit 1
+          fi
+
+          echo "deployer: $DEPLOYER"
+          echo "usdc issuer: $USDC_ISSUER"
+          echo "usdc SAC: $USDC_SAC"
+          echo "xlm SAC: $XLM_SAC"
+
+          {
+            echo "DEPLOYER=$DEPLOYER"
+            echo "USDC_ISSUER=$USDC_ISSUER"
+            echo "USDC_SAC=$USDC_SAC"
+            echo "XLM_SAC=$XLM_SAC"
+          } >> "$GITHUB_ENV"
+
+      - name: Build launch contract WASMs
+        working-directory: packages/contracts
+        run: |
+          set -euo pipefail
+          # vault-contract contractimport!s vault_token.wasm, so the token has
+          # to be built before the vault.
+          cargo build --release --target wasm32-unknown-unknown -p vault-token-contract
+          cargo build --release --target wasm32-unknown-unknown \
+            -p vault-contract \
+            -p treasury-contract \
+            -p yield-registry-contract \
+            -p allocation-strategy-contract \
+            -p nester-contract
+
+      - name: Deploy launch manifest
+        id: deploy
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 scripts/deploy_launch_manifest.py \
+            --manifest deploy/mainnet/launch-manifest.toml \
+            --wasm-dir packages/contracts/target/wasm32-unknown-unknown/release \
+            --source-account deployer \
+            --rpc-url "$LOCAL_RPC_URL" \
+            --network-passphrase "$LOCAL_PASSPHRASE" \
+            --admin "$DEPLOYER" \
+            --usdc-sac "$USDC_SAC" \
+            --xlm-sac "$XLM_SAC" \
+            --max-contract-bytes "$MAX_CONTRACT_BYTES" \
+            --out "$REPORT_DIR/deployed-local.env" \
+            --verification "$REPORT_DIR/deployed-local.verification.txt" \
+            2>&1 | tee "$REPORT_DIR/deploy.log"
+
+      - name: Run contract integration suite
+        id: integration
+        continue-on-error: true
+        working-directory: packages/contracts
+        run: |
+          set -euo pipefail
+          cargo test -p nester-integration-tests \
+            2>&1 | tee "$GITHUB_WORKSPACE/$REPORT_DIR/integration.log"
+
+      - uses: ./.github/actions/setup
+        if: ${{ inputs.run_e2e }}
+        with:
+          node: "true"
+
+      # Same Mainnet build the CI smoke job produces. The suite intercepts every
+      # network call, so it needs a production build and a server, not a live
+      # backend; the deployed local contracts are exercised by the manifest
+      # verification in the step above.
+      - name: Run dapp mainnet e2e smoke suite
+        id: e2e
+        if: ${{ inputs.run_e2e }}
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+          NEXT_PUBLIC_STELLAR_NETWORK: "Public Global Stellar Network ; September 2015"
+          NEXT_PUBLIC_STELLAR_RPC_URL: ${{ inputs.mainnet_rpc_url }}
+          NEXT_PUBLIC_STELLAR_HORIZON_URL: https://horizon.stellar.org
+          NEXT_PUBLIC_EXPLORER_URL: https://stellar.expert/explorer/public
+          NEXT_PUBLIC_NETWORK: mainnet
+          NEXT_PUBLIC_ENABLE_AI: "false"
+          NEXT_PUBLIC_VAULT_CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          NEXT_PUBLIC_VAULT_XLM_CONTRACT_ID: CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+          NEXT_PUBLIC_VAULT_TOKEN_CONTRACT_ID: CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+          NEXT_PUBLIC_USDC_CONTRACT_ID: CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+          NEXT_PUBLIC_MAINNET_VAULT_CONTRACT: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          NEXT_PUBLIC_MAINNET_VAULT_TOKEN_CONTRACT: CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+          NEXT_PUBLIC_MAINNET_YIELD_REGISTRY_CONTRACT: CEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+          NEXT_PUBLIC_MAINNET_ALLOCATION_STRATEGY_CONTRACT: CFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+          NEXT_PUBLIC_MAINNET_TREASURY_CONTRACT: CGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG
+          NEXT_PUBLIC_MAINNET_ACCESS_CONTROL_CONTRACT: CHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
+        run: |
+          set -euo pipefail
+          NEXT_PID=""
+          cleanup() {
+            if [ -n "$NEXT_PID" ]; then
+              kill "$NEXT_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          pnpm --filter @nester/dapp exec playwright install chromium --with-deps
+          pnpm --filter @nester/dapp run build
+
+          pnpm --filter @nester/dapp exec next start -p 3001 \
+            > "$REPORT_DIR/next.log" 2>&1 &
+          NEXT_PID=$!
+
+          ready=false
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://localhost:3001/ >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "true" ]; then
+            echo "::error::dapp production build did not become ready."
+            cat "$REPORT_DIR/next.log"
+            exit 1
+          fi
+
+          STAGING_URL=http://localhost:3001 \
+            pnpm --filter @nester/dapp run test:e2e:mainnet \
+            2>&1 | tee "$REPORT_DIR/e2e.log"
+
+      - name: Collect quickstart logs
+        if: always()
+        run: docker logs "$QUICKSTART_CONTAINER" > "$REPORT_DIR/quickstart.log" 2>&1 || true
+
+      # Recorded as an artifact and in the job summary. The report is written
+      # even when a suite fails, which is the run record people need.
+      - name: Write run report
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          INTEGRATION_OUTCOME: ${{ steps.integration.outcome }}
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+          QUICKSTART_IMAGE: ${{ inputs.quickstart_image }}
+          MAINNET_RPC_URL: ${{ inputs.mainnet_rpc_url }}
+        run: |
+          set +e
+          python3 scripts/mainnet_protocol.py report \
+            --output "$REPORT_DIR/run-report.md" \
+            --mainnet-settings "$REPORT_DIR/mainnet-settings.json" \
+            --prepared-settings "$REPORT_DIR/quickstart-config-settings/mainnet.json" \
+            --local-settings "$REPORT_DIR/local-settings.json" \
+            --deployed-env "$REPORT_DIR/deployed-local.env" \
+            --verification "$REPORT_DIR/deployed-local.verification.txt" \
+            --deploy-log "$REPORT_DIR/deploy.log" \
+            --integration-log "$REPORT_DIR/integration.log" \
+            --e2e-log "$REPORT_DIR/e2e.log" \
+            --protocol-version "$PROTOCOL_VERSION" \
+            --quickstart-image "$QUICKSTART_IMAGE" \
+            --mainnet-rpc "$MAINNET_RPC_URL" \
+            --mainnet-passphrase "$MAINNET_PASSPHRASE" \
+            --local-passphrase "$LOCAL_PASSPHRASE" \
+            --local-rpc "$LOCAL_RPC_URL" \
+            --deploy-outcome "$DEPLOY_OUTCOME" \
+            --integration-outcome "$INTEGRATION_OUTCOME" \
+            --e2e-outcome "$E2E_OUTCOME" \
+            --job-status "$JOB_STATUS" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --commit "${{ github.sha }}"
+          report_status=$?
+
+          if [ -f "$REPORT_DIR/run-report.md" ]; then
+            cat "$REPORT_DIR/run-report.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$report_status"
+
+      - name: Upload run report and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mainnet-protocol-run-${{ github.run_id }}
+          path: .mainnet-protocol/
+          retention-days: 30
+
+      # continue-on-error keeps the report step reachable; this final gate is
+      # what turns a failed deploy, integration suite or e2e suite into a red
+      # workflow. Skipped e2e is allowed (input run_e2e=false).
+      - name: Enforce rehearsal result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          INTEGRATION_OUTCOME: ${{ steps.integration.outcome }}
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+        run: |
+          set -euo pipefail
+          failed=0
+
+          if [ "$JOB_STATUS" = "failure" ]; then
+            echo "::error::A setup or environment step failed before the suites completed."
+            failed=1
+          fi
+
+          for stage in deploy integration e2e; do
+            case "$stage" in
+              deploy) result="$DEPLOY_OUTCOME" ;;
+              integration) result="$INTEGRATION_OUTCOME" ;;
+              e2e) result="$E2E_OUTCOME" ;;
+            esac
+
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "::error::The $stage stage finished with result '$result'."
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            echo "Rehearsal failed. See the run report and artifact for protocol version and settings used."
+            exit 1
+          fi
+          echo "Rehearsal passed. Run report uploaded as mainnet-protocol-run-${{ github.run_id }}."
+
+      - name: Stop quickstart
+        if: always()
+        run: docker rm -f "$QUICKSTART_CONTAINER" >/dev/null 2>&1 || true
