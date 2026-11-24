@@ -1,0 +1,65 @@
+services:
+  postgres_preprod:
+    image: postgres:15-alpine
+    container_name: nester_postgres_preprod
+    environment:
+      POSTGRES_DB: nester_preprod
+      POSTGRES_USER: nester
+      # Real credentials are supplied through deploy/preprod/.env, which is
+      # gitignored, matching deploy/production/docker-compose.production.yml.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in deploy/preprod/.env}
+    volumes:
+      - postgres_preprod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nester -d nester_preprod"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # No host port mapping: matches production's network isolation.
+    restart: unless-stopped
+
+  redis_preprod:
+    image: redis:7-alpine
+    container_name: nester_redis_preprod
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  api_preprod:
+    # Pinned to an immutable digest resolved from the release candidate tag
+    # by the deploy-preprod workflow, matching production's digest pinning.
+    image: ghcr.io/suncrestlabs/nester-api@${API_IMAGE_DIGEST:?set by the deploy-preprod workflow}
+    container_name: nester_api_preprod
+    environment:
+      - DATABASE_URL=postgres://nester:${POSTGRES_PASSWORD:?set in deploy/preprod/.env}@postgres_preprod:5432/nester_preprod?sslmode=disable
+      - REDIS_URL=redis://redis_preprod:6379
+      - STELLAR_NETWORK=testnet
+      - STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
+      - CONTRACT_ADDRESS_VAULT_FACTORY=${CONTRACT_ADDRESS_VAULT_FACTORY:?set in deploy/preprod/.env}
+      - CONTRACT_ADDRESS_YIELD_REGISTRY=${CONTRACT_ADDRESS_YIELD_REGISTRY:?set in deploy/preprod/.env}
+      - STELLAR_OPERATOR_SECRET=${STELLAR_OPERATOR_SECRET:?set in deploy/preprod/.env}
+      - APP_ENV=staging
+      # Migrations run as their own approved job (see the migrate job in
+      # deploy-preprod.yml), matching production.
+      - RUN_MIGRATIONS=false
+    depends_on:
+      postgres_preprod:
+        condition: service_healthy
+      redis_preprod:
+        condition: service_healthy
+    restart: unless-stopped
+
+  signer_preprod:
+    # Separate signer container matching production's signing-isolation shape.
+    image: ghcr.io/suncrestlabs/nester-signer@${SIGNER_IMAGE_DIGEST:?set by the deploy-preprod workflow}
+    container_name: nester_signer_preprod
+    environment:
+      - STELLAR_OPERATOR_SECRET=${STELLAR_OPERATOR_SECRET:?set in deploy/preprod/.env}
+      - APP_ENV=staging
+    restart: unless-stopped
+
+volumes:
+  postgres_preprod_data:
