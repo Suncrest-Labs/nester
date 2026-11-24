@@ -10,6 +10,9 @@ updates:
     open-pull-requests-limit: 3
     rebase-strategy: "disabled"
     labels: ["dependencies", "smart-contracts"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-deps:
         patterns: ["*"]
@@ -24,12 +27,17 @@ updates:
     open-pull-requests-limit: 3
     rebase-strategy: "disabled"
     labels: ["dependencies", "backend"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       go-deps:
         patterns: ["*"]
 
+  # One entry for the whole pnpm workspace. The lockfile lives at the repo
+  # root, so per-app entries cannot update it and fail `--frozen-lockfile`.
   - package-ecosystem: "npm"
-    directory: "/apps/dapp/frontend"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -38,29 +46,14 @@ updates:
     open-pull-requests-limit: 3
     rebase-strategy: "disabled"
     labels: ["dependencies", "frontend"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-production:
         dependency-type: "production"
         patterns: ["*"]
       npm-dev:
-        dependency-type: "development"
-        patterns: ["*"]
-
-  - package-ecosystem: "npm"
-    directory: "/apps/website"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "Africa/Lagos"
-    open-pull-requests-limit: 3
-    rebase-strategy: "disabled"
-    labels: ["dependencies", "frontend"]
-    groups:
-      website-production:
-        dependency-type: "production"
-        patterns: ["*"]
-      website-dev:
         dependency-type: "development"
         patterns: ["*"]
 
@@ -74,6 +67,9 @@ updates:
     open-pull-requests-limit: 3
     rebase-strategy: "disabled"
     labels: ["dependencies", "ci"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       github-actions:
         patterns: ["*"]
