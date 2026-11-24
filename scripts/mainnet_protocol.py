@@ -274,11 +274,9 @@ def cmd_report(args: argparse.Namespace) -> int:
         "| Setting | Value |",
         "| --- | --- |",
         f"| Mainnet RPC source | `{args.mainnet_rpc}` |",
-        f"| Mainnet passphrase | `{args.mainnet_passphrase}` |",
         f"| Mainnet protocol version | `{args.protocol_version}` |",
         f"| Quickstart image | `{args.quickstart_image}` |",
         f"| Local protocol version | `{args.protocol_version}` (verified against core `/info`) |",
-        f"| Local network passphrase | `{args.local_passphrase}` |",
         f"| Local Soroban RPC | `{args.local_rpc}` |",
         f"| Settings profile applied | `mainnet` ({len(prepared_flat)} Soroban config entries) |",
         f"| Excluded mainnet-only entries | {', '.join(f'`{key}`' for key in excluded) or '_none_'} |",
@@ -368,27 +366,11 @@ def cmd_report(args: argparse.Namespace) -> int:
             "",
             "</details>",
             "",
-            "## Full mainnet ConfigUpgradeSet",
+            "## Settings source",
             "",
-            "Fetched from mainnet with `stellar network settings --output json-formatted`.",
-            "",
-            "<details><summary>mainnet-settings.json</summary>",
-            "",
-            "```json",
-            json.dumps(mainnet_settings, indent=2, sort_keys=True),
-            "```",
-            "",
-            "</details>",
-            "",
-            "## Full deployed env",
-            "",
-            "<details><summary>deployed-local.env</summary>",
-            "",
-            "```",
-            deployed_env or "_not captured_",
-            "```",
-            "",
-            "</details>",
+            "The full mainnet `ConfigUpgradeSet`, fetched with `stellar network settings`,",
+            "is attached as `mainnet-settings.json` in the run artifact. This report",
+            f"records the {len(prepared_flat)} entries applied and the limits above.",
             "",
         ]
     )
@@ -430,8 +412,6 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--protocol-version", required=True)
     report.add_argument("--quickstart-image", required=True)
     report.add_argument("--mainnet-rpc", required=True)
-    report.add_argument("--mainnet-passphrase", required=True)
-    report.add_argument("--local-passphrase", required=True)
     report.add_argument("--local-rpc", required=True)
     report.add_argument("--deploy-outcome", default="skipped")
     report.add_argument("--integration-outcome", default="skipped")

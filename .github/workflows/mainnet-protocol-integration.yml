@@ -452,8 +452,6 @@ jobs:
             --protocol-version "$PROTOCOL_VERSION" \
             --quickstart-image "$QUICKSTART_IMAGE" \
             --mainnet-rpc "$MAINNET_RPC_URL" \
-            --mainnet-passphrase "$MAINNET_PASSPHRASE" \
-            --local-passphrase "$LOCAL_PASSPHRASE" \
             --local-rpc "$LOCAL_RPC_URL" \
             --deploy-outcome "$DEPLOY_OUTCOME" \
             --integration-outcome "$INTEGRATION_OUTCOME" \

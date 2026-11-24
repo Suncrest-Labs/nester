@@ -59,7 +59,7 @@ The artifact `mainnet-protocol-run-<run-id>` contains:
 
 | File | Contents |
 | --- | --- |
-| `run-report.md` | Protocol version, quickstart image, settings applied, mainnet limits table, per-stage results, deployed contract IDs, verification transcript, log tails, full mainnet settings. |
+| `run-report.md` | Protocol version, quickstart image, settings applied, mainnet limits table, per-stage results, deployed contract IDs, verification transcript and log tails. |
 | `mainnet-settings.json` | Raw mainnet `ConfigUpgradeSet`, including the two excluded entries. |
 | `quickstart-config-settings/mainnet.json` | The exact settings file quickstart applied. |
 | `local-settings.json` | Settings the local network reported after startup. |
