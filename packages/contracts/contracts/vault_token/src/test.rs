@@ -364,6 +364,35 @@ fn approve_rejects_past_expiration_for_positive_amount() {
 }
 
 #[test]
+fn approve_accepts_expiration_at_maximum_storage_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let current_ledger = env.ledger().sequence();
+    let expiration_ledger = current_ledger + env.storage().max_ttl();
+
+    client.approve(&alice, &spender, &1_i128, &expiration_ledger);
+
+    assert_eq!(client.allowance(&alice, &spender), 1);
+}
+
+#[test]
+#[should_panic]
+fn approve_rejects_expiration_beyond_maximum_storage_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let current_ledger = env.ledger().sequence();
+    let expiration_ledger = current_ledger + env.storage().max_ttl() + 1;
+
+    client.approve(&alice, &spender, &1_i128, &expiration_ledger);
+}
+
+#[test]
 fn approve_allows_zero_amount_revoke_with_past_expiration() {
     let env = Env::default();
     env.mock_all_auths();
@@ -374,6 +403,19 @@ fn approve_allows_zero_amount_revoke_with_past_expiration() {
     client.approve(&alice, &spender, &1_000_i128, &100_u32);
     env.ledger().with_mut(|li| li.sequence_number = 10);
     client.approve(&alice, &spender, &0_i128, &9_u32);
+
+    assert_eq!(client.allowance(&alice, &spender), 0);
+}
+
+#[test]
+fn approve_allows_zero_amount_revoke_with_far_future_expiration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    client.approve(&alice, &spender, &0_i128, &u32::MAX);
 
     assert_eq!(client.allowance(&alice, &spender), 0);
 }

@@ -162,6 +162,9 @@ impl VaultTokenContract {
         if amount > 0 && expiration_ledger < current_ledger {
             panic_with_error!(&env, ContractError::InvalidOperation);
         }
+        if amount > 0 && expiration_ledger - current_ledger > env.storage().max_ttl() {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
 
         let key = DataKey::Allowance(from.clone(), spender.clone());
         env.storage().persistent().set(
@@ -171,7 +174,7 @@ impl VaultTokenContract {
                 expiration_ledger,
             },
         );
-        if expiration_ledger > current_ledger {
+        if amount > 0 && expiration_ledger > current_ledger {
             let ttl = expiration_ledger - current_ledger;
             env.storage().persistent().extend_ttl(&key, ttl, ttl);
         }
