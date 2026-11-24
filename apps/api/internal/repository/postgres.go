@@ -29,8 +29,8 @@ func NewPostgresDB(cfg config.DatabaseConfig) (*PostgresDB, error) {
 // NewPostgresDBTraced is NewPostgresDB with OpenTelemetry query spans
 // attached (nester#1054).
 //
-// Privacy is the design constraint. otelpgx is configured with
-// WithTrimSQLInSpanName so span names stay low-cardinality, and crucially
+// Privacy is the design constraint. otelpgx trims SQL in span names by
+// default so span names stay low-cardinality, and is configured crucially
 // *without* IncludeQueryParameters — pgx would otherwise attach every bound
 // argument to the span, and in this codebase those are account numbers,
 // balances, wallet addresses and amounts. The parameterised SQL text is
@@ -48,11 +48,9 @@ func NewPostgresDBTraced(cfg config.DatabaseConfig) (*PostgresDB, error) {
 // bound values never reach a span will fail, instead of silently continuing to
 // exercise a differently-configured tracer.
 func pgxTracerOptions() []otelpgx.Option {
-	return []otelpgx.Option{
-		// IncludeQueryParameters is deliberately absent: bound arguments are
-		// account numbers, balances, wallet addresses and amounts.
-		otelpgx.WithTrimSQLInSpanName(),
-	}
+	// IncludeQueryParameters is deliberately absent: bound arguments are
+	// account numbers, balances, wallet addresses and amounts.
+	return []otelpgx.Option{}
 }
 
 func newPostgresDB(cfg config.DatabaseConfig, tracingEnabled bool) (*PostgresDB, error) {

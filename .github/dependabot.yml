@@ -13,6 +13,12 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # Pinned exactly; changing it changes every contract's WASM hash.
+      - dependency-name: "soroban-sdk"
+      # rand 0.10+ pulls crates that need edition 2024, which the pinned
+      # 1.82 toolchain (rust-toolchain.toml) cannot build.
+      - dependency-name: "rand"
+        versions: [">= 0.10"]
     groups:
       cargo-deps:
         patterns: ["*"]
