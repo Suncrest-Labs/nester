@@ -102,11 +102,23 @@ spec:
 ---
 # The signer holds STELLAR_OPERATOR_SECRET at runtime and is deployed
 # separately from the API for the same reason apps/api/Dockerfile.signer
-# documents: compromising the API must not yield the signing key. It exposes
-# no network port (see Dockerfile.signer's comment); it is reached over its
-# Unix socket volume by the API pod when the two share a node, or over the
-# mutual-TLS transport when they do not -- that wiring is environment-specific
-# and intentionally left to the cluster operator, not hardcoded here.
+# documents: compromising the API must not yield the signing key.
+#
+# It is reached over its mutual-TLS transport on 8443 (SIGNER_LISTEN_ADDR),
+# because the API and signer are separate pods and cannot share a Unix socket
+# without pinning both to one node. The TLS keypair and client CA are
+# operator-provisioned in the `nester-signer-tls` Secret; nothing secret is
+# committed here. The API half of that trust (its client certificate and
+# signer URL) is not wired in this manifest yet -- the API currently only
+# reads SIGNER_SOCKET_PATH -- so this Deployment defines the port and policy
+# the network is allowed to reach, not the whole client configuration.
+#
+# The pod is locked down for the reason the key lives here: no root, no
+# writable root filesystem, no capabilities, no privilege escalation, and the
+# default seccomp profile. The only writable path is the `signer-run` emptyDir
+# that holds the kill-switch sentinel. On Kubernetes the supported way to
+# engage the kill switch is to scale this Deployment to 0 replicas, which is
+# an orchestrator-level action rather than an application credential.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -127,9 +139,30 @@ spec:
         app: nester-signer
         env: production
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # distroless/static:nonroot runs as 65532:65532; the image's own user
+        # and these ids must agree or the binary cannot read its files.
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: signer
           image: ghcr.io/suncrestlabs/nester-signer@__SIGNER_IMAGE_DIGEST__
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: signer-mtls
+              containerPort: 8443
+              protocol: TCP
           env:
             - name: APP_ENV
               value: "production"
@@ -138,6 +171,83 @@ spec:
                 secretKeyRef:
                   name: nester-production-secrets
                   key: stellar-operator-secret
+            - name: STELLAR_NETWORK_PASSPHRASE
+              value: "Public Global Stellar Network ; September 2015"
+            # The signer rebuilds and simulates transactions (RPC) and reads
+            # sequence numbers (Horizon). These are the endpoints the egress
+            # policy below is meant to allow; see its note on FQDN limits.
+            - name: STELLAR_RPC_URL
+              value: "https://soroban.stellar.org"
+            - name: STELLAR_HORIZON_URL
+              value: "https://horizon.stellar.org"
+            - name: SIGNER_LISTEN_ADDR
+              value: ":8443"
+            - name: SIGNER_TLS_CERT_FILE
+              value: "/var/run/nester-signer-tls/tls.crt"
+            - name: SIGNER_TLS_KEY_FILE
+              value: "/var/run/nester-signer-tls/tls.key"
+            - name: SIGNER_TLS_CLIENT_CA_FILE
+              value: "/var/run/nester-signer-tls/client-ca.crt"
+            - name: SIGNER_KILL_SWITCH_PATH
+              value: "/var/run/nester-signer/signing.disabled"
+            # The allowlist has no default in the signer: it refuses to start
+            # without one, and an empty/missing key keeps it from starting
+            # rather than letting it sign for any contract.
+            - name: SIGNER_ALLOWED_CONTRACTS
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-production-contracts
+                  key: signer-allowed-contracts
+            - name: SIGNER_MAX_AMOUNT_STROOPS
+              value: "1000000000"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: signer-mtls
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: signer-mtls
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          volumeMounts:
+            - name: signer-run
+              mountPath: /var/run/nester-signer
+            - name: signer-tls
+              mountPath: /var/run/nester-signer-tls
+              readOnly: true
+      volumes:
+        - name: signer-run
+          emptyDir: {}
+        - name: signer-tls
+          secret:
+            secretName: nester-signer-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nester-signer-production
+  namespace: nester-production
+  labels:
+    app: nester-signer
+    env: production
+spec:
+  selector:
+    app: nester-signer
+    env: production
+  ports:
+    - name: signer-mtls
+      protocol: TCP
+      port: 8443
+      targetPort: signer-mtls
+  type: ClusterIP
 ---
 # A one-shot Job, not a Deployment: it runs the migrations to completion and
 # exits rather than staying up. Uses the same API image/digest as the API
@@ -212,3 +322,109 @@ spec:
                 configMapKeyRef:
                   name: nester-production-contracts
                   key: yield-registry-address
+
+---
+# Network isolation for the signer (nester#1530).
+#
+# Default-deny on the signer pods only: the API, migration Job and anything
+# else in the namespace keep whatever policy they already had. The two
+# policies below re-open exactly one ingress path and the signer's own egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nester-signer-default-deny
+  namespace: nester-production
+  labels:
+    app: nester-signer
+    env: production
+spec:
+  podSelector:
+    matchLabels:
+      app: nester-signer
+      env: production
+  # Both directions: with only Ingress denied the signer could still reach
+  # anything it liked, which is half the point of isolating it.
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# The only caller allowed to reach the signer: the production API pods in
+# this namespace, on the signer's mTLS port. No other pod, and nothing
+# outside the namespace, matches this rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nester-signer-allow-api
+  namespace: nester-production
+  labels:
+    app: nester-signer
+    env: production
+spec:
+  podSelector:
+    matchLabels:
+      app: nester-signer
+      env: production
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: nester-production
+          podSelector:
+            matchLabels:
+              app: nester-api
+              env: production
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+# The signer's egress allowlist: DNS, plus outbound HTTPS to the Stellar
+# endpoints configured above (RPC for simulation, Horizon for sequence
+# numbers). Nothing else -- no database, no Redis, no cluster-internal
+# address, no plaintext HTTP.
+#
+# LIMITATION, stated rather than hidden: a vanilla Kubernetes NetworkPolicy
+# cannot select a destination by hostname. `ipBlock: 0.0.0.0/0` on port 443
+# therefore allows any *public* HTTPS destination, not only Stellar's; the
+# cluster ranges are excluded so the signer still cannot reach the database,
+# Redis, the API, or the Kubernetes API. Pinning egress to
+# soroban.stellar.org / horizon.stellar.org by FQDN needs a CNI that supports
+# FQDN policy (e.g. Cilium `toFQDNs`); the endpoints' public IPs are CDN-backed
+# and are not stable enough to hardcode here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nester-signer-egress
+  namespace: nester-production
+  labels:
+    app: nester-signer
+    env: production
+spec:
+  podSelector:
+    matchLabels:
+      app: nester-signer
+      env: production
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
