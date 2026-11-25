@@ -87,3 +87,213 @@ spec:
       port: 80
       targetPort: 8080
   type: ClusterIP
+---
+# The signer exists in staging so the production isolation rules below are
+# exercised somewhere before mainnet. Same shape as
+# deploy/production/k8s-production.yaml: separate Deployment, mTLS on 8443,
+# no root, no writable root filesystem, no capabilities, resource bounds.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nester-signer-staging
+  namespace: nester-staging
+  labels:
+    app: nester-signer
+    env: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nester-signer
+      env: staging
+  template:
+    metadata:
+      labels:
+        app: nester-signer
+        env: staging
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: signer
+          image: ghcr.io/suncrestlabs/nester-signer:latest
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: signer-mtls
+              containerPort: 8443
+              protocol: TCP
+          env:
+            - name: APP_ENV
+              value: "staging"
+            - name: STELLAR_OPERATOR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nester-staging-secrets
+                  key: stellar-operator-secret
+            - name: STELLAR_NETWORK_PASSPHRASE
+              value: "Test SDF Network ; September 2015"
+            - name: STELLAR_RPC_URL
+              value: "https://soroban-testnet.stellar.org"
+            - name: STELLAR_HORIZON_URL
+              value: "https://horizon-testnet.stellar.org"
+            - name: SIGNER_LISTEN_ADDR
+              value: ":8443"
+            - name: SIGNER_TLS_CERT_FILE
+              value: "/var/run/nester-signer-tls/tls.crt"
+            - name: SIGNER_TLS_KEY_FILE
+              value: "/var/run/nester-signer-tls/tls.key"
+            - name: SIGNER_TLS_CLIENT_CA_FILE
+              value: "/var/run/nester-signer-tls/client-ca.crt"
+            - name: SIGNER_KILL_SWITCH_PATH
+              value: "/var/run/nester-signer/signing.disabled"
+            - name: SIGNER_ALLOWED_CONTRACTS
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-staging-contracts
+                  key: signer-allowed-contracts
+            - name: SIGNER_MAX_AMOUNT_STROOPS
+              value: "1000000000"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: signer-mtls
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: signer-mtls
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          volumeMounts:
+            - name: signer-run
+              mountPath: /var/run/nester-signer
+            - name: signer-tls
+              mountPath: /var/run/nester-signer-tls
+              readOnly: true
+      volumes:
+        - name: signer-run
+          emptyDir: {}
+        - name: signer-tls
+          secret:
+            secretName: nester-signer-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nester-signer-staging
+  namespace: nester-staging
+  labels:
+    app: nester-signer
+    env: staging
+spec:
+  selector:
+    app: nester-signer
+    env: staging
+  ports:
+    - name: signer-mtls
+      protocol: TCP
+      port: 8443
+      targetPort: signer-mtls
+  type: ClusterIP
+---
+# Signer isolation in staging, identical in shape to production so a live
+# test can assert that a non-API pod cannot reach nester-signer-staging:8443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nester-signer-default-deny
+  namespace: nester-staging
+  labels:
+    app: nester-signer
+    env: staging
+spec:
+  podSelector:
+    matchLabels:
+      app: nester-signer
+      env: staging
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nester-signer-allow-api
+  namespace: nester-staging
+  labels:
+    app: nester-signer
+    env: staging
+spec:
+  podSelector:
+    matchLabels:
+      app: nester-signer
+      env: staging
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: nester-staging
+          podSelector:
+            matchLabels:
+              app: nester-api
+              env: staging
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nester-signer-egress
+  namespace: nester-staging
+  labels:
+    app: nester-signer
+    env: staging
+spec:
+  podSelector:
+    matchLabels:
+      app: nester-signer
+      env: staging
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
