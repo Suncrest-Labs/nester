@@ -37,7 +37,7 @@ soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
-    Symbol,
+    IntoVal, Symbol, TryFromVal, Val,
 };
 
 use nester_access_control::{AccessControl, Role};
@@ -69,6 +69,32 @@ enum DataKey {
     MaxRewardedReferrals,
     MaxRewardPerReferrer,
     MinClaim,
+}
+
+// Per-address state must never grow the shared instance entry. Renew existing
+// entries on reads and renew new/updated entries immediately after writes.
+fn read_user<T: TryFromVal<Env, Val>>(env: &Env, key: &DataKey) -> Option<T>
+where
+    T::Error: core::fmt::Debug,
+{
+    let value = env.storage().persistent().get(key);
+    if value.is_some() {
+        extend_user_ttl(env, key);
+    }
+    value
+}
+
+fn write_user<T: IntoVal<Env, Val>>(env: &Env, key: &DataKey, value: &T) {
+    env.storage().persistent().set(key, value);
+    extend_user_ttl(env, key);
+}
+
+fn extend_user_ttl(env: &Env, key: &DataKey) {
+    env.storage().persistent().extend_ttl(
+        key,
+        nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+        nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+    );
 }
 
 #[contract]
@@ -132,26 +158,18 @@ impl ReferralContract {
         if user == referrer {
             panic_with_error!(&env, ContractError::SelfReferral);
         }
-        if env
-            .storage()
-            .instance()
-            .has(&DataKey::Referrer(user.clone()))
-        {
+        if read_user::<Address>(&env, &DataKey::Referrer(user.clone())).is_some() {
             panic_with_error!(&env, ContractError::AlreadyReferred);
         }
-        if let Some(referrers_referrer) = env
-            .storage()
-            .instance()
-            .get::<DataKey, Address>(&DataKey::Referrer(referrer.clone()))
+        if let Some(referrers_referrer) =
+            read_user::<Address>(&env, &DataKey::Referrer(referrer.clone()))
         {
             if referrers_referrer == user {
                 panic_with_error!(&env, ContractError::ReferralCycle);
             }
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Referrer(user.clone()), &referrer);
+        write_user(&env, &DataKey::Referrer(user.clone()), &referrer);
 
         emit_event(&env, REFERRAL, REF_REG, user, referrer);
     }
@@ -184,11 +202,7 @@ impl ReferralContract {
             return;
         }
 
-        let referrer: Address = match env
-            .storage()
-            .instance()
-            .get(&DataKey::Referrer(referred_user.clone()))
-        {
+        let referrer: Address = match read_user(&env, &DataKey::Referrer(referred_user.clone())) {
             Some(r) => r,
             None => return,
         };
@@ -235,40 +249,35 @@ impl ReferralContract {
 
         // Per-referrer distinct-referee count cap — only ever consumed the
         // first time a given referred user earns anything.
-        let already_counted = env
-            .storage()
-            .instance()
-            .get(&DataKey::CountedTowardCap(referred_user.clone()))
-            .unwrap_or(false);
+        let already_counted =
+            read_user(&env, &DataKey::CountedTowardCap(referred_user.clone())).unwrap_or(false);
         if !already_counted {
             let max_referrals: u32 = env
                 .storage()
                 .instance()
                 .get(&DataKey::MaxRewardedReferrals)
                 .unwrap_or(0);
-            let count: u32 = env
-                .storage()
-                .instance()
-                .get(&DataKey::ReferredCount(referrer.clone()))
-                .unwrap_or(0);
+            let count: u32 =
+                read_user(&env, &DataKey::ReferredCount(referrer.clone())).unwrap_or(0);
             if count >= max_referrals {
                 return;
             }
-            env.storage()
-                .instance()
-                .set(&DataKey::ReferredCount(referrer.clone()), &(count + 1));
-            env.storage()
-                .instance()
-                .set(&DataKey::CountedTowardCap(referred_user.clone()), &true);
+            write_user(
+                &env,
+                &DataKey::ReferredCount(referrer.clone()),
+                &(count + 1),
+            );
+            write_user(
+                &env,
+                &DataKey::CountedTowardCap(referred_user.clone()),
+                &true,
+            );
         }
 
         // Per-referrer lifetime cap, then global budget — whichever binds
         // tighter wins; never overshoot either.
-        let lifetime: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::LifetimeReward(referrer.clone()))
-            .unwrap_or(0);
+        let lifetime: i128 =
+            read_user(&env, &DataKey::LifetimeReward(referrer.clone())).unwrap_or(0);
         let max_lifetime: i128 = env
             .storage()
             .instance()
@@ -281,17 +290,15 @@ impl ReferralContract {
             return;
         }
 
-        env.storage().instance().set(
+        write_user(
+            &env,
             &DataKey::LifetimeReward(referrer.clone()),
             &(lifetime + reward),
         );
 
-        let balance: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::RewardBalance(referrer.clone()))
-            .unwrap_or(0);
-        env.storage().instance().set(
+        let balance: i128 = read_user(&env, &DataKey::RewardBalance(referrer.clone())).unwrap_or(0);
+        write_user(
+            &env,
             &DataKey::RewardBalance(referrer.clone()),
             &(balance + reward),
         );
@@ -323,11 +330,7 @@ impl ReferralContract {
     pub fn claim_referral_rewards(env: Env, referrer: Address) -> i128 {
         referrer.require_auth();
 
-        let balance: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::RewardBalance(referrer.clone()))
-            .unwrap_or(0);
+        let balance: i128 = read_user(&env, &DataKey::RewardBalance(referrer.clone())).unwrap_or(0);
         let min_claim: i128 = env
             .storage()
             .instance()
@@ -337,9 +340,7 @@ impl ReferralContract {
             panic_with_error!(&env, ContractError::BelowClaimMinimum);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::RewardBalance(referrer.clone()), &0i128);
+        write_user(&env, &DataKey::RewardBalance(referrer.clone()), &0i128);
 
         let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         token::Client::new(&env, &token).transfer(
@@ -435,28 +436,19 @@ impl ReferralContract {
     // -----------------------------------------------------------------------
 
     pub fn get_referrer(env: Env, user: Address) -> Option<Address> {
-        env.storage().instance().get(&DataKey::Referrer(user))
+        read_user(&env, &DataKey::Referrer(user))
     }
 
     pub fn get_reward_balance(env: Env, referrer: Address) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::RewardBalance(referrer))
-            .unwrap_or(0)
+        read_user(&env, &DataKey::RewardBalance(referrer)).unwrap_or(0)
     }
 
     pub fn get_lifetime_reward(env: Env, referrer: Address) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::LifetimeReward(referrer))
-            .unwrap_or(0)
+        read_user(&env, &DataKey::LifetimeReward(referrer)).unwrap_or(0)
     }
 
     pub fn get_referred_count(env: Env, referrer: Address) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::ReferredCount(referrer))
-            .unwrap_or(0)
+        read_user(&env, &DataKey::ReferredCount(referrer)).unwrap_or(0)
     }
 
     pub fn get_budget_remaining(env: Env) -> i128 {

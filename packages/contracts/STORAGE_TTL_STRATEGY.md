@@ -25,6 +25,7 @@ and the TTL extension behaviour that is **actually implemented**.
 | **`VaultContract`** | Lock positions (`DataKey::Lock*`) | `Persistent` | Extend-on-access; see §3 |
 | **`VaultTokenContract`** | Balances, allowances | `Persistent` | Managed by token contract |
 | **`YieldRegistryContract`** | Source registry entries | `Instance` / `Persistent` | |
+| **`ReferralContract`** | Referrer, CountedTowardCap, ReferredCount, RewardBalance, LifetimeReward | `Persistent` | Per-address entries renew on reads and writes; global configuration/budget remain in instance storage |
 | **`NesterContract`** | `DataKey::Version`, admin state | `Instance` | |
 | **`AllocationStrategyContract`** | Allocation weights | `Instance` | |
 
@@ -98,3 +99,19 @@ End-to-end TTL tests added under issue #1220 live in
 balances survive a large ledger-sequence advance. Those tests are run by
 `cargo test -p nester-integration-tests` (no filter) -- see
 `.github/workflows/ci.yml` `contracts` job, step "Run integration tests".
+
+
+## Referral account storage (#1471)
+
+`contracts/referral/src/lib.rs` centralizes per-address reads/writes in
+`read_user` and `write_user`. Existing entries renew on access using
+`POSITION_TTL_THRESHOLD_LEDGERS` (120,960) and
+`POSITION_TTL_EXTEND_TO_LEDGERS` (518,400). Missing reads do not create entries.
+Claims retain a zero reward balance and preserve lifetime rewards and cap state.
+The 500-referral regression compares serialized instance storage after every
+registration, so both key growth and growing collections are detected.
+
+This changes the storage layout for new deployments. It does not migrate an
+already deployed instance-backed referral contract: existing relationships,
+balances and cap records must be migrated before using this layout in an upgrade.
+Persistent entries that become archived require restoration before access.
