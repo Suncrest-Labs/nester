@@ -424,6 +424,9 @@ jobs:
           name: contract-wasm-hashes
           path: wasm-hashes/wasm-hashes.txt
 
+      - name: Check persistent storage TTL renewal
+        run: python3 packages/contracts/scripts/check_storage_ttl.py
+
   # SLO rules (nester#1056). Validates the recording and alerting rules and
   # runs the burn-rate unit tests against the same files Prometheus loads, so a
   # threshold edited without updating its arithmetic fails the build rather than
