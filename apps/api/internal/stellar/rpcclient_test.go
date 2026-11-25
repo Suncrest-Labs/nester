@@ -647,9 +647,3 @@ func TestFailover_ClientErrorDoesNotFailOver(t *testing.T) {
 		t.Fatalf("secondary hits = %d, want 0 for 400 client error", secondary.count("getHealth"))
 	}
 }
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
