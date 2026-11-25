@@ -41,6 +41,7 @@ impl HostileVaultHarness {
         );
 
         VaultTokenContractClient::new(&env, &token_id).initialize(
+            &admin,
             &vault_id,
             &String::from_str(&env, "Nester USDC Vault"),
             &String::from_str(&env, "nUSDC"),
@@ -83,6 +84,7 @@ impl HostileVaultHarness {
         VaultContractClient::new(&env, &vault_id).register_callee(&admin, &yield_sink_id);
 
         VaultTokenContractClient::new(&env, &token_id).initialize(
+            &admin,
             &vault_id,
             &String::from_str(&env, "Nester USDC Vault"),
             &String::from_str(&env, "nUSDC"),

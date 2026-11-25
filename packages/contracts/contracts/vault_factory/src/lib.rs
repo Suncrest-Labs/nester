@@ -335,6 +335,40 @@ impl VaultFactoryContract {
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
     }
+    // -----------------------------------------------------------------------
+    // Timelocked upgrade (#1475)
+    // -----------------------------------------------------------------------
+
+    /// Proposes a new WASM upgrade for the vault factory.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_VAULT_FACTORY (48 hours).
+    pub fn propose_upgrade(env: Env, proposer: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &proposer, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &proposer,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_VAULT_FACTORY,
+            eta,
+        );
+    }
+
+    /// Cancels a pending WASM upgrade. Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, canceller: Address) {
+        AccessControl::require_role(&env, &canceller, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &canceller);
+    }
+
+    /// Executes a matured WASM upgrade. Permissionless after the ETA.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
+
+    /// Returns the pending upgrade, if any.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
+    }
+
     pub fn version(env: Env) -> soroban_sdk::String {
         soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
     }

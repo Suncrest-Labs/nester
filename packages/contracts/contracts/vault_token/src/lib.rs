@@ -25,9 +25,11 @@ soroban_sdk::contractmeta!(key = "name", val = "VaultTokenContract");
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, String,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env,
+    String,
 };
 
+use nester_access_control::{AccessControl, Role};
 use nester_common::ContractError;
 
 // ---------------------------------------------------------------------------
@@ -78,12 +80,22 @@ impl VaultTokenContract {
 
     /// Initialise the token.
     ///
+    /// * `admin` — receives `Role::Admin`; it can grant `Role::Upgrader`, which
+    ///   proposes timelocked upgrades (#1475). It cannot touch balances directly.
     /// * `vault` — the Vault contract address; the only caller allowed to mint
     ///   or burn shares via [`Self::mint_for_deposit`] / [`Self::burn_for_withdrawal`].
-    pub fn initialize(env: Env, vault: Address, name: String, symbol: String, decimals: u32) {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        vault: Address,
+        name: String,
+        symbol: String,
+        decimals: u32,
+    ) {
         if env.storage().instance().has(&DataKey::Vault) {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
+        AccessControl::initialize(&env, &admin);
         // No vault.require_auth() here — vault isn't initialized yet when this is called.
         // Auth for vault-only operations is enforced in mint_for_deposit, burn_for_withdrawal, etc.
         env.storage().instance().set(&DataKey::Vault, &vault);
@@ -385,6 +397,60 @@ impl VaultTokenContract {
             .persistent()
             .get(&DataKey::DepositTimestamp(user))
             .unwrap_or(0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Roles and timelocked upgrade (#1475)
+    // -----------------------------------------------------------------------
+
+    pub fn grant_role(env: Env, grantor: Address, grantee: Address, role: Role) {
+        AccessControl::grant_role(&env, &grantor, &grantee, role);
+    }
+
+    pub fn revoke_role(env: Env, revoker: Address, target: Address, role: Role) {
+        AccessControl::revoke_role(&env, &revoker, &target, role);
+    }
+
+    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
+        AccessControl::transfer_admin(&env, &current_admin, &new_admin);
+    }
+
+    pub fn accept_admin(env: Env, new_admin: Address) {
+        AccessControl::accept_admin(&env, &new_admin);
+    }
+
+    pub fn has_role(env: Env, account: Address, role: Role) -> bool {
+        AccessControl::has_role(&env, &account, role)
+    }
+
+    /// Proposes a new WASM upgrade for the share token.
+    ///
+    /// Requires Upgrader role and enforces MIN_UPGRADE_DELAY_VAULT_TOKEN (48 hours).
+    pub fn propose_upgrade(env: Env, proposer: Address, new_wasm_hash: BytesN<32>, eta: u64) {
+        AccessControl::require_role(&env, &proposer, Role::Upgrader);
+        nester_common::Upgrade::propose_upgrade(
+            &env,
+            &proposer,
+            new_wasm_hash,
+            nester_common::MIN_UPGRADE_DELAY_VAULT_TOKEN,
+            eta,
+        );
+    }
+
+    /// Cancels a pending WASM upgrade. Requires Upgrader role.
+    pub fn cancel_upgrade(env: Env, canceller: Address) {
+        AccessControl::require_role(&env, &canceller, Role::Upgrader);
+        nester_common::Upgrade::cancel_upgrade(&env, &canceller);
+    }
+
+    /// Executes a matured WASM upgrade. Permissionless after the ETA.
+    pub fn execute_upgrade(env: Env, caller: Address, wasm_hash: BytesN<32>) {
+        nester_common::Upgrade::execute_upgrade(&env, &caller, wasm_hash);
+    }
+
+    /// Returns the pending upgrade, if any.
+    pub fn get_pending_upgrade(env: Env) -> Option<nester_common::PendingUpgrade> {
+        nester_common::Upgrade::get_pending_upgrade(&env)
     }
 
     pub fn version(env: Env) -> soroban_sdk::String {

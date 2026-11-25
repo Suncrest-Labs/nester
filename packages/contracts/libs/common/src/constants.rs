@@ -62,6 +62,18 @@ pub const MIN_UPGRADE_DELAY_YIELD_REGISTRY: u64 = 172_800;
 pub const MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY: u64 = 172_800;
 /// Mandatory timelock delay for Treasury upgrades (7 days).
 pub const MIN_UPGRADE_DELAY_TREASURY: u64 = 604_800;
+/// Mandatory timelock delay for Vault Token upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_VAULT_TOKEN: u64 = 172_800;
+/// Mandatory timelock delay for Vault Factory upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_VAULT_FACTORY: u64 = 172_800;
+/// Mandatory timelock delay for Savings Goal upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_SAVINGS_GOAL: u64 = 172_800;
+/// Mandatory timelock delay for Goal Rewards upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_GOAL_REWARDS: u64 = 172_800;
+/// Mandatory timelock delay for Referral upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_REFERRAL: u64 = 172_800;
+/// Mandatory timelock delay for Recurring Deposit upgrades (48 hours).
+pub const MIN_UPGRADE_DELAY_RECURRING_DEPOSIT: u64 = 172_800;
 
 // ---------------------------------------------------------------------------
 // Time-locked savings vault (issue #802)

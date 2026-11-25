@@ -17,6 +17,7 @@ fn setup(env: &Env) -> (VaultTokenContractClient<'_>, Address, Address) {
     let token_id = env.register_contract(None, VaultTokenContract);
     let client = VaultTokenContractClient::new(env, &token_id);
     client.initialize(
+        &Address::generate(env),
         &vault,
         &String::from_str(env, "Nester USDC Vault"),
         &String::from_str(env, "nUSDC"),
@@ -57,6 +58,7 @@ fn initialize_twice_panics() {
     env.mock_all_auths();
     let (client, vault, _) = setup(&env);
     client.initialize(
+        &Address::generate(&env),
         &vault,
         &String::from_str(&env, "Dup"),
         &String::from_str(&env, "DUP"),
@@ -406,6 +408,7 @@ fn non_vault_cannot_burn_directly() {
 
     env.mock_all_auths();
     client.initialize(
+        &Address::generate(&env),
         &vault,
         &String::from_str(&env, "T"),
         &String::from_str(&env, "T"),
@@ -476,6 +479,7 @@ fn non_vault_cannot_mint() {
     // Initialize with mock auths for setup
     env.mock_all_auths();
     client.initialize(
+        &Address::generate(&env),
         &vault,
         &String::from_str(&env, "T"),
         &String::from_str(&env, "T"),
@@ -498,6 +502,7 @@ fn non_vault_cannot_burn_for_withdrawal() {
 
     env.mock_all_auths();
     client.initialize(
+        &Address::generate(&env),
         &vault,
         &String::from_str(&env, "T"),
         &String::from_str(&env, "T"),
@@ -800,4 +805,97 @@ fn balance_of_unfunded_account_is_zero() {
     let (client, _vault, _) = setup(&env);
     let stranger = Address::generate(&env);
     assert_eq!(client.balance(&stranger), 0_i128);
+}
+
+// ---------------------------------------------------------------------------
+// Timelocked upgrade (#1475)
+// ---------------------------------------------------------------------------
+
+mod upgrade {
+    use super::*;
+    use nester_access_control::Role;
+    use soroban_sdk::{Bytes, BytesN};
+
+    const DELAY: u64 = nester_common::MIN_UPGRADE_DELAY_VAULT_TOKEN;
+
+    fn setup_with_admin(env: &Env) -> (VaultTokenContractClient<'_>, Address) {
+        env.mock_all_auths();
+        let admin = Address::generate(env);
+        let token_id = env.register_contract(None, VaultTokenContract);
+        let client = VaultTokenContractClient::new(env, &token_id);
+        client.initialize(
+            &admin,
+            &Address::generate(env),
+            &String::from_str(env, "Nester USDC Vault"),
+            &String::from_str(env, "nUSDC"),
+            &7u32,
+        );
+        (client, admin)
+    }
+
+    #[test]
+    fn initialize_grants_admin_role() {
+        let env = Env::default();
+        let (client, admin) = setup_with_admin(&env);
+        assert!(client.has_role(&admin, &Role::Admin));
+        assert!(!client.has_role(&admin, &Role::Upgrader));
+    }
+
+    #[test]
+    fn propose_upgrade_requires_upgrader_role() {
+        let env = Env::default();
+        let (client, admin) = setup_with_admin(&env);
+        let eta = env.ledger().timestamp() + DELAY;
+        let hash = BytesN::from_array(&env, &[7u8; 32]);
+
+        // Admin alone is not enough.
+        assert!(client.try_propose_upgrade(&admin, &hash, &eta).is_err());
+        let stranger = Address::generate(&env);
+        assert!(client.try_propose_upgrade(&stranger, &hash, &eta).is_err());
+        assert_eq!(client.get_pending_upgrade(), None);
+    }
+
+    #[test]
+    fn propose_and_execute_upgrade_after_delay() {
+        let env = Env::default();
+        let (client, admin) = setup_with_admin(&env);
+        let upgrader = Address::generate(&env);
+        client.grant_role(&admin, &upgrader, &Role::Upgrader);
+        let hash = env.deployer().upload_contract_wasm(Bytes::new(&env));
+        let eta = env.ledger().timestamp() + DELAY;
+
+        client.propose_upgrade(&upgrader, &hash, &eta);
+        let pending = client.get_pending_upgrade().unwrap();
+        assert_eq!(pending.wasm_hash, hash);
+        assert_eq!(pending.eta, eta);
+
+        env.ledger().set_timestamp(eta);
+        let relayer = Address::generate(&env);
+        assert!(client.try_execute_upgrade(&relayer, &hash).is_ok());
+    }
+
+    #[test]
+    fn execute_upgrade_before_eta_is_rejected() {
+        let env = Env::default();
+        let (client, admin) = setup_with_admin(&env);
+        let upgrader = Address::generate(&env);
+        client.grant_role(&admin, &upgrader, &Role::Upgrader);
+        let hash = env.deployer().upload_contract_wasm(Bytes::new(&env));
+        let now = env.ledger().timestamp();
+
+        assert!(
+            client
+                .try_propose_upgrade(&upgrader, &hash, &(now + DELAY - 1))
+                .is_err(),
+            "an ETA shorter than the minimum delay must be rejected"
+        );
+
+        client.propose_upgrade(&upgrader, &hash, &(now + DELAY));
+        env.ledger().set_timestamp(now + DELAY - 1);
+        assert!(
+            client.try_execute_upgrade(&upgrader, &hash).is_err(),
+            "execute_upgrade must reject before the ETA"
+        );
+        assert!(client.get_pending_upgrade().is_some());
+    }
 }

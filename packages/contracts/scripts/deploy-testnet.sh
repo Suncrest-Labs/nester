@@ -206,6 +206,7 @@ NESTER_ID=$(deploy_contract "Nester" "$WASM_DIR/nester_contract_opt.wasm")
 echo ""
 echo "⏳  Initializing VaultToken (USDC)..."
 invoke "$VAULT_TOKEN_USDC_ID" initialize \
+  --admin "$DEPLOYER" \
   --vault "$VAULT_USDC_ID" \
   --name "Nester USDC Vault Token" \
   --symbol "nUSDC" \
@@ -215,6 +216,7 @@ echo "✓  VaultToken (USDC) initialized"
 echo ""
 echo "⏳  Initializing VaultToken (XLM)..."
 invoke "$VAULT_TOKEN_XLM_ID" initialize \
+  --admin "$DEPLOYER" \
   --vault "$VAULT_XLM_ID" \
   --name "Nester XLM Vault Token" \
   --symbol "nXLM" \
