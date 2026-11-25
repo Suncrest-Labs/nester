@@ -17,6 +17,7 @@ import (
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/freshness"
 	"github.com/suncrestlabs/nester/apps/api/internal/retry"
+	"github.com/suncrestlabs/nester/apps/api/internal/rpcbudget"
 )
 
 // defaultDevJWTSecret is the placeholder value shipped in .env.example. It is long
@@ -80,6 +81,7 @@ type Config struct {
 	indexer                IndexerConfig
 	circuitBreaker         CircuitBreakerConfig
 	rpcRetry               RPCRetryConfig
+	rpcBudget              RPCBudgetConfig
 	launchCaps             LaunchCapsConfig
 
 	// protocolTVLAnomalyDropPct is the single-interval TVL drop (percent)
@@ -151,6 +153,40 @@ type RPCRetryConfig struct {
 	maxDelay    time.Duration
 	budget      time.Duration
 }
+
+// RPCBudgetConfig holds per-provider outbound RPC token-bucket settings and
+// priority-class reserve thresholds.
+type RPCBudgetConfig struct {
+	enabled      bool
+	sorobanRPS   float64
+	sorobanBurst float64
+	horizonRPS   float64
+	horizonBurst float64
+	highReserve  float64
+	lowThreshold float64
+}
+
+func (c RPCBudgetConfig) Enabled() bool { return c.enabled }
+
+func (c RPCBudgetConfig) SorobanRPCPolicy() rpcbudget.Config {
+	return rpcbudget.Config{
+		RefillRate:   c.sorobanRPS,
+		Burst:        c.sorobanBurst,
+		HighReserve:  c.highReserve,
+		LowThreshold: c.lowThreshold,
+	}
+}
+
+func (c RPCBudgetConfig) HorizonPolicy() rpcbudget.Config {
+	return rpcbudget.Config{
+		RefillRate:   c.horizonRPS,
+		Burst:        c.horizonBurst,
+		HighReserve:  c.highReserve,
+		LowThreshold: c.lowThreshold,
+	}
+}
+
+func (c *Config) RPCBudget() RPCBudgetConfig { return c.rpcBudget }
 
 // IndexerConfig holds the event indexer's freshness contract (nester#1088).
 //
@@ -705,6 +741,15 @@ func loadFrom(loader *envLoader) (*Config, error) {
 			baseDelay:   loader.durationDefault("RPC_RETRY_BASE_DELAY", retry.DefaultBaseDelay),
 			maxDelay:    loader.durationDefault("RPC_RETRY_MAX_DELAY", retry.DefaultMaxDelay),
 			budget:      loader.durationDefault("RPC_RETRY_BUDGET", retry.DefaultBudget),
+		},
+		rpcBudget: RPCBudgetConfig{
+			enabled:      loader.boolDefault("RPC_BUDGET_ENABLED", true),
+			sorobanRPS:   loader.floatDefault("RPC_BUDGET_SOROBAN_RPS", rpcbudget.DefaultRefillRate),
+			sorobanBurst: loader.floatDefault("RPC_BUDGET_SOROBAN_BURST", rpcbudget.DefaultBurst),
+			horizonRPS:   loader.floatDefault("RPC_BUDGET_HORIZON_RPS", rpcbudget.DefaultRefillRate),
+			horizonBurst: loader.floatDefault("RPC_BUDGET_HORIZON_BURST", rpcbudget.DefaultBurst),
+			highReserve:  loader.floatDefault("RPC_BUDGET_HIGH_RESERVE", rpcbudget.DefaultHighReserve),
+			lowThreshold: loader.floatDefault("RPC_BUDGET_LOW_THRESHOLD", rpcbudget.DefaultLowThreshold),
 		},
 	}
 

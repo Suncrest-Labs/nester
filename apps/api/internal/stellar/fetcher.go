@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+
+	"github.com/suncrestlabs/nester/apps/api/internal/rpcbudget"
 )
 
 // rpcEventFetcher is the production EventFetcher: a thin adapter over the
@@ -38,6 +40,7 @@ func (f *rpcEventFetcher) FetchEvents(
 	contractIDs []string,
 	startLedger uint64,
 ) ([]indexedEvent, uint64, error) {
+	ctx = rpcbudget.WithPriority(ctx, rpcbudget.PriorityHigh)
 	return fetchSorobanEvents(ctx, f.rpc, contractIDs, startLedger)
 }
 
@@ -47,6 +50,7 @@ func (f *rpcEventFetcher) FetchEvents(
 // indexer had no way to derive a valid startLedger on a fresh database and
 // fell back to 0, which the RPC rejects (B-02).
 func (f *rpcEventFetcher) LatestLedger(ctx context.Context) (uint64, error) {
+	ctx = rpcbudget.WithPriority(ctx, rpcbudget.PriorityHigh)
 	var rpcResp struct {
 		Result struct {
 			Sequence uint64 `json:"sequence"`
