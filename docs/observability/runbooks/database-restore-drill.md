@@ -1,21 +1,95 @@
 # Database Restore Drill Runbook & Findings
 
-## Overview
-This runbook details our automated and scheduled database restore drills, satisfying launch requirements for proven backup integrity and disaster recovery preparedness (nester#795).
+## Status and scope
 
-## Stated SLOs, RPO, and Retention
-- **Retention:** Automated backups are retained for 14 days (`BACKUP_RETENTION_DAYS=14`). Older artifacts are automatically pruned by `scripts/db-backup.sh`.
-- **RPO (Recovery Point Objective):** $\le 1$ hour (based on hourly cron scheduling of automated `pg_dump` plus continuous WAL archiving in production).
-- **RTO (Recovery Time Objective):** $\le 15$ minutes for logical full restore plus migration validation.
+The local `make db-restore-drill` target is a development smoke test, not evidence
+of a restore from the production backup pipeline. It first runs `make db-backup`
+against `nester_dev`, then restores the resulting local dump into
+`nester_restore_drill`. No production-pipeline restore result or measured RTO/RPO
+is recorded by that target.
 
-## Restore Drill Schedule & Automation
-Restore drills are scheduled weekly via CI job or cron runner executing `make db-restore-drill` against an isolated scratch database (`nester_restore_drill`), preventing any production impact.
+Do not describe a drill as complete until the steps below have been run using a
+backup artifact from the production pipeline and an isolated scratch PostgreSQL
+instance. Never point `BASE_DSN` or the restore target at production.
 
-## Drill Runbook Steps
-1. Produce or fetch the latest backup artifact: `make db-backup`
-2. Execute the automated scratch restore drill: `make db-restore-drill`
-3. Verify table counts, foreign key constraints, and migration table parity.
+## Objectives and measurements
 
-## Drill Findings & Fold-Back
-- **Finding 1:** Initial restores failed when tables already existed. Resolved by adding `--clean --if-exists` flags to `pg_restore` in `scripts/db-restore.sh`.
-- **Finding 2:** Silent partial failures risked corrupted states. Resolved by adding `--exit-on-error` to `pg_restore` and table count verification assertions in `db-restore-drill.sh`.
+The production targets in
+[`database-restore-runbook.md`](./database-restore-runbook.md) are objectives,
+not measured drill results:
+
+- **Retention:** 14 days where configured by the backup pipeline.
+- **RPO target:** less than 24 hours for daily snapshots; less than 5 minutes
+  only where continuous PITR/WAL archiving is enabled.
+- **RTO target:** less than 30 minutes for restoration and verification.
+
+Record actual values for each drill. Do not substitute these targets for
+measurements:
+
+- **Measured RPO:** drill start UTC minus the backup's verified data cutoff UTC.
+- **Measured RTO:** scratch restore start UTC to the point when API health,
+  indexer resumption, and duplicate-posting checks all pass.
+
+## Prerequisites
+
+1. Obtain the latest eligible artifact from the production backup pipeline and
+   record its provider backup ID, creation time, data cutoff time, and checksum.
+2. Decrypt the artifact only into protected scratch storage using the approved
+   key-management process. Do not place keys in this repository, command logs,
+   or the drill report.
+3. Provision a disposable PostgreSQL instance isolated from production. Confirm
+   the scratch DSN points only to that instance and that the required tools
+   (`psql`, `pg_restore`, and the API runtime) are available.
+4. Record the start time in UTC before beginning the restore.
+
+The repository's `scripts/db-backup.sh` creates a local plaintext `pg_dump`
+artifact; it does not fetch, encrypt, or upload a production backup. Do not use
+`make db-backup` as a substitute for the production pipeline artifact.
+
+## Drill steps
+
+1. Validate the decrypted artifact with `pg_restore --list` and verify its
+   checksum against the recorded value.
+2. Restore it to the disposable database with
+   `scripts/db-restore.sh <dump> <scratch-database-dsn>`. The script verifies
+   migration parity; resolve any failure before starting the API.
+3. Record the restored `system_state` value for
+   `event_indexer.last_ledger`, plus baseline counts for `processed_events`,
+   `ledger_entries`, and the relevant money-path tables.
+4. Start the API/indexer against the scratch database using the same build and
+   configuration intended for recovery. Confirm `/health/detailed` reports a
+   healthy database and observe that the indexer resumes from the restored
+   cursor and advances.
+5. Restart the API/indexer once. Confirm the cursor remains monotonic and that
+   replay/restart does not create duplicate processed events or ledger postings.
+   Record the post-restart counts and any duplicate-key or balance-integrity
+   errors.
+6. Record the completion time and compute RTO/RPO using the definitions above.
+   Attach sanitized logs and count/query results; do not include credentials or
+   customer data.
+
+## Drill report
+
+For each completed drill, record:
+
+| Field | Result |
+| --- | --- |
+| Run date and environment | |
+| Backup provider ID / checksum | |
+| Backup creation and data cutoff UTC | |
+| Scratch PostgreSQL version | |
+| Restore start / completion UTC | |
+| API health and indexer resumption | |
+| Cursor before / after restart | |
+| Relevant counts before / after restart | |
+| Duplicate postings or integrity errors | |
+| Measured RTO | |
+| Measured RPO | |
+
+## Findings and follow-up
+
+Record each observed failure, its impact, corrective action, and a successful
+rerun here. Historical script safeguards (`--clean --if-exists`,
+`--exit-on-error`, and migration checks) do not by themselves prove that the
+production backup pipeline can be restored or that the indexer resumes without
+duplicate postings.
