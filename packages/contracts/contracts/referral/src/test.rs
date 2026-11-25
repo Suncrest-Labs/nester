@@ -324,3 +324,119 @@ fn only_the_registered_vault_can_accrue_rewards() {
     let result = client.try_accrue_reward(&user, &1_000_000i128, &MIN_DEPOSIT, &deposit_time);
     assert!(result.is_err());
 }
+
+// Issue #1471: account growth must not grow the shared instance entry.
+#[test]
+fn registering_500_referrals_keeps_instance_entry_size_constant() {
+    use soroban_sdk::{testutils::storage::Instance as _, xdr::ToXdr};
+
+    let (env, _admin, _vault, _token, client) = setup();
+    env.budget().reset_unlimited();
+    let before = env.as_contract(&client.address, || {
+        env.storage().instance().all().to_xdr(&env)
+    });
+    let referrer = Address::generate(&env);
+    for _ in 0..500 {
+        let user = Address::generate(&env);
+        client.register_referral(&user, &referrer);
+        assert_eq!(client.get_referrer(&user), Some(referrer.clone()));
+        env.as_contract(&client.address, || {
+            let key = crate::DataKey::Referrer(user.clone());
+            assert!(env.storage().persistent().has(&key));
+            assert!(!env.storage().instance().has(&key));
+            // Compare serialized bytes, not just key count: even a growing
+            // collection behind a single instance key must fail this test.
+            assert_eq!(env.storage().instance().all().to_xdr(&env), before);
+        });
+    }
+}
+
+#[test]
+fn reward_accounting_uses_persistent_keys_with_ttl() {
+    use soroban_sdk::testutils::storage::Persistent as _;
+
+    let (env, admin, _vault, token_address, client) = setup();
+    let user = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    client.set_min_claim(&admin, &1);
+    client.register_referral(&user, &referrer);
+    client.accrue_reward(
+        &user,
+        &1_000_000,
+        &MIN_DEPOSIT,
+        &eligible_deposit_time(&env),
+    );
+    let reward = client.get_reward_balance(&referrer);
+    assert!(reward > 0);
+    assert_eq!(client.get_lifetime_reward(&referrer), reward);
+    assert_eq!(client.get_referred_count(&referrer), 1);
+    env.as_contract(&client.address, || {
+        for key in [
+            crate::DataKey::Referrer(user.clone()),
+            crate::DataKey::CountedTowardCap(user.clone()),
+            crate::DataKey::ReferredCount(referrer.clone()),
+            crate::DataKey::RewardBalance(referrer.clone()),
+            crate::DataKey::LifetimeReward(referrer.clone()),
+        ] {
+            assert!(!env.storage().instance().has(&key));
+            assert!(env.storage().persistent().has(&key));
+            assert_eq!(
+                env.storage().persistent().get_ttl(&key),
+                nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+            );
+        }
+    });
+    assert_eq!(client.claim_referral_rewards(&referrer), reward);
+    assert_eq!(client.get_reward_balance(&referrer), 0);
+    assert_eq!(client.get_lifetime_reward(&referrer), reward);
+    assert_eq!(
+        token::Client::new(&env, &token_address).balance(&referrer),
+        reward
+    );
+}
+
+#[test]
+fn existing_referrals_renew_ttl_on_read_without_creating_missing_entries() {
+    use soroban_sdk::testutils::storage::Persistent as _;
+
+    let (env, _admin, _vault, _token, client) = setup();
+    let user = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    client.register_referral(&user, &referrer);
+    let key = crate::DataKey::Referrer(user.clone());
+    // Keep the test contract alive while advancing near the user entry's TTL.
+    env.as_contract(&client.address, || {
+        env.storage().instance().extend_ttl(518_400, 518_400);
+    });
+    env.ledger().with_mut(|l| {
+        l.sequence_number += nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+            - nester_common::POSITION_TTL_THRESHOLD_LEDGERS
+            + 1
+    });
+    env.as_contract(&client.address, || {
+        assert!(
+            env.storage().persistent().get_ttl(&key)
+                < nester_common::POSITION_TTL_THRESHOLD_LEDGERS
+        );
+    });
+    assert_eq!(client.get_referrer(&user), Some(referrer.clone()));
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().persistent().get_ttl(&key),
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+    });
+    let missing = Address::generate(&env);
+    assert_eq!(client.get_referrer(&missing), None);
+    assert_eq!(client.get_reward_balance(&missing), 0);
+    env.as_contract(&client.address, || {
+        assert!(!env
+            .storage()
+            .persistent()
+            .has(&crate::DataKey::Referrer(missing.clone())));
+        assert!(!env
+            .storage()
+            .persistent()
+            .has(&crate::DataKey::RewardBalance(missing)));
+    });
+}
