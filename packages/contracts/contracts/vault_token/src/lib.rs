@@ -155,13 +155,29 @@ impl VaultTokenContract {
         expiration_ledger: u32,
     ) {
         from.require_auth();
-        env.storage().instance().set(
-            &DataKey::Allowance(from.clone(), spender.clone()),
+        if amount < 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+        let current_ledger = env.ledger().sequence();
+        if amount > 0 && expiration_ledger < current_ledger {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
+        if amount > 0 && expiration_ledger - current_ledger > env.storage().max_ttl() {
+            panic_with_error!(&env, ContractError::InvalidOperation);
+        }
+
+        let key = DataKey::Allowance(from.clone(), spender.clone());
+        env.storage().persistent().set(
+            &key,
             &AllowanceValue {
                 amount,
                 expiration_ledger,
             },
         );
+        if amount > 0 && expiration_ledger > current_ledger {
+            let ttl = expiration_ledger - current_ledger;
+            env.storage().persistent().extend_ttl(&key, ttl, ttl);
+        }
         env.events().publish(
             (symbol_short!("approve"), from, spender),
             (amount, expiration_ledger),
@@ -517,7 +533,7 @@ fn set_total_assets(env: &Env, value: i128) {
 fn get_allowance(env: &Env, from: &Address, spender: &Address) -> i128 {
     match env
         .storage()
-        .instance()
+        .persistent()
         .get::<DataKey, AllowanceValue>(&DataKey::Allowance(from.clone(), spender.clone()))
     {
         None => 0,
@@ -537,8 +553,8 @@ fn spend_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
         panic_with_error!(env, ContractError::Unauthorized);
     }
     let key = DataKey::Allowance(from.clone(), spender.clone());
-    let existing: AllowanceValue = env.storage().instance().get(&key).unwrap();
-    env.storage().instance().set(
+    let existing: AllowanceValue = env.storage().persistent().get(&key).unwrap();
+    env.storage().persistent().set(
         &key,
         &AllowanceValue {
             amount: current - amount,
