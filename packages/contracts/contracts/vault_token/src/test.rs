@@ -2,8 +2,8 @@ extern crate std;
 
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Ledger as _},
-    xdr::{FromXdr, LedgerKey, ScVal, ToXdr},
-    Address, Bytes, Env, String,
+    xdr::{LedgerKey, ScVal},
+    Address, Env, String,
 };
 
 use crate::{VaultTokenContract, VaultTokenContractClient};
@@ -907,10 +907,6 @@ fn deposit_cost_with_holders(holders: u32) -> (u64, u64) {
     // A depositor that does not hold shares yet.
     let user = Address::generate(&setup_env);
 
-    // Objects are bound to their Env, so carry addresses over as XDR.
-    let id_xdr: std::vec::Vec<u8> = token_id.clone().to_xdr(&setup_env).iter().collect();
-    let user_xdr: std::vec::Vec<u8> = user.to_xdr(&setup_env).iter().collect();
-
     // Drop auth nonces recorded during setup: the restored Env replays the
     // same nonce sequence and would hit "nonce already exists".
     let mut snapshot = setup_env.to_snapshot();
@@ -923,8 +919,8 @@ fn deposit_cost_with_holders(holders: u32) -> (u64, u64) {
 
     let env = Env::from_snapshot(snapshot);
     env.mock_all_auths();
-    let token_id = Address::from_xdr(&env, &Bytes::from_slice(&env, &id_xdr)).unwrap();
-    let user = Address::from_xdr(&env, &Bytes::from_slice(&env, &user_xdr)).unwrap();
+    let token_id = nester_test_utils::env::carry_address(&setup_env, &env, &token_id);
+    let user = nester_test_utils::env::carry_address(&setup_env, &env, &user);
     env.register_contract(Some(&token_id), VaultTokenContract);
     let client = VaultTokenContractClient::new(&env, &token_id);
     assert_eq!(client.total_supply(), 1_000 * i128::from(holders));
@@ -978,12 +974,39 @@ fn balances_and_allowances_are_not_in_instance_storage() {
 // Persistent TTL renewal
 // ---------------------------------------------------------------------------
 
+const APPROVAL_EXPIRATION: u32 = 1_000_000;
+
 fn persistent_ttl(env: &Env, token_id: &Address, key: &crate::DataKey) -> u32 {
     env.as_contract(token_id, || env.storage().persistent().get_ttl(key))
 }
 
-/// Mints and approves for `user`, then moves the ledger forward until every
-/// entry written so far is one ledger below the renewal threshold.
+fn assert_position_ttl(env: &Env, token_id: &Address, user: &Address) {
+    for key in [
+        crate::DataKey::Balance(user.clone()),
+        crate::DataKey::DepositTimestamp(user.clone()),
+    ] {
+        assert_eq!(
+            persistent_ttl(env, token_id, &key),
+            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+    }
+}
+
+/// An allowance lives until its `expiration_ledger` (SEP-41), not for the
+/// position TTL.
+fn assert_allowance_ttl(env: &Env, token_id: &Address, user: &Address, spender: &Address) {
+    assert_eq!(
+        persistent_ttl(
+            env,
+            token_id,
+            &crate::DataKey::Allowance(user.clone(), spender.clone())
+        ),
+        APPROVAL_EXPIRATION - env.ledger().sequence()
+    );
+}
+
+/// Mints and approves for `user`, then moves the ledger forward until the
+/// balance and deposit timestamp are one ledger below the renewal threshold.
 fn setup_entries_near_expiry(
     env: &Env,
 ) -> (VaultTokenContractClient<'_>, Address, Address, Address) {
@@ -991,19 +1014,11 @@ fn setup_entries_near_expiry(
     let user = Address::generate(env);
     let spender = Address::generate(env);
     client.mint_for_deposit(&user, &1_000);
-    client.approve(&user, &spender, &500, &1_000_000);
+    client.approve(&user, &spender, &500, &APPROVAL_EXPIRATION);
     client.extend_ttl(&None);
 
-    for key in [
-        crate::DataKey::Balance(user.clone()),
-        crate::DataKey::DepositTimestamp(user.clone()),
-        crate::DataKey::Allowance(user.clone(), spender.clone()),
-    ] {
-        assert_eq!(
-            persistent_ttl(env, &token_id, &key),
-            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
-        );
-    }
+    assert_position_ttl(env, &token_id, &user);
+    assert_allowance_ttl(env, &token_id, &user, &spender);
 
     let advance = nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
         - nester_common::POSITION_TTL_THRESHOLD_LEDGERS
@@ -1023,35 +1038,53 @@ fn writes_renew_persistent_ttl() {
     let (client, token_id, user, spender) = setup_entries_near_expiry(&env);
 
     client.mint_for_deposit(&user, &1_000);
-    client.approve(&user, &spender, &400, &1_000_000);
+    client.approve(&user, &spender, &400, &APPROVAL_EXPIRATION);
 
-    for key in [
-        crate::DataKey::Balance(user.clone()),
-        crate::DataKey::DepositTimestamp(user.clone()),
-        crate::DataKey::Allowance(user.clone(), spender.clone()),
-    ] {
-        assert_eq!(
-            persistent_ttl(&env, &token_id, &key),
-            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
-        );
-    }
+    assert_position_ttl(&env, &token_id, &user);
+    assert_allowance_ttl(&env, &token_id, &user, &spender);
+}
+
+#[test]
+fn reads_renew_balance_and_deposit_timestamp() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token_id, user, _) = setup_entries_near_expiry(&env);
+
+    assert_eq!(client.balance(&user), 1_000);
+    assert!(client.get_deposit_time(&user) <= env.ledger().timestamp());
+
+    assert_position_ttl(&env, &token_id, &user);
 }
 
 #[test]
 fn extend_ttl_renews_balance_and_deposit_timestamp() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, token_id, user, _) = setup_entries_near_expiry(&env);
+    let (client, token_id, user, spender) = setup_entries_near_expiry(&env);
 
     client.extend_ttl(&Some(user.clone()));
 
-    for key in [
-        crate::DataKey::Balance(user.clone()),
-        crate::DataKey::DepositTimestamp(user.clone()),
-    ] {
-        assert_eq!(
-            persistent_ttl(&env, &token_id, &key),
-            nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
-        );
-    }
+    assert_position_ttl(&env, &token_id, &user);
+    // extend_ttl leaves the allowance on its own expiration-based TTL.
+    assert_allowance_ttl(&env, &token_id, &user, &spender);
+}
+
+#[test]
+fn zero_balance_entry_is_removed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, token_id) = setup(&env);
+    let user = Address::generate(&env);
+    let other = Address::generate(&env);
+    client.mint_for_deposit(&user, &1_000);
+
+    client.transfer(&user, &other, &1_000);
+
+    assert_eq!(client.balance(&user), 0);
+    env.as_contract(&token_id, || {
+        assert!(!env
+            .storage()
+            .persistent()
+            .has(&crate::DataKey::Balance(user.clone())));
+    });
 }

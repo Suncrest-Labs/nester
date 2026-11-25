@@ -44,8 +44,8 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short,
     testutils::{Address as _, Events as _, Ledger, LedgerInfo},
     token,
-    xdr::{FromXdr, LedgerKey, ScVal, ToXdr},
-    Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
+    xdr::{LedgerKey, ScVal},
+    Address, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 use vault_token::{VaultTokenContract, VaultTokenContractClient};
 
@@ -3869,11 +3869,6 @@ mod pause_matrix {
 // ---------------------------------------------------------------------------
 
 /// Re-creates `addr` (bound to `from`) inside `to`.
-fn carry_address(from: &Env, to: &Env, addr: &Address) -> Address {
-    let raw: std::vec::Vec<u8> = addr.clone().to_xdr(from).iter().collect();
-    Address::from_xdr(to, &Bytes::from_slice(to, &raw)).unwrap()
-}
-
 /// CPU and memory of `vault.deposit` for a fresh depositor after
 /// `depositors` other accounts have deposited.
 ///
@@ -3921,10 +3916,10 @@ fn vault_deposit_cost_with_depositors(depositors: u32) -> (u64, u64) {
 
     let env = Env::from_snapshot(snapshot);
     env.mock_all_auths();
-    let vault_id = carry_address(&setup_env, &env, &vault_id);
-    let vault_token_id = carry_address(&setup_env, &env, &vault_token_id);
-    let treasury = carry_address(&setup_env, &env, &treasury);
-    let user = carry_address(&setup_env, &env, &user);
+    let vault_id = nester_test_utils::env::carry_address(&setup_env, &env, &vault_id);
+    let vault_token_id = nester_test_utils::env::carry_address(&setup_env, &env, &vault_token_id);
+    let treasury = nester_test_utils::env::carry_address(&setup_env, &env, &treasury);
+    let user = nester_test_utils::env::carry_address(&setup_env, &env, &user);
     env.register_contract(Some(&vault_id), VaultContract);
     env.register_contract(Some(&vault_token_id), VaultTokenContract);
     env.register_contract(Some(&treasury), MockTreasury);

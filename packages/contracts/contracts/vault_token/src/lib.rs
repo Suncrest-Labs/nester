@@ -388,10 +388,14 @@ impl VaultTokenContract {
     /// contract.  Returns 0 if no timestamp has been recorded (e.g. the user
     /// has never received shares via deposit or transfer).
     pub fn get_deposit_time(env: Env, user: Address) -> u64 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::DepositTimestamp(user))
-            .unwrap_or(0)
+        let key = DataKey::DepositTimestamp(user);
+        match env.storage().persistent().get::<DataKey, u64>(&key) {
+            Some(timestamp) => {
+                bump_persistent(&env, &key);
+                timestamp
+            }
+            None => 0,
+        }
     }
 
     pub fn version(env: Env) -> soroban_sdk::String {
@@ -485,17 +489,28 @@ fn bump_persistent(env: &Env, key: &DataKey) {
     );
 }
 
+/// Reads renew the entry's TTL too, so a holder who only receives or is
+/// queried by the vault stays live without a separate keeper call.
 fn get_balance(env: &Env, account: &Address) -> i128 {
-    env.storage()
-        .persistent()
-        .get::<DataKey, i128>(&DataKey::Balance(account.clone()))
-        .unwrap_or(0_i128)
+    let key = DataKey::Balance(account.clone());
+    match env.storage().persistent().get::<DataKey, i128>(&key) {
+        Some(balance) => {
+            bump_persistent(env, &key);
+            balance
+        }
+        None => 0,
+    }
 }
 
+/// A zero balance is removed rather than stored, so it pays no rent.
 fn set_balance(env: &Env, account: &Address, amount: i128) {
     let key = DataKey::Balance(account.clone());
-    env.storage().persistent().set(&key, &amount);
-    bump_persistent(env, &key);
+    if amount == 0 {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &amount);
+        bump_persistent(env, &key);
+    }
 }
 
 fn receive_balance(env: &Env, account: &Address, amount: i128) {
