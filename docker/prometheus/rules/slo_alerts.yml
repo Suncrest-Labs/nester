@@ -143,6 +143,79 @@ groups:
           runbook: docs/observability/runbooks/api-availability.md
 
   # ---------------------------------------------------------------------------
+  # API availability — mainnet-specific 99.9% SLO (nester#1421)
+  # ---------------------------------------------------------------------------
+  # Mainnet requires deliberate response to degraded reliability. Same 99.9%
+  # target as general API availability, but filtered to mainnet environment
+  # with network passphrase label. The error budget policy (see
+  # docs/observability/error-budget-policy.md) defines four states:
+  #   Healthy    > 50% budget remaining
+  #   Watch      25-50% budget remaining
+  #   Warning    0-25% budget remaining
+  #   Exhausted  ≤ 0% budget remaining
+  #
+  # These alerts fire on burn rate, not budget state. Budget state is tracked
+  # via the 28-day recording rule and reviewed on cadence. The alerts catch
+  # active degradation; the policy gates work based on accumulated consumption.
+  - name: slo_alerts_api_availability_mainnet
+    rules:
+      - alert: APIAvailabilityMainnetFastBurn
+        expr: |
+          api:availability:error_ratio_rate1h{environment="mainnet"} > 0.01344
+          and
+          api:availability:error_ratio_rate5m{environment="mainnet"} > 0.01344
+        for: 2m
+        labels:
+          severity: page
+          slo: api_availability_mainnet
+          service: api
+          burn: fast
+          environment: mainnet
+        annotations:
+          summary: >-
+            Mainnet API availability burning 28-day error budget 13.4x
+            ({{ $value | humanizePercentage }} 5xx over 1h)
+          description: >-
+            **Mainnet production SLO breach.** 5xx ratio is {{ with query "api:availability:error_ratio_rate1h{environment=\"mainnet\"}" }}{{ . | first | value | humanizePercentage }}{{ end }}
+            over 1h and {{ with query "api:availability:error_ratio_rate5m{environment=\"mainnet\"}" }}{{ . | first | value | humanizePercentage }}{{ end }}
+            over 5m, against mainnet's 99.9% target (0.1% budget = 40 minutes
+            per 28 days). At this rate the entire 28-day budget is exhausted in
+            ~50 hours. User-facing production reliability is degraded.
+          budget_remaining: >-
+            {{ with query "1 - (api:availability:error_ratio_rate28d{environment=\"mainnet\"} / 0.001)" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          dashboard: /d/nester-slo-api/api-availability?var-environment=mainnet
+          runbook: docs/observability/runbooks/api-availability-mainnet.md
+          policy: docs/observability/error-budget-policy.md
+
+      - alert: APIAvailabilityMainnetSlowBurn
+        expr: |
+          api:availability:error_ratio_rate6h{environment="mainnet"} > 0.0056
+          and
+          api:availability:error_ratio_rate30m{environment="mainnet"} > 0.0056
+        for: 15m
+        labels:
+          severity: ticket
+          slo: api_availability_mainnet
+          service: api
+          burn: slow
+          environment: mainnet
+        annotations:
+          summary: >-
+            Mainnet API availability burning 28-day error budget 5.6x
+            ({{ $value | humanizePercentage }} 5xx over 6h)
+          description: >-
+            **Mainnet production SLO degradation.** Sustained elevated 5xx ratio
+            against mainnet's 99.9% target. At this rate the 28-day budget is
+            exhausted in ~5 days. Not paging: there is time to fix this in
+            business hours, but it will not resolve itself. Check error budget
+            state and follow policy in runbook.
+          budget_remaining: >-
+            {{ with query "1 - (api:availability:error_ratio_rate28d{environment=\"mainnet\"} / 0.001)" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          dashboard: /d/nester-slo-api/api-availability?var-environment=mainnet
+          runbook: docs/observability/runbooks/api-availability-mainnet.md
+          policy: docs/observability/error-budget-policy.md
+
+  # ---------------------------------------------------------------------------
   # Per-endpoint error rate (nester#1227)
   # ---------------------------------------------------------------------------
   #
@@ -620,6 +693,36 @@ groups:
             the safety net is expected to page rather than pass silently.
           dashboard: /d/nester-slo-money-path/money-path-integrity
           runbook: docs/observability/runbooks/money-path-integrity.md
+
+      - alert: VaultAssetCompositionDivergence
+        # Vault's total_assets diverges from USDC balance + adapter positions
+        # (nester#1421). This is the independent check that catches exploits
+        # and accounting bugs: a vault reports one total, but when we sum what
+        # it actually holds, the numbers disagree beyond the tolerance measured
+        # in basis points. Distinct from BalanceComparator (DB vs chain): this
+        # compares chain against chain, so disagreement means the vault's
+        # accounting is broken, an exploit has drained funds, or an adapter is
+        # misreporting positions.
+        expr: |
+          sum(increase(nester_reconcile_divergences_total{kind="composition_mismatch"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: page
+          slo: money_path_integrity
+          service: api
+        annotations:
+          summary: >-
+            Vault total_assets diverges from USDC + adapter positions
+          description: >-
+            One or more vaults report a total_assets value that does not match
+            the sum of their USDC SAC balance and deployed adapter positions,
+            beyond the configured basis point threshold. This is the independent
+            check for exploits and accounting bugs. Check reconciliation_findings
+            for vault IDs, divergence amounts, and basis points. Unlike balance
+            mismatches (DB vs chain), this is chain vs chain, so the vault's
+            own accounting is suspect.
+          dashboard: /d/nester-slo-money-path/money-path-integrity
+          runbook: docs/observability/runbooks/vault-asset-composition.md
 
       - alert: PendingSubmissionsBacklogged
         # Age, not depth. A queue of 200 that drains in seconds is healthy; a

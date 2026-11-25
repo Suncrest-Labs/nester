@@ -361,6 +361,84 @@ tests:
         exp_alerts: []
 
   # ===========================================================================
+  # API availability — mainnet-specific SLO (nester#1421)
+  # ===========================================================================
+  #
+  # Mainnet requires separate alerting from testnet. Same 99.9% target, but
+  # with environment label to distinguish production traffic. Tests the
+  # mainnet-specific fast and slow burn alerts fire on mainnet traffic and
+  # that the environment filter works correctly.
+
+  - interval: 1m
+    name: Mainnet API availability fast burn pages on error burst
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx",environment="mainnet"}'
+        values: '0+540x120'   # 9/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx",environment="mainnet"}'
+        values: '0+60x120'    # 1/s  => 10% error ratio
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: APIAvailabilityMainnetFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: api_availability_mainnet
+              service: api
+              burn: fast
+              environment: mainnet
+            exp_annotations:
+              summary: "Mainnet API availability burning 28-day error budget 13.4x (10% 5xx over 1h)"
+              description: "**Mainnet production SLO breach.** 5xx ratio is 10% over 1h and 10% over 5m, against mainnet's 99.9% target (0.1% budget = 40 minutes per 28 days). At this rate the entire 28-day budget is exhausted in ~50 hours. User-facing production reliability is degraded."
+              budget_remaining: "-9900%"
+              dashboard: /d/nester-slo-api/api-availability?var-environment=mainnet
+              runbook: docs/observability/runbooks/api-availability-mainnet.md
+              policy: docs/observability/error-budget-policy.md
+
+  - interval: 1m
+    name: Mainnet API availability slow burn tickets without paging
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx",environment="mainnet"}'
+        values: '0+59520x460'   # 992/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx",environment="mainnet"}'
+        values: '0+480x460'     # 8/s => 0.8%
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: APIAvailabilityMainnetSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: api_availability_mainnet
+              service: api
+              burn: slow
+              environment: mainnet
+            exp_annotations:
+              summary: "Mainnet API availability burning 28-day error budget 5.6x (0.8% 5xx over 6h)"
+              description: "**Mainnet production SLO degradation.** Sustained elevated 5xx ratio against mainnet's 99.9% target. At this rate the 28-day budget is exhausted in ~5 days. Not paging: there is time to fix this in business hours, but it will not resolve itself. Check error budget state and follow policy in runbook."
+              budget_remaining: "-700%"
+              dashboard: /d/nester-slo-api/api-availability?var-environment=mainnet
+              runbook: docs/observability/runbooks/api-availability-mainnet.md
+              policy: docs/observability/error-budget-policy.md
+      # Must not page
+      - eval_time: 7h
+        alertname: APIAvailabilityMainnetFastBurn
+        exp_alerts: []
+
+  - interval: 1m
+    name: Mainnet healthy system does not fire mainnet alerts
+    input_series:
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="2xx",environment="mainnet"}'
+        values: '0+59970x120'   # 999.5/s
+      - series: 'nester_http_requests_total{route="GET /api/v1/vaults",method="GET",status_class="5xx",environment="mainnet"}'
+        values: '0+30x120'      # 0.5/s => 0.05%
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: APIAvailabilityMainnetFastBurn
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: APIAvailabilityMainnetSlowBurn
+        exp_alerts: []
+
+  # ===========================================================================
   # Per-endpoint error rate (nester#1227)
   # ===========================================================================
   #
