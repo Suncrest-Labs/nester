@@ -13,6 +13,7 @@ import { useVaults } from "@/hooks/useVaults";
 import { getStoredToken } from "@/lib/api/client";
 import { AppShell } from "@/components/app-shell";
 import { motion } from "framer-motion";
+import SubmittedTransactionHistory from "@/components/history/SubmittedTransactionHistory";
 
 interface ActivityResponse {
   data: Transaction[];
@@ -181,6 +182,8 @@ export default function HistoryPage() {
       </div>
 
       <FilterBar vaultOptions={vaultOptions} onChange={setFilters} />
+
+      {user?.address && <SubmittedTransactionHistory walletAddress={user.address} />}
 
       <TransactionTable
         transactions={filteredTransactions}

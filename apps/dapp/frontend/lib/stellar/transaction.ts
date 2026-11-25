@@ -10,10 +10,16 @@ import {
 } from "@stellar/stellar-sdk";
 
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
-import { readNetworkId } from "@/lib/storageKeys";
+import { readNetworkId, type NetworkId } from "@/lib/storageKeys";
 import { assertValidContractId, getContractId } from "@/lib/contracts";
 import { depositAmountToStroops } from "@/lib/decimal";
 import { applySlippage, resolveFreshQuote, type TimedQuote } from "@/lib/slippage";
+import {
+  getSubmittedTransactions,
+  hasAmbiguousTransaction,
+  recordSubmittedTransaction,
+  updateSubmittedTransactionStatus,
+} from "@/lib/stellar/transaction-history";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -177,6 +183,18 @@ export class TransactionExpiredError extends Error {
   constructor() {
     super("Signing took too long, try again");
     this.name = "TransactionExpiredError";
+  }
+}
+
+export class AmbiguousTransactionError extends Error {
+  constructor(
+    public readonly txHash: string,
+    public readonly explorerUrl: string
+  ) {
+    super(
+      `A previous transaction is still awaiting confirmation. Check ${txHash} on the explorer before retrying.`
+    );
+    this.name = "AmbiguousTransactionError";
   }
 }
 
@@ -557,18 +575,37 @@ export async function submitTransaction(
 
   // Re-parse from signed XDR so we have a Transaction object to submit
   const tx = new Transaction(signedXdr, network.networkPassphrase);
+  const txHash = tx.hash().toString("hex");
+  const walletAddress = tx.source;
+  const unresolved = await refreshPendingSubmissions(walletAddress, network.id, server);
+  if (hasAmbiguousTransaction(unresolved)) {
+    const pending = unresolved.find((record) => record.status === "pending");
+    if (pending) {
+      throw new AmbiguousTransactionError(
+        pending.txHash,
+        `${network.explorerUrl}/transactions/${pending.txHash}`
+      );
+    }
+  }
+
+  recordSubmittedTransaction(walletAddress, network.id, {
+    txHash,
+    minTime: tx.timeBounds ? Number(tx.timeBounds.minTime) : null,
+    maxTime: tx.timeBounds ? Number(tx.timeBounds.maxTime) : null,
+  });
+
   const sendResult = await server.sendTransaction(tx);
 
   if (sendResult.status === "ERROR") {
     if (isTxTooLate(sendResult.errorResult)) {
+      updateSubmittedTransactionStatus(walletAddress, network.id, txHash, "archived");
       throw new TransactionExpiredError();
     }
+    updateSubmittedTransactionStatus(walletAddress, network.id, txHash, "failed");
     throw new TransactionFailedError(
       sendResult.errorResult?.toXDR("base64") ?? "unknown error"
     );
   }
-
-  const txHash = sendResult.hash;
 
   // Poll for confirmation
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
@@ -577,6 +614,7 @@ export async function submitTransaction(
     const getResult = await server.getTransaction(txHash);
 
     if (getResult.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      updateSubmittedTransactionStatus(walletAddress, network.id, txHash, "confirmed");
       return {
         txHash,
         explorerUrl: `${network.explorerUrl}/tx/${txHash}`,
@@ -585,6 +623,7 @@ export async function submitTransaction(
     }
 
     if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+      updateSubmittedTransactionStatus(walletAddress, network.id, txHash, "failed");
       throw new TransactionFailedError(
         getResult.resultMetaXdr?.toXDR("base64") ?? "on-chain execution failed"
       );
@@ -594,6 +633,39 @@ export async function submitTransaction(
   }
 
   throw new TransactionTimeoutError();
+}
+
+export async function refreshSubmittedTransactions(
+  walletAddress: string,
+  networkId: NetworkId = getCurrentNetwork().id
+) {
+  const network = networkId === "mainnet" ? NETWORKS.mainnet : NETWORKS.testnet;
+  const server = getServer(network.rpcUrl);
+  return refreshPendingSubmissions(walletAddress, networkId, server);
+}
+
+async function refreshPendingSubmissions(
+  walletAddress: string,
+  networkId: NetworkId,
+  server: SorobanRpc.Server
+) {
+  const records = getSubmittedTransactions(walletAddress, networkId);
+  for (const record of records) {
+    if (record.status !== "pending") continue;
+    const result = await server.getTransaction(record.txHash);
+    if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      updateSubmittedTransactionStatus(walletAddress, networkId, record.txHash, "confirmed");
+    } else if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+      updateSubmittedTransactionStatus(walletAddress, networkId, record.txHash, "failed");
+    } else if (
+      result.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+      record.maxTime !== null &&
+      Date.now() / 1000 > record.maxTime
+    ) {
+      updateSubmittedTransactionStatus(walletAddress, networkId, record.txHash, "archived");
+    }
+  }
+  return getSubmittedTransactions(walletAddress, networkId);
 }
 
 // ── High-level vault flows ───────────────────────────────────────────────────
