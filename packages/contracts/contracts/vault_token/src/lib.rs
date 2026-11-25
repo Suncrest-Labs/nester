@@ -111,10 +111,7 @@ impl VaultTokenContract {
         // Recipient gets a fresh deposit timestamp so they cannot inherit an
         // old timestamp and bypass the early-withdrawal fee immediately after
         // receiving shares.
-        env.storage().persistent().set(
-            &DataKey::DepositTimestamp(to.clone()),
-            &env.ledger().timestamp(),
-        );
+        set_deposit_timestamp(&env, &to);
         // Sender's timestamp is no longer meaningful once their balance is zero.
         if get_balance(&env, &from) == 0 {
             env.storage()
@@ -132,10 +129,7 @@ impl VaultTokenContract {
         spend_balance(&env, &from, amount);
         receive_balance(&env, &to, amount);
         // Same timestamp semantics as transfer().
-        env.storage().persistent().set(
-            &DataKey::DepositTimestamp(to.clone()),
-            &env.ledger().timestamp(),
-        );
+        set_deposit_timestamp(&env, &to);
         if get_balance(&env, &from) == 0 {
             env.storage()
                 .persistent()
@@ -310,10 +304,7 @@ impl VaultTokenContract {
         set_total_assets(&env, total_assets + amount);
         // Record deposit time so the vault can enforce the early-withdrawal
         // lock period even when shares are later received via transfer.
-        env.storage().persistent().set(
-            &DataKey::DepositTimestamp(to.clone()),
-            &env.ledger().timestamp(),
-        );
+        set_deposit_timestamp(&env, &to);
         env.events()
             .publish((symbol_short!("mint"), to), (shares, amount));
         shares
@@ -397,10 +388,14 @@ impl VaultTokenContract {
     /// contract.  Returns 0 if no timestamp has been recorded (e.g. the user
     /// has never received shares via deposit or transfer).
     pub fn get_deposit_time(env: Env, user: Address) -> u64 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::DepositTimestamp(user))
-            .unwrap_or(0)
+        let key = DataKey::DepositTimestamp(user);
+        match env.storage().persistent().get::<DataKey, u64>(&key) {
+            Some(timestamp) => {
+                bump_persistent(&env, &key);
+                timestamp
+            }
+            None => 0,
+        }
     }
 
     pub fn version(env: Env) -> soroban_sdk::String {
@@ -483,17 +478,39 @@ pub fn amount_for_shares_math(shares: i128, total_supply: i128, total_assets: i1
 // Storage helpers
 // ---------------------------------------------------------------------------
 
-fn get_balance(env: &Env, account: &Address) -> i128 {
-    env.storage()
-        .instance()
-        .get::<DataKey, i128>(&DataKey::Balance(account.clone()))
-        .unwrap_or(0_i128)
+// Per-account keys live in persistent storage: instance storage is one
+// ledger entry, so keeping holders there grows the cost of every call (#1470).
+
+fn bump_persistent(env: &Env, key: &DataKey) {
+    env.storage().persistent().extend_ttl(
+        key,
+        nester_common::POSITION_TTL_THRESHOLD_LEDGERS,
+        nester_common::POSITION_TTL_EXTEND_TO_LEDGERS,
+    );
 }
 
+/// Reads renew the entry's TTL too, so a holder who only receives or is
+/// queried by the vault stays live without a separate keeper call.
+fn get_balance(env: &Env, account: &Address) -> i128 {
+    let key = DataKey::Balance(account.clone());
+    match env.storage().persistent().get::<DataKey, i128>(&key) {
+        Some(balance) => {
+            bump_persistent(env, &key);
+            balance
+        }
+        None => 0,
+    }
+}
+
+/// A zero balance is removed rather than stored, so it pays no rent.
 fn set_balance(env: &Env, account: &Address, amount: i128) {
-    env.storage()
-        .instance()
-        .set(&DataKey::Balance(account.clone()), &amount);
+    let key = DataKey::Balance(account.clone());
+    if amount == 0 {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &amount);
+        bump_persistent(env, &key);
+    }
 }
 
 fn receive_balance(env: &Env, account: &Address, amount: i128) {
@@ -561,6 +578,14 @@ fn spend_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
             expiration_ledger: existing.expiration_ledger,
         },
     );
+}
+
+fn set_deposit_timestamp(env: &Env, account: &Address) {
+    let key = DataKey::DepositTimestamp(account.clone());
+    env.storage()
+        .persistent()
+        .set(&key, &env.ledger().timestamp());
+    bump_persistent(env, &key);
 }
 
 /// Panic unless the invocation is authorised by the stored Vault address.

@@ -23,7 +23,8 @@ and the TTL extension behaviour that is **actually implemented**.
 | **`VaultContract`** | `DataKey::Token` | `Instance` | Checked by `require_initialized` (`vault/src/lib.rs:704`) |
 | **`VaultContract`** | `DataKey::Status` | `Instance` | Vault pause state |
 | **`VaultContract`** | Lock positions (`DataKey::Lock*`) | `Persistent` | Extend-on-access; see §3 |
-| **`VaultTokenContract`** | Balances, allowances | `Persistent` | Managed by token contract |
+| **`VaultTokenContract`** | `Balance`, `DepositTimestamp`, `Allowance` (per account) | `Persistent` | Renewed on read and write; see §3.4 |
+| **`VaultTokenContract`** | Vault, name, symbol, decimals, totals | `Instance` | Renewed by `extend_ttl(None)` |
 | **`YieldRegistryContract`** | Source registry entries | `Instance` / `Persistent` | |
 | **`NesterContract`** | `DataKey::Version`, admin state | `Instance` | |
 | **`AllocationStrategyContract`** | Allocation weights | `Instance` | |
@@ -74,6 +75,37 @@ The previous version of this document described two named constants
 (`TTL_BUMP_THRESHOLD_LEDGERS = 120_960`, `TTL_EXTEND_TO_LEDGERS = 518_400`).
 **These constants do not exist** anywhere in the codebase today. The only TTL
 constants live locally in `vault/src/lib.rs:1755-1756` (see §3.1).
+
+### 3.4 vault_token per-account entries
+
+Each holder's `Balance` and `DepositTimestamp`, and each `Allowance`, is its
+own persistent entry, so the cost of a call does not depend on the number of
+holders (issue #1470).
+
+- **Balance and deposit timestamp.** Every write and every read inside a
+  transaction extends the entry to `POSITION_TTL_EXTEND_TO_LEDGERS` (518,400
+  ledgers, about 30 days) once it is below `POSITION_TTL_THRESHOLD_LEDGERS`
+  (`vault_token/src/lib.rs:484` `bump_persistent`, `:494` `get_balance`,
+  `:506` `set_balance`, `:583` `set_deposit_timestamp`, `:390`
+  `get_deposit_time`). A zero balance is removed instead of stored.
+- **Holders who do nothing for 30 days.** Nothing reads their entries, so
+  they have to be renewed from outside: `extend_ttl(Some(user))`
+  (`vault_token/src/lib.rs:407`, issue #1485) is permissionless and renews
+  that holder's `Balance` and `DepositTimestamp`. Calling it for every
+  holder is the job of the keeper in issue #1486, which is not built yet.
+  Until it is, an entry that expires is archived, not deleted: `balance()`,
+  withdrawals and transfers for that holder fail until the entry is restored
+  with a `RestoreFootprintOp`.
+- **Allowances.** `approve` sets the allowance's TTL to
+  `expiration_ledger - current ledger` (`vault_token/src/lib.rs:172`), the
+  SEP-41 rule, so an approval lives exactly as long as it is valid.
+  `extend_ttl` does not touch allowances.
+
+**Deploying this layout.** vault_token has no upgrade entrypoint, and tokens
+deployed before #1470 keep balances in instance storage, so this layout needs
+a fresh vault_token deployment. Nothing migrates the old entries: shares held
+in an existing testnet token stay in that token at its old address, and the
+new token starts with no holders.
 
 ---
 
