@@ -702,6 +702,55 @@ fn claim_records_are_persistent_and_do_not_grow_instance_storage() {
     }
 }
 
+#[test]
+fn instance_claim_records_remain_valid_after_storage_migration() {
+    let f = setup();
+    f.token_admin.mint(&f.admin, &1_000_000_000);
+    f.rewards.fund_pool(&f.admin, &1_000_000_000);
+
+    let id = steady_contributions(&f, 1, TARGET, TARGET / 10, 10);
+    let next_id = steady_contributions(&f, 2, TARGET, TARGET / 10, 10);
+    f.advance(60 * DAY);
+
+    let overlap_key = crate::DataKey::ActiveClaimWindow(f.vault.address.clone(), f.owner.clone());
+    f.env.as_contract(&f.rewards.address, || {
+        f.env
+            .storage()
+            .instance()
+            .set(&crate::DataKey::Claimed(id.clone()), &true);
+        f.env.storage().instance().set(&overlap_key, &id);
+    });
+
+    assert!(f.rewards.is_claimed(&id));
+    assert!(f.rewards.try_claim_goal_bonus(&f.owner, &id).is_err());
+
+    f.env.as_contract(&f.rewards.address, || {
+        assert!(f
+            .env
+            .storage()
+            .persistent()
+            .has(&crate::DataKey::Claimed(id.clone())));
+        assert!(!f
+            .env
+            .storage()
+            .instance()
+            .has(&crate::DataKey::Claimed(id.clone())));
+    });
+
+    assert!(f.rewards.try_claim_goal_bonus(&f.owner, &next_id).is_ok());
+
+    f.env.as_contract(&f.rewards.address, || {
+        assert_eq!(
+            f.env
+                .storage()
+                .persistent()
+                .get::<_, BytesN<32>>(&overlap_key),
+            Some(next_id.clone())
+        );
+        assert!(!f.env.storage().instance().has(&overlap_key));
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Anti-fake-contribution basis
 // ---------------------------------------------------------------------------

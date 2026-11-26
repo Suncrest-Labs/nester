@@ -685,13 +685,22 @@ impl GoalRewardsContract {
 
 fn is_claimed(env: &Env, goal_id: &BytesN<32>) -> bool {
     let key = DataKey::Claimed(goal_id.clone());
-    let storage = env.storage().persistent();
-    if storage.has(&key) {
-        storage.extend_ttl(
+    let persistent = env.storage().persistent();
+    if persistent.has(&key) {
+        persistent.extend_ttl(
             &key,
             POSITION_TTL_THRESHOLD_LEDGERS,
             POSITION_TTL_EXTEND_TO_LEDGERS,
         );
+        true
+    } else if env.storage().instance().get::<DataKey, bool>(&key) == Some(true) {
+        persistent.set(&key, &true);
+        persistent.extend_ttl(
+            &key,
+            POSITION_TTL_THRESHOLD_LEDGERS,
+            POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
+        env.storage().instance().remove(&key);
         true
     } else {
         false
@@ -710,16 +719,26 @@ fn set_claimed(env: &Env, goal_id: &BytesN<32>) {
 }
 
 fn get_active_claim_window(env: &Env, key: &DataKey) -> Option<BytesN<32>> {
-    let storage = env.storage().persistent();
-    let value = storage.get(key);
-    if value.is_some() {
-        storage.extend_ttl(
+    let persistent = env.storage().persistent();
+    if let Some(value) = persistent.get(key) {
+        persistent.extend_ttl(
             key,
             POSITION_TTL_THRESHOLD_LEDGERS,
             POSITION_TTL_EXTEND_TO_LEDGERS,
         );
+        Some(value)
+    } else if let Some(value) = env.storage().instance().get::<DataKey, BytesN<32>>(key) {
+        persistent.set(key, &value);
+        persistent.extend_ttl(
+            key,
+            POSITION_TTL_THRESHOLD_LEDGERS,
+            POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
+        env.storage().instance().remove(key);
+        Some(value)
+    } else {
+        None
     }
-    value
 }
 
 fn set_active_claim_window(env: &Env, key: &DataKey, goal_id: &BytesN<32>) {
