@@ -124,6 +124,12 @@ func (NoopVaultDepositInvoker) EmergencyWithdrawAll(_ context.Context, _ string)
 // Default performance fee (10%) applied when estimating harvest proceeds off-chain.
 const defaultHarvestPerformanceFeeBPS = 1000
 
+// defaultHarvestGasFeeUSDC is the fallback per-harvest network fee used by the
+// preview when no fee is wired in. It matches HARVEST_ENGINE_GAS_FEE's default
+// so the "net after gas" figure shown to the user agrees with the economic gate
+// the automated harvest engine applies (nester#949).
+const defaultHarvestGasFeeUSDC = "0.05"
+
 // HarvestResult is returned by POST /api/v1/vaults/{id}/harvest.
 type HarvestResult struct {
 	GrossYieldUSDC     string `json:"gross_yield_usdc"`
@@ -143,9 +149,13 @@ type VaultService struct {
 	operatorFundedDeposits *OperatorFundedDepositPolicy
 	chainVerifier          ChainEventVerifier
 	defaultHarvestCompound bool
-	yieldRecorder          YieldHarvestRecorder
-	goalYieldRouter        GoalYieldRouter
-	sharePriceCache        *sharePriceCache
+	// harvestGasFee is the estimated network cost of a single harvest, in the
+	// vault's settlement currency. The preview subtracts it from the net yield
+	// so users can judge whether harvesting is worth today's gas (#949).
+	harvestGasFee   decimal.Decimal
+	yieldRecorder   YieldHarvestRecorder
+	goalYieldRouter GoalYieldRouter
+	sharePriceCache *sharePriceCache
 	// metrics is optional. A nil value disables SLI recording and every
 	// helper in vault_flow_metrics.go no-ops, so a service constructed
 	// without it (tests, tooling) behaves exactly as before. Losing
@@ -446,8 +456,24 @@ type RebalancePositionResult struct {
 func NewVaultService(repository vault.Repository) *VaultService {
 	return &VaultService{
 		repository:      repository,
+		harvestGasFee:   decimal.RequireFromString(defaultHarvestGasFeeUSDC),
 		sharePriceCache: newSharePriceCache(),
 	}
+}
+
+// SetHarvestGasFee overrides the per-harvest network fee estimate used by the
+// harvest preview. Production wires HARVEST_ENGINE_GAS_FEE here so the preview
+// and the harvest engine agree on gas. Negative fees are floored at zero.
+func (s *VaultService) SetHarvestGasFee(fee decimal.Decimal) {
+	s.harvestGasFee = fee
+}
+
+// estimatedHarvestGas returns the gas estimate for one harvest, never negative.
+func (s *VaultService) estimatedHarvestGas() decimal.Decimal {
+	if s.harvestGasFee.IsNegative() {
+		return decimal.Zero
+	}
+	return s.harvestGasFee
 }
 
 // SetDepositInvoker wires an optional on-chain invoker into the vault service.
@@ -1706,10 +1732,15 @@ type HarvestPreview struct {
 	GrossYieldUSDC     string `json:"gross_yield_usdc"`
 	PerformanceFeeUSDC string `json:"performance_fee_usdc"`
 	NetYieldUSDC       string `json:"net_yield_usdc"`
-	Compounded         bool   `json:"compounded"`
-	EstimatedNewShares string `json:"estimated_new_shares,omitempty"`
-	PerformanceFeeBPS  int    `json:"performance_fee_bps"`
-	Impaired           bool   `json:"impaired,omitempty"`
+	// GasCostUSDC is the estimated network cost of submitting the harvest.
+	GasCostUSDC string `json:"gas_cost_usdc"`
+	// NetYieldAfterGasUSDC is what the user actually keeps once gas is paid:
+	// max(net_yield_usdc - gas_cost_usdc, 0). Never negative.
+	NetYieldAfterGasUSDC string `json:"net_yield_after_gas_usdc"`
+	Compounded           bool   `json:"compounded"`
+	EstimatedNewShares   string `json:"estimated_new_shares,omitempty"`
+	PerformanceFeeBPS    int    `json:"performance_fee_bps"`
+	Impaired             bool   `json:"impaired,omitempty"`
 }
 
 type PreviewHarvestInput struct {
@@ -1733,15 +1764,19 @@ func (s *VaultService) PreviewHarvest(ctx context.Context, input PreviewHarvestI
 		return HarvestPreview{}, vault.ErrVaultForbidden
 	}
 
+	gasCost := s.estimatedHarvestGas()
+
 	grossYield := harvestableYield(existing)
 	if grossYield.Cmp(decimal.Zero) <= 0 {
 		return HarvestPreview{
-			VaultID:            existing.ID.String(),
-			GrossYieldUSDC:     formatUSDCAmount(decimal.Zero),
-			PerformanceFeeUSDC: formatUSDCAmount(decimal.Zero),
-			NetYieldUSDC:       formatUSDCAmount(decimal.Zero),
-			PerformanceFeeBPS:  defaultHarvestPerformanceFeeBPS,
-			Impaired:           existing.CurrentBalance.LessThan(existing.TotalDeposited),
+			VaultID:              existing.ID.String(),
+			GrossYieldUSDC:       formatUSDCAmount(decimal.Zero),
+			PerformanceFeeUSDC:   formatUSDCAmount(decimal.Zero),
+			NetYieldUSDC:         formatUSDCAmount(decimal.Zero),
+			GasCostUSDC:          formatUSDCAmount(gasCost),
+			NetYieldAfterGasUSDC: formatUSDCAmount(decimal.Zero),
+			PerformanceFeeBPS:    defaultHarvestPerformanceFeeBPS,
+			Impaired:             existing.CurrentBalance.LessThan(existing.TotalDeposited),
 		}, nil
 	}
 
@@ -1750,13 +1785,23 @@ func (s *VaultService) PreviewHarvest(ctx context.Context, input PreviewHarvestI
 		Round(vault.MaxAmountScale)
 	netYield := grossYield.Sub(performanceFee)
 
+	// Gas is a real cost of harvesting, so the headline figure is what is left
+	// after paying it. Floor at zero: an uneconomic harvest is reported as
+	// 0 net, never as a negative amount the user would "receive" (#949).
+	netAfterGas := netYield.Sub(gasCost)
+	if netAfterGas.IsNegative() {
+		netAfterGas = decimal.Zero
+	}
+
 	preview := HarvestPreview{
-		VaultID:            existing.ID.String(),
-		GrossYieldUSDC:     formatUSDCAmount(grossYield),
-		PerformanceFeeUSDC: formatUSDCAmount(performanceFee),
-		NetYieldUSDC:       formatUSDCAmount(netYield),
-		Compounded:         input.Compound,
-		PerformanceFeeBPS:  defaultHarvestPerformanceFeeBPS,
+		VaultID:              existing.ID.String(),
+		GrossYieldUSDC:       formatUSDCAmount(grossYield),
+		PerformanceFeeUSDC:   formatUSDCAmount(performanceFee),
+		NetYieldUSDC:         formatUSDCAmount(netYield),
+		GasCostUSDC:          formatUSDCAmount(gasCost),
+		NetYieldAfterGasUSDC: formatUSDCAmount(netAfterGas),
+		Compounded:           input.Compound,
+		PerformanceFeeBPS:    defaultHarvestPerformanceFeeBPS,
 	}
 
 	if input.Compound {

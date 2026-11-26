@@ -82,6 +82,8 @@ pub enum ContractError {
     // LockNotFound -> reuse TimelockNotFound (14)
     // InsufficientFlexibleShares -> reuse InsufficientBalance (4)
     // LockLimitExceeded (per-user open-lock cap) -> reuse ExceedsLimit (10)
+    // --- #1477: Impaired vault deposits ---
+    // VaultImpaired -> reuse InvalidOperation (9); Soroban caps this enum at 50 variants.
 }
 
 // Alias for backwards compatibility
