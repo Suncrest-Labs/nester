@@ -340,8 +340,21 @@ export async function previewWithdrawalFee(
     }
 
     const raw = scValToNative(result.retval) as Record<string, bigint | number>;
+    const grossStroops = BigInt(raw.gross_asset_value ?? 0);
+    if (sharesStroops > BigInt(0) && grossStroops === BigInt(0)) {
+      return {
+        grossAssetValue: 0,
+        managementFeeDeducted: 0,
+        performanceFeeDeducted: 0,
+        earlyWithdrawalFeeDeducted: 0,
+        netAmountReceived: 0,
+        available: false,
+        error: "Withdrawal fee preview unavailable",
+      };
+    }
+
     return {
-      grossAssetValue: stroopsToXlm(BigInt(raw.gross_asset_value ?? 0)),
+      grossAssetValue: stroopsToXlm(grossStroops),
       managementFeeDeducted: stroopsToXlm(BigInt(raw.management_fee_deducted ?? 0)),
       performanceFeeDeducted: stroopsToXlm(BigInt(raw.performance_fee_deducted ?? 0)),
       earlyWithdrawalFeeDeducted: stroopsToXlm(BigInt(raw.early_withdrawal_fee_deducted ?? 0)),

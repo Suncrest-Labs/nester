@@ -34,11 +34,12 @@ vi.mock("@/lib/vault-contracts", () => ({
   }),
 }));
 
+const executeVaultWithdrawMock = vi.fn();
 const previewWithdrawalFeeMock = vi.fn();
 const previewFeeScheduleMock = vi.fn();
 
 vi.mock("@/lib/stellar/transaction", () => ({
-  executeVaultWithdraw: vi.fn(),
+  executeVaultWithdraw: (...args: unknown[]) => executeVaultWithdrawMock(...args),
   previewWithdrawalFee: (...args: unknown[]) => previewWithdrawalFeeMock(...args),
   previewFeeSchedule: (...args: unknown[]) => previewFeeScheduleMock(...args),
   UserRejectedError: class UserRejectedError extends Error {},
@@ -227,6 +228,96 @@ describe("WithdrawModal fee tier preview", () => {
       "Lowest tier reached"
     );
     expect(screen.getByTestId("withdrawal-fee-amount")).toHaveTextContent("0.00 USDC");
+    expect(screen.getByTestId("withdrawal-net-received")).toHaveTextContent("500.00 USDC");
+  });
+
+  it("re-previews freshQuote.sharesBurned when user changes amount and submits before debounce fires", async () => {
+    previewWithdrawalFeeMock
+      .mockResolvedValueOnce({
+        grossAssetValue: 100,
+        managementFeeDeducted: 0,
+        performanceFeeDeducted: 0,
+        earlyWithdrawalFeeDeducted: 2,
+        netAmountReceived: 98,
+        available: true,
+      })
+      .mockResolvedValueOnce({
+        grossAssetValue: 10,
+        managementFeeDeducted: 0,
+        performanceFeeDeducted: 0,
+        earlyWithdrawalFeeDeducted: 0.2,
+        netAmountReceived: 9.8,
+        available: true,
+      });
+    previewFeeScheduleMock.mockResolvedValue({
+      tenureSecs: 30 * SECONDS_PER_DAY,
+      currentExitFeeBps: 200,
+      currentPerformanceFeeBps: 1000,
+      nextBoundarySecs: 90 * SECONDS_PER_DAY,
+      nextBoundaryExitFeeBps: 100,
+      nextBoundaryPerfFeeBps: 1000,
+      available: true,
+    });
+    executeVaultWithdrawMock.mockResolvedValue({
+      txHash: "abc123456789",
+      explorerUrl: "https://stellar.expert/explorer/testnet/tx/abc123456789",
+    });
+
+    render(<WithdrawModal open position={basePosition} onClose={() => {}} />);
+    const input = screen.getByPlaceholderText("0.00");
+
+    // First enter 100 and let debounce complete
+    fireEvent.change(input, { target: { value: "100" } });
+    await waitFor(() => {
+      expect(screen.getByTestId("withdrawal-net-received")).toHaveTextContent("98.00 USDC");
+    });
+
+    // Change to 10 and immediately submit before the 300ms debounce fires
+    fireEvent.change(input, { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: /confirm withdrawal/i }));
+
+    await waitFor(() => {
+      expect(executeVaultWithdrawMock).toHaveBeenCalledTimes(1);
+    });
+
+    const withdrawCall = executeVaultWithdrawMock.mock.calls[0][0] as {
+      shares: number;
+      minAssetsOut: bigint;
+    };
+    expect(withdrawCall.shares).toBe(10);
+    // Floor (in stroops) must be derived from the fresh 10-share preview (9.8 USDC),
+    // NOT the stale 100-share preview (98 USDC).
+    expect(withdrawCall.minAssetsOut).toBeLessThanOrEqual(BigInt(98_000_000));
+    expect(withdrawCall.minAssetsOut).toBeGreaterThan(BigInt(90_000_000));
+  });
+
+  it("falls back to quote when contract preview is unavailable (e.g. zero gross on rounding)", async () => {
+    previewWithdrawalFeeMock.mockResolvedValue({
+      grossAssetValue: 0,
+      managementFeeDeducted: 0,
+      performanceFeeDeducted: 0,
+      earlyWithdrawalFeeDeducted: 0,
+      netAmountReceived: 0,
+      available: false,
+      error: "Withdrawal fee preview unavailable",
+    });
+    previewFeeScheduleMock.mockResolvedValue({
+      tenureSecs: 30 * SECONDS_PER_DAY,
+      currentExitFeeBps: 200,
+      currentPerformanceFeeBps: 1000,
+      nextBoundarySecs: 90 * SECONDS_PER_DAY,
+      nextBoundaryExitFeeBps: 100,
+      nextBoundaryPerfFeeBps: 1000,
+      available: true,
+    });
+
+    render(<WithdrawModal open position={basePosition} onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("0.00"), { target: { value: "500" } });
+
+    await waitFor(() => {
+      expect(previewWithdrawalFeeMock).toHaveBeenCalled();
+    });
+
     expect(screen.getByTestId("withdrawal-net-received")).toHaveTextContent("500.00 USDC");
   });
 });

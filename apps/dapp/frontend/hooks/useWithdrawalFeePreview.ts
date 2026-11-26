@@ -16,6 +16,7 @@ export function useWithdrawalFeePreview(
   enabled: boolean
 ) {
   const [feePreview, setFeePreview] = useState<WithdrawalFeePreviewResult | null>(null);
+  const [previewedShares, setPreviewedShares] = useState<number | bigint | null>(null);
   const [schedulePreview, setSchedulePreview] = useState<FeeSchedulePreviewResult | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -26,6 +27,7 @@ export function useWithdrawalFeePreview(
   useEffect(() => {
     if (!enabled || !walletAddress || !contractId || Number(shares) <= 0) {
       setFeePreview(null);
+      setPreviewedShares(null);
       setSchedulePreview(null);
       setLoading(false);
       return;
@@ -42,11 +44,13 @@ export function useWithdrawalFeePreview(
         ]);
         if (!cancelled) {
           setFeePreview(feeRes);
+          setPreviewedShares(shares);
           setSchedulePreview(scheduleRes);
         }
       } catch {
         if (!cancelled) {
           setFeePreview(null);
+          setPreviewedShares(null);
           setSchedulePreview(null);
         }
       } finally {
@@ -60,5 +64,5 @@ export function useWithdrawalFeePreview(
     };
   }, [enabled, walletAddress, contractId, shares]);
 
-  return { feePreview, schedulePreview, loading };
+  return { feePreview, previewedShares, schedulePreview, loading };
 }

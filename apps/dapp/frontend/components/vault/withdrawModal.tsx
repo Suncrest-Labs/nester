@@ -37,6 +37,7 @@ import {
 import { TransactionAnnouncer } from "@/components/vault/transactionAnnouncer";
 import {
   executeVaultWithdraw,
+  previewWithdrawalFee,
   UserRejectedError,
   TransactionFailedError,
   TransactionTimeoutError,
@@ -210,6 +211,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
 
   const {
     feePreview,
+    previewedShares,
     schedulePreview,
     loading: feePreviewLoading,
   } = useWithdrawalFeePreview(
@@ -217,16 +219,19 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
     open && !!position && amount > 0 && state === "input"
   );
 
-  const grossAmount = feePreview?.available
+  const hasMatchingFeePreview =
+    !!feePreview?.available && previewedShares === quote?.sharesBurned;
+
+  const grossAmount = hasMatchingFeePreview
     ? feePreview.grossAssetValue
     : (quote?.grossAmount ?? 0);
-  const exitFeeAmount = feePreview?.available
+  const exitFeeAmount = hasMatchingFeePreview
     ? feePreview.earlyWithdrawalFeeDeducted
     : (quote ? quote.grossAmount - quote.netAmount : 0);
-  const performanceFeeAmount = feePreview?.available
+  const performanceFeeAmount = hasMatchingFeePreview
     ? feePreview.performanceFeeDeducted
     : 0;
-  const netAmount = feePreview?.available
+  const netAmount = hasMatchingFeePreview
     ? feePreview.netAmountReceived
     : (quote?.netAmount ?? 0);
 
@@ -306,9 +311,19 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
           return next;
         }
       );
-      const effectiveNet = feePreview?.available
-        ? feePreview.netAmountReceived
-        : freshQuote.netAmount;
+      let effectiveNet = freshQuote.netAmount;
+      if (feePreview?.available && previewedShares === freshQuote.sharesBurned) {
+        effectiveNet = feePreview.netAmountReceived;
+      } else if (vaultDef?.contractAddress) {
+        const freshFeePreview = await previewWithdrawalFee({
+          walletAddress: address,
+          contractId: vaultDef.contractAddress,
+          shares: freshQuote.sharesBurned,
+        });
+        if (freshFeePreview.available) {
+          effectiveNet = freshFeePreview.netAmountReceived;
+        }
+      }
       const txReceipt = await executeVaultWithdraw({
         walletAddress: address,
         vaultId: position.vaultId,
@@ -492,7 +507,7 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
                     value: `${formatCurrency(exitFeeAmount)} ${position.asset ?? "USDC"}`,
                     testId: "withdrawal-fee-amount",
                   },
-                  ...(feePreview?.available
+                  ...(hasMatchingFeePreview
                     ? [
                         {
                           label: "Performance fee",
