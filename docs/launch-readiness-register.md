@@ -156,7 +156,7 @@ claims counted above.)
 #### [API-24] Event indexer mainnet RPC 24h read-only soak
 - **Status:** Open
 - **Evidence:** —
-- **Notes:** Read-only mainnet RPC soak harness and runbook added (`scripts/mainnet-rpc-soak.py`, `scripts/test_mainnet_rpc_soak.py`, `docs/MAINNET_RPC_INDEXER_SOAK.md`). Run for >=24h against mainnet RPC on staging and attach the soak report (lag p50/p99, error counts, request rate, cursor continuity, zero duplicates, zero gap alerts) to mark Resolved.
+- **Notes:** Refs #1550. Read-only mainnet RPC soak harness and runbook added (`scripts/mainnet-rpc-soak.py`, `scripts/test_mainnet_rpc_soak.py`, `docs/MAINNET_RPC_INDEXER_SOAK.md`) and smoke-tested against live `https://mainnet.sorobanrpc.com`. Remains Open until the full >=24h staging soak report (lag p50/p99, error counts, request rate, cursor continuity, zero duplicates, zero gap alerts) is attached.
 
 #### [API-29] GetRoles uuid type
 - **Status:** Open
