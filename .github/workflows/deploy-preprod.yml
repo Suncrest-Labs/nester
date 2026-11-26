@@ -1,0 +1,406 @@
+name: Deploy Pre-Production (Mainnet Parity)
+
+# Full mainnet launch-sequence rehearsal against a dedicated pre-production
+# environment (`nester-preprod`) whose infrastructure shape mirrors production
+# 1:1 (2 API replicas, isolated signer Deployment, immutable image digests,
+# separate migration Job, /readyz readiness gate, smoke checks, and automatic
+# rollback on failure), while targeting Stellar testnet on separate infra.
+#
+# Triggered by pushing a release-candidate tag (`v*.*.*-rc.*`) or manually via
+# `workflow_dispatch`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build and deploy (defaults to preprod-<short-sha>)"
+        required: false
+        default: ""
+        type: string
+  push:
+    tags:
+      - "v*.*.*-rc.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-preprod
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/suncrestlabs/nester-api
+  SIGNER_IMAGE: ghcr.io/suncrestlabs/nester-signer
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # 1. Build and push the release-candidate images (API + isolated signer).
+  # ────────────────────────────────────────────────────────────────────
+  build-images:
+    name: "Build preprod image (${{ matrix.name }})"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: api
+            dockerfile: apps/api/Dockerfile
+          - name: signer
+            dockerfile: apps/api/Dockerfile.signer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Determine image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.image_tag }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          elif [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="preprod-${GITHUB_SHA::12}"
+          fi
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using image tag: $TAG"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }} image
+        env:
+          IMAGE: ${{ matrix.name == 'api' && env.API_IMAGE || env.SIGNER_IMAGE }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          docker build -f "$DOCKERFILE" -t "$IMAGE:$TAG" apps/api
+          docker push "$IMAGE:$TAG"
+
+  # ────────────────────────────────────────────────────────────────────
+  # 2. Resolve the tag to immutable digests & record previous digests.
+  # ────────────────────────────────────────────────────────────────────
+  resolve-digests:
+    name: "Resolve image digests"
+    needs: build-images
+    runs-on: ubuntu-latest
+    outputs:
+      api_digest: ${{ steps.resolve.outputs.api_digest }}
+      signer_digest: ${{ steps.resolve.outputs.signer_digest }}
+      previous_api_digest: ${{ steps.previous.outputs.api_digest }}
+      previous_signer_digest: ${{ steps.previous.outputs.signer_digest }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve tag to digests
+        id: resolve
+        env:
+          TAG: ${{ needs.build-images.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          API_DIGEST=$(docker buildx imagetools inspect "${{ env.API_IMAGE }}:${TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          SIGNER_DIGEST=$(docker buildx imagetools inspect "${{ env.SIGNER_IMAGE }}:${TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+
+          if [ -z "$API_DIGEST" ] || [ -z "$SIGNER_DIGEST" ]; then
+            echo "::error::Could not resolve ${TAG} to an image digest. Did build-images push it?"
+            exit 1
+          fi
+
+          echo "api_digest=$API_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "signer_digest=$SIGNER_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${TAG} -> api@$API_DIGEST, signer@$SIGNER_DIGEST"
+
+      - name: Record currently-deployed preprod digests for rollback
+        id: previous
+        env:
+          KUBE_CONFIG: ${{ secrets.PREPROD_KUBE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KUBE_CONFIG" ]; then
+            echo "::error::PREPROD_KUBE_CONFIG is not configured. Required to read the currently-deployed digest before rolling forward."
+            exit 1
+          fi
+          echo "$KUBE_CONFIG" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+
+          CURRENT_API=$(kubectl get deployment nester-api-preprod -n nester-preprod -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
+          CURRENT_SIGNER=$(kubectl get deployment nester-signer-preprod -n nester-preprod -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
+
+          echo "api_digest=${CURRENT_API#*@}" >> "$GITHUB_OUTPUT"
+          echo "signer_digest=${CURRENT_SIGNER#*@}" >> "$GITHUB_OUTPUT"
+          echo "Previously deployed: api@${CURRENT_API#*@}, signer@${CURRENT_SIGNER#*@}"
+          rm -f "$RUNNER_TEMP/kubeconfig"
+
+  # ────────────────────────────────────────────────────────────────────
+  # 3. Run preprod migrations as a separate approved Job.
+  # ────────────────────────────────────────────────────────────────────
+  migrate:
+    name: "Run preprod migrations"
+    needs: resolve-digests
+    runs-on: ubuntu-latest
+    environment: preprod
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Check required secrets
+        env:
+          KUBE_CONFIG: ${{ secrets.PREPROD_KUBE_CONFIG }}
+        run: |
+          if [ -z "$KUBE_CONFIG" ]; then
+            echo "::error::PREPROD_KUBE_CONFIG is not configured. Settings -> Secrets and variables -> Actions -> PREPROD_KUBE_CONFIG."
+            exit 1
+          fi
+
+      - name: Render migration job manifest
+        env:
+          API_DIGEST: ${{ needs.resolve-digests.outputs.api_digest }}
+          SIGNER_DIGEST: ${{ needs.resolve-digests.outputs.signer_digest }}
+        run: |
+          set -euo pipefail
+          python3 -c "
+          import os
+          content = open('deploy/preprod/k8s-preprod.yaml').read()
+          content = content.replace('ghcr.io/suncrestlabs/nester-api@__API_IMAGE_DIGEST__', '${{ env.API_IMAGE }}@' + os.environ['API_DIGEST'])
+          content = content.replace('ghcr.io/suncrestlabs/nester-signer@__SIGNER_IMAGE_DIGEST__', '${{ env.SIGNER_IMAGE }}@' + os.environ['SIGNER_DIGEST'])
+          open('$RUNNER_TEMP/k8s-preprod.rendered.yaml', 'w').write(content)
+          "
+
+      - name: Run migration job
+        env:
+          KUBE_CONFIG: ${{ secrets.PREPROD_KUBE_CONFIG }}
+        run: |
+          set -euo pipefail
+          echo "$KUBE_CONFIG" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+
+          kubectl delete job nester-api-migrate -n nester-preprod --ignore-not-found
+          kubectl apply -f <(python3 -c "
+          import yaml, sys
+          docs = list(yaml.safe_load_all(open('$RUNNER_TEMP/k8s-preprod.rendered.yaml')))
+          for d in docs:
+              if d.get('kind') == 'Job':
+                  yaml.safe_dump(d, sys.stdout)
+          ")
+
+          echo "Waiting for the migration job's pod to log completion..."
+          for _ in $(seq 1 30); do
+            LOGS=$(kubectl logs job/nester-api-migrate -n nester-preprod 2>/dev/null || echo "")
+            if echo "$LOGS" | grep -q "database migrations complete"; then
+              echo "Migrations complete."
+              kubectl delete job nester-api-migrate -n nester-preprod
+              rm -f "$RUNNER_TEMP/kubeconfig"
+              exit 0
+            fi
+            if echo "$LOGS" | grep -qi "auto-migrate:.*error\|panic:"; then
+              echo "::error::Migration job logged an error:"
+              echo "$LOGS"
+              kubectl delete job nester-api-migrate -n nester-preprod --ignore-not-found
+              rm -f "$RUNNER_TEMP/kubeconfig"
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "::error::Migration job did not log completion within the timeout."
+          kubectl logs job/nester-api-migrate -n nester-preprod || true
+          kubectl delete job nester-api-migrate -n nester-preprod --ignore-not-found
+          rm -f "$RUNNER_TEMP/kubeconfig"
+          exit 1
+
+  # ────────────────────────────────────────────────────────────────────
+  # 4. Deploy API (2 replicas) + isolated signer at the pinned digests.
+  # ────────────────────────────────────────────────────────────────────
+  preprod-deploy:
+    name: "Deploy to Pre-Production"
+    needs: [resolve-digests, migrate]
+    runs-on: ubuntu-latest
+    environment: preprod
+    outputs:
+      deployed_api_digest: ${{ needs.resolve-digests.outputs.api_digest }}
+      deployed_signer_digest: ${{ needs.resolve-digests.outputs.signer_digest }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Check required secrets
+        env:
+          KUBE_CONFIG: ${{ secrets.PREPROD_KUBE_CONFIG }}
+        run: |
+          if [ -z "$KUBE_CONFIG" ]; then
+            echo "::error::PREPROD_KUBE_CONFIG is not configured. Settings -> Secrets and variables -> Actions -> PREPROD_KUBE_CONFIG."
+            exit 1
+          fi
+
+      - name: Render and apply manifests
+        env:
+          KUBE_CONFIG: ${{ secrets.PREPROD_KUBE_CONFIG }}
+          API_DIGEST: ${{ needs.resolve-digests.outputs.api_digest }}
+          SIGNER_DIGEST: ${{ needs.resolve-digests.outputs.signer_digest }}
+        run: |
+          set -euo pipefail
+          echo "$KUBE_CONFIG" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+
+          python3 -c "
+          import os
+          content = open('deploy/preprod/k8s-preprod.yaml').read()
+          content = content.replace('ghcr.io/suncrestlabs/nester-api@__API_IMAGE_DIGEST__', '${{ env.API_IMAGE }}@' + os.environ['API_DIGEST'])
+          content = content.replace('ghcr.io/suncrestlabs/nester-signer@__SIGNER_IMAGE_DIGEST__', '${{ env.SIGNER_IMAGE }}@' + os.environ['SIGNER_DIGEST'])
+          open('$RUNNER_TEMP/k8s-preprod.rendered.yaml', 'w').write(content)
+          "
+
+          kubectl apply -f <(python3 -c "
+          import yaml, sys
+          docs = list(yaml.safe_load_all(open('$RUNNER_TEMP/k8s-preprod.rendered.yaml')))
+          for d in docs:
+              if d.get('kind') != 'Job':
+                  yaml.safe_dump(d, sys.stdout)
+                  print('---')
+          ")
+
+          kubectl rollout status deployment/nester-api-preprod -n nester-preprod --timeout=5m
+          kubectl rollout status deployment/nester-signer-preprod -n nester-preprod --timeout=5m
+          rm -f "$RUNNER_TEMP/kubeconfig"
+
+      - name: Wait for API readiness
+        env:
+          PREPROD_API_URL: ${{ vars.PREPROD_API_URL || 'https://api-preprod.nester.dev/api/v1' }}
+        run: |
+          READYZ_URL="${PREPROD_API_URL%/api/v1}/readyz"
+          echo "Polling $READYZ_URL"
+
+          for i in $(seq 1 30); do
+            HTTP_CODE=$(curl -s -o /tmp/readyz-body -w '%{http_code}' "$READYZ_URL" || echo "000")
+            BODY=$(cat /tmp/readyz-body 2>/dev/null || echo "")
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "API ready: $BODY"
+              exit 0
+            fi
+
+            echo "Not ready yet ($i/30): HTTP $HTTP_CODE, $BODY"
+            sleep 2
+          done
+
+          echo "::error::API did not become ready within the timeout. Last response: HTTP $HTTP_CODE, $BODY"
+          exit 1
+
+  # ────────────────────────────────────────────────────────────────────
+  # 5. Smoke checks against the live preprod deploy (gating rollback).
+  # ────────────────────────────────────────────────────────────────────
+  preprod-smoke-test:
+    name: "Pre-Production Smoke Checks"
+    runs-on: ubuntu-24.04
+    needs: preprod-deploy
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: ./.github/actions/setup
+        with:
+          node: "true"
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @nester/dapp exec playwright install chromium --with-deps
+
+      - name: Run smoke tests against preprod
+        id: smoke
+        env:
+          STAGING_URL: ${{ vars.PREPROD_URL || 'https://preprod.nester.dev' }}
+          SMOKE_TEST: "1"
+          SMOKE_TEST_WALLET_SECRET: ${{ secrets.PREPROD_SMOKE_TEST_WALLET_SECRET }}
+        run: |
+          if [ -z "$SMOKE_TEST_WALLET_SECRET" ]; then
+            echo "::error::PREPROD_SMOKE_TEST_WALLET_SECRET is not configured."
+            exit 1
+          fi
+
+          cd apps/dapp/frontend
+          set +e
+          PLAYWRIGHT_JSON_OUTPUT_NAME=smoke-result.json \
+          npx playwright test tests/smoke.spec.ts \
+            --reporter="html,json,list"
+          TEST_EXIT_CODE=$?
+          set -e
+
+          echo "test_exit_code=$TEST_EXIT_CODE" >> $GITHUB_OUTPUT
+          exit $TEST_EXIT_CODE
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: preprod-smoke-test-results-${{ github.run_id }}
+          path: |
+            apps/dapp/frontend/playwright-report/
+            apps/dapp/frontend/test-results/
+            apps/dapp/frontend/smoke-result.json
+          retention-days: 30
+
+  # ────────────────────────────────────────────────────────────────────
+  # 6. Automatic rollback to the digests captured before this deploy.
+  # ────────────────────────────────────────────────────────────────────
+  rollback:
+    name: "Automatic Rollback"
+    runs-on: ubuntu-latest
+    needs: [resolve-digests, preprod-deploy, preprod-smoke-test]
+    if: always() && (needs.preprod-deploy.result == 'failure' || needs.preprod-smoke-test.result == 'failure')
+    environment: preprod
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Check we have something to roll back to
+        env:
+          PREV_API: ${{ needs.resolve-digests.outputs.previous_api_digest }}
+        run: |
+          if [ -z "$PREV_API" ]; then
+            echo "::error::No previous digest was recorded (first-ever preprod deploy?). Automatic rollback has nothing to roll back to."
+            exit 1
+          fi
+
+      - name: Roll back API and signer to previous digests
+        env:
+          KUBE_CONFIG: ${{ secrets.PREPROD_KUBE_CONFIG }}
+          PREV_API: ${{ needs.resolve-digests.outputs.previous_api_digest }}
+          PREV_SIGNER: ${{ needs.resolve-digests.outputs.previous_signer_digest }}
+        run: |
+          set -euo pipefail
+          echo "$KUBE_CONFIG" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+
+          kubectl set image deployment/nester-api-preprod \
+            api="${{ env.API_IMAGE }}@${PREV_API}" \
+            -n nester-preprod
+          kubectl set image deployment/nester-signer-preprod \
+            signer="${{ env.SIGNER_IMAGE }}@${PREV_SIGNER}" \
+            -n nester-preprod
+
+          kubectl rollout status deployment/nester-api-preprod -n nester-preprod --timeout=5m
+          kubectl rollout status deployment/nester-signer-preprod -n nester-preprod --timeout=5m
+          rm -f "$RUNNER_TEMP/kubeconfig"
+
+          echo "Rolled back preprod to api@${PREV_API}, signer@${PREV_SIGNER}"
+
+      - name: Fail the workflow
+        run: |
+          echo "Preprod rolled back automatically after smoke test failure."
+          exit 1

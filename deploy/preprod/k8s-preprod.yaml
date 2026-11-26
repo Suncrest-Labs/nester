@@ -1,0 +1,184 @@
+# Pre-production manifests for the API, signer, and migration job.
+# Mirrors deploy/production/k8s-production.yaml's exact infrastructure shape
+# (replicas, immutable digest pinning, /readyz readiness probe, isolated signer
+# Deployment, separate one-shot migration Job, Secret/ConfigMap wiring) inside
+# its own dedicated `nester-preprod` namespace targeting Stellar testnet.
+#
+# This ensures full launch-sequence rehearsals exercise the same topology and
+# deployment mechanics as mainnet without sharing servers, namespaces,
+# databases, or secrets with staging or production.
+#
+# The `__API_IMAGE_DIGEST__` / `__SIGNER_IMAGE_DIGEST__` placeholders are
+# substituted by the deploy-preprod workflow's "Resolve image digests" and
+# "Render manifests" steps before `kubectl apply`; they are never committed
+# as real digests.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nester-api-preprod
+  namespace: nester-preprod
+  labels:
+    app: nester-api
+    env: preprod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nester-api
+      env: preprod
+  template:
+    metadata:
+      labels:
+        app: nester-api
+        env: preprod
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/suncrestlabs/nester-api@__API_IMAGE_DIGEST__
+          ports:
+            - containerPort: 8080
+          env:
+            - name: APP_ENV
+              value: "staging"
+            - name: STELLAR_NETWORK
+              value: "testnet"
+            - name: STELLAR_HORIZON_URL
+              value: "https://horizon-testnet.stellar.org"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nester-preprod-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nester-preprod-secrets
+                  key: redis-url
+            - name: CONTRACT_ADDRESS_VAULT_FACTORY
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-preprod-contracts
+                  key: vault-factory-address
+            - name: CONTRACT_ADDRESS_YIELD_REGISTRY
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-preprod-contracts
+                  key: yield-registry-address
+            # Migrations run as their own approved job (see the migrate job
+            # in .github/workflows/deploy-preprod.yml), matching production.
+            - name: RUN_MIGRATIONS
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nester-api-preprod
+  namespace: nester-preprod
+spec:
+  selector:
+    app: nester-api
+    env: preprod
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+# Isolated signer Deployment matching production's signing-isolation topology
+# (see docs/security/signing-isolation.md). Holds STELLAR_OPERATOR_SECRET
+# separately from the API and exposes no network port.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nester-signer-preprod
+  namespace: nester-preprod
+  labels:
+    app: nester-signer
+    env: preprod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nester-signer
+      env: preprod
+  template:
+    metadata:
+      labels:
+        app: nester-signer
+        env: preprod
+    spec:
+      containers:
+        - name: signer
+          image: ghcr.io/suncrestlabs/nester-signer@__SIGNER_IMAGE_DIGEST__
+          env:
+            - name: APP_ENV
+              value: "staging"
+            - name: STELLAR_OPERATOR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nester-preprod-secrets
+                  key: stellar-operator-secret
+---
+# One-shot migration Job matching production's nester-api-migrate Job.
+# Uses the exact same pinned API image digest as the API Deployment above.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nester-api-migrate
+  namespace: nester-preprod
+  labels:
+    app: nester-api-migrate
+    env: preprod
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: nester-api-migrate
+        env: preprod
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ghcr.io/suncrestlabs/nester-api@__API_IMAGE_DIGEST__
+          env:
+            - name: APP_ENV
+              value: "staging"
+            - name: RUN_MIGRATIONS
+              value: "true"
+            - name: STELLAR_NETWORK
+              value: "testnet"
+            - name: STELLAR_HORIZON_URL
+              value: "https://horizon-testnet.stellar.org"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nester-preprod-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nester-preprod-secrets
+                  key: redis-url
+            - name: CONTRACT_ADDRESS_VAULT_FACTORY
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-preprod-contracts
+                  key: vault-factory-address
+            - name: CONTRACT_ADDRESS_YIELD_REGISTRY
+              valueFrom:
+                configMapKeyRef:
+                  name: nester-preprod-contracts
+                  key: yield-registry-address
