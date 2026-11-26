@@ -322,6 +322,7 @@ type DatabaseConfig struct {
 type StellarConfig struct {
 	networkPassphrase string
 	rpcURL            string
+	secondaryRPCURL   string
 	horizonURL        string
 	operatorSecret    string
 	// operatorAddress is the operator's PUBLIC address. It is required when
@@ -468,6 +469,7 @@ func loadFrom(loader *envLoader) (*Config, error) {
 		stellar: StellarConfig{
 			networkPassphrase:                 loader.requiredString("STELLAR_NETWORK_PASSPHRASE"),
 			rpcURL:                            loader.requiredURL("STELLAR_RPC_URL"),
+			secondaryRPCURL:                   loader.optionalURL("STELLAR_RPC_SECONDARY_URL"),
 			horizonURL:                        loader.requiredURL("STELLAR_HORIZON_URL"),
 			operatorSecret:                    loader.stringDefault("STELLAR_OPERATOR_SECRET", ""),
 			operatorFundedDepositsEnabled:     loader.boolDefault("STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED", false),
@@ -1536,9 +1538,17 @@ func validateStellarNetworkConsistency(s StellarConfig, loader *envLoader) {
 	}
 
 	rpcURL := strings.ToLower(s.rpcURL)
+	secondaryRPCURL := strings.ToLower(s.secondaryRPCURL)
 	horizonURL := strings.ToLower(s.horizonURL)
 
+	if secondaryRPCURL != "" && strings.TrimRight(strings.TrimSpace(secondaryRPCURL), "/") == strings.TrimRight(strings.TrimSpace(rpcURL), "/") {
+		loader.addError(
+			"STELLAR_RPC_SECONDARY_URL must be a distinct endpoint from STELLAR_RPC_URL to provide failover",
+		)
+	}
+
 	rpcIsTestnet := strings.Contains(rpcURL, "testnet") || strings.Contains(rpcURL, "futurenet")
+	secondaryRPCIsTestnet := strings.Contains(secondaryRPCURL, "testnet") || strings.Contains(secondaryRPCURL, "futurenet")
 	horizonIsTestnet := strings.Contains(horizonURL, "testnet") || strings.Contains(horizonURL, "futurenet")
 
 	switch passphrase {
@@ -1546,6 +1556,12 @@ func validateStellarNetworkConsistency(s StellarConfig, loader *envLoader) {
 		if rpcIsTestnet {
 			loader.addError(
 				"STELLAR_RPC_URL appears to be a testnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to mainnet; " +
+					"set both to the same network to prevent cross-environment routing",
+			)
+		}
+		if secondaryRPCIsTestnet {
+			loader.addError(
+				"STELLAR_RPC_SECONDARY_URL appears to be a testnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to mainnet; " +
 					"set both to the same network to prevent cross-environment routing",
 			)
 		}
@@ -1576,11 +1592,19 @@ func validateStellarNetworkConsistency(s StellarConfig, loader *envLoader) {
 		// wrong network.
 		rpcIsMainnetSDF := strings.Contains(rpcURL, "horizon.stellar.org") ||
 			(strings.Contains(rpcURL, "stellar.org") && !rpcIsTestnet)
+		secondaryRPCIsMainnetSDF := secondaryRPCURL != "" && (strings.Contains(secondaryRPCURL, "horizon.stellar.org") ||
+			(strings.Contains(secondaryRPCURL, "stellar.org") && !secondaryRPCIsTestnet))
 		horizonIsMainnetSDF := strings.Contains(horizonURL, "horizon.stellar.org") ||
 			(strings.Contains(horizonURL, "stellar.org") && !horizonIsTestnet)
 		if rpcIsMainnetSDF {
 			loader.addError(
 				"STELLAR_RPC_URL appears to be a mainnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to testnet; " +
+					"set both to the same network to prevent cross-environment routing",
+			)
+		}
+		if secondaryRPCIsMainnetSDF {
+			loader.addError(
+				"STELLAR_RPC_SECONDARY_URL appears to be a mainnet endpoint but STELLAR_NETWORK_PASSPHRASE is set to testnet; " +
 					"set both to the same network to prevent cross-environment routing",
 			)
 		}
@@ -1647,6 +1671,12 @@ func (s StellarConfig) NetworkPassphrase() string {
 
 func (s StellarConfig) RPCURL() string {
 	return s.rpcURL
+}
+
+// SecondaryRPCURL returns the optional secondary Soroban RPC endpoint used for
+// automatic failover when the primary endpoint fails or its circuit breaker opens.
+func (s StellarConfig) SecondaryRPCURL() string {
+	return s.secondaryRPCURL
 }
 
 func (s StellarConfig) HorizonURL() string {
@@ -1912,6 +1942,20 @@ func (l *envLoader) requiredURL(key string) string {
 	value := l.requiredString(key)
 	l.retype(key, "url")
 	if value == "" {
+		return ""
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		l.addError(fmt.Sprintf("%s must be a valid absolute URL", key))
+		return ""
+	}
+	return value
+}
+
+func (l *envLoader) optionalURL(key string) string {
+	l.record(key, "url", "", false)
+	value, ok := l.lookup(key)
+	if !ok || value == "" {
 		return ""
 	}
 	parsed, err := url.ParseRequestURI(value)

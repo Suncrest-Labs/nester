@@ -36,6 +36,7 @@ var varNotes = map[string]varNote{
 
 	"STELLAR_NETWORK_PASSPHRASE": {mainnet: "Must be `Public Global Stellar Network ; September 2015`. Must agree with STELLAR_RPC_URL and STELLAR_HORIZON_URL or startup fails."},
 	"STELLAR_RPC_URL":            {mainnet: "Must not contain `testnet` or `futurenet` when the passphrase is mainnet."},
+	"STELLAR_RPC_SECONDARY_URL":  {mainnet: "Independent secondary Soroban RPC endpoint for automatic failover. Must differ from STELLAR_RPC_URL and not contain `testnet` or `futurenet` on mainnet."},
 	"STELLAR_HORIZON_URL":        {mainnet: "Must not contain `testnet` or `futurenet` when the passphrase is mainnet."},
 	"STELLAR_OPERATOR_SECRET":    {secret: true, mainnet: "Prefer SIGNER_SOCKET_PATH (isolated signer) so this process holds no operator key. If set, store it in the secrets manager only."},
 	"STELLAR_OPERATOR_ADDRESS":   {mainnet: "Public address only; must correspond to the signer's key."},

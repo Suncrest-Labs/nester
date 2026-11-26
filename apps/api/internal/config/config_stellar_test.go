@@ -167,3 +167,68 @@ func TestStellarNetworkConsistency_CustomPassphraseSkipsCheck(t *testing.T) {
 		t.Fatalf("custom passphrase should not trigger network consistency check, got: %v", err)
 	}
 }
+
+// TestStellarSecondaryRPCURL_Validation verifies that STELLAR_RPC_SECONDARY_URL
+// is accepted when distinct and network-consistent, and rejected when identical
+// to primary or pointing at the wrong network.
+func TestStellarSecondaryRPCURL_Validation(t *testing.T) {
+	t.Run("valid distinct mainnet secondary", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("STELLAR_NETWORK_PASSPHRASE", StellarMainnetPassphrase)
+		t.Setenv("STELLAR_RPC_URL", "https://rpc-primary.example.com")
+		t.Setenv("STELLAR_RPC_SECONDARY_URL", "https://rpc-secondary.example.com")
+		t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
+		t.Setenv("YIELD_REGISTRY_CONTRACT", "CAAAA")
+		t.Setenv("STELLAR_ALLOCATION_STRATEGY_ADDRESS", "CBBBB")
+		chdir(t, t.TempDir())
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("expected valid mainnet secondary RPC config to load, got: %v", err)
+		}
+		if got := cfg.Stellar().SecondaryRPCURL(); got != "https://rpc-secondary.example.com" {
+			t.Fatalf("SecondaryRPCURL() = %q, want %q", got, "https://rpc-secondary.example.com")
+		}
+	})
+
+	t.Run("rejects secondary identical to primary", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("STELLAR_NETWORK_PASSPHRASE", StellarMainnetPassphrase)
+		t.Setenv("STELLAR_RPC_URL", "https://rpc-primary.example.com")
+		t.Setenv("STELLAR_RPC_SECONDARY_URL", "https://rpc-primary.example.com/")
+		t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
+		t.Setenv("YIELD_REGISTRY_CONTRACT", "CAAAA")
+		t.Setenv("STELLAR_ALLOCATION_STRATEGY_ADDRESS", "CBBBB")
+		chdir(t, t.TempDir())
+
+		_, err := Load()
+		if err == nil {
+			t.Fatal("expected Load() to reject identical primary and secondary RPC URLs")
+		}
+		if !strings.Contains(err.Error(), "STELLAR_RPC_SECONDARY_URL") {
+			t.Errorf("expected error to mention STELLAR_RPC_SECONDARY_URL, got: %v", err)
+		}
+	})
+
+	t.Run("rejects testnet secondary on mainnet", func(t *testing.T) {
+		baseEnv(t)
+		requiredEnv(t)
+		t.Setenv("STELLAR_NETWORK_PASSPHRASE", StellarMainnetPassphrase)
+		t.Setenv("STELLAR_RPC_URL", "https://rpc-primary.example.com")
+		t.Setenv("STELLAR_RPC_SECONDARY_URL", "https://soroban-testnet.stellar.org")
+		t.Setenv("STELLAR_HORIZON_URL", "https://horizon.example.com")
+		t.Setenv("YIELD_REGISTRY_CONTRACT", "CAAAA")
+		t.Setenv("STELLAR_ALLOCATION_STRATEGY_ADDRESS", "CBBBB")
+		chdir(t, t.TempDir())
+
+		_, err := Load()
+		if err == nil {
+			t.Fatal("expected Load() to reject testnet secondary RPC URL on mainnet")
+		}
+		if !strings.Contains(err.Error(), "STELLAR_RPC_SECONDARY_URL") {
+			t.Errorf("expected error to mention STELLAR_RPC_SECONDARY_URL, got: %v", err)
+		}
+	})
+}
