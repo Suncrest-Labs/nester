@@ -8,10 +8,10 @@ through the real testnet multisig signer set.
 **Status: not yet executed live.** Automated tests pin each layer in isolation
 (§3), but an end-to-end timed drill with a live on-call page and the real
 testnet signer set has not yet been run. Nothing in this document describes a
-live exercise that did not happen; §5 is the run log to fill in on the first
+live exercise that did not happen; §6 is the run log to fill in on the first
 real drill. Do not cite this document as evidence that the 15-minute SLA has
-been met until §5 contains a dated run with recorded timestamps and testnet
-transaction hashes.
+been met until §6 contains a dated run with recorded timestamps and testnet
+transaction hashes (tracked in #1552).
 
 ---
 
@@ -26,7 +26,7 @@ and collecting multisig signatures.
 ### Success criteria
 
 - **Time to pause (`T0 → T4`) is under 15 minutes**, or every bottleneck that
-  pushed it over 15 minutes has a concrete follow-up issue filed in §5.
+  pushed it over 15 minutes has a concrete follow-up issue filed in §6.
 - **Deposits are halted** on-chain (`deposit` rejected) and at the API layer.
 - **Withdrawals remain open** on-chain (`withdraw` succeeds) and at the API
   layer while deposits are paused.
