@@ -959,6 +959,7 @@ func run() error {
 		httpClient:      depHTTPClient,
 		horizonURL:      cfg.Stellar().HorizonURL(),
 		rpcURL:          cfg.Stellar().RPCURL(),
+		secondaryRPCURL: cfg.Stellar().SecondaryRPCURL(),
 		startedAt:       startedAt,
 		environment:     cfg.Environment(),
 		buildVersion:    version,
@@ -2281,10 +2282,19 @@ func newChainBreakers(cfg *config.Config, m *metrics.Metrics, logger *slog.Logge
 		return nil, err
 	}
 
-	if err := m.RegisterBreakers(map[metrics.Upstream]metrics.BreakerReader{
+	registeredBreakers := map[metrics.Upstream]metrics.BreakerReader{
 		metrics.UpstreamSorobanRPC: sorobanBreaker,
 		metrics.UpstreamHorizon:    horizonBreaker,
-	}); err != nil {
+	}
+	if secondaryURL := cfg.Stellar().SecondaryRPCURL(); secondaryURL != "" {
+		sorobanSecondaryBreaker := breaker.New(string(metrics.UpstreamSorobanRPCSecondary), sorobanPolicy, onTransition)
+		if err := router.Register(secondaryURL, sorobanSecondaryBreaker); err != nil {
+			return nil, err
+		}
+		registeredBreakers[metrics.UpstreamSorobanRPCSecondary] = sorobanSecondaryBreaker
+	}
+
+	if err := m.RegisterBreakers(registeredBreakers); err != nil {
 		// Non-fatal, for the same reason as the freshness collector: losing
 		// the metric must not stop the API serving, and the breakers still
 		// protect the upstreams and still appear in /health/detailed.
@@ -2433,9 +2443,10 @@ type healthDeps struct {
 	poolStats    func() poolStats
 	probeTimeout time.Duration
 
-	httpClient   *http.Client
-	horizonURL   string
-	rpcURL       string
+	httpClient      *http.Client
+	horizonURL      string
+	rpcURL          string
+	secondaryRPCURL string
 	startedAt    time.Time
 	environment  string
 	buildVersion string
@@ -2656,9 +2667,10 @@ type detailedHealthResponse struct {
 	UptimeSecs  int64            `json:"uptime_seconds"`
 	Database    dbStatus         `json:"database"`
 	Redis       redisStatus      `json:"redis"`
-	Horizon     dependencyStatus `json:"horizon"`
-	SorobanRPC  dependencyStatus `json:"soroban_rpc"`
-	GeneratedAt time.Time        `json:"generated_at"`
+	Horizon             dependencyStatus  `json:"horizon"`
+	SorobanRPC          dependencyStatus  `json:"soroban_rpc"`
+	SorobanRPCSecondary *dependencyStatus `json:"soroban_rpc_secondary,omitempty"`
+	GeneratedAt         time.Time         `json:"generated_at"`
 }
 
 // safeDependencyError reduces a dependency failure to a coarse reason that
@@ -2762,6 +2774,22 @@ func detailedHealthHandler(deps healthDeps) http.HandlerFunc {
 			CircuitBreaker: newBreakerStatus(deps.breakers[metrics.UpstreamSorobanRPC]),
 		}
 
+		secondaryDegraded := false
+		if deps.secondaryRPCURL != "" {
+			sStart := time.Now()
+			sRes := stellarpkg.PingSorobanRPC(r.Context(), deps.httpClient, deps.secondaryRPCURL)
+			secStatus := dependencyStatus{
+				OK:             sRes.OK,
+				Endpoint:       sRes.Endpoint,
+				Error:          safeProbeError(sRes),
+				LatencyMillis:  time.Since(sStart).Milliseconds(),
+				LatestLedger:   sRes.LatestLedger,
+				CircuitBreaker: newBreakerStatus(deps.breakers[metrics.UpstreamSorobanRPCSecondary]),
+			}
+			resp.SorobanRPCSecondary = &secStatus
+			secondaryDegraded = !secStatus.OK || breakerDegraded(secStatus.CircuitBreaker)
+		}
+
 		// Redis only counts against this instance when it is configured; the
 		// in-memory fallback path has nothing to lose.
 		redisDown := resp.Redis.Configured && !resp.Redis.OK
@@ -2773,6 +2801,7 @@ func detailedHealthHandler(deps healthDeps) http.HandlerFunc {
 		// outage — turning the partial failure into the total one this feature
 		// exists to prevent. Only the database, Redis, and draining do that.
 		degraded := !resp.Database.OK || redisDown || !resp.Horizon.OK || !resp.SorobanRPC.OK ||
+			secondaryDegraded ||
 			breakerDegraded(resp.Horizon.CircuitBreaker) ||
 			breakerDegraded(resp.SorobanRPC.CircuitBreaker)
 		draining := !deps.ready.Load()

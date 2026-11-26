@@ -9,7 +9,7 @@ Every environment variable read by `apps/api/internal/config` at startup. Regene
 - **Mainnet**: constraints enforced at startup, and defaults that are unsafe or must be set deliberately on mainnet.
 - Values are read from the process environment first, then a local `.env`. Empty values count as unset.
 
-151 variables: 5 always required, 8 secret.
+152 variables: 5 always required, 8 secret.
 
 | Name | Type | Default | Required | Secret | Mainnet |
 | --- | --- | --- | --- | --- | --- |
@@ -27,6 +27,7 @@ Every environment variable read by `apps/api/internal/config` at startup. Regene
 | `DATABASE_CONNECTION_TIMEOUT` | duration | `5s` | no | no | — |
 | `STELLAR_NETWORK_PASSPHRASE` | string | _none_ | yes | no | Must be `Public Global Stellar Network ; September 2015`. Must agree with STELLAR_RPC_URL and STELLAR_HORIZON_URL or startup fails. |
 | `STELLAR_RPC_URL` | url | _none_ | yes | no | Must not contain `testnet` or `futurenet` when the passphrase is mainnet. |
+| `STELLAR_RPC_SECONDARY_URL` | url | _none_ | no | no | Independent secondary Soroban RPC endpoint for automatic failover. Must differ from STELLAR_RPC_URL and not contain `testnet` or `futurenet` on mainnet. |
 | `STELLAR_HORIZON_URL` | url | _none_ | yes | no | Must not contain `testnet` or `futurenet` when the passphrase is mainnet. |
 | `STELLAR_OPERATOR_SECRET` | string | _none_ | no | **yes** | Prefer SIGNER_SOCKET_PATH (isolated signer) so this process holds no operator key. If set, store it in the secrets manager only. |
 | `STELLAR_OPERATOR_FUNDED_DEPOSITS_ENABLED` | bool | `false` | no | no | Leave `false` unless STELLAR_OPERATOR_FUNDED_DEPOSIT_VAULTS and a max amount are set; this lets the API spend operator funds. |

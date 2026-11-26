@@ -19,11 +19,12 @@ import (
 type Upstream string
 
 const (
-	UpstreamSorobanRPC Upstream = "soroban_rpc"
-	UpstreamHorizon    Upstream = "horizon"
-	UpstreamCoinGecko  Upstream = "coingecko"
-	UpstreamDeFiLlama  Upstream = "defillama"
-	UpstreamOther      Upstream = "other"
+	UpstreamSorobanRPC          Upstream = "soroban_rpc"
+	UpstreamSorobanRPCSecondary Upstream = "soroban_rpc_secondary"
+	UpstreamHorizon             Upstream = "horizon"
+	UpstreamCoinGecko           Upstream = "coingecko"
+	UpstreamDeFiLlama           Upstream = "defillama"
+	UpstreamOther               Upstream = "other"
 )
 
 // Transport error kinds. A closed set: the raw error text from a failed
