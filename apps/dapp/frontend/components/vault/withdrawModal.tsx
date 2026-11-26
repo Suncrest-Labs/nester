@@ -26,9 +26,18 @@ import { useQuoteTimestamp } from "@/hooks/useQuoteTimestamp";
 import { SlippageControl } from "@/components/slippage-control";
 import { applySlippageToAmount, minReceivedUnits, resolveFreshQuote } from "@/lib/slippage";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { useWithdrawalFeePreview } from "@/hooks/useWithdrawalFeePreview";
+import {
+  formatBps,
+  formatTierDate,
+  getNextLowerTierDate,
+  resolveCurrentTierLabel,
+  SECONDS_PER_DAY,
+} from "@/lib/fees";
 import { TransactionAnnouncer } from "@/components/vault/transactionAnnouncer";
 import {
   executeVaultWithdraw,
+  previewWithdrawalFee,
   UserRejectedError,
   TransactionFailedError,
   TransactionTimeoutError,
@@ -184,6 +193,78 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
   const quotedAt = useQuoteTimestamp(quote);
   const { bps: slippageBps, setBps: setSlippageBps } = useSlippage();
 
+  const vaultDef = useMemo(
+    () => (position ? getVaultById(position.vaultId) : null),
+    [position]
+  );
+
+  const feePreviewParams = useMemo(() => {
+    if (!address || !vaultDef?.contractAddress || !quote || quote.sharesBurned <= 0) {
+      return null;
+    }
+    return {
+      walletAddress: address,
+      contractId: vaultDef.contractAddress,
+      shares: quote.sharesBurned,
+    };
+  }, [address, vaultDef?.contractAddress, quote]);
+
+  const {
+    feePreview,
+    previewedShares,
+    schedulePreview,
+    loading: feePreviewLoading,
+  } = useWithdrawalFeePreview(
+    feePreviewParams,
+    open && !!position && amount > 0 && state === "input"
+  );
+
+  const hasMatchingFeePreview =
+    !!feePreview?.available && previewedShares === quote?.sharesBurned;
+
+  const grossAmount = hasMatchingFeePreview
+    ? feePreview.grossAssetValue
+    : (quote?.grossAmount ?? 0);
+  const exitFeeAmount = hasMatchingFeePreview
+    ? feePreview.earlyWithdrawalFeeDeducted
+    : (quote ? quote.grossAmount - quote.netAmount : 0);
+  const performanceFeeAmount = hasMatchingFeePreview
+    ? feePreview.performanceFeeDeducted
+    : 0;
+  const netAmount = hasMatchingFeePreview
+    ? feePreview.netAmountReceived
+    : (quote?.netAmount ?? 0);
+
+  const currentTierDisplay = useMemo(() => {
+    if (schedulePreview?.available) {
+      const label = resolveCurrentTierLabel(
+        schedulePreview.tenureSecs,
+        schedulePreview.currentExitFeeBps,
+        schedulePreview.nextBoundarySecs
+      );
+      return `${label} (${formatBps(schedulePreview.currentExitFeeBps)})`;
+    }
+    if (!position) return "—";
+    if (position.isMatured) return "No exit fee (Matured) (0.00%)";
+    return `Early exit (${position.earlyWithdrawalPenaltyPct.toFixed(2)}%)`;
+  }, [schedulePreview, position]);
+
+  const nextLowerTierDisplay = useMemo(() => {
+    if (schedulePreview?.available) {
+      const nextDate = getNextLowerTierDate(
+        schedulePreview.tenureSecs,
+        schedulePreview.nextBoundarySecs
+      );
+      if (!nextDate) return "Lowest tier reached";
+      return `${formatBps(schedulePreview.nextBoundaryExitFeeBps)} on ${formatTierDate(nextDate)}`;
+    }
+    if (!position || position.isMatured || position.daysRemaining <= 0) {
+      return "Lowest tier reached";
+    }
+    const maturityDate = new Date(Date.now() + position.daysRemaining * SECONDS_PER_DAY * 1000);
+    return `0.00% on ${formatTierDate(maturityDate)}`;
+  }, [schedulePreview, position]);
+
   const validationError = useMemo(() => {
     if (!amount) return null;
     if (!position) return null;
@@ -230,13 +311,26 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
           return next;
         }
       );
+      let effectiveNet = freshQuote.netAmount;
+      if (feePreview?.available && previewedShares === freshQuote.sharesBurned) {
+        effectiveNet = feePreview.netAmountReceived;
+      } else if (vaultDef?.contractAddress) {
+        const freshFeePreview = await previewWithdrawalFee({
+          walletAddress: address,
+          contractId: vaultDef.contractAddress,
+          shares: freshQuote.sharesBurned,
+        });
+        if (freshFeePreview.available) {
+          effectiveNet = freshFeePreview.netAmountReceived;
+        }
+      }
       const txReceipt = await executeVaultWithdraw({
         walletAddress: address,
         vaultId: position.vaultId,
         contractId: vaultDef?.contractAddress || "",
         asset: position.asset?.toUpperCase() === "XLM" ? "XLM" : "USDC",
         shares: freshQuote.sharesBurned,
-        minAssetsOut: applySlippageToAmount(freshQuote.netAmount, slippageBps),
+        minAssetsOut: applySlippageToAmount(effectiveNet, slippageBps),
       });
 
       const result = recordWithdrawal({
@@ -393,15 +487,61 @@ export function WithdrawModal({ open, onClose, position }: WithdrawModalProps) {
               {/* Quote preview */}
               <div className="mt-4 space-y-2.5 rounded-2xl border border-border bg-secondary/20 p-4 text-sm">
                 {[
-                  { label: "Gross proceeds", value: `${formatCurrency(quote?.grossAmount ?? 0)} ${position.asset ?? "USDC"}` },
-                  { label: "Early exit penalty", value: `${formatCurrency(quote ? quote.grossAmount - quote.netAmount : 0)} ${position.asset ?? "USDC"}` },
-                  { label: "Net to wallet", value: `${formatCurrency(quote?.netAmount ?? 0)} ${position.asset ?? "USDC"}`, highlight: true },
-                  { label: "Minimum received", value: `${formatCurrency(quote ? minReceivedUnits(quote.netAmount, slippageBps) : 0)} ${position.asset ?? "USDC"}` },
-                  { label: "Shares burned", value: formatCurrency(quote?.sharesBurned ?? 0) },
-                ].map(({ label, value, highlight }) => (
-                  <div key={label} className="flex items-center justify-between">
+                  {
+                    label: "Gross proceeds",
+                    value: `${formatCurrency(grossAmount)} ${position.asset ?? "USDC"}`,
+                    testId: "withdrawal-gross-amount",
+                  },
+                  {
+                    label: "Current tier",
+                    value: feePreviewLoading ? "Loading…" : currentTierDisplay,
+                    testId: "withdrawal-current-tier",
+                  },
+                  {
+                    label: "Next lower tier",
+                    value: feePreviewLoading ? "Loading…" : nextLowerTierDisplay,
+                    testId: "withdrawal-next-tier-date",
+                  },
+                  {
+                    label: "Exit fee",
+                    value: `${formatCurrency(exitFeeAmount)} ${position.asset ?? "USDC"}`,
+                    testId: "withdrawal-fee-amount",
+                  },
+                  ...(hasMatchingFeePreview
+                    ? [
+                        {
+                          label: "Performance fee",
+                          value: `${formatCurrency(performanceFeeAmount)} ${position.asset ?? "USDC"}`,
+                          testId: "withdrawal-performance-fee",
+                        },
+                      ]
+                    : []),
+                  {
+                    label: "Net received",
+                    value: `${formatCurrency(netAmount)} ${position.asset ?? "USDC"}`,
+                    highlight: true,
+                    testId: "withdrawal-net-received",
+                  },
+                  {
+                    label: "Minimum received",
+                    value: `${formatCurrency(quote ? minReceivedUnits(netAmount, slippageBps) : 0)} ${position.asset ?? "USDC"}`,
+                    testId: "withdrawal-min-received",
+                  },
+                  {
+                    label: "Shares burned",
+                    value: formatCurrency(quote?.sharesBurned ?? 0),
+                    testId: "withdrawal-shares-burned",
+                  },
+                ].map(({ label, value, highlight, testId }) => (
+                  <div key={label} className="flex items-center justify-between gap-2">
                     <span className="text-muted-foreground">{label}</span>
-                    <span className={cn("font-medium", highlight ? "text-emerald-600" : "text-foreground")}>
+                    <span
+                      data-testid={testId}
+                      className={cn(
+                        "text-right font-medium",
+                        highlight ? "text-emerald-600" : "text-foreground"
+                      )}
+                    >
                       {value}
                     </span>
                   </div>

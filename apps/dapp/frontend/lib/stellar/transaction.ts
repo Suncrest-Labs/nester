@@ -271,6 +271,198 @@ export async function previewDeposit(params: DepositQuoteParams): Promise<{
   }
 }
 
+export interface WithdrawalFeePreviewParams {
+  walletAddress: string;
+  contractId: string;
+  shares: number | bigint;
+}
+
+export interface WithdrawalFeePreviewResult {
+  grossAssetValue: number;
+  managementFeeDeducted: number;
+  performanceFeeDeducted: number;
+  earlyWithdrawalFeeDeducted: number;
+  netAmountReceived: number;
+  available: boolean;
+  error?: string;
+}
+
+/**
+ * Preview exact withdrawal fees and net amount received by simulating the
+ * vault contract's `withdrawal_fee_preview(user, shares)`.
+ */
+export async function previewWithdrawalFee(
+  params: WithdrawalFeePreviewParams
+): Promise<WithdrawalFeePreviewResult> {
+  try {
+    const { walletAddress, contractId, shares: rawShares } = params;
+    const network = getCurrentNetwork();
+    const server = getServer(network.rpcUrl);
+    const account = await server.getAccount(walletAddress);
+
+    const sharesStroops =
+      typeof rawShares === "bigint"
+        ? rawShares
+        : BigInt(Math.round(Number(rawShares) * 10_000_000));
+
+    const contract = new Contract(assertValidContractId(contractId, "vault contract"));
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: network.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          "withdrawal_fee_preview",
+          new Address(walletAddress).toScVal(),
+          nativeToScVal(sharesStroops, { type: "i128" })
+        )
+      )
+      .setTimeout(30)
+      .build();
+
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim)) {
+      throw new TransactionFailedError(
+        (sim as SorobanRpc.Api.SimulateTransactionErrorResponse).error
+      );
+    }
+    const result = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
+    if (!result) {
+      return {
+        grossAssetValue: 0,
+        managementFeeDeducted: 0,
+        performanceFeeDeducted: 0,
+        earlyWithdrawalFeeDeducted: 0,
+        netAmountReceived: 0,
+        available: false,
+        error: "Withdrawal fee preview unavailable",
+      };
+    }
+
+    const raw = scValToNative(result.retval) as Record<string, bigint | number>;
+    const grossStroops = BigInt(raw.gross_asset_value ?? 0);
+    if (sharesStroops > BigInt(0) && grossStroops === BigInt(0)) {
+      return {
+        grossAssetValue: 0,
+        managementFeeDeducted: 0,
+        performanceFeeDeducted: 0,
+        earlyWithdrawalFeeDeducted: 0,
+        netAmountReceived: 0,
+        available: false,
+        error: "Withdrawal fee preview unavailable",
+      };
+    }
+
+    return {
+      grossAssetValue: stroopsToXlm(grossStroops),
+      managementFeeDeducted: stroopsToXlm(BigInt(raw.management_fee_deducted ?? 0)),
+      performanceFeeDeducted: stroopsToXlm(BigInt(raw.performance_fee_deducted ?? 0)),
+      earlyWithdrawalFeeDeducted: stroopsToXlm(BigInt(raw.early_withdrawal_fee_deducted ?? 0)),
+      netAmountReceived: stroopsToXlm(BigInt(raw.net_amount_received ?? 0)),
+      available: true,
+    };
+  } catch (err) {
+    return {
+      grossAssetValue: 0,
+      managementFeeDeducted: 0,
+      performanceFeeDeducted: 0,
+      earlyWithdrawalFeeDeducted: 0,
+      netAmountReceived: 0,
+      available: false,
+      error: err instanceof Error ? err.message : "Withdrawal fee preview unavailable",
+    };
+  }
+}
+
+export interface FeeSchedulePreviewParams {
+  walletAddress: string;
+  contractId: string;
+}
+
+export interface FeeSchedulePreviewResult {
+  tenureSecs: number;
+  currentExitFeeBps: number;
+  currentPerformanceFeeBps: number;
+  nextBoundarySecs: number | null;
+  nextBoundaryExitFeeBps: number;
+  nextBoundaryPerfFeeBps: number;
+  available: boolean;
+  error?: string;
+}
+
+/**
+ * Preview a user's current fee tier and next lower tier boundary by simulating
+ * the vault contract's `fee_schedule_preview(user)`.
+ */
+export async function previewFeeSchedule(
+  params: FeeSchedulePreviewParams
+): Promise<FeeSchedulePreviewResult> {
+  try {
+    const { walletAddress, contractId } = params;
+    const network = getCurrentNetwork();
+    const server = getServer(network.rpcUrl);
+    const account = await server.getAccount(walletAddress);
+
+    const contract = new Contract(assertValidContractId(contractId, "vault contract"));
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: network.networkPassphrase,
+    })
+      .addOperation(
+        contract.call("fee_schedule_preview", new Address(walletAddress).toScVal())
+      )
+      .setTimeout(30)
+      .build();
+
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim)) {
+      throw new TransactionFailedError(
+        (sim as SorobanRpc.Api.SimulateTransactionErrorResponse).error
+      );
+    }
+    const result = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
+    if (!result) {
+      return {
+        tenureSecs: 0,
+        currentExitFeeBps: 0,
+        currentPerformanceFeeBps: 0,
+        nextBoundarySecs: null,
+        nextBoundaryExitFeeBps: 0,
+        nextBoundaryPerfFeeBps: 0,
+        available: false,
+        error: "Fee schedule preview unavailable",
+      };
+    }
+
+    const raw = scValToNative(result.retval) as Record<string, bigint | number | null | undefined>;
+    const nextBoundary =
+      raw.next_boundary_secs !== null && raw.next_boundary_secs !== undefined
+        ? Number(raw.next_boundary_secs)
+        : null;
+
+    return {
+      tenureSecs: Number(raw.tenure_secs ?? 0),
+      currentExitFeeBps: Number(raw.current_exit_fee_bps ?? 0),
+      currentPerformanceFeeBps: Number(raw.current_performance_fee_bps ?? 0),
+      nextBoundarySecs: nextBoundary,
+      nextBoundaryExitFeeBps: Number(raw.next_boundary_exit_fee_bps ?? 0),
+      nextBoundaryPerfFeeBps: Number(raw.next_boundary_perf_fee_bps ?? 0),
+      available: true,
+    };
+  } catch (err) {
+    return {
+      tenureSecs: 0,
+      currentExitFeeBps: 0,
+      currentPerformanceFeeBps: 0,
+      nextBoundarySecs: null,
+      nextBoundaryExitFeeBps: 0,
+      nextBoundaryPerfFeeBps: 0,
+      available: false,
+      error: err instanceof Error ? err.message : "Fee schedule preview unavailable",
+    };
+  }
+}
+
 /**
  * Estimate Stellar network fee for a withdrawal via simulateTransaction.
  */

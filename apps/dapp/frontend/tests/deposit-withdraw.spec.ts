@@ -50,6 +50,8 @@ test.describe('Deposit / Withdraw journey', () => {
 
       const modal = page.getByRole('dialog');
       await expect(modal).toBeVisible();
+      await expect(modal.getByTestId('fee-schedule-summary')).toBeVisible();
+      await expect(modal.getByTestId('full-fee-schedule-link')).toHaveAttribute('href', '/vaults#fee-schedule');
 
       await modal.getByPlaceholder('0.00').fill(depositAmount);
       await modal.getByRole('button', { name: /confirm/i }).click();
@@ -72,6 +74,10 @@ test.describe('Deposit / Withdraw journey', () => {
       await expect(modal).toBeVisible();
 
       await modal.getByPlaceholder('0.00').fill(depositAmount);
+      await expect(modal.getByTestId('withdrawal-current-tier')).toBeVisible();
+      await expect(modal.getByTestId('withdrawal-next-tier-date')).toBeVisible();
+      await expect(modal.getByTestId('withdrawal-fee-amount')).toBeVisible();
+      await expect(modal.getByTestId('withdrawal-net-received')).toBeVisible();
       await modal.getByRole('button', { name: /confirm/i }).click();
 
       await expect(page.getByText(/withdrawal successful/i).or(page.getByText(/confirmed/i))).toBeVisible({ timeout: 30_000 });
