@@ -53,8 +53,16 @@ type withdrawRequest struct {
 
 // maxSingleTransactionAmount is the per-transaction ceiling enforced at the
 // API layer for deposits and withdrawals. It is independent of daily caps and
-// limits the blast radius of a compromised session or client bug.
+// limits the blast radius of a compromised session or client bug. The value
+// is loaded from the STELLAR_MAX_SINGLE_TX_AMOUNT configuration at startup via
+// SetMaxSingleTransactionAmount; a non-positive value disables the check.
 var maxSingleTransactionAmount = decimal.NewFromInt(100000)
+
+// SetMaxSingleTransactionAmount overrides the per-transaction ceiling. It is
+// called from main.go with the value read from configuration.
+func SetMaxSingleTransactionAmount(limit decimal.Decimal) {
+	maxSingleTransactionAmount = limit
+}
 
 // validateSingleTransactionLimit rejects amounts above the per-transaction
 // ceiling. A non-positive ceiling disables the check.

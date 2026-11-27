@@ -246,19 +246,21 @@ func (h *TransactionHandler) createTransaction(w http.ResponseWriter, r *http.Re
 	// request amount alone, before any service or chain work, so an
 	// oversized single transaction is refused regardless of the user's
 	// running totals or daily caps.
-	if err := h.perTxCap.CheckPerTransaction(amount); err != nil {
-		var capErr *caps.CapExceededError
-		if errors.As(err, &capErr) {
-			response.WriteJSON(w, http.StatusUnprocessableEntity, response.Err(
-				http.StatusUnprocessableEntity,
-				"PER_TRANSACTION_LIMIT_EXCEEDED",
-				capErr.Error(),
-			))
+		if h.perTxCap != nil {
+		if err := h.perTxCap.CheckPerTransaction(amount); err != nil {
+			var capErr *caps.CapExceededError
+			if errors.As(err, &capErr) {
+				response.WriteJSON(w, http.StatusUnprocessableEntity, response.Err(
+					http.StatusUnprocessableEntity,
+					"PER_TRANSACTION_LIMIT_EXCEEDED",
+					capErr.Error(),
+				))
+				return
+			}
+			logpkg.FromContext(r.Context()).Error("transaction handler: per-transaction check failed", "error", err.Error())
+			response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
 			return
 		}
-		logpkg.FromContext(r.Context()).Error("transaction handler: per-transaction check failed", "error", err.Error())
-		response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
-		return
 	}
 
 	model, err := h.service.RegisterTransaction(r.Context(), service.RegisterTransactionInput{
