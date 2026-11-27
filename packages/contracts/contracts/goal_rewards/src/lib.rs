@@ -65,6 +65,7 @@ use nester_common::goal_effort::{
     self, check_eligibility, compute_bonus, effort_score_bps, ContributionStatsInput,
     IneligibilityReason, RewardTier,
 };
+use nester_common::{POSITION_TTL_EXTEND_TO_LEDGERS, POSITION_TTL_THRESHOLD_LEDGERS};
 use savings_goal::{GoalStatus, SavingsGoalContractClient};
 
 // ---------------------------------------------------------------------------
@@ -431,11 +432,7 @@ impl GoalRewardsContract {
     pub fn claim_goal_bonus(env: Env, caller: Address, goal_id: BytesN<32>) -> i128 {
         caller.require_auth();
 
-        if env
-            .storage()
-            .instance()
-            .has(&DataKey::Claimed(goal_id.clone()))
-        {
+        if is_claimed(&env, &goal_id) {
             panic_with_error!(&env, GoalRewardError::BonusAlreadyClaimed);
         }
 
@@ -460,11 +457,7 @@ impl GoalRewardsContract {
         // before this one's completion — i.e. they must not have been
         // concurrently active.
         let overlap_key = DataKey::ActiveClaimWindow(goal.vault.clone(), caller.clone());
-        if let Some(prev_goal_id) = env
-            .storage()
-            .instance()
-            .get::<DataKey, BytesN<32>>(&overlap_key)
-        {
+        if let Some(prev_goal_id) = get_active_claim_window(&env, &overlap_key) {
             if prev_goal_id != goal_id {
                 // Concurrent iff this goal was created before the previous
                 // claim's goal had completed — i.e. their active windows
@@ -536,13 +529,11 @@ impl GoalRewardsContract {
             panic_with_error!(&env, GoalRewardError::RewardPoolEmpty);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Claimed(goal_id.clone()), &true);
+        set_claimed(&env, &goal_id);
         env.storage()
             .instance()
             .set(&DataKey::RewardPoolBalance, &(pool_balance - bonus));
-        env.storage().instance().set(&overlap_key, &goal_id);
+        set_active_claim_window(&env, &overlap_key, &goal_id);
 
         if bonus == pool_balance && bonus > 0 {
             env.events().publish((GOAL_RWD, GR_EMPTY), goal_id.clone());
@@ -591,11 +582,7 @@ impl GoalRewardsContract {
         let registry_client = SavingsGoalContractClient::new(&env, &registry);
         let goal = registry_client.get_goal(&goal_id);
 
-        if env
-            .storage()
-            .instance()
-            .has(&DataKey::Claimed(goal_id.clone()))
-        {
+        if is_claimed(&env, &goal_id) {
             return (false, 0, GoalRewardError::BonusAlreadyClaimed as u32);
         }
 
@@ -672,7 +659,7 @@ impl GoalRewardsContract {
     }
 
     pub fn is_claimed(env: Env, goal_id: BytesN<32>) -> bool {
-        env.storage().instance().has(&DataKey::Claimed(goal_id))
+        is_claimed(&env, &goal_id)
     }
 
     // -----------------------------------------------------------------
@@ -694,6 +681,74 @@ impl GoalRewardsContract {
     pub fn accept_admin(env: Env, new_admin: Address) {
         AccessControl::accept_admin(&env, &new_admin);
     }
+}
+
+fn is_claimed(env: &Env, goal_id: &BytesN<32>) -> bool {
+    let key = DataKey::Claimed(goal_id.clone());
+    let persistent = env.storage().persistent();
+    if persistent.has(&key) {
+        persistent.extend_ttl(
+            &key,
+            POSITION_TTL_THRESHOLD_LEDGERS,
+            POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
+        true
+    } else if env.storage().instance().get::<DataKey, bool>(&key) == Some(true) {
+        persistent.set(&key, &true);
+        persistent.extend_ttl(
+            &key,
+            POSITION_TTL_THRESHOLD_LEDGERS,
+            POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
+        env.storage().instance().remove(&key);
+        true
+    } else {
+        false
+    }
+}
+
+fn set_claimed(env: &Env, goal_id: &BytesN<32>) {
+    let key = DataKey::Claimed(goal_id.clone());
+    let storage = env.storage().persistent();
+    storage.set(&key, &true);
+    storage.extend_ttl(
+        &key,
+        POSITION_TTL_THRESHOLD_LEDGERS,
+        POSITION_TTL_EXTEND_TO_LEDGERS,
+    );
+}
+
+fn get_active_claim_window(env: &Env, key: &DataKey) -> Option<BytesN<32>> {
+    let persistent = env.storage().persistent();
+    if let Some(value) = persistent.get(key) {
+        persistent.extend_ttl(
+            key,
+            POSITION_TTL_THRESHOLD_LEDGERS,
+            POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
+        Some(value)
+    } else if let Some(value) = env.storage().instance().get::<DataKey, BytesN<32>>(key) {
+        persistent.set(key, &value);
+        persistent.extend_ttl(
+            key,
+            POSITION_TTL_THRESHOLD_LEDGERS,
+            POSITION_TTL_EXTEND_TO_LEDGERS,
+        );
+        env.storage().instance().remove(key);
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn set_active_claim_window(env: &Env, key: &DataKey, goal_id: &BytesN<32>) {
+    let storage = env.storage().persistent();
+    storage.set(key, goal_id);
+    storage.extend_ttl(
+        key,
+        POSITION_TTL_THRESHOLD_LEDGERS,
+        POSITION_TTL_EXTEND_TO_LEDGERS,
+    );
 }
 
 // ---------------------------------------------------------------------------

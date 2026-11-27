@@ -1,7 +1,10 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events as _, Ledger as _,
+    },
     token, Address, BytesN, Env, IntoVal, Vec,
 };
 
@@ -640,6 +643,144 @@ fn sequential_goal_created_after_last_claim_is_eligible() {
         paid > 0,
         "a non-overlapping later goal must still be claimable"
     );
+}
+
+#[test]
+fn claim_records_are_persistent_and_do_not_grow_instance_storage() {
+    let f = setup();
+    f.token_admin.mint(&f.admin, &3_000_000_000);
+    f.rewards.fund_pool(&f.admin, &3_000_000_000);
+
+    let initial_instance_size = f.env.as_contract(&f.rewards.address, || {
+        f.env.storage().instance().all().len()
+    });
+
+    for seed in 1..=3 {
+        let id = steady_contributions(&f, seed, TARGET, TARGET / 10, 10);
+        f.advance(60 * DAY);
+        f.rewards.claim_goal_bonus(&f.owner, &id);
+
+        assert!(f.env.as_contract(&f.rewards.address, || {
+            f.env
+                .storage()
+                .persistent()
+                .has(&crate::DataKey::Claimed(id.clone()))
+        }));
+        assert!(
+            f.env.as_contract(&f.rewards.address, || {
+                f.env
+                    .storage()
+                    .persistent()
+                    .get_ttl(&crate::DataKey::Claimed(id.clone()))
+            }) >= nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+        assert_eq!(
+            f.env.as_contract(&f.rewards.address, || {
+                f.env.storage().persistent().get::<_, BytesN<32>>(
+                    &crate::DataKey::ActiveClaimWindow(f.vault.address.clone(), f.owner.clone()),
+                )
+            }),
+            Some(id)
+        );
+        assert!(
+            f.env.as_contract(&f.rewards.address, || {
+                f.env
+                    .storage()
+                    .persistent()
+                    .get_ttl(&crate::DataKey::ActiveClaimWindow(
+                        f.vault.address.clone(),
+                        f.owner.clone(),
+                    ))
+            }) >= nester_common::POSITION_TTL_EXTEND_TO_LEDGERS
+        );
+        assert_eq!(
+            f.env.as_contract(&f.rewards.address, || {
+                f.env.storage().instance().all().len()
+            }),
+            initial_instance_size
+        );
+    }
+}
+
+#[test]
+fn instance_claim_records_remain_valid_after_storage_migration() {
+    let f = setup();
+    f.token_admin.mint(&f.admin, &1_000_000_000);
+    f.rewards.fund_pool(&f.admin, &1_000_000_000);
+
+    let id = steady_contributions(&f, 1, TARGET, TARGET / 10, 10);
+    let next_id = steady_contributions(&f, 2, TARGET, TARGET / 10, 10);
+    f.advance(60 * DAY);
+
+    let overlap_key = crate::DataKey::ActiveClaimWindow(f.vault.address.clone(), f.owner.clone());
+    f.env.as_contract(&f.rewards.address, || {
+        f.env
+            .storage()
+            .instance()
+            .set(&crate::DataKey::Claimed(id.clone()), &true);
+        f.env.storage().instance().set(&overlap_key, &id);
+    });
+
+    assert!(f.rewards.is_claimed(&id));
+    assert!(f.rewards.try_claim_goal_bonus(&f.owner, &id).is_err());
+
+    f.env.as_contract(&f.rewards.address, || {
+        assert!(f
+            .env
+            .storage()
+            .persistent()
+            .has(&crate::DataKey::Claimed(id.clone())));
+        assert!(!f
+            .env
+            .storage()
+            .instance()
+            .has(&crate::DataKey::Claimed(id.clone())));
+    });
+
+    assert!(f.rewards.try_claim_goal_bonus(&f.owner, &next_id).is_ok());
+
+    f.env.as_contract(&f.rewards.address, || {
+        assert_eq!(
+            f.env
+                .storage()
+                .persistent()
+                .get::<_, BytesN<32>>(&overlap_key),
+            Some(next_id.clone())
+        );
+        assert!(!f.env.storage().instance().has(&overlap_key));
+    });
+}
+
+#[test]
+fn legacy_active_claim_window_still_rejects_overlapping_goals() {
+    let f = setup();
+    f.token_admin.mint(&f.admin, &2_000_000_000);
+    f.rewards.fund_pool(&f.admin, &2_000_000_000);
+
+    let first = f.create_goal(1, TARGET, 52 * WEEK);
+    let second = f.create_goal(2, TARGET, 52 * WEEK);
+    for _ in 0..10 {
+        f.contribute(&first, TARGET / 10);
+        f.contribute(&second, TARGET / 10);
+        f.advance(WEEK);
+    }
+    f.advance(60 * DAY);
+
+    let overlap_key = crate::DataKey::ActiveClaimWindow(f.vault.address.clone(), f.owner.clone());
+    f.env.as_contract(&f.rewards.address, || {
+        f.env
+            .storage()
+            .instance()
+            .set(&crate::DataKey::Claimed(first.clone()), &true);
+        f.env.storage().instance().set(&overlap_key, &first);
+    });
+
+    let error = f
+        .rewards
+        .try_claim_goal_bonus(&f.owner, &second)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(error, crate::GoalRewardError::GoalBonusOverlap.into());
 }
 
 // ---------------------------------------------------------------------------
