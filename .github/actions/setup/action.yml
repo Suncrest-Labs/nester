@@ -11,7 +11,7 @@ inputs:
     description: Install Rust with the wasm32 target, rustfmt and clippy, with cargo caching.
     default: "false"
   rust-toolchain:
-    description: Rust toolchain channel or exact version.
+    description: Rust toolchain channel.
     default: stable
   rust-workspace:
     description: Cargo workspace directory used as the cache key root.
@@ -49,14 +49,6 @@ runs:
       uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
       with:
         targets: wasm32-unknown-unknown
-
-    - name: Setup Rust (pinned)
-      if: inputs.rust == 'true' && inputs.rust-toolchain != 'stable' && inputs.rust-toolchain != 'nightly'
-      uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # pinned toolchain
-      with:
-        toolchain: ${{ inputs.rust-toolchain }}
-        targets: wasm32-unknown-unknown
-        components: rustfmt,clippy
 
     - name: Cache cargo
       if: inputs.rust == 'true'

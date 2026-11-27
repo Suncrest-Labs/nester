@@ -751,6 +751,38 @@ fn instance_claim_records_remain_valid_after_storage_migration() {
     });
 }
 
+#[test]
+fn legacy_active_claim_window_still_rejects_overlapping_goals() {
+    let f = setup();
+    f.token_admin.mint(&f.admin, &2_000_000_000);
+    f.rewards.fund_pool(&f.admin, &2_000_000_000);
+
+    let first = f.create_goal(1, TARGET, 52 * WEEK);
+    let second = f.create_goal(2, TARGET, 52 * WEEK);
+    for _ in 0..10 {
+        f.contribute(&first, TARGET / 10);
+        f.contribute(&second, TARGET / 10);
+        f.advance(WEEK);
+    }
+    f.advance(60 * DAY);
+
+    let overlap_key = crate::DataKey::ActiveClaimWindow(f.vault.address.clone(), f.owner.clone());
+    f.env.as_contract(&f.rewards.address, || {
+        f.env
+            .storage()
+            .instance()
+            .set(&crate::DataKey::Claimed(first.clone()), &true);
+        f.env.storage().instance().set(&overlap_key, &first);
+    });
+
+    let error = f
+        .rewards
+        .try_claim_goal_bonus(&f.owner, &second)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(error, crate::GoalRewardError::GoalBonusOverlap.into());
+}
+
 // ---------------------------------------------------------------------------
 // Anti-fake-contribution basis
 // ---------------------------------------------------------------------------
