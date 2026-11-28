@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/suncrestlabs/nester/apps/api/internal/auth"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/caps"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/domain/vault"
 	"github.com/suncrestlabs/nester/apps/api/internal/service"
@@ -21,6 +22,10 @@ import (
 type TransactionHandler struct {
 	service   *service.TransactionService
 	vaultRepo vaultRepository
+	// perTxCap is the API-layer single-transaction ceiling enforced on the
+	// create path for both deposits and withdrawals. The zero value disables
+	// the check.
+	perTxCap *caps.Checker
 }
 
 type vaultRepository interface {
@@ -33,6 +38,12 @@ func NewTransactionHandler(service *service.TransactionService) *TransactionHand
 
 func (h *TransactionHandler) SetVaultRepository(repo vaultRepository) {
 	h.vaultRepo = repo
+}
+
+// SetPerTransactionChecker installs the checker used to enforce the
+// per-transaction ceiling at the API layer. Passing nil disables the check.
+func (h *TransactionHandler) SetPerTransactionChecker(c *caps.Checker) {
+	h.perTxCap = c
 }
 
 func (h *TransactionHandler) Register(mux *http.ServeMux) {
@@ -229,6 +240,27 @@ func (h *TransactionHandler) createTransaction(w http.ResponseWriter, r *http.Re
 	if !validTypes[req.Type] {
 		response.WriteJSON(w, http.StatusBadRequest, response.ValidationErr("type must be one of: deposit, withdrawal"))
 		return
+	}
+
+	// Per-transaction ceiling (mainnet launch guard). Evaluated on the
+	// request amount alone, before any service or chain work, so an
+	// oversized single transaction is refused regardless of the user's
+	// running totals or daily caps.
+		if h.perTxCap != nil {
+		if err := h.perTxCap.CheckPerTransaction(amount); err != nil {
+			var capErr *caps.CapExceededError
+			if errors.As(err, &capErr) {
+				response.WriteJSON(w, http.StatusUnprocessableEntity, response.Err(
+					http.StatusUnprocessableEntity,
+					"PER_TRANSACTION_LIMIT_EXCEEDED",
+					capErr.Error(),
+				))
+				return
+			}
+			logpkg.FromContext(r.Context()).Error("transaction handler: per-transaction check failed", "error", err.Error())
+			response.WriteJSON(w, http.StatusInternalServerError, response.Err(http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error"))
+			return
+		}
 	}
 
 	model, err := h.service.RegisterTransaction(r.Context(), service.RegisterTransactionInput{

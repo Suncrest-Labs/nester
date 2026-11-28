@@ -1,8 +1,10 @@
 // Package caps enforces deposit limits at several granularities: a
 // launch-minimum per-user total deposit cap and global protocol-wide TVL cap
 // for the testnet launch (nester#1119), a per-vault soft capacity and a
-// per-user rolling 24h cap across all vaults (nester#1316), and a
-// mainnet-only hard TVL cap per vault (nester#1376).
+// per-user rolling 24h cap across all vaults (nester#1316), a
+// mainnet-only hard TVL cap per vault (nester#1376), and a per-transaction
+// ceiling applied independently of daily caps to bound the blast radius of a
+// single compromised session or client bug.
 //
 // Kept dependency-free, like domain/moneypath, so the service layer and the
 // postgres repository can both depend on it without a repository -> service
@@ -42,6 +44,12 @@ var ErrUserDailyCapExceeded = errors.New("deposit would exceed user daily deposi
 // never enforced on testnet.
 var ErrTVLCapExceeded = errors.New("vault TVL cap exceeded on mainnet")
 
+// ErrPerTransactionCapExceeded is returned when a single deposit or
+// withdrawal amount exceeds the configured per-transaction ceiling. It is
+// evaluated independently of daily and cumulative caps (issue: mainnet
+// per-transaction limit).
+var ErrPerTransactionCapExceeded = errors.New("transaction amount exceeds the per-transaction limit")
+
 // CapExceededError carries the numbers behind a rejected deposit so the API
 // response and logs can explain exactly why, without a second lookup.
 type CapExceededError struct {
@@ -59,24 +67,31 @@ type CapExceededError struct {
 type Kind string
 
 const (
-	KindPerUser Kind = "per_user"
-	KindGlobal  Kind = "global"
+	KindPerUser        Kind = "per_user"
+	KindGlobal         Kind = "global"
+	KindPerTransaction Kind = "per_transaction"
 )
 
 func (e *CapExceededError) Error() string {
 	switch e.Kind {
 	case KindPerUser:
 		return ErrPerUserCapExceeded.Error()
+	case KindPerTransaction:
+		return ErrPerTransactionCapExceeded.Error()
 	default:
 		return ErrGlobalCapExceeded.Error()
 	}
 }
 
 func (e *CapExceededError) Unwrap() error {
-	if e.Kind == KindPerUser {
+	switch e.Kind {
+	case KindPerUser:
 		return ErrPerUserCapExceeded
+	case KindPerTransaction:
+		return ErrPerTransactionCapExceeded
+	default:
+		return ErrGlobalCapExceeded
 	}
-	return ErrGlobalCapExceeded
 }
 
 // Totals is the current state used to evaluate a prospective deposit against
@@ -118,15 +133,21 @@ type Config struct {
 	// which an approach warning is emitted for a deposit that stays under the
 	// cap. Sorted ascending; empty disables warnings.
 	WarnThresholdsPct []int
+	// PerTransactionCap is the maximum size of a single deposit or withdrawal.
+	// It is independent of daily and cumulative caps: a transaction is refused
+	// if its amount alone exceeds this ceiling, regardless of the user's
+	// running totals. Zero or negative disables the check.
+	PerTransactionCap decimal.Decimal
 }
 
 // ParseCapValue parses a launch-cap env var value (LAUNCH_PER_USER_DEPOSIT_CAP
-// / LAUNCH_GLOBAL_TVL_CAP). Blank or "0" explicitly disables the cap and
-// returns decimal.Zero with no error. Any other value must parse as a
-// non-negative decimal; a malformed or negative value is an error so
-// misconfiguration fails startup instead of silently disabling the cap
-// (nester CodeRabbit finding: discarded parse errors produced a zero-value
-// decimal — indistinguishable from "disabled" — on malformed input).
+// / LAUNCH_GLOBAL_TVL_CAP / LAUNCH_PER_TRANSACTION_CAP). Blank or "0"
+// explicitly disables the cap and returns decimal.Zero with no error. Any
+// other value must parse as a non-negative decimal; a malformed or negative
+// value is an error so misconfiguration fails startup instead of silently
+// disabling the cap (nester CodeRabbit finding: discarded parse errors
+// produced a zero-value decimal — indistinguishable from "disabled" — on
+// malformed input).
 func ParseCapValue(raw string) (decimal.Decimal, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" || trimmed == "0" {
@@ -142,8 +163,28 @@ func ParseCapValue(raw string) (decimal.Decimal, error) {
 	return value, nil
 }
 
-func (c Config) perUserEnabled() bool { return c.PerUserCap.IsPositive() }
-func (c Config) globalEnabled() bool  { return c.GlobalCap.IsPositive() }
+func (c Config) perUserEnabled() bool        { return c.PerUserCap.IsPositive() }
+func (c Config) globalEnabled() bool         { return c.GlobalCap.IsPositive() }
+func (c Config) perTransactionEnabled() bool { return c.PerTransactionCap.IsPositive() }
+
+// CheckPerTransaction reports whether a single transaction amount exceeds the
+// configured per-transaction ceiling. It is a pure function of the amount and
+// the config: it performs no I/O, does not consult running totals, and is
+// therefore safe to call before any lock is taken. A nil checker or a
+// disabled ceiling always passes.
+func (c *Checker) CheckPerTransaction(amount decimal.Decimal) error {
+	if c == nil || !c.cfg.perTransactionEnabled() {
+		return nil
+	}
+	if amount.GreaterThan(c.cfg.PerTransactionCap) {
+		return &CapExceededError{
+			Kind:      KindPerTransaction,
+			Cap:       c.cfg.PerTransactionCap,
+			Attempted: amount,
+		}
+	}
+	return nil
+}
 
 // Checker evaluates deposits against the configured caps.
 type Checker struct {
@@ -168,6 +209,9 @@ func NewChecker(cfg Config, totals Totals, warn WarnFunc) *Checker {
 func (c *Checker) CheckDeposit(ctx context.Context, userID uuid.UUID, amount decimal.Decimal) error {
 	if c == nil || c.totals == nil {
 		return nil
+	}
+	if err := c.CheckPerTransaction(amount); err != nil {
+		return err
 	}
 	if !c.cfg.perUserEnabled() && !c.cfg.globalEnabled() {
 		return nil
@@ -229,6 +273,9 @@ func (c *Checker) EvaluateTotals(ctx context.Context, userID uuid.UUID, amount, 
 	if c == nil {
 		return nil
 	}
+	if err := c.CheckPerTransaction(amount); err != nil {
+		return err
+	}
 	if !c.cfg.perUserEnabled() && !c.cfg.globalEnabled() {
 		return nil
 	}
@@ -268,96 +315,12 @@ func (c *Checker) EvaluateTotals(ctx context.Context, userID uuid.UUID, amount, 
 	return nil
 }
 
-// Enabled reports whether either cap is configured, so a caller deciding
+// Enabled reports whether any cap is configured, so a caller deciding
 // whether to pay the cost of a transactional lock (see EvaluateTotals) can
 // skip it entirely when caps are off.
 func (c *Checker) Enabled() bool {
 	if c == nil {
 		return false
 	}
-	return c.cfg.perUserEnabled() || c.cfg.globalEnabled()
-}
-
-// collectWarnings returns one Warning per threshold newly crossed by this
-// deposit, i.e. when priorTotal was under a configured percentage of cap and
-// newTotal is at or above it. This deliberately alerts on the *first*
-// deposit that crosses each line, not on every subsequent deposit while
-// already over it.
-//
-// It only builds the Warning values — it does not invoke WarnFunc. Callers
-// must collect warnings from every enabled cap check and emit them (via
-// emitWarnings) only once all checks have passed, so a deposit that crosses
-// the per-user warn threshold but is then rejected by the global cap never
-// emits a misleading warning (nester CodeRabbit finding).
-func (c *Checker) collectWarnings(kind Kind, userID uuid.UUID, cap_ decimal.Decimal, priorTotal, newTotal decimal.Decimal) []Warning {
-	if cap_.Sign() <= 0 {
-		return nil
-	}
-	var warnings []Warning
-	for _, pct := range c.cfg.WarnThresholdsPct {
-		threshold := cap_.Mul(decimal.NewFromInt(int64(pct))).Div(decimal.NewFromInt(100))
-		if priorTotal.LessThan(threshold) && newTotal.GreaterThanOrEqual(threshold) {
-			warnings = append(warnings, Warning{
-				Kind:         kind,
-				UserID:       userID,
-				Cap:          cap_,
-				NewTotal:     newTotal,
-				ThresholdPct: pct,
-			})
-		}
-	}
-	return warnings
-}
-
-// emitWarnings invokes WarnFunc for every collected warning. Called only
-// after all enabled cap checks for a deposit have succeeded.
-func (c *Checker) emitWarnings(ctx context.Context, warnings []Warning) {
-	for _, w := range warnings {
-		c.warn(ctx, w)
-	}
-}
-
-// CheckVaultCap reports whether depositing amount into a vault currently at
-// currentBalance would exceed cap. A nil cap means no limit.
-func CheckVaultCap(currentBalance decimal.Decimal, cap *decimal.Decimal, amount decimal.Decimal) error {
-	if cap == nil {
-		return nil
-	}
-	if currentBalance.Add(amount).GreaterThan(*cap) {
-		return ErrVaultCapExceeded
-	}
-	return nil
-}
-
-// CheckUserDailyCap reports whether depositing amount, on top of a user's
-// existing rolling24hTotal, would exceed cap. A nil cap means no limit.
-func CheckUserDailyCap(rolling24hTotal decimal.Decimal, cap *decimal.Decimal, amount decimal.Decimal) error {
-	if cap == nil {
-		return nil
-	}
-	if rolling24hTotal.Add(amount).GreaterThan(*cap) {
-		return ErrUserDailyCapExceeded
-	}
-	return nil
-}
-
-// CheckTVLCap reports whether depositing amount into a vault currently at
-// currentTVL would exceed the mainnet hard cap. A nil or non-positive cap
-// means no limit (the default, since the cap is configured per-deployment
-// and most environments are not mainnet).
-func CheckTVLCap(currentTVL decimal.Decimal, cap *decimal.Decimal, amount decimal.Decimal) error {
-	if cap == nil || cap.Sign() <= 0 {
-		return nil
-	}
-	if currentTVL.Add(amount).GreaterThan(*cap) {
-		return ErrTVLCapExceeded
-	}
-	return nil
-}
-
-// VaultTVLCapManager checks and enforces the mainnet-only hard TVL cap per
-// vault (nester#1376). Implementations are expected to read the vault's
-// current TVL and the configured ceiling, then delegate to CheckTVLCap.
-type VaultTVLCapManager interface {
-	CheckDepositCap(ctx context.Context, vaultID uuid.UUID, currentTVL decimal.Decimal, depositAmount decimal.Decimal) error
+	return c.cfg.perUserEnabled() || c.cfg.globalEnabled() || c.cfg.perTransactionEnabled()
 }

@@ -75,6 +75,7 @@ type Config struct {
 	rebalancer             RebalancerConfig
 	goalNotificationDigest GoalNotificationDigestConfig
 	schedulerLeadership    SchedulerLeadershipConfig
+	transactionLimits      TransactionLimitsConfig
 	tracing                TracingConfig
 	metrics                MetricsConfig
 	indexer                IndexerConfig
@@ -267,6 +268,17 @@ type TVLConfig struct {
 // the caps checker, so an operator can change either cap by editing the env
 // var and restarting — no code change or migration needed. A zero/empty
 // value disables that cap.
+//
+// TransactionLimitsConfig governs the per-transaction deposit/withdrawal cap
+// enforced on mainnet. It is loaded from STELLAR_MAX_SINGLE_TX_AMOUNT and a
+// zero/empty value disables the check.
+type TransactionLimitsConfig struct {
+	maxSingleTxAmount string
+}
+
+// MaxSingleTxAmount returns the configured per-transaction cap as a decimal
+// string; empty means no cap is enforced.
+func (t TransactionLimitsConfig) MaxSingleTxAmount() string { return t.maxSingleTxAmount }
 type LaunchCapsConfig struct {
 	perUserDepositCap string
 	globalTVLCap      string
