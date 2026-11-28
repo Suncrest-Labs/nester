@@ -1,25 +1,81 @@
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /apps/dapp/frontend
+  - package-ecosystem: "cargo"
+    directory: "/packages/contracts"
     schedule:
-      interval: daily
-    open-pull-requests-limit: 0
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "smart-contracts"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Pinned exactly; changing it changes every contract's WASM hash.
+      - dependency-name: "soroban-sdk"
+      # rand 0.10+ pulls crates that need edition 2024, which the pinned
+      # 1.82 toolchain (rust-toolchain.toml) cannot build.
+      - dependency-name: "rand"
+        versions: [">= 0.10"]
+    groups:
+      cargo-deps:
+        patterns: ["*"]
 
-  - package-ecosystem: gomod
-    directory: /apps/api
+  - package-ecosystem: "gomod"
+    directory: "/apps/api"
     schedule:
-      interval: daily
-    open-pull-requests-limit: 0
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "backend"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      go-deps:
+        patterns: ["*"]
 
-  - package-ecosystem: cargo
-    directory: /packages/contracts
+  # One entry for the whole pnpm workspace. The lockfile lives at the repo
+  # root, so per-app entries cannot update it and fail `--frozen-lockfile`.
+  - package-ecosystem: "npm"
+    directory: "/"
     schedule:
-      interval: daily
-    open-pull-requests-limit: 0
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "frontend"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      npm-production:
+        dependency-type: "production"
+        patterns: ["*"]
+      npm-dev:
+        dependency-type: "development"
+        patterns: ["*"]
 
-  - package-ecosystem: github-actions
-    directory: /
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: daily
-    open-pull-requests-limit: 0
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"
+    labels: ["dependencies", "ci"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      github-actions:
+        patterns: ["*"]

@@ -340,6 +340,88 @@ fn approve_and_transfer_from() {
 
 #[test]
 #[should_panic]
+fn approve_rejects_negative_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    client.approve(&alice, &spender, &-1_i128, &1_u32);
+}
+
+#[test]
+#[should_panic]
+fn approve_rejects_past_expiration_for_positive_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+    env.ledger().with_mut(|li| li.sequence_number = 10);
+
+    client.approve(&alice, &spender, &1_i128, &9_u32);
+}
+
+#[test]
+fn approve_accepts_expiration_at_maximum_storage_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let current_ledger = env.ledger().sequence();
+    let expiration_ledger = current_ledger + env.storage().max_ttl();
+
+    client.approve(&alice, &spender, &1_i128, &expiration_ledger);
+
+    assert_eq!(client.allowance(&alice, &spender), 1);
+}
+
+#[test]
+#[should_panic]
+fn approve_rejects_expiration_beyond_maximum_storage_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let current_ledger = env.ledger().sequence();
+    let expiration_ledger = current_ledger + env.storage().max_ttl() + 1;
+
+    client.approve(&alice, &spender, &1_i128, &expiration_ledger);
+}
+
+#[test]
+fn approve_allows_zero_amount_revoke_with_past_expiration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    client.approve(&alice, &spender, &1_000_i128, &100_u32);
+    env.ledger().with_mut(|li| li.sequence_number = 10);
+    client.approve(&alice, &spender, &0_i128, &9_u32);
+
+    assert_eq!(client.allowance(&alice, &spender), 0);
+}
+
+#[test]
+fn approve_allows_zero_amount_revoke_with_far_future_expiration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    client.approve(&alice, &spender, &0_i128, &u32::MAX);
+
+    assert_eq!(client.allowance(&alice, &spender), 0);
+}
+
+#[test]
+#[should_panic]
 fn transfer_from_exceeds_allowance_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -538,6 +620,38 @@ fn pure_shares_for_deposit_first() {
 fn pure_shares_for_deposit_proportional() {
     // 1_000 into vault with 10_000 supply / 20_000 assets → 500 shares
     assert_eq!(crate::shares_for_deposit_math(1_000, 10_000, 20_000), 500);
+}
+
+#[test]
+fn impaired_vault_rejects_new_deposit_with_typed_error() {
+    assert_eq!(
+        crate::try_shares_for_deposit_math(1_000, 10_000, 0),
+        Err(nester_common::ContractError::InvalidOperation)
+    );
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    client.mint_for_deposit(&alice, &10_000_i128);
+    client.set_total_assets(&0_i128);
+
+    assert_eq!(
+        client.try_shares_for_deposit(&5_000_i128),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::InvalidOperation as u32,
+        )))
+    );
+    assert_eq!(
+        client.try_mint_for_deposit(&bob, &5_000_i128),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            nester_common::ContractError::InvalidOperation as u32,
+        )))
+    );
+    assert_eq!(client.total_supply(), 10_000);
+    assert_eq!(client.balance(&bob), 0);
 }
 
 #[test]

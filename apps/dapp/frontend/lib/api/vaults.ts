@@ -60,6 +60,10 @@ export interface HarvestPreview {
   gross_yield_usdc: string;
   performance_fee_usdc: string;
   net_yield_usdc: string;
+  /** Estimated network cost of submitting the harvest, in USDC. */
+  gas_cost_usdc?: string;
+  /** net_yield_usdc minus gas_cost_usdc, floored at zero. */
+  net_yield_after_gas_usdc?: string;
   compounded: boolean;
   estimated_new_shares?: string;
   performance_fee_bps: number;

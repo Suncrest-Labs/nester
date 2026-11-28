@@ -36,12 +36,6 @@ interface HarvestModalProps {
 type Step = "preview" | "confirm";
 type ExecutionState = "idle" | "submitting" | "success" | "error";
 
-type PreviewWithGas = HarvestPreview & {
-  gas_cost_usdc?: string;
-  estimated_gas_cost_usdc?: string;
-  net_yield_after_gas_usdc?: string;
-};
-
 function formatUsdc(value: string | number | undefined) {
   const amount = Number.parseFloat(String(value ?? "0"));
   if (!Number.isFinite(amount)) return `${value ?? "0"} USDC`;
@@ -212,9 +206,10 @@ export function HarvestModal({
     queryFn: () => vaultsApi.previewHarvest(vaultId, compound),
   });
 
-  const historyQuery = useYieldHarvests(50);
+  // Scoped server-side to this vault: the API filters, so a history exists even
+  // when the user's most recent harvests happened in other vaults.
+  const historyQuery = useYieldHarvests(20, vaultId);
   const preview = previewQuery.data ?? null;
-  const previewWithGas = preview as PreviewWithGas | null;
   const previewLoading =
     previewQuery.isLoading || (previewQuery.isFetching && !preview);
   const previewError = previewQuery.error
@@ -222,22 +217,25 @@ export function HarvestModal({
     : "";
 
   const vaultHarvests = useMemo(() => {
-    return (
-      historyQuery.data?.pages
-        .flatMap((page) => page.items)
-        .filter((harvest) => harvest.vault_id === vaultId)
-        .slice(0, 5) ?? []
-    );
-  }, [historyQuery.data, vaultId]);
+    return historyQuery.data?.pages.flatMap((page) => page.items).slice(0, 5) ?? [];
+  }, [historyQuery.data]);
 
+  // The API returns the gas estimate alongside the preview, so the modal never
+  // has to invent a cost. Zero is only used when the field is absent (an older
+  // API), in which case "net after gas" equals net yield rather than a lie.
   const estimatedGasCost = useMemo(() => {
-    const value =
-      previewWithGas?.gas_cost_usdc ??
-      previewWithGas?.estimated_gas_cost_usdc ??
-      "0";
-    const amount = Number.parseFloat(value);
+    const amount = Number.parseFloat(preview?.gas_cost_usdc ?? "0");
     return Number.isFinite(amount) && amount >= 0 ? amount : 0;
-  }, [previewWithGas]);
+  }, [preview?.gas_cost_usdc]);
+
+  const netYieldAfterGas = useMemo(() => {
+    if (preview?.net_yield_after_gas_usdc) {
+      return preview.net_yield_after_gas_usdc;
+    }
+    const netYield = Number.parseFloat(preview?.net_yield_usdc ?? "0");
+    if (!Number.isFinite(netYield)) return "0";
+    return String(Math.max(0, netYield - estimatedGasCost));
+  }, [preview?.net_yield_after_gas_usdc, preview?.net_yield_usdc, estimatedGasCost]);
 
   const hasNoHarvestableYield = useMemo(
     () => harvestableYieldIsZero(preview),
@@ -396,16 +394,7 @@ export function HarvestModal({
                   />
                   <AmountRow
                     label="Net Yield After Gas"
-                    value={formatUsdc(
-                      previewWithGas?.net_yield_after_gas_usdc ??
-                        String(
-                          Math.max(
-                            0,
-                            Number.parseFloat(preview.net_yield_usdc) -
-                              estimatedGasCost
-                          )
-                        )
-                    )}
+                    value={formatUsdc(netYieldAfterGas)}
                     highlight
                   />
                   {compound && preview.estimated_new_shares && (
@@ -454,8 +443,9 @@ export function HarvestModal({
             </div>
 
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Net after gas uses the current estimated network cost, so you can
-              compare harvesting with today&apos;s gas prices.
+              Past harvests show the amount received. Net after gas nets off
+              today&apos;s estimated network fee, so each row is comparable with
+              what harvesting costs right now.
             </p>
 
             <div className="mt-4 space-y-3">
@@ -522,7 +512,9 @@ export function HarvestModal({
                         </p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground">Net after gas</p>
+                        <p className="text-muted-foreground">
+                          Net after est. gas
+                        </p>
                         <p
                           className={cn(
                             "mt-1 font-medium",
